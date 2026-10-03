@@ -54,7 +54,7 @@ func TestFinalTurnRenderCarriesProtectedDiagnostics(t *testing.T) {
 		{Role: "tool", ToolCallID: "diagnostics-call", Content: canary},
 	}
 
-	got, rendered := tryRenderFinalTurnReply(t.Context(), true, ts, exec, terminalContent{})
+	got, rendered := tryRenderFinalTurnReply(t.Context(), true, true, ts, exec, terminalContent{})
 	if !rendered || got.content != "rendered diagnostics "+canary || !got.protected {
 		t.Fatalf("protected final render = (%#v, %v)", got, rendered)
 	}
@@ -128,7 +128,7 @@ func TestCodingFinalTurnRenderRefreshesWorkspaceSnapshot(t *testing.T) {
 	writeCodingWorkspaceTestFile(t, filepath.Join(project, "final.txt"), "external final-render change\n")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.FinalTurnRenderMode = "llm"
-	result, rendered := tryRenderFinalTurnReply(t.Context(), true, ts, execState, terminalContent{})
+	result, rendered := tryRenderFinalTurnReply(t.Context(), true, true, ts, execState, terminalContent{})
 	if !rendered || result.content != "captured response" {
 		t.Fatalf("final render = (%#v, %v)", result, rendered)
 	}

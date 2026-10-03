@@ -467,6 +467,9 @@ func TestDefaultConfigUsesSeahorseContextManager(t *testing.T) {
 	if got := DefaultConfig().Agents.Defaults.ContextManager; got != "seahorse" {
 		t.Fatalf("default context manager = %q, want seahorse", got)
 	}
+	if got := DefaultConfig().Agents.Defaults.PromptCacheMode.Effective(); got != PromptCacheModeEnabled {
+		t.Fatalf("default prompt cache mode = %q, want %q", got, PromptCacheModeEnabled)
+	}
 }
 
 func TestLoadConfigRejectsLegacyContextManager(t *testing.T) {
@@ -503,6 +506,60 @@ func TestLoadConfigAcceptsDisabledContextManager(t *testing.T) {
 	}
 	if got := cfg.Agents.Defaults.ContextManager; got != "none" {
 		t.Fatalf("context manager = %q, want none", got)
+	}
+}
+
+func TestLoadConfigAcceptsDisabledPromptCacheMode(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"version": 4,
+		"agents": {"defaults": {"prompt_cache_mode": "disabled"}}
+	}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(configPath): %v", err)
+	}
+
+	cfg, err := LoadConfigReadOnly(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigReadOnly() error = %v", err)
+	}
+	if got := cfg.Agents.Defaults.PromptCacheMode.Effective(); got != PromptCacheModeDisabled {
+		t.Fatalf("prompt cache mode = %q, want %q", got, PromptCacheModeDisabled)
+	}
+}
+
+func TestLoadConfigRejectsUnknownPromptCacheMode(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"version": 4,
+		"agents": {"defaults": {"prompt_cache_mode": "sometimes"}}
+	}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(configPath): %v", err)
+	}
+
+	_, err := LoadConfigReadOnly(configPath)
+	if err == nil || !strings.Contains(err.Error(), "agents.defaults.prompt_cache_mode") {
+		t.Fatalf("LoadConfigReadOnly() error = %v", err)
+	}
+}
+
+func TestLoadConfigAppliesPromptCacheModeFromEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"version":4}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(configPath): %v", err)
+	}
+	t.Setenv("MINTCLAW_AGENTS_DEFAULTS_PROMPT_CACHE_MODE", "disabled")
+
+	cfg, err := LoadConfigReadOnly(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigReadOnly() error = %v", err)
+	}
+	if got := cfg.Agents.Defaults.PromptCacheMode.Effective(); got != PromptCacheModeDisabled {
+		t.Fatalf("prompt cache mode = %q, want %q", got, PromptCacheModeDisabled)
 	}
 }
 

@@ -2366,6 +2366,22 @@ func TestBuildRequestBody_CompilesPromptCachePlanForOpenAI(t *testing.T) {
 			t.Fatalf("invalid-plan cache breakpoint count = %d, want 0", got)
 		}
 	})
+
+	t.Run("disabled cache control emits no provider fields", func(t *testing.T) {
+		provider := NewProvider("key", "https://api.openai.com/v1", "")
+		options := map[string]any{"prompt_cache_key": "legacy-lineage"}
+		protocoltypes.DisablePromptCache(options)
+		body := provider.buildRequestBody(messages, nil, "gpt-5.6", options)
+
+		for _, field := range []string{"prompt_cache_key", "prompt_cache_options"} {
+			if _, exists := body[field]; exists {
+				t.Fatalf("disabled cache control emitted %s: %#v", field, body[field])
+			}
+		}
+		if got := markerCount(t, body); got != 0 {
+			t.Fatalf("disabled cache breakpoint count = %d, want 0", got)
+		}
+	})
 }
 
 func TestSupportsExplicitPromptCaching(t *testing.T) {

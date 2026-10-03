@@ -234,6 +234,7 @@ func (p *Pipeline) prepareLLMRequest(
 			Provider:           primaryCandidateProvider(exec.model.activeCandidates),
 			Model:              llm.llmModel,
 			PromptHash:         safeJSONHash(traceSettings, diagnosticPromptHashMessages(llm.callMessages)),
+			PromptCacheMode:    string(effectivePromptCacheMode(p.Cfg)),
 			PromptCache:        promptCache,
 			MessagesCount:      len(llm.callMessages),
 			ToolsCount:         len(llm.providerToolDefs),

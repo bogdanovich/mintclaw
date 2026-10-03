@@ -4,6 +4,8 @@ import "strings"
 
 const promptCachePlanOptionKey = "__mintclaw_prompt_cache_plan"
 
+type promptCacheDisabled struct{}
+
 // SetPromptCachePlan stores a detached plan in the internal provider options
 // channel. Callers retain ownership of the input plan and its slices.
 func SetPromptCachePlan(options map[string]any, plan PromptCachePlan) {
@@ -18,6 +20,16 @@ func SetPromptCachePlan(options map[string]any, plan PromptCachePlan) {
 // trusted runtime derives a replacement.
 func ClearPromptCachePlan(options map[string]any) {
 	delete(options, promptCachePlanOptionKey)
+}
+
+// DisablePromptCache stores a trusted fail-closed marker. It is intentionally
+// not a valid plan: adapters observe that a typed cache decision is present,
+// emit no cache-only fields, and do not fall back to legacy message markers.
+func DisablePromptCache(options map[string]any) {
+	if options == nil {
+		return
+	}
+	options[promptCachePlanOptionKey] = promptCacheDisabled{}
 }
 
 // PromptCachePlanOptionPresent reports whether the reserved typed-plan option

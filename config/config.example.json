@@ -18,6 +18,7 @@
       "summarize_message_threshold": 20,
       "summarize_token_percent": 75,
       "split_on_marker": false,
+      "prompt_cache_mode": "enabled",
       "max_llm_retries": 2,
       "llm_retry_backoff_secs": 2,
       "prompt_memory": {

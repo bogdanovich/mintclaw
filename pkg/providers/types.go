@@ -52,6 +52,10 @@ func ClearPromptCachePlan(options map[string]any) {
 	protocoltypes.ClearPromptCachePlan(options)
 }
 
+func DisablePromptCache(options map[string]any) {
+	protocoltypes.DisablePromptCache(options)
+}
+
 func PromptCachePlanFromOptions(options map[string]any) (PromptCachePlan, bool) {
 	return protocoltypes.PromptCachePlanFromOptions(options)
 }

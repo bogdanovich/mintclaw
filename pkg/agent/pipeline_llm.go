@@ -242,7 +242,8 @@ func (p *Pipeline) invokeLLMWithRetry(
 		if providerName == "" {
 			providerName, _ = providers.ExtractProtocol(exec.model.activeModelConfig)
 		}
-		callOpts := withPromptCacheLineage(
+		callOpts := withConfiguredPromptCacheLineage(
+			promptCacheEnabled(p.Cfg),
 			llm.llmOpts,
 			promptCacheScopeForCheckpoint(
 				ts.agent.ID,
