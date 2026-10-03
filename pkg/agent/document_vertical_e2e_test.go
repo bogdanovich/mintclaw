@@ -1121,8 +1121,9 @@ func (provider *documentFormReviewE2EProvider) Chat(
 					"document",
 					map[string]any{
 						"action": "form", "form_action": "collect", "job_id": jobID,
-						"field_id": provider.optionalFieldID,
-						"question": "Would you like to provide this optional information?",
+						"field_id":      provider.optionalFieldID,
+						"question":      "Would you like to provide this optional information?",
+						"blank_actions": []any{"skip", "not_applicable"},
 					},
 				)), nil
 			}
@@ -1133,8 +1134,9 @@ func (provider *documentFormReviewE2EProvider) Chat(
 					"document",
 					map[string]any{
 						"action": "form", "form_action": "collect", "job_id": jobID,
-						"field_id": provider.optionalSkipID,
-						"question": "Would you like to provide this other optional information?",
+						"field_id":      provider.optionalSkipID,
+						"question":      "Would you like to provide this other optional information?",
+						"blank_actions": []any{"skip", "not_applicable"},
 					},
 				)), nil
 			}
@@ -1162,7 +1164,7 @@ func (provider *documentFormReviewE2EProvider) Chat(
 				"field_id": selectedFieldID,
 			}
 			if !provider.agentLed || len(provider.receipts) > 0 {
-				arguments["blank_actions"] = []string{"skip", "not_applicable"}
+				arguments["blank_actions"] = []any{"skip", "not_applicable"}
 			}
 			if provider.agentLed && len(provider.receipts) == 0 {
 				question = "First, what should I enter in the free-text field?"
