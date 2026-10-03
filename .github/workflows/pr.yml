@@ -254,6 +254,7 @@ jobs:
           agent_tests+='TestAgentLoopCanonicalizesWorkspaceAtConstruction|'
           agent_tests+='TestWithIsolatedSkillBootstrapUsesOnlyWorkspaceSkillRoot|'
           agent_tests+='TestSeahorseContextManagerIsolatesAgentRuntimes|'
+          agent_tests+='TestGatewayContextPrefixCorpusAcrossRestart|'
           agent_tests+='TestRunAgentLoop_MessageToolMediaDeliveryBlocksBeforeFinalResponse|'
           agent_tests+='TestRunAgentLoop_MessageToolMediaDefaultsToTerminalDelivery|'
           agent_tests+='TestNewAgentLoopRegistersRequestUserInputByDefault|'
@@ -264,6 +265,9 @@ jobs:
           go test -count=1 -tags goolm,stdjson \
             -run "$agent_tests" \
             ./pkg/agent
+          go test -count=1 -tags goolm,stdjson \
+            -run '^Test(PrefixOracle.*|ScriptedProviderCaptures.*|NativeCodingContextPrefixCorpus)$' \
+            ./pkg/testharness/llmscenario ./cmd/mintclaw/internal/coding
           go test -count=1 -tags goolm,stdjson \
             -run '^TestFormWriteCoordinator' \
             ./pkg/document

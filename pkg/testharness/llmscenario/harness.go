@@ -62,7 +62,7 @@ func (p *ScriptedProvider) Chat(
 
 	call := ProviderCall{
 		Messages: cloneMessages(messages),
-		Tools:    append([]providers.ToolDefinition(nil), toolDefs...),
+		Tools:    cloneToolDefinitions(toolDefs),
 		Model:    model,
 		Options:  cloneMap(options),
 	}
@@ -99,7 +99,13 @@ func (p *ScriptedProvider) GetDefaultModel() string {
 func (p *ScriptedProvider) Calls() []ProviderCall {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]ProviderCall(nil), p.calls...)
+	out := append([]ProviderCall(nil), p.calls...)
+	for i := range out {
+		out[i].Messages = cloneMessages(out[i].Messages)
+		out[i].Tools = cloneToolDefinitions(out[i].Tools)
+		out[i].Options = cloneMap(out[i].Options)
+	}
+	return out
 }
 
 func (p *ScriptedProvider) AssertExhausted() error {
@@ -234,6 +240,9 @@ func cloneResponse(resp *providers.LLMResponse) *providers.LLMResponse {
 	}
 	out := *resp
 	out.ToolCalls = append([]providers.ToolCall(nil), resp.ToolCalls...)
+	for i := range out.ToolCalls {
+		out.ToolCalls[i].Arguments = cloneMap(resp.ToolCalls[i].Arguments)
+	}
 	if resp.Usage != nil {
 		usage := *resp.Usage
 		out.Usage = &usage
@@ -248,6 +257,16 @@ func cloneMessages(messages []providers.Message) []providers.Message {
 		out[i].Attachments = append([]providers.Attachment(nil), messages[i].Attachments...)
 		out[i].SystemParts = append([]providers.ContentBlock(nil), messages[i].SystemParts...)
 		out[i].ToolCalls = append([]providers.ToolCall(nil), messages[i].ToolCalls...)
+		for j := range out[i].ToolCalls {
+			out[i].ToolCalls[j].Arguments = cloneMap(messages[i].ToolCalls[j].Arguments)
+		}
+		out[i].TurnEnvelope = messages[i].TurnEnvelope.Clone()
+		for j := range out[i].SystemParts {
+			if control := messages[i].SystemParts[j].CacheControl; control != nil {
+				copyControl := *control
+				out[i].SystemParts[j].CacheControl = &copyControl
+			}
+		}
 	}
 	return out
 }
@@ -258,7 +277,35 @@ func cloneMap(in map[string]any) map[string]any {
 	}
 	out := make(map[string]any, len(in))
 	for k, v := range in {
-		out[k] = v
+		out[k] = cloneValue(v)
 	}
 	return out
+}
+
+func cloneToolDefinitions(in []providers.ToolDefinition) []providers.ToolDefinition {
+	out := append([]providers.ToolDefinition(nil), in...)
+	for i := range out {
+		out[i].Function.Parameters = cloneMap(in[i].Function.Parameters)
+	}
+	return out
+}
+
+func cloneValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneMap(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i := range out {
+			out[i] = cloneValue(typed[i])
+		}
+		return out
+	case []string:
+		return append([]string(nil), typed...)
+	case providers.PromptCachePlan:
+		typed.BreakpointMessageIndexes = append([]int(nil), typed.BreakpointMessageIndexes...)
+		return typed
+	default:
+		return value
+	}
 }
