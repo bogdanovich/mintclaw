@@ -77,6 +77,7 @@ const (
 	MaxQuestionIDLength     = 64
 	MaxHeaderLength         = 64
 	MaxQuestionLength       = 1000
+	MaxIntroductionLength   = 1282 // 512-character summary + separator + 768-character plan, separate from the question.
 	MaxOptionLabelLength    = 64
 	MaxOptionValueLength    = 256
 	MaxDescriptionLength    = 500
@@ -122,11 +123,12 @@ type Option struct {
 }
 
 type Question struct {
-	ID          string   `json:"id"`
-	Header      string   `json:"header,omitempty"`
-	Question    string   `json:"question"`
-	Options     []Option `json:"options,omitempty"`
-	MultiSelect bool     `json:"multi_select,omitempty"`
+	ID           string   `json:"id"`
+	Header       string   `json:"header,omitempty"`
+	Introduction string   `json:"introduction,omitempty"`
+	Question     string   `json:"question"`
+	Options      []Option `json:"options,omitempty"`
+	MultiSelect  bool     `json:"multi_select,omitempty"`
 }
 
 // SuspensionRequest is the authority-free payload a tool or trusted policy
@@ -446,6 +448,9 @@ func validateQuestions(kind Kind, questions []Question) error {
 		}
 		if strings.TrimSpace(question.Question) == "" {
 			return fmt.Errorf("%w: question %q text is required", ErrInvalidInteraction, question.ID)
+		}
+		if !validBoundedString(question.Introduction, MaxIntroductionLength) {
+			return fmt.Errorf("%w: question %q introduction exceeds bounds", ErrInvalidInteraction, question.ID)
 		}
 		if !validBoundedString(question.Question, MaxQuestionLength) {
 			return fmt.Errorf(

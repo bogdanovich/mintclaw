@@ -14,13 +14,14 @@ func TestNormalizeOutboundMetadataCanonicalizesCurrentContract(t *testing.T) {
 		ToolCalls: []OutboundToolCall{{
 			ID: " call-1 ", Function: &OutboundToolCallFunction{Name: " read_file "},
 		}},
-		OutboundKind:      " final ",
-		ModelName:         " fallback-model ",
-		DefaultModelName:  " primary-model ",
-		UsageInputTokens:  -1,
-		UsageOutputTokens: 4500,
-		UsageTotalTokens:  4500,
-		RequestID:         " request-1 ",
+		OutboundKind:        " final ",
+		ModelName:           " fallback-model ",
+		DefaultModelName:    " primary-model ",
+		UsageInputTokens:    -1,
+		UsageOutputTokens:   4500,
+		UsageTotalTokens:    4500,
+		RequestID:           " request-1 ",
+		InteractionLanguage: " RU-ru ",
 	})
 
 	if metadata.MessageKind != OutboundMessageKindToolCalls ||
@@ -29,7 +30,7 @@ func TestNormalizeOutboundMetadataCanonicalizesCurrentContract(t *testing.T) {
 		metadata.OutboundKind != OutboundKindFinal || metadata.ModelName != "fallback-model" ||
 		metadata.DefaultModelName != "primary-model" || metadata.UsageInputTokens != 0 ||
 		metadata.UsageOutputTokens != 4500 || metadata.UsageTotalTokens != 4500 ||
-		metadata.RequestID != "request-1" {
+		metadata.RequestID != "request-1" || metadata.InteractionLanguage != "ru-ru" {
 		t.Fatalf("normalized metadata = %#v", metadata)
 	}
 	if err := ValidateOutboundMetadata(metadata); err != nil {

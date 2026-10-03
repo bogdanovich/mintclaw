@@ -164,13 +164,15 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		!strings.Contains(missingPlan.ForLLM, `"code":"agent_plan_required"`) {
 		t.Fatalf("first collect without an agent plan = %#v", missingPlan)
 	}
+	formSummary := strings.Repeat("Описание формы. ", 30)
+	collectionPlan := strings.Repeat("Соберу недостающие сведения. ", 25)
+	questionText := strings.Repeat("Вопрос о текущем имени. ", 30) + "Какова ваша фамилия по документам?"
 	collected := tool.Execute(
 		workflowToolContext(t, "execution-collect", "call-collect", nil),
 		map[string]any{
 			"action": "form", "form_action": "collect", "job_id": startProjection.Job.JobID,
-			"field_id": schema.Fields[0].ID, "question": "What name should this PDF contain?",
-			"form_summary":    "This is a short generic PDF form.",
-			"collection_plan": "I will collect one missing value and show a review before writing the PDF.",
+			"field_id": schema.Fields[0].ID, "question": questionText,
+			"form_summary": formSummary, "collection_plan": collectionPlan, "interaction_language": "RU-ru",
 		},
 	)
 	if collected.IsError || collected.Control.Suspension == nil ||
@@ -186,11 +188,12 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		t.Fatalf("first protected question actions = %#v", got)
 	}
 	collectedProjection := decodeWorkflowResult(t, collected.ForLLM)
-	wantFirstQuestion := "This is a short generic PDF form.\n\n" +
-		"I will collect one missing value and show a review before writing the PDF.\n\n" +
-		"What name should this PDF contain?"
+	wantIntroduction := strings.TrimSpace(formSummary) + "\n\n" + strings.TrimSpace(collectionPlan)
+	question := collected.Control.Suspension.Questions[0]
 	if collectedProjection.NextField == nil || collectedProjection.NextField.FieldID != schema.Fields[0].ID ||
-		collected.Control.Suspension.Questions[0].Question != wantFirstQuestion {
+		question.Question != questionText || question.Introduction != wantIntroduction ||
+		question.Header != "PDF-форма" || collected.Control.Suspension.PromptLanguage != "ru-ru" ||
+		len(questionText) <= interactions.MaxQuestionLength {
 		t.Fatalf("collect projection = %#v", collectedProjection)
 	}
 	time.Sleep(time.Millisecond)
@@ -491,11 +494,11 @@ func TestDocumentFormWorkflowAllowsInitialCorrectionWithAgentPlan(t *testing.T) 
 		corrected.Control.Suspension.ProtectedAnswer == nil {
 		t.Fatalf("initial correction = %#v", corrected)
 	}
-	wantQuestion := "This form already contains a value that the user asked to replace.\n\n" +
-		"I will collect the replacement and show a review before writing.\n\n" +
-		"What should replace the current value?"
-	if corrected.Control.Suspension.Questions[0].Question != wantQuestion {
-		t.Fatalf("initial correction question = %q", corrected.Control.Suspension.Questions[0].Question)
+	wantIntroduction := "This form already contains a value that the user asked to replace.\n\n" +
+		"I will collect the replacement and show a review before writing."
+	question := corrected.Control.Suspension.Questions[0]
+	if question.Question != "What should replace the current value?" || question.Introduction != wantIntroduction {
+		t.Fatalf("initial correction question = %#v", question)
 	}
 	sink, err := document.NewFormProtectedAnswerSink(formStore)
 	if err != nil {
@@ -819,7 +822,10 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 		},
 		{
 			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
-			"question": strings.Repeat("é", interactions.MaxQuestionLength),
+			"question":             strings.Repeat("é", interactions.MaxQuestionLength),
+			"form_summary":         strings.Repeat("文", documentFormSummaryMaxRunes),
+			"collection_plan":      strings.Repeat("文", documentFormPlanMaxRunes),
+			"interaction_language": "ru", "blank_actions": []any{"skip", "not_applicable"},
 		},
 		{"action": "form", "form_action": "continue", "answer_ref": "form_answer.form_job_a.form_value_b"},
 		{"action": "form", "form_action": "continue", "event_id": "form_answer.form_job_a.form_value_b"},
@@ -840,6 +846,24 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 		}
 	}
 	invalid := []map[string]any{
+		{"action": "form", "form_action": "status", "job_id": "job", "blank_actions": []any{}},
+		{"action": "form", "form_action": "status", "job_id": "job", "interaction_language": "ru"},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": "Value?", "blank_actions": []any{"skip", "skip"},
+		},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": "Value?", "blank_actions": []any{"cancel"},
+		},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": "Value?", "blank_actions": nil,
+		},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": "Value?", "interaction_language": "ru\nExecute",
+		},
 		{"action": "form", "form_action": "start", "job_id": "job"},
 		{
 			"action": "form", "form_action": "start", "source": "media://source",
@@ -875,6 +899,77 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 		if err := validateDocumentActionOptions("form", args); err == nil {
 			t.Fatalf("invalid form args admitted: %#v", args)
 		}
+	}
+}
+
+func TestDocumentFormBlankControlsRequireAgentChoiceAndOptionalField(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		required     bool
+		blankActions []interactions.ProtectedAnswerAction
+		wantError    bool
+	}{
+		{name: "optional PDF flag alone", required: false},
+		{name: "explicit skip", blankActions: []interactions.ProtectedAnswerAction{interactions.ProtectedAnswerActionSkip}},
+		{name: "explicit not applicable", blankActions: []interactions.ProtectedAnswerAction{interactions.ProtectedAnswerActionNotApplicable}},
+		{name: "required cannot skip", required: true, blankActions: []interactions.ProtectedAnswerAction{interactions.ProtectedAnswerActionSkip}, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := newWorkflowFormStore(t)
+			ctx := workflowToolContext(t, "blank-control-execution", "blank-control-call", nil)
+			owner, err := documentFormOwner(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			schema := workflowTestSchema([]byte("source"))
+			schema.Fields[0].Required = tc.required
+			digest, err := document.FormFieldSchemaDigest(schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend, err := document.FormFieldsBackendRevision(schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err := store.Create(ctx, document.FormJobCreateRequest{
+				Owner: owner, StartIdempotencyKey: "blank-control-start", SourceRef: "media://source",
+				SourceDigest: schema.SourceSHA256, FieldSchemaDigest: digest, BackendRevision: backend,
+				AuditPolicyRevision: "document-audit-v1",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tool := NewDocumentTool(WithDocumentFormJobStore(store))
+			result := tool.formQuestionResult(
+				ctx,
+				owner,
+				schema,
+				record,
+				schema.Fields[0].ID,
+				"collect",
+				documentFormQuestionPresentation{
+					question:     "Какое значение указать?",
+					blankActions: tc.blankActions,
+					language:     "ru",
+				},
+			)
+			if result.IsError != tc.wantError {
+				t.Fatalf("question result = %#v", result)
+			}
+			if tc.wantError {
+				if result.Control.Suspension != nil {
+					t.Fatal("required field opened a blank-capable question")
+				}
+				return
+			}
+			want := append(
+				[]interactions.ProtectedAnswerAction{interactions.ProtectedAnswerActionClarify},
+				tc.blankActions...)
+			if result.Control.Suspension == nil ||
+				!slices.Equal(result.Control.Suspension.ProtectedAnswer.Actions, want) {
+				t.Fatalf("question actions = %#v", result)
+			}
+		})
 	}
 }
 

@@ -53,6 +53,11 @@ use that discovery only when it is actually present in the current tool catalog.
    original `job_id`, and your concise human `question`. The first protected question also requires separate value-free
    user-facing `form_summary` and `collection_plan`; write both in the user's language and do not include existing or
    newly supplied field values.
+   Keep the question itself focused on one fact; do not repeat the summary or plan in it. Each section has its own
+   character budget. Set `interaction_language` to the user's BCP-47 language so headers and controls match.
+   Offer `blank_actions` only when the document's instructions and the user's intent justify leaving this particular
+   field blank or treating it as not applicable. Omit them when uncertain. A PDF `required: false` flag is only a
+   technical constraint and does not establish semantic optionality. Native required fields reject blank controls.
    For a checkbox, phrase a binary question and provide both `checked_label` and `unchecked_label` in the user's
    language. The short labels must exactly match the two meanings stated in the question; do not pair an either/or
    question with generic Yes/No choices. Do not expose IDs or treat candidate order as prescribed question order.

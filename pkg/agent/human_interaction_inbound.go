@@ -1581,6 +1581,11 @@ func interactionResponseReplyTarget(record interactions.Record, inbound bus.Inbo
 		if messageID := strings.TrimSpace(record.Answer.ResponseMessageID); messageID != "" {
 			return messageID
 		}
+	}
+	if messageID := strings.TrimSpace(inbound.Interaction.ResponseMessageID); messageID != "" {
+		return messageID
+	}
+	if record.Answer != nil {
 		if messageID := strings.TrimSpace(record.Answer.MessageID); messageID != "" {
 			return messageID
 		}

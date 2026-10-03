@@ -57,7 +57,12 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 	}
 	if cancellation.CommandHandled {
 		if strings.EqualFold(strings.TrimSpace(msg.Context.Channel), "telegram") {
-			msg.Context.ReplyToMessageID = strings.TrimSpace(msg.Context.MessageID)
+			// A callback query is an ingress event, not a Telegram message.
+			// Keep its ID for deduplication and reply to the verified prompt.
+			msg.Context.ReplyToMessageID = firstNonEmptyString(
+				msg.Context.Interaction.ResponseMessageID,
+				msg.Context.MessageID,
+			)
 		}
 		metadata := bus.OutboundMetadata{
 			InteractionKind:     string(cancellation.Kind),
