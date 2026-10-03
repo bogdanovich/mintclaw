@@ -30,6 +30,16 @@ const (
 	documentFormCandidateLimit        = 8
 )
 
+type documentFormQuestionPresentation struct {
+	question       string
+	summary        string
+	plan           string
+	language       string
+	blankActions   []interactions.ProtectedAnswerAction
+	checkedLabel   string
+	uncheckedLabel string
+}
+
 type safeDocumentFormJob struct {
 	JobID                string                `json:"job_id"`
 	State                document.FormJobState `json:"state"`
@@ -734,7 +744,7 @@ func (tool *DocumentTool) navigateFormWorkflow(
 	if err != nil || string(action) != formAction {
 		return documentFormToolFailure("form_job_conflict", "the protected navigation receipt is invalid")
 	}
-	return tool.formQuestionResult(ctx, owner, schema, record, fieldID, formAction, "", "", "", "", "")
+	return tool.formQuestionResult(ctx, owner, schema, record, fieldID, formAction, documentFormQuestionPresentation{})
 }
 
 func (tool *DocumentTool) statusFormWorkflow(
@@ -840,6 +850,20 @@ func (tool *DocumentTool) collectFormWorkflow(
 	if fieldIndex < 0 {
 		return documentFormToolFailure("field_unresolved", "the requested form field is unavailable")
 	}
+	language := ""
+	if rawLanguage := stringDocumentArg(args, "interaction_language"); rawLanguage != "" {
+		language, err = interactions.CanonicalPromptLanguage(rawLanguage)
+		if err != nil {
+			return documentFormToolFailure("invalid_input", "the question language is invalid")
+		}
+	}
+	blankActions := []interactions.ProtectedAnswerAction(nil)
+	if raw, present := args["blank_actions"]; present {
+		blankActions, err = documentFormBlankActions(raw)
+		if err != nil {
+			return documentFormToolFailure("invalid_input", "the question blank actions are invalid")
+		}
+	}
 	return tool.formQuestionResult(
 		ctx,
 		owner,
@@ -847,11 +871,12 @@ func (tool *DocumentTool) collectFormWorkflow(
 		record,
 		fieldID,
 		formAction,
-		strings.TrimSpace(stringDocumentArg(args, "question")),
-		formSummary,
-		collectionPlan,
-		strings.TrimSpace(stringDocumentArg(args, "checked_label")),
-		strings.TrimSpace(stringDocumentArg(args, "unchecked_label")),
+		documentFormQuestionPresentation{
+			question: strings.TrimSpace(stringDocumentArg(args, "question")),
+			summary:  formSummary, plan: collectionPlan, language: language, blankActions: blankActions,
+			checkedLabel:   strings.TrimSpace(stringDocumentArg(args, "checked_label")),
+			uncheckedLabel: strings.TrimSpace(stringDocumentArg(args, "unchecked_label")),
+		},
 	)
 }
 
@@ -969,11 +994,7 @@ func (tool *DocumentTool) formQuestionResult(
 	record document.FormJobRecord,
 	fieldID string,
 	formAction string,
-	questionText string,
-	formSummary string,
-	collectionPlan string,
-	checkedLabel string,
-	uncheckedLabel string,
+	presentation documentFormQuestionPresentation,
 ) *toolshared.ToolResult {
 	fieldIndex := slices.IndexFunc(schema.Fields, func(field document.FormField) bool {
 		return field.ID == fieldID && !field.ReadOnly
@@ -982,7 +1003,10 @@ func (tool *DocumentTool) formQuestionResult(
 		return documentFormToolFailure("field_unresolved", "the next form field is unavailable")
 	}
 	field := schema.Fields[fieldIndex]
-	options, err := documentFormQuestionOptions(field, checkedLabel, uncheckedLabel)
+	if field.Required && len(presentation.blankActions) > 0 {
+		return documentFormToolFailure("invalid_input", "required form fields cannot offer blank actions")
+	}
+	options, err := documentFormQuestionOptions(field, presentation.checkedLabel, presentation.uncheckedLabel)
 	if err != nil {
 		return documentFormToolFailure("invalid_input", "the form checkbox labels are invalid")
 	}
@@ -1010,24 +1034,21 @@ func (tool *DocumentTool) formQuestionResult(
 	); backErr == nil {
 		binding.Actions = append(binding.Actions, interactions.ProtectedAnswerActionBack)
 	}
-	if !field.Required {
-		binding.Actions = append(
-			binding.Actions,
-			interactions.ProtectedAnswerActionSkip,
-			interactions.ProtectedAnswerActionNotApplicable,
-		)
-	}
+	binding.Actions = append(binding.Actions, presentation.blankActions...)
 	label := documentFormFieldLabel(field)
 	question := interactions.Question{
-		ID: "document_form_value", Header: "PDF form",
-		Question:    documentFormQuestionText(questionText, formSummary, collectionPlan, label, field),
-		Options:     options,
-		MultiSelect: field.MultiSelect,
+		ID:           "document_form_value",
+		Header:       interactions.PromptText(presentation.language, interactions.PromptFormHeader),
+		Introduction: strings.TrimSpace(strings.Join([]string{presentation.summary, presentation.plan}, "\n\n")),
+		Question:     documentFormQuestionText(presentation.question, label, field),
+		Options:      options,
+		MultiSelect:  field.MultiSelect,
 	}
 	suspension := interactions.SuspensionRequest{
 		Kind: interactions.KindQuestion, Questions: []interactions.Question{question},
 		PromptSummary: "Provide or correct PDF form field: " + truncateDocumentFormText(label, 256),
 		Timeout:       documentFormQuestionTimeout, ProtectedAnswer: &binding,
+		PromptLanguage: presentation.language,
 	}
 	if validationErr := interactions.ValidateSuspensionRequest(suspension); validationErr != nil {
 		return documentFormToolFailure("field_unresolved", "the form question could not be prepared")
@@ -1294,29 +1315,44 @@ func documentFormOwner(ctx context.Context) (document.FormJobOwner, error) {
 
 func documentFormQuestionText(
 	agentQuestion string,
-	formSummary string,
-	collectionPlan string,
 	label string,
 	field document.FormField,
 ) string {
 	agentQuestion = strings.TrimSpace(agentQuestion)
-	formSummary = strings.TrimSpace(formSummary)
-	collectionPlan = strings.TrimSpace(collectionPlan)
 	if agentQuestion != "" {
-		if formSummary != "" && collectionPlan != "" {
-			agentQuestion = strings.Join([]string{formSummary, collectionPlan, agentQuestion}, "\n\n")
-		}
-		return truncateDocumentFormText(agentQuestion, interactions.MaxQuestionLength)
+		return agentQuestion
 	}
 	question := fmt.Sprintf("Provide %s for the PDF form. You may reply with free text.", label)
 	if field.DateFormat != "" {
 		question = fmt.Sprintf("Provide %s for the PDF form using %s. You may reply with free text.",
 			label, field.DateFormat)
 	}
-	if !field.Required {
-		question += " You may also skip it or mark it not applicable."
+	return question
+}
+
+func documentFormBlankActions(raw any) ([]interactions.ProtectedAnswerAction, error) {
+	values, ok := raw.([]any)
+	if typed, typedOK := raw.([]string); typedOK {
+		values = make([]any, len(typed))
+		for i, value := range typed {
+			values[i] = value
+		}
+		ok = true
 	}
-	return truncateDocumentFormText(question, interactions.MaxQuestionLength)
+	if !ok || len(values) > 2 {
+		return nil, errors.New("blank_actions must contain only distinct skip and not_applicable actions")
+	}
+	actions := make([]interactions.ProtectedAnswerAction, 0, len(values))
+	for _, rawValue := range values {
+		value, valid := rawValue.(string)
+		action := interactions.ProtectedAnswerAction(value)
+		if !valid || (action != interactions.ProtectedAnswerActionSkip &&
+			action != interactions.ProtectedAnswerActionNotApplicable) || slices.Contains(actions, action) {
+			return nil, errors.New("blank_actions must contain only distinct skip and not_applicable actions")
+		}
+		actions = append(actions, action)
+	}
+	return actions, nil
 }
 
 func documentFormQuestionOptions(
@@ -1616,14 +1652,10 @@ func documentFormFieldLabel(field document.FormField) string {
 
 func truncateDocumentFormText(value string, maximum int) string {
 	value = strings.TrimSpace(value)
-	if len(value) <= maximum {
+	if utf8.RuneCountInString(value) <= maximum {
 		return value
 	}
-	value = value[:maximum]
-	for value != "" && !utf8.ValidString(value) {
-		value = value[:len(value)-1]
-	}
-	return strings.TrimSpace(value)
+	return strings.TrimSpace(string([]rune(value)[:maximum]))
 }
 
 func safeDocumentFormJobProjection(record document.FormJobRecord) *safeDocumentFormJob {

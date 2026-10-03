@@ -53,6 +53,11 @@ use that discovery only when it is actually present in the current tool catalog.
    original `job_id`, and your concise human `question`. The first protected question also requires separate value-free
    user-facing `form_summary` and `collection_plan`; write both in the user's language and do not include existing or
    newly supplied field values.
+   Keep the question itself focused on one fact; do not repeat the summary or plan in it. Each section has its own
+   character budget. Set `interaction_language` to the user's BCP-47 language so headers and controls match.
+   Offer `blank_actions` only when the document's instructions and the user's intent justify leaving this particular
+   field blank or treating it as not applicable. Omit them when uncertain. A PDF `required: false` flag is only a
+   technical constraint and does not establish semantic optionality. Native required fields reject blank controls.
    For a checkbox, phrase a binary question and provide both `checked_label` and `unchecked_label` in the user's
    language. The short labels must exactly match the two meanings stated in the question; do not pair an either/or
    question with generic Yes/No choices. Do not expose IDs or treat candidate order as prescribed question order.
@@ -61,11 +66,11 @@ use that discovery only when it is actually present in the current tool catalog.
 3. Collect delivers the question and suspends; do not duplicate it. An answer yields exactly one `protected_answer_ref`;
    pass that exact value as `answer_ref` to `continue`. Never substitute an `interaction_id`, expose the answer, or ask
    for it again. A value button, `/answer`, or verified reply to the active prompt is an answer; other messages are
-   ordinary guidance. `Clarify` and `Back` are navigation, never field values. On `Clarify`, explain the requested fact
-   and why it matters, then collect the same field again. On `Back`, use `status` to choose a previously answered safe
-   field and `correct` it; if nothing precedes the current question, explain that instead. In either case, do not call
-   `continue` until a new protected answer receipt exists. Continue returns progress without choosing or asking the
-   next question.
+   ordinary guidance. `Clarify` and `Back` are navigation, never field values. Their protected reference is a native
+   navigation receipt: follow the runtime's exact `form_action: clarify` or `form_action: back` call with its
+   `navigation_ref`. Do not substitute `continue`, guess a field, or invent a receipt. Native authority reopens the
+   same question or the prior editable step without appending a value. Continue consumes only a new protected value
+   receipt and returns progress without choosing or asking the next question.
 4. Keep the job. Use `status`, `correct` with a safe field plus a new question, and `cancel` on request. `Skip` and
    `Not applicable` are typed blank-value decisions for optional fields; `Cancel` and `/stop` terminate the workflow.
    Translate ordinary correction intent yourself; never request a field ID or replace the job.

@@ -18,10 +18,26 @@ const (
 	PromptBrowserAttachAction      PromptTextKey = "browser_attach_action"
 	PromptResponseRecorded         PromptTextKey = "response_recorded"
 	PromptLiveHandoffExpired       PromptTextKey = "live_handoff_expired"
+	PromptFormHeader               PromptTextKey = "form_header"
+	PromptClarify                  PromptTextKey = "clarify"
+	PromptBack                     PromptTextKey = "back"
+	PromptSkip                     PromptTextKey = "skip"
+	PromptNotApplicable            PromptTextKey = "not_applicable"
+	PromptCancel                   PromptTextKey = "cancel"
+	PromptAllowOnce                PromptTextKey = "allow_once"
+	PromptDeny                     PromptTextKey = "deny"
 )
 
 var promptTextCatalog = map[string]map[PromptTextKey]string{
 	"en": {
+		PromptFormHeader:               "PDF form",
+		PromptClarify:                  "Clarify",
+		PromptBack:                     "Back",
+		PromptSkip:                     "Skip",
+		PromptNotApplicable:            "Not applicable",
+		PromptCancel:                   "⛔ Cancel turn",
+		PromptAllowOnce:                "Allow once",
+		PromptDeny:                     "Deny",
 		PromptApprovalQuestion:         "Allow this action?",
 		PromptApprovalRequestedOutcome: "Requested outcome:",
 		PromptApprovalExactAction:      "Exact action:",
@@ -31,6 +47,14 @@ var promptTextCatalog = map[string]map[PromptTextKey]string{
 			"Retry the request to start a new session.",
 	},
 	"ru": {
+		PromptFormHeader:               "PDF-форма",
+		PromptClarify:                  "Поясни вопрос",
+		PromptBack:                     "Назад",
+		PromptSkip:                     "Оставить пустым",
+		PromptNotApplicable:            "Не применимо",
+		PromptCancel:                   "⛔ Отменить задачу",
+		PromptAllowOnce:                "Разрешить один раз",
+		PromptDeny:                     "Отклонить",
 		PromptApprovalQuestion:         "Разрешить это действие?",
 		PromptApprovalRequestedOutcome: "Запрошенный результат:",
 		PromptApprovalExactAction:      "Точное действие:",

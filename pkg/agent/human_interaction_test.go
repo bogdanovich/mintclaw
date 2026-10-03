@@ -2785,6 +2785,30 @@ func TestInteractionResponseReplyTargetUsesPersistedCallbackMessage(t *testing.T
 	}
 }
 
+func TestInteractionPromptReplyTargetSeparatesCallbackEventIdentity(t *testing.T) {
+	record := interactions.Record{
+		ID: "interaction-callback", ShortID: "callback", Kind: interactions.KindQuestion,
+		Route: interactions.Route{Channel: "telegram", ChatID: "chat-1"},
+		Origin: interactions.Origin{
+			ExecutionContext: &bus.InboundContext{
+				MessageID:   "10698106213006357",
+				Interaction: bus.InboundInteractionProjection{ResponseMessageID: "7716"},
+			},
+		},
+	}
+	message := interactionPromptMessage(record)
+	if message.ReplyToMessageID != "7716" || message.Metadata.RequestID != "10698106213006357" {
+		t.Fatalf("callback prompt identity = %#v", message)
+	}
+	if got := interactionResponseReplyTarget(record, *record.Origin.ExecutionContext); got != "7716" {
+		t.Fatalf("callback terminal reply target = %q", got)
+	}
+	record.Answer = &interactions.Answer{MessageID: "10698106213006357"}
+	if got := interactionResponseReplyTarget(record, *record.Origin.ExecutionContext); got != "7716" {
+		t.Fatalf("callback projection must take precedence over the answer event ID: %q", got)
+	}
+}
+
 func TestProjectedInteractionCallbackPersistsFinalReplyTarget(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
@@ -9763,9 +9787,10 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:interaction-stop"),
 		Context: bus.InboundContext{
 			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
-			TopicID: "topic-1", SenderID: "user-1", MessageID: "stop-1",
+			TopicID: "topic-1", SenderID: "user-1", MessageID: "10698105932921492",
 			Interaction: bus.InboundInteractionProjection{
-				Choice: bus.InboundInteractionChoiceCancel,
+				Choice:            bus.InboundInteractionChoiceCancel,
+				ResponseMessageID: "7716",
 			},
 		},
 	})
@@ -9790,8 +9815,8 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 			metadata.InteractionKind != bus.OutboundInteractionQuestion {
 			t.Fatalf("stop reply metadata = %#v", metadata)
 		}
-		if outbound.Context.ReplyToMessageID != "stop-1" {
-			t.Fatalf("cancel-button reply target = %q, want stop-1", outbound.Context.ReplyToMessageID)
+		if outbound.Context.ReplyToMessageID != "7716" || outbound.ReplyToMessageID != "7716" {
+			t.Fatalf("cancel-button reply target = %q, want prompt message 7716", outbound.Context.ReplyToMessageID)
 		}
 		if strings.Contains(outbound.Content, "No active task to stop.") {
 			t.Fatalf("stop reply used inactive-task contract: %q", outbound.Content)
@@ -9814,6 +9839,27 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 	provider.mu.Unlock()
 	if calls != 0 {
 		t.Fatalf("model calls after interaction stop = %d, want 0", calls)
+	}
+}
+
+func TestRenderInteractionPromptPreservesSeparateUnicodeIntroductionAndQuestion(t *testing.T) {
+	introduction := strings.Repeat("文", interactions.MaxIntroductionLength)
+	question := strings.Repeat("Я", interactions.MaxQuestionLength-1) + "?"
+	record := interactions.Record{
+		Kind:           interactions.KindQuestion,
+		ShortID:        "1234abcd",
+		PromptLanguage: "ru",
+		Questions: []interactions.Question{
+			{ID: "value", Header: "PDF-форма", Introduction: introduction, Question: question},
+		},
+	}
+	got := renderInteractionPrompt(record)
+	want := "PDF-форма\n\n" + introduction + "\n\n" + question + "\n\n`/answer 1234abcd …`\n`/stop`"
+	if got != want {
+		t.Fatal("interaction rendering dropped or truncated an introduction/question section")
+	}
+	if got := interactionPromptMessage(record).Metadata.InteractionLanguage; got != "ru" {
+		t.Fatalf("outbound interaction language = %q", got)
 	}
 }
 

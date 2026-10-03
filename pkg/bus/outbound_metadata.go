@@ -37,6 +37,7 @@ type OutboundMetadata struct {
 	UsageTotalTokens    int                        `json:"usage_total_tokens,omitempty"`
 	InteractionKind     string                     `json:"interaction_kind,omitempty"`
 	InteractionControls string                     `json:"interaction_controls,omitempty"`
+	InteractionLanguage string                     `json:"interaction_language,omitempty"`
 	Choices             []string                   `json:"interaction_choices,omitempty"`
 	Actions             []InboundInteractionChoice `json:"interaction_actions,omitempty"`
 	InteractionID       string                     `json:"interaction_id,omitempty"`
@@ -66,7 +67,7 @@ func (m OutboundMetadata) IsZero() bool {
 		m.DefaultModelName == "" && m.UsageInputTokens == 0 && m.UsageOutputTokens == 0 &&
 		m.UsageTotalTokens == 0 && m.InteractionKind == "" && m.InteractionControls == "" &&
 		len(m.Choices) == 0 && len(m.Actions) == 0 && m.InteractionID == "" &&
-		m.InteractionShortID == "" && m.RequestID == ""
+		m.InteractionShortID == "" && m.RequestID == "" && m.InteractionLanguage == ""
 }
 
 // NormalizeOutboundMetadata returns one canonical representation for runtime
@@ -79,6 +80,7 @@ func NormalizeOutboundMetadata(m OutboundMetadata) OutboundMetadata {
 	m.DefaultModelName = strings.TrimSpace(m.DefaultModelName)
 	m.InteractionKind = strings.TrimSpace(m.InteractionKind)
 	m.InteractionControls = strings.TrimSpace(m.InteractionControls)
+	m.InteractionLanguage = strings.ToLower(strings.TrimSpace(m.InteractionLanguage))
 	m.InteractionID = strings.TrimSpace(m.InteractionID)
 	m.InteractionShortID = strings.TrimSpace(m.InteractionShortID)
 	m.RequestID = strings.TrimSpace(m.RequestID)
@@ -105,6 +107,7 @@ func ValidateOutboundMetadata(m OutboundMetadata) error {
 		m.DefaultModelName != normalized.DefaultModelName || m.UsageInputTokens != normalized.UsageInputTokens ||
 		m.UsageOutputTokens != normalized.UsageOutputTokens || m.UsageTotalTokens != normalized.UsageTotalTokens ||
 		m.InteractionKind != normalized.InteractionKind ||
+		m.InteractionLanguage != normalized.InteractionLanguage ||
 		m.InteractionControls != normalized.InteractionControls || m.InteractionID != normalized.InteractionID ||
 		m.InteractionShortID != normalized.InteractionShortID || m.RequestID != normalized.RequestID ||
 		!equalOutboundInteractionChoices(m.Choices, normalized.Choices) ||
@@ -222,6 +225,9 @@ func (m OutboundMetadata) Merge(update OutboundMetadata) OutboundMetadata {
 	}
 	if update.InteractionControls != "" {
 		m.InteractionControls = update.InteractionControls
+	}
+	if update.InteractionLanguage != "" {
+		m.InteractionLanguage = update.InteractionLanguage
 	}
 	if len(update.Choices) > 0 {
 		m.Choices = append([]string(nil), update.Choices...)
