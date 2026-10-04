@@ -309,9 +309,10 @@ func TestSuccessfulLLMCallConsumesLiveOnlyToolText(t *testing.T) {
 	durable := `{"state":"succeeded","pages":[1]}`
 	exec.messages = append(exec.messages, providers.Message{
 		Role: "tool", ToolCallID: "document-extract", Content: durable + "\n" + secret,
+		LiveToolContextID: "document-context",
 	})
 	exec.liveToolContexts = []liveToolContextProjection{{
-		toolCallID: "document-extract", durableContent: durable,
+		toolCallID: "document-extract", messageID: "document-context", durableContent: durable,
 	}}
 	ts.recordPersistedMessagePair(exec.messages[len(exec.messages)-1], providers.Message{
 		Role: "tool", ToolCallID: "document-extract", Content: durable,

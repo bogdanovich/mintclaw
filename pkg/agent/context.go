@@ -1514,9 +1514,11 @@ func prepareHistoryForProvider(history []providers.Message, preserveTurnEnvelope
 	sanitized := make([]providers.Message, 0, len(history))
 	for _, msg := range history {
 		envelope := msg.TurnEnvelope.Clone()
+		liveToolContextID := msg.LiveToolContextID
 		msg = stripCanonicalMessageState(msg)
 		if preserveTurnEnvelope {
 			msg.TurnEnvelope = envelope
+			msg.LiveToolContextID = liveToolContextID
 		}
 		switch msg.Role {
 		case "system":
@@ -1703,6 +1705,7 @@ func stripCanonicalMessageState(message providers.Message) providers.Message {
 	message.RootTurnStart = false
 	message.OutboundDeliveryID = ""
 	message.TurnEnvelope = nil
+	message.LiveToolContextID = ""
 	return message
 }
 

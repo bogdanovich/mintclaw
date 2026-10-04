@@ -141,16 +141,18 @@ func promptCacheScopeForTurn(ts *turnState, exec *turnExecution, purpose string)
 		}
 		var projections []liveProjection
 		for _, projection := range exec.liveToolContexts {
+			matches := 0
 			for _, message := range exec.messages {
-				if message.Role == "tool" && message.ToolCallID == projection.toolCallID {
+				if projection.matches(message) {
+					matches++
 					projections = append(projections, liveProjection{
 						message.ToolCallID, message.Content, message.Media,
 					})
 				}
 			}
-		}
-		if len(projections) != len(exec.liveToolContexts) {
-			return promptCacheLineageScope{}
+			if matches != 1 {
+				return promptCacheLineageScope{}
+			}
 		}
 		encoded, err := json.Marshal(projections)
 		if err != nil {

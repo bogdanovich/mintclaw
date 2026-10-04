@@ -176,6 +176,10 @@ type Message struct {
 	// with its later durable context injection. It is never persisted or sent
 	// to a provider.
 	CodingSteerID string `json:"-"`
+	// LiveToolContextID identifies one in-memory tool-result occurrence whose
+	// extra context must be consumed after a model call. Provider call IDs may
+	// be reused by later batches; this identity is never persisted or sent.
+	LiveToolContextID string `json:"-"`
 	// SteeringSenderID preserves the admission scope of an in-memory steering
 	// message when a suspended turn returns it to the runtime queue.
 	SteeringSenderID string `json:"-"`
