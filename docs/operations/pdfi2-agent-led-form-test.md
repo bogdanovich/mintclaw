@@ -29,7 +29,9 @@ same job, exercise these paths where they are valid:
 3. Use Back, then answer the revisited field.
 4. Skip one semantically optional field. A PDF field's unset `Required` flag alone is not sufficient: the agent must
    explicitly offer `blank_actions` (`skip` and/or `not_applicable`). Without that decision neither control is shown;
-   native required fields reject these actions even when requested by the agent.
+   native required fields reject these actions even when requested by the agent. Clarify and Back restore the saved
+   language and blank actions for the target field, including after restart; they must not copy the current field's
+   controls or infer new blank permissions from the schema. Existing jobs without a saved selection stay conservative.
 5. Correct one existing or already answered field in ordinary language.
 6. Ask for status. It must report value-free progress without exposing protected answers.
 7. At review, check the confirmed, preserved, skipped, unresolved, and blocker counts.
@@ -51,6 +53,10 @@ For the truncation regression, use synthetic Russian text whose UTF-8 byte count
 count stays within the question's 1000-character limit. The summary (512 characters) and plan (768 characters) have
 independent limits. An over-limit section must return a recoverable error, never a shortened question. Optional
 `interaction_language` is a BCP-47 tag; unsupported locales fall back to English control labels, not broken callbacks.
+
+The value-free per-field control selection is stored in the authenticated job snapshot and erased with terminal job
+cleanup. A binary rollback must not overwrite mutable state written by the new runtime: inspect snapshot compatibility
+and plan a forward migration or explicit restore before downgrading.
 
 ## Headless live-client path
 

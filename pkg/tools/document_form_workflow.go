@@ -744,7 +744,15 @@ func (tool *DocumentTool) navigateFormWorkflow(
 	if err != nil || string(action) != formAction {
 		return documentFormToolFailure("form_job_conflict", "the protected navigation receipt is invalid")
 	}
-	return tool.formQuestionResult(ctx, owner, schema, record, fieldID, formAction, documentFormQuestionPresentation{})
+	controls, err := tool.formJobs.QuestionControls(ctx, document.FormProtectedAnswerBindingRequest{
+		JobID: record.JobID, ExpectedRevision: record.Revision, Owner: owner, FieldID: fieldID,
+	})
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	return tool.formQuestionResult(ctx, owner, schema, record, fieldID, formAction, documentFormQuestionPresentation{
+		language: controls.Language, blankActions: controls.BlankActions,
+	})
 }
 
 func (tool *DocumentTool) statusFormWorkflow(
@@ -1019,6 +1027,9 @@ func (tool *DocumentTool) formQuestionResult(
 	binding, err := tool.formJobs.NewProtectedAnswerBinding(ctx, document.FormProtectedAnswerBindingRequest{
 		JobID: record.JobID, ExpectedRevision: record.Revision, Owner: owner,
 		FieldID: fieldID, SupersedesEventID: supersedes,
+		QuestionControls: &document.FormQuestionControls{
+			Language: presentation.language, BlankActions: presentation.blankActions,
+		},
 	})
 	if err != nil {
 		return documentFormToolError(err)

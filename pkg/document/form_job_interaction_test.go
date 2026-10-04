@@ -2,12 +2,89 @@ package document
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 )
+
+func TestFormQuestionControlsAreDurableFieldScopedAndAuthorityChecked(t *testing.T) {
+	store, options := newTestFormJobStore(t)
+	owner := testFormJobOwner()
+	created, err := store.Create(t.Context(), testFormJobCreateRequest(owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := FormProtectedAnswerBindingRequest{
+		JobID: created.JobID, ExpectedRevision: created.Revision, Owner: owner, FieldID: "field.name",
+	}
+	legacy, err := store.QuestionControls(t.Context(), request)
+	if err != nil || legacy.Language != "" || len(legacy.BlankActions) != 0 {
+		t.Fatalf("legacy controls = %#v, %v", legacy, err)
+	}
+	want := FormQuestionControls{Language: "ru", BlankActions: []interactions.ProtectedAnswerAction{
+		interactions.ProtectedAnswerActionSkip, interactions.ProtectedAnswerActionNotApplicable,
+	}}
+	request.QuestionControls = &want
+	if _, err = store.NewProtectedAnswerBinding(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	other := request
+	other.FieldID = "field.notes"
+	other.QuestionControls = &FormQuestionControls{Language: "en"}
+	if _, err = store.NewProtectedAnswerBinding(t.Context(), other); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	reopened, err := OpenFormJobStore(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reopened.Close)
+	got, err := reopened.QuestionControls(t.Context(), request)
+	if err != nil || got.Language != want.Language || !slices.Equal(got.BlankActions, want.BlankActions) {
+		t.Fatalf("restarted controls = %#v, %v", got, err)
+	}
+	wrongOwner := request
+	wrongOwner.Owner.SenderID = "other-actor"
+	if _, err = reopened.QuestionControls(t.Context(), wrongOwner); err == nil {
+		t.Fatal("another actor read saved controls")
+	}
+	stale := request
+	stale.ExpectedRevision++
+	if _, err = reopened.QuestionControls(t.Context(), stale); err == nil {
+		t.Fatal("stale job revision read saved controls")
+	}
+	for _, invalid := range []FormQuestionControls{
+		{Language: "RU"},
+		{BlankActions: []interactions.ProtectedAnswerAction{interactions.ProtectedAnswerActionBack}},
+		{BlankActions: []interactions.ProtectedAnswerAction{
+			interactions.ProtectedAnswerActionSkip, interactions.ProtectedAnswerActionSkip,
+		}},
+	} {
+		request.QuestionControls = &invalid
+		if _, err = reopened.NewProtectedAnswerBinding(t.Context(), request); err == nil {
+			t.Fatalf("invalid controls accepted: %#v", invalid)
+		}
+	}
+	request.QuestionControls = &FormQuestionControls{}
+	if _, err = reopened.NewProtectedAnswerBinding(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := reopened.QuestionControls(t.Context(), request)
+	if err != nil || cleared.Language != "" || len(cleared.BlankActions) != 0 {
+		t.Fatalf("explicit removal did not replace old controls: %#v, %v", cleared, err)
+	}
+	terminal, err := reopened.Cancel(t.Context(), created.JobID, created.Revision, owner)
+	if err != nil || terminal.State != FormJobCanceled {
+		t.Fatalf("cancel = %#v, %v", terminal, err)
+	}
+	if _, err = reopened.QuestionControls(t.Context(), request); err == nil {
+		t.Fatal("terminal job returned saved controls")
+	}
+}
 
 func TestFormProtectedAnswerSinkPersistsIdempotentlyAcrossRestart(t *testing.T) {
 	store, options := newTestFormJobStore(t)

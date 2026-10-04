@@ -398,6 +398,146 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	}
 }
 
+func TestDocumentFormNavigationRestoresTargetControlsAfterRestart(t *testing.T) {
+	for _, intent := range []interactions.ProtectedAnswerIntent{
+		interactions.ProtectedAnswerClarify, interactions.ProtectedAnswerBack,
+	} {
+		t.Run(string(intent), func(t *testing.T) {
+			store, options := newWorkflowFormStore(t)
+			mediaStore := media.NewFileMediaStore()
+			t.Cleanup(mediaStore.Stop)
+			data := []byte("%PDF-1.7\nnavigation fixture\n%%EOF\n")
+			path := filepath.Join(t.TempDir(), "source.pdf")
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ref, err := mediaStore.Store(path, media.MediaMeta{}, "navigation-fixture")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = mediaStore.BindOwner(ref, documentToolTestOwner(t)); err != nil {
+				t.Fatal(err)
+			}
+			schema := workflowTestSchema(data)
+			schema.Fields[0].Required = false
+			next := schema.Fields[0]
+			next.ID = "field_" + strings.Repeat("f", 64)
+			next.Name = "Notes"
+			next.Widgets = []document.FormFieldWidget{{
+				ID: "widget_" + strings.Repeat("b", 64), Page: 1, Ordinal: 1,
+			}}
+			schema.Fields = append(schema.Fields, next)
+			digest, err := document.FormFieldSchemaDigest(schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend, err := document.FormFieldsBackendRevision(schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := workflowToolContext(t, "navigation-create", "create", nil)
+			owner, err := documentFormOwner(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, err := store.Create(ctx, document.FormJobCreateRequest{
+				Owner: owner, StartIdempotencyKey: "navigation", SourceRef: ref,
+				SourceDigest: schema.SourceSHA256, FieldSchemaDigest: digest, BackendRevision: backend,
+				AuditPolicyRevision: "document-audit-v1",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tool := NewDocumentTool(WithDocumentFormJobStore(store))
+			tool.SetMediaStore(mediaStore)
+			tool.formSchema = workflowSchemaResolver(schema)
+			question := tool.Execute(ctx, map[string]any{
+				"action": "form", "form_action": "collect", "job_id": job.JobID,
+				"field_id": schema.Fields[0].ID, "question": "Какое имя указать?",
+				"form_summary": "Тестовая форма.", "collection_plan": "Уточню данные и покажу сводку.",
+				"interaction_language": "ru", "blank_actions": []any{"skip", "not_applicable"},
+			})
+			if question.IsError || question.Control.Suspension == nil {
+				t.Fatalf("collect = %#v", question)
+			}
+			sink, err := document.NewFormProtectedAnswerSink(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			accept := func(action interactions.ProtectedAnswerIntent, identity string) interactions.ProtectedAnswerReceipt {
+				t.Helper()
+				binding := *question.Control.Suspension.ProtectedAnswer
+				receipt, acceptErr := sink.Accept(t.Context(), interactions.ProtectedAnswerSinkRequest{
+					Binding: binding, Workspace: "workspace", Route: workflowInteractionRoute(),
+					InteractionID: identity, IdempotencyKey: identity, Intent: action, Text: "NAV_PRIVATE_VALUE",
+				})
+				if acceptErr != nil {
+					t.Fatal(acceptErr)
+				}
+				if commitErr := sink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
+					Binding: binding, Workspace: "workspace", Route: workflowInteractionRoute(),
+					InteractionID: identity, Receipt: receipt,
+				}); commitErr != nil {
+					t.Fatal(commitErr)
+				}
+				return receipt
+			}
+			if intent == interactions.ProtectedAnswerBack {
+				value := accept(interactions.ProtectedAnswerValue, "value")
+				continued := tool.Execute(ctx, map[string]any{
+					"action": "form", "form_action": "continue", "answer_ref": value.Reference,
+				})
+				if continued.IsError {
+					t.Fatalf("continue = %#v", continued)
+				}
+				question = tool.Execute(ctx, map[string]any{
+					"action": "form", "form_action": "collect", "job_id": job.JobID,
+					"field_id": next.ID, "question": "Any notes?", "interaction_language": "en",
+				})
+				if question.IsError || question.Control.Suspension == nil {
+					t.Fatalf("second collect = %#v", question)
+				}
+			}
+			before, err := store.Get(ctx, job.JobID, owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt := accept(intent, "navigation")
+			store.Close()
+			reopened, err := document.OpenFormJobStore(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(reopened.Close)
+			restarted := NewDocumentTool(WithDocumentFormJobStore(reopened))
+			restarted.SetMediaStore(mediaStore)
+			restarted.formSchema = workflowSchemaResolver(schema)
+			args, err := restarted.ProtectedAnswerContinuationArguments(receipt.Reference)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := restarted.Execute(workflowToolContext(t, "navigation-resume", "resume", nil), args)
+			projection := decodeWorkflowResult(t, result.ForLLM)
+			if result.IsError || result.Control.Suspension == nil || projection.NextField == nil ||
+				projection.NextField.FieldID != schema.Fields[0].ID {
+				t.Fatalf("navigation = %#v; projection=%#v", result, projection)
+			}
+			suspension := result.Control.Suspension
+			if suspension.PromptLanguage != "ru" || suspension.Questions[0].Header != "PDF-форма" ||
+				!slices.Equal(suspension.ProtectedAnswer.Actions, []interactions.ProtectedAnswerAction{
+					interactions.ProtectedAnswerActionClarify, interactions.ProtectedAnswerActionSkip,
+					interactions.ProtectedAnswerActionNotApplicable,
+				}) {
+				t.Fatalf("target controls lost = %#v", suspension)
+			}
+			after, err := reopened.Get(ctx, job.JobID, owner)
+			if err != nil || after.Revision != before.Revision || !slices.Equal(after.Fields, before.Fields) {
+				t.Fatalf("navigation changed values: before=%#v after=%#v err=%v", before, after, err)
+			}
+		})
+	}
+}
+
 func TestDocumentFormWorkflowAllowsInitialCorrectionWithAgentPlan(t *testing.T) {
 	formStore, _ := newWorkflowFormStore(t)
 	mediaStore, err := media.NewFileMediaStoreWithPersistentIndex(
