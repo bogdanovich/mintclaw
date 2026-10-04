@@ -1064,7 +1064,7 @@ func (tool *DocumentTool) formProgressWindowResult(
 	recentlyCompletedFieldID string,
 	window documentFormWindowSelection,
 ) *toolshared.ToolResult {
-	if record.State == document.FormJobReviewReady {
+	if record.State == document.FormJobReviewReady && !window.explicit {
 		review, err := tool.formJobs.CurrentFormReview(ctx, record.JobID, owner, schema)
 		if err != nil {
 			return documentFormToolError(err)

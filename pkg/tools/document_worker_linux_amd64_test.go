@@ -3,6 +3,7 @@
 package tools
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +42,7 @@ func TestDocumentFormEvidenceUsesRetainedSourceWithoutDurableRawEvidence(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	tool, job, _ := newDocumentDialogueJobWithSource(t, 2, document.FormFieldText, source)
+	tool, job, schema := newDocumentDialogueJobWithSource(t, 2, document.FormFieldText, source)
 	ctx := workflowToolContext(t, "retained-evidence", "retained-evidence-call", nil)
 	result := tool.Execute(ctx, map[string]any{
 		"action": "form", "form_action": "evidence", "job_id": job.JobID, "pages": []int{1},
@@ -74,5 +75,50 @@ func TestDocumentFormEvidenceUsesRetainedSourceWithoutDurableRawEvidence(t *test
 	image := renderView.Evidence.Artifacts[0]
 	if max(image.Width, image.Height) > documentFormEvidenceRenderEdge || image.Width <= 0 || image.Height <= 0 {
 		t.Fatalf("planning render exceeds fixed bounds: %#v", image)
+	}
+	for index, field := range schema.Fields {
+		job, _, err = tool.formJobs.AppendValue(ctx, document.FormJobAppendValueRequest{
+			JobID: job.JobID, ExpectedRevision: job.Revision, Owner: mustDocumentFormOwner(t, ctx),
+			FieldID: field.ID, IdempotencyKey: fmt.Sprintf("evidence-ready-%d", index),
+			Value: document.FormProtectedValue{Kind: document.ProtectedValueText, Text: "Synthetic confirmed fact"},
+			State: document.FormValueConfirmed, Source: document.FormValueSourceUser,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	tool.formAudit = &workflowTestAuditor{proposal: document.FormAuditProposal{Decision: document.FormAuditPass}}
+	reviewed := tool.Execute(ctx, map[string]any{"action": "form", "form_action": "review", "job_id": job.JobID})
+	reviewView := decodeWorkflowResult(t, reviewed.ForLLM)
+	if reviewed.IsError || reviewView.Job == nil || reviewView.Review == nil ||
+		reviewView.Job.State != document.FormJobReviewReady || !reviewView.Review.Ready {
+		t.Fatalf("evidence test did not reach review-ready: %#v", reviewed)
+	}
+	for _, mode := range []string{"text", "render"} {
+		readyEvidence := tool.Execute(ctx, map[string]any{
+			"action": "form", "form_action": "evidence", "job_id": job.JobID,
+			"pages": []int{1}, "evidence_mode": mode,
+		})
+		readyView := decodeWorkflowResult(t, readyEvidence.ForLLM)
+		if readyEvidence.IsError || readyView.Evidence == nil || readyView.Mapping == nil ||
+			!readyView.Mapping.Window.Selected || !readyView.Mapping.ReadyForReview ||
+			len(readyView.Mapping.CandidateFields) != 2 || readyView.Review != nil {
+			t.Fatalf("review-ready %s evidence lost its selected window: %#v", mode, readyEvidence)
+		}
+		readyFollowup, followupErr := tool.ToolResultFollowup(readyEvidence)
+		if followupErr != nil || readyFollowup == nil || readyFollowup.ResponseOnly {
+			t.Fatalf("review-ready %s evidence lost the fence: %#v, %v", mode, readyFollowup, followupErr)
+		}
+		for _, action := range []string{"correct", "review", "collect", "commit"} {
+			args := map[string]any{"action": "form", "form_action": action, "job_id": job.JobID}
+			if action == "correct" || action == "collect" {
+				args["field_id"] = readyView.Mapping.CandidateFields[0].FieldID
+				args["question"] = "What should replace this fact?"
+			}
+			allowed := action == "correct" || action == "review"
+			if validationErr := readyFollowup.ValidateArguments(args); (validationErr == nil) != allowed {
+				t.Fatalf("review-ready %s evidence action %s: allowed=%t, err=%v", mode, action, allowed, validationErr)
+			}
+		}
 	}
 }
