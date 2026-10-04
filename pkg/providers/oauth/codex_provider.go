@@ -403,9 +403,9 @@ func buildCodexParams(
 			OfInputItemList: inputItems,
 		},
 		Store: openai.Opt(false),
-		Reasoning: shared.ReasoningParam{
-			Effort: codexReasoningEffort(options["thinking_level"]),
-		},
+	}
+	if effort, configured := codexReasoningEffort(options["thinking_level"]); configured {
+		params.Reasoning = shared.ReasoningParam{Effort: effort}
 	}
 
 	if instructions != "" {
@@ -435,23 +435,29 @@ func buildCodexParams(
 	return params
 }
 
-func codexReasoningEffort(raw any) shared.ReasoningEffort {
+func codexReasoningEffort(raw any) (shared.ReasoningEffort, bool) {
 	level, _ := raw.(string)
 	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "off":
+		return shared.ReasoningEffortNone, true
 	case "low":
-		return shared.ReasoningEffortLow
+		return shared.ReasoningEffortLow, true
 	case "medium", "adaptive":
-		return shared.ReasoningEffortMedium
+		return shared.ReasoningEffortMedium, true
 	case "high":
-		return shared.ReasoningEffortHigh
+		return shared.ReasoningEffortHigh, true
 	case "xhigh":
-		return shared.ReasoningEffortXhigh
+		return shared.ReasoningEffortXhigh, true
 	case "max":
 		// openai-go can serialize forward-compatible string enum values even
 		// before it publishes a named constant for the Codex catalog tier.
-		return shared.ReasoningEffort("max")
+		return shared.ReasoningEffort("max"), true
 	default:
-		return shared.ReasoningEffortNone
+		// An absent effort means "use the model default", not "disable
+		// reasoning". New Codex models may reject the explicit wire value
+		// "none", so leave the reasoning object out unless the operator chose
+		// an effort supported by the concrete model profile.
+		return "", false
 	}
 }
 
