@@ -2,7 +2,9 @@
 
 ## Status and scope
 
-Status: active. PR 1 is in implementation; PRs 2 and 3 are pending.
+Status: active. PR 1 merged as #1457 (`5a58ce0fa`). PR 2 implementation and
+local validation are complete at #1461; CI/review/merge remain pending. PR 3 is
+pending. No production deployment yet.
 
 Fix the shared delegation contract behind the October 3 browser incident.
 Do not redesign the browser driver or add site-specific workarounds. The same
@@ -77,6 +79,27 @@ conditional handoff. Keep required behavior as the compatibility default.
 Restrict any conditional declaration to lifecycle work; required result and
 external-action verification cannot be bypassed through it. Preserve the
 declaration through durable suspension and continuation.
+
+The caller declares `requirement: "if_needed"` only on a `live_handoff` item,
+for example authentication recovery. Omitted requirements and `"required"`
+retain mandatory semantics. The child partitions an unnecessary conditional
+handoff into `not_needed_items`; a performed handoff instead claims its durable
+receipt in `completed_items`, and a needed but unsuccessful handoff remains in
+`missing_items`. This is a bounded declaration, not a condition interpreter.
+
+```json
+{
+  "objective_items": [
+    {"item": "Inspect and report both account results", "kind": "result"},
+    {
+      "item": "Hand over the same session only if authentication is required",
+      "kind": "live_handoff",
+      "requirement": "if_needed"
+    },
+    {"item": "Confirm cleanup", "kind": "result"}
+  ]
+}
+```
 
 Acceptance criteria:
 

@@ -4985,6 +4985,15 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 }
 
 func TestLiveHandoffContinuationClaimsDurableReceiptAfterTerminalCompletion(t *testing.T) {
+	for _, requirement := range []string{taskresult.ObjectiveRequirementRequired, taskresult.ObjectiveRequirementIfNeeded} {
+		t.Run(requirement, func(t *testing.T) {
+			testLiveHandoffContinuationClaimsDurableReceipt(t, requirement)
+		})
+	}
+}
+
+func testLiveHandoffContinuationClaimsDurableReceipt(t *testing.T, requirement string) {
+	t.Helper()
 	toolCall := func(id, operation string) providers.ToolCall {
 		return providers.ToolCall{
 			ID: id, Name: "browser_handoff_continuation",
@@ -5004,6 +5013,7 @@ func TestLiveHandoffContinuationClaimsDurableReceiptAfterTerminalCompletion(t *t
 	}
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
 		Item: "hand the live browser session to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+		Requirement: requirement,
 	}})
 
 	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{

@@ -74,6 +74,48 @@ func TestParseObjectiveItemsCarriesStructuredAcceptance(t *testing.T) {
 	}
 }
 
+func TestParseObjectiveItemsConditionalRequirement(t *testing.T) {
+	for _, requirement := range []string{"", "required", "if_needed"} {
+		entry := map[string]any{"item": "authentication handoff", "kind": "live_handoff"}
+		if requirement != "" {
+			entry["requirement"] = requirement
+		}
+		items, err := parseObjectiveItems([]any{entry})
+		if err != nil || len(items) != 1 || items[0].Requirement != requirement {
+			t.Fatalf("requirement %q = (%#v, %v)", requirement, items, err)
+		}
+	}
+	for _, entry := range []map[string]any{
+		{"item": "return data", "kind": "result", "requirement": "if_needed"},
+		{"item": "publish", "kind": "external_action", "requirement": "if_needed"},
+		{"item": "handoff", "kind": "live_handoff", "requirement": "optional"},
+		{"item": "handoff", "kind": "live_handoff", "requirement": true},
+		{"item": "handoff", "kind": "live_handoff", "requirement": nil},
+	} {
+		if items, err := parseObjectiveItems([]any{entry}); err == nil {
+			t.Fatalf("invalid requirement was admitted: %#v", items)
+		}
+	}
+}
+
+func TestObjectiveItemsParameterLimitsConditionalRequirementToHandoff(t *testing.T) {
+	for _, kinds := range [][]string{
+		{taskresult.ObjectiveKindResult, taskresult.ObjectiveKindExternalAction},
+		{taskresult.ObjectiveKindResult, taskresult.ObjectiveKindLiveHandoff},
+	} {
+		schema := objectiveItemsParameter(kinds...)
+		properties := schema["items"].(map[string]any)["properties"].(map[string]any)
+		_, offered := properties["requirement"]
+		if offered != objectiveKindAllowed(kinds, taskresult.ObjectiveKindLiveHandoff) {
+			t.Fatalf(
+				"requirement availability does not match handoff capability: kinds=%v properties=%v",
+				kinds,
+				properties,
+			)
+		}
+	}
+}
+
 func TestParseObjectiveItemsCarriesExactJSONIntent(t *testing.T) {
 	items, err := parseObjectiveItems([]any{map[string]any{
 		"item": "return the final JSON report", "kind": "result",

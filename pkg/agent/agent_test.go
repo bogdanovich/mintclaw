@@ -9405,7 +9405,8 @@ func TestRunAgentLoop_MessageToolMediaDeliveryBlocksBeforeFinalResponse(t *testi
 
 	msgBus := bus.NewMessageBus()
 	provider := &messageToolMediaThenFinalProvider{mediaPath: videoPath}
-	al := NewAgentLoop(cfg, msgBus, provider)
+	// Delivery fixtures must not depend on the operator's installed skills.
+	al := NewAgentLoop(cfg, msgBus, provider, WithIsolatedSkillBootstrap())
 	installTestOutboundCoordinator(t, al, t.TempDir())
 	store := media.NewFileMediaStore()
 	al.SetMediaStore(store)
@@ -9520,7 +9521,7 @@ func TestRunAgentLoop_MessageToolMediaDefaultsToTerminalDelivery(t *testing.T) {
 
 	msgBus := bus.NewMessageBus()
 	provider := &terminalMessageToolMediaProvider{mediaPath: videoPath}
-	al := NewAgentLoop(cfg, msgBus, provider)
+	al := NewAgentLoop(cfg, msgBus, provider, WithIsolatedSkillBootstrap())
 	store := media.NewFileMediaStore()
 	al.SetMediaStore(store)
 	mediaChannel := &fakeMediaChannel{}

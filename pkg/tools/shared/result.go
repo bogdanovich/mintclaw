@@ -361,9 +361,10 @@ type WriteAuditEntry struct {
 // stable checklist ID before a configured child runs. It verifies the declared
 // contract; it does not infer omitted intent from free-form text.
 type ObjectiveSpec struct {
-	Item       string                          `json:"item"`
-	Kind       string                          `json:"kind"`
-	Acceptance *taskresult.ObjectiveAcceptance `json:"acceptance,omitempty"`
+	Item        string                          `json:"item"`
+	Kind        string                          `json:"kind"`
+	Requirement string                          `json:"requirement,omitempty"`
+	Acceptance  *taskresult.ObjectiveAcceptance `json:"acceptance,omitempty"`
 }
 
 // ContentForLLM returns the normalized textual content to append to the

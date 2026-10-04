@@ -277,10 +277,11 @@ type Origin struct {
 }
 
 type ObjectiveChecklistItem struct {
-	ID         string                          `json:"id"`
-	Item       string                          `json:"item"`
-	Kind       string                          `json:"kind"`
-	Acceptance *taskresult.ObjectiveAcceptance `json:"acceptance,omitempty"`
+	ID          string                          `json:"id"`
+	Item        string                          `json:"item"`
+	Kind        string                          `json:"kind"`
+	Requirement string                          `json:"requirement,omitempty"`
+	Acceptance  *taskresult.ObjectiveAcceptance `json:"acceptance,omitempty"`
 }
 
 type Answer struct {
