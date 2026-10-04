@@ -75,8 +75,12 @@ func TestObjectivePresentationPreservesFactsAndSpecificBlocker(t *testing.T) {
 		"missing link":    strings.ReplaceAll(answer, "https://example.com/42", "the listing"),
 		"missing blocker": strings.TrimSuffix(answer, blocker),
 		"altered price":   strings.ReplaceAll(answer, "$85", "$850"),
+		"decimal price":   strings.ReplaceAll(answer, "$85", "$85.50"),
 		"altered ID":      strings.ReplaceAll(answer, "42", "142"),
 		"altered link":    strings.ReplaceAll(answer, "https://example.com/42", "https://example.com/420"),
+		"link path":       strings.ReplaceAll(answer, "https://example.com/42", "https://example.com/42/other"),
+		"link query":      strings.ReplaceAll(answer, "https://example.com/42", "https://example.com/42?other=true"),
+		"link fragment":   strings.ReplaceAll(answer, "https://example.com/42", "https://example.com/42#other"),
 		"JSON fragment":   answer + ` Supporting data: {"id":42}`,
 		"envelope":        answer + objectiveOutcomeStart,
 	} {
@@ -85,6 +89,20 @@ func TestObjectivePresentationPreservesFactsAndSpecificBlocker(t *testing.T) {
 				t.Fatalf("incomplete or internal answer admitted: %q", got)
 			}
 		})
+	}
+}
+
+func TestPresentationURLBoundaries(t *testing.T) {
+	const link = "https://example.com/"
+	for _, text := range []string{link, "See " + link + ".", "[Example](" + link + ")", "<" + link + ">"} {
+		if !containsPresentationFact(text, link) {
+			t.Fatalf("retained URL rejected: %q", text)
+		}
+	}
+	for _, suffix := range []string{"other", "?other=true", "#other", ".other", ";other", "/other"} {
+		if containsPresentationFact(link+suffix, link) {
+			t.Fatalf("different URL admitted: %q", link+suffix)
+		}
 	}
 }
 

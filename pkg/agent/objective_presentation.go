@@ -75,6 +75,7 @@ func containsPresentationFact(text, fact string) bool {
 	}
 	first, _ := utf8.DecodeRuneInString(fact)
 	last, _ := utf8.DecodeLastRuneInString(fact)
+	isURL := strings.HasPrefix(fact, "https://") || strings.HasPrefix(fact, "http://")
 	word := func(char rune) bool { return unicode.IsLetter(char) || unicode.IsDigit(char) || char == '_' }
 	for offset := 0; offset < len(text); {
 		index := strings.Index(text[offset:], fact)
@@ -85,7 +86,21 @@ func containsPresentationFact(text, fact string) bool {
 		end := index + len(fact)
 		left, _ := utf8.DecodeLastRuneInString(text[:index])
 		right, _ := utf8.DecodeRuneInString(text[end:])
-		if (!word(first) || !word(left)) && (!word(last) || !word(right)) {
+		rightBoundary := !word(last) || !word(right)
+		if isURL {
+			// A literal URL prefix is not the retained link. Permit only end,
+			// whitespace, closing markup, or terminal sentence punctuation.
+			rightBoundary = end == len(text) || unicode.IsSpace(right) || strings.ContainsRune(")]>", right)
+			if !rightBoundary && strings.ContainsRune(".,;!", right) {
+				_, width := utf8.DecodeRuneInString(text[end:])
+				next, _ := utf8.DecodeRuneInString(text[end+width:])
+				rightBoundary = end+width == len(text) || unicode.IsSpace(next)
+			}
+		} else if unicode.IsDigit(last) && right == '.' {
+			next, _ := utf8.DecodeRuneInString(text[end+1:])
+			rightBoundary = !unicode.IsDigit(next)
+		}
+		if (!word(first) || !word(left)) && rightBoundary {
 			return true
 		}
 		offset = index + 1
