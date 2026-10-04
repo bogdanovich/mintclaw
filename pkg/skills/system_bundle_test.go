@@ -68,6 +68,14 @@ func TestBundledPDFSkillRoutesOrdinaryFormRequestsThroughProtectedWorkflow(t *te
 		"Do not solicit missing protected values through",
 		"ordinary chat",
 		"call `fields`, build one complete stable-ID assignment map",
+		"`max_characters: 4000`",
+		"at most two explicit pages",
+		"`max_dimension: 1024`",
+		"`field_window.truncated`",
+		"`form_action: clarify_intent`",
+		"browsing keeps the protected-question fence active",
+		"`job.needs_initial_plan`",
+		"never copy names, existing values, or raw source text",
 	} {
 		assert.Contains(t, contract, required)
 	}

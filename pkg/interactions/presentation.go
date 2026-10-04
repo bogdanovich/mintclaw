@@ -19,6 +19,7 @@ const (
 	PromptResponseRecorded         PromptTextKey = "response_recorded"
 	PromptLiveHandoffExpired       PromptTextKey = "live_handoff_expired"
 	PromptFormHeader               PromptTextKey = "form_header"
+	PromptFormAnswerHint           PromptTextKey = "form_answer_hint"
 	PromptClarify                  PromptTextKey = "clarify"
 	PromptBack                     PromptTextKey = "back"
 	PromptSkip                     PromptTextKey = "skip"
@@ -31,6 +32,7 @@ const (
 var promptTextCatalog = map[string]map[PromptTextKey]string{
 	"en": {
 		PromptFormHeader:               "PDF form",
+		PromptFormAnswerHint:           "You may reply with free text or use the choices below.",
 		PromptClarify:                  "Clarify",
 		PromptBack:                     "Back",
 		PromptSkip:                     "Skip",
@@ -48,6 +50,7 @@ var promptTextCatalog = map[string]map[PromptTextKey]string{
 	},
 	"ru": {
 		PromptFormHeader:               "PDF-форма",
+		PromptFormAnswerHint:           "Можно ответить текстом или выбрать вариант ниже.",
 		PromptClarify:                  "Поясни вопрос",
 		PromptBack:                     "Назад",
 		PromptSkip:                     "Оставить пустым",

@@ -226,7 +226,7 @@ func (tool *DocumentTool) Description() string {
 			"operation_id returned by fill"
 	}
 	return "Inspect, read, render, conversationally complete, directly fill, or verify an exact current PDF " +
-		"attachment or authorized local PDF. For an ordinary form-completion request, inspect, use form discover, then " +
+		"attachment or authorized local PDF. For an ordinary form-completion request, inspect and read bounded evidence, use form discover, then " +
 		"start the protected multi-turn form workflow with the returned field_schema_digest. The first protected question " +
 		"requires the agent's short form_summary and collection_plan; use collect for a missing value and correct for an " +
 		"existing value the user asked to replace; reserve direct fill for a complete explicit stable-ID map. " +
@@ -308,13 +308,15 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"type": "string",
 				"enum": []string{
 					"discover", "start", "collect", "continue", "clarify", "back", "status", "correct", "review",
-					"commit", "cancel",
+					"commit", "cancel", "clarify_intent", "evidence",
 				},
 				"description": "Agent-led protected form operation. discover returns a bounded field window and exact " +
 					"field_schema_digest; start prepares a job from that digest without asking a question and returns " +
 					"bounded candidate_fields; collect asks one explicitly selected field and MUST include a non-empty " +
 					"question; continue accepts only answer_ref and never asks the next field; clarify and back accept " +
 					"only an interaction-runtime navigation_ref and deterministically ask the authenticated field; " +
+					"clarify_intent pauses before collection for ordinary intent/applicability clarification, never values; " +
+					"evidence reads at most two pages/4000 characters or renders one page at 1024 pixels from the same job; " +
 					"status, correct, review, commit, and cancel keep using the original job_id.",
 			},
 			"field_schema_digest": map[string]any{
@@ -322,6 +324,12 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"minLength":   sha256.Size * 2,
 				"maxLength":   sha256.Size * 2,
 				"description": "Exact field_schema_digest returned by form discover for this source; required for form start.",
+			},
+			"evidence_mode": map[string]any{
+				"type": "string",
+				"enum": []string{"text", "render"},
+				"description": "Form evidence only: text (default) or one-page render. Requires job_id and explicit pages; " +
+					"returns bounded current-call evidence alongside the same job's safe field window, never retained media.",
 			},
 			"job_id": map[string]any{
 				"type":        "string",
@@ -353,14 +361,15 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"minLength": 1,
 				"maxLength": documentFormSummaryMaxRunes,
 				"description": "Short value-free user-facing document summary authored by the agent. Required with " +
-					"collection_plan for the first protected question, whether collecting or correcting a field.",
+					"collection_plan for the first protected question; may also carry bounded interpretation notes at discover " +
+					"immediately after reading. Never include source text or field values.",
 			},
 			"collection_plan": map[string]any{
 				"type":      "string",
 				"minLength": 1,
 				"maxLength": documentFormPlanMaxRunes,
 				"description": "Short value-free user-facing collection plan authored by the agent. Required with " +
-					"form_summary for the first protected question, whether collecting or correcting a field.",
+					"form_summary for the first protected question; may accompany discover to retain value-free semantic notes.",
 			},
 			"checked_label": map[string]any{
 				"type":      "string",
@@ -514,7 +523,29 @@ func (*DocumentTool) ToolResultFollowup(
 		if projection.Job == nil {
 			return nil, errors.New("prepared form job is unavailable")
 		}
-		return documentFormToolOnlyFollowup(projection, true)
+		return documentFormToolOnlyFollowup(projection, projection.Job.NeedsInitialPlan ||
+			projection.Job.State == document.FormJobPrepared)
+	case "status", "evidence":
+		if projection.Mapping != nil && projection.Mapping.Window.Selected {
+			if projection.Job == nil {
+				return nil, errors.New("browsed form job is unavailable")
+			}
+			return documentFormToolOnlyFollowup(projection, projection.Job.NeedsInitialPlan)
+		}
+		return nil, nil
+	case "clarify_intent":
+		if projection.Job == nil || !projection.Job.NeedsInitialPlan ||
+			projection.Job.State != document.FormJobPrepared {
+			return nil, errors.New("form intent checkpoint is unavailable")
+		}
+		return &toolshared.ToolOnlyFollowup{
+			ResponseOnly: true,
+			Instruction: "The same immutable form job is prepared but collection has not started. Ask one focused " +
+				"ordinary question about intent or section applicability only when it changes the plan. Explain that " +
+				"personal form values will be requested separately through protected questions. Do not ask for a " +
+				"personal value, expose IDs, make assignments, or claim completion. Wait for the user's reply and " +
+				"continue this same job; do not require the attachment again.",
+		}, nil
 	case "review":
 		if projection.Job == nil {
 			return nil, errors.New("reviewed form job is unavailable")
@@ -642,7 +673,32 @@ func documentFormToolOnlyFollowup(
 		// transition; ordinary review/commit rendering may resume.
 		return nil, nil
 	}
-	if projection.Mapping.ReadyForReview {
+	initialPlan := prepared || projection.Job.NeedsInitialPlan
+	validateBrowse := func(arguments map[string]any) (bool, error) {
+		action := strings.ToLower(strings.TrimSpace(stringDocumentArg(arguments, "form_action")))
+		if action != "status" && action != "clarify_intent" && action != "evidence" {
+			return false, nil
+		}
+		if strings.TrimSpace(stringDocumentArg(arguments, "action")) != "form" ||
+			strings.TrimSpace(stringDocumentArg(arguments, "job_id")) != jobID {
+			return true, errors.New("form planning follow-up changed the current job")
+		}
+		if action == "status" && !documentFormWindowArgs(arguments).explicit {
+			return true, errors.New("form browsing requires an explicit page or field window")
+		}
+		if action == "clarify_intent" && (!initialPlan || projection.Job.State != document.FormJobPrepared) {
+			return true, errors.New("ordinary intent clarification must precede protected collection")
+		}
+		return true, validateDocumentActionOptions("form", arguments)
+	}
+	browseInstruction := " If the relevant field is outside this window, call form_action=status with the same " +
+		"job_id and explicit pages or field_offset; this preserves the protected question boundary. " +
+		"For missing textual/visual evidence, use form_action=evidence with the same job_id and explicit pages, " +
+		"choosing evidence_mode=text or render. Do not guess from cryptic labels."
+	if initialPlan && projection.Job.State == document.FormJobPrepared {
+		browseInstruction += " If material intent is ambiguous, use form_action=clarify_intent for this job before collecting values."
+	}
+	if projection.Mapping.ReadyForReview && !projection.Mapping.Window.Selected {
 		lead := "The protected answer was consumed and the form is ready for review. "
 		if prepared {
 			lead = "The prepared form is ready for review. "
@@ -650,8 +706,11 @@ func documentFormToolOnlyFollowup(
 		return &toolshared.ToolOnlyFollowup{
 			Instruction: lead +
 				"Call the originating tool exactly once with action=form, form_action=review, and the exact job_id " +
-				"from its result. Do not answer in prose or repeat any field question.",
+				"from its result. Do not answer in prose or repeat any field question." + browseInstruction,
 			ValidateArguments: func(arguments map[string]any) error {
+				if handled, err := validateBrowse(arguments); handled {
+					return err
+				}
 				if len(arguments) != 3 || strings.TrimSpace(stringDocumentArg(arguments, "action")) != "form" ||
 					strings.ToLower(strings.TrimSpace(stringDocumentArg(arguments, "form_action"))) != "review" ||
 					strings.TrimSpace(stringDocumentArg(arguments, "job_id")) != jobID {
@@ -663,6 +722,7 @@ func documentFormToolOnlyFollowup(
 	}
 
 	actions := make(map[string]string)
+	kinds := make(map[string]document.FormFieldKind)
 	for _, candidate := range projection.Mapping.CandidateFields {
 		fieldID := strings.TrimSpace(candidate.FieldID)
 		blocker := strings.TrimSpace(candidate.Blocker)
@@ -674,16 +734,17 @@ func documentFormToolOnlyFollowup(
 			action = "collect"
 		}
 		actions[fieldID] = action
+		kinds[fieldID] = candidate.Kind
 	}
-	if len(actions) == 0 {
+	if len(actions) == 0 && !projection.Mapping.Window.Selected {
 		return nil, errors.New("protected form follow-up has no unresolved candidate")
 	}
 	lead := "The protected answer was consumed. Continue the same form job by calling the originating tool "
-	if prepared {
+	if initialPlan {
 		lead = "The form job was prepared successfully. Start protected collection by calling the originating tool "
 	}
 	planInstruction := ""
-	if prepared {
+	if initialPlan {
 		planInstruction = " For this first protected question, include concise value-free form_summary and " +
 			"collection_plan in the user's language."
 	}
@@ -695,15 +756,28 @@ func documentFormToolOnlyFollowup(
 			"and include a concise user-facing question in the user's language." + planInstruction +
 			" Supply interaction_language to localize controls. Keep question distinct from summary/plan. " +
 			"Offer blank_actions only when the field is optional by meaning; PDF required=false is not enough." +
+			" Checkbox questions require both checked_label and unchecked_label matching the question meanings." +
+			browseInstruction +
 			" Do not answer in prose, collect an existing value as missing, repeat a confirmed field unless the user " +
 			"asked to correct it, expose IDs to the user, or request the protected value again.",
 		ValidateArguments: func(arguments map[string]any) error {
+			if handled, err := validateBrowse(arguments); handled {
+				return err
+			}
+			if projection.Mapping.ReadyForReview &&
+				strings.TrimSpace(stringDocumentArg(arguments, "form_action")) == "review" {
+				if len(arguments) != 3 || strings.TrimSpace(stringDocumentArg(arguments, "action")) != "form" ||
+					strings.TrimSpace(stringDocumentArg(arguments, "job_id")) != jobID {
+					return errors.New("protected form follow-up must review the current job")
+				}
+				return validateDocumentActionOptions("form", arguments)
+			}
 			for key := range arguments {
 				switch key {
 				case "action", "form_action", "job_id", "field_id", "question", "checked_label", "unchecked_label",
 					"interaction_language", "blank_actions":
 				case "form_summary", "collection_plan":
-					if !prepared {
+					if !initialPlan {
 						return errors.New("protected form follow-up contains an unrelated option")
 					}
 				default:
@@ -722,11 +796,16 @@ func documentFormToolOnlyFollowup(
 			}
 			formSummary := strings.TrimSpace(stringDocumentArg(arguments, "form_summary"))
 			collectionPlan := strings.TrimSpace(stringDocumentArg(arguments, "collection_plan"))
-			if prepared && (formSummary == "" || collectionPlan == "") {
+			if initialPlan && (formSummary == "" || collectionPlan == "") {
 				return errors.New("prepared form follow-up requires a summary and collection plan")
 			}
-			if !prepared && (formSummary != "" || collectionPlan != "") {
+			if !initialPlan && (formSummary != "" || collectionPlan != "") {
 				return errors.New("form summary and collection plan are valid only for the initial question")
+			}
+			if kinds[fieldID] == document.FormFieldCheckbox &&
+				(strings.TrimSpace(stringDocumentArg(arguments, "checked_label")) == "" ||
+					strings.TrimSpace(stringDocumentArg(arguments, "unchecked_label")) == "") {
+				return errors.New("checkbox questions require explicit matching labels")
 			}
 			return validateDocumentActionOptions("form", arguments)
 		},
@@ -1407,7 +1486,7 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 			"action": {}, "form_action": {}, "source": {}, "job_id": {}, "answer_ref": {}, "event_id": {},
 			"navigation_ref": {}, "field_id": {}, "question": {}, "field_schema_digest": {}, "form_summary": {},
 			"collection_plan": {}, "checked_label": {}, "unchecked_label": {}, "pages": {}, "field_offset": {},
-			"interaction_language": {}, "blank_actions": {},
+			"interaction_language": {}, "blank_actions": {}, "evidence_mode": {},
 		},
 		"fill":   {"action": {}, "source": {}, "assignments": {}, "operation_id": {}},
 		"verify": {"action": {}, "source": {}, "operation_id": {}},
@@ -1461,6 +1540,19 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		}
 		if err := validateDocumentFormWindow(formAction, args); err != nil {
 			return err
+		}
+		if rawMode, present := args["evidence_mode"]; present {
+			mode, valid := rawMode.(string)
+			if formAction != "evidence" || !valid || (mode != "text" && mode != "render") {
+				return errors.New("evidence_mode applies only to bounded form evidence")
+			}
+		}
+		if formAction == "evidence" {
+			pages, valid := documentPagesArg(args["pages"])
+			if !valid || len(pages) == 0 || len(pages) > documentFormEvidencePageLimit ||
+				(stringDocumentArg(args, "evidence_mode") == "render" && len(pages) != 1) {
+				return errors.New("form evidence requires at most two text pages or exactly one rendered page")
+			}
 		}
 		hasSource := strings.TrimSpace(stringDocumentArg(args, "source")) != ""
 		hasJob := strings.TrimSpace(stringDocumentArg(args, "job_id")) != ""
@@ -1518,10 +1610,8 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		case "discover":
 			if !hasSource || hasJob || hasAnswer || hasNavigation || hasLegacyEvent || hasField || hasQuestion ||
 				hasSchemaDigest ||
-				hasFormSummary ||
-				hasCollectionPlan ||
 				hasCheckboxLabels {
-				return errors.New("form discover requires only source")
+				return errors.New("form discover requires source and optional value-free summary/plan notes")
 			}
 		case "start":
 			if !hasSource || hasJob || hasAnswer || hasNavigation || hasLegacyEvent || hasField || hasQuestion ||
@@ -1556,7 +1646,7 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 				string(navigation.Action) != formAction {
 				return errors.New("form clarify or back requires only its exact navigation_ref")
 			}
-		case "status", "review", "commit", "cancel":
+		case "status", "review", "commit", "cancel", "clarify_intent", "evidence":
 			if hasSource || !hasJob || hasAnswer || hasNavigation || hasLegacyEvent || hasField || hasQuestion ||
 				hasSchemaDigest ||
 				hasFormSummary ||
@@ -1577,7 +1667,7 @@ func validateDocumentFormWindow(formAction string, args map[string]any) error {
 	if !hasPages && !hasOffset {
 		return nil
 	}
-	if formAction != "discover" && formAction != "start" && formAction != "status" {
+	if formAction != "discover" && formAction != "start" && formAction != "status" && formAction != "evidence" {
 		return errors.New("form field windows apply only to discover, start, or status")
 	}
 	if hasPages {

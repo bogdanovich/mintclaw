@@ -31,7 +31,7 @@ import (
 func TestDocumentToolDescriptionRequiresUnambiguousFillMapping(t *testing.T) {
 	description := NewDocumentTool().Description()
 	for _, required := range []string{
-		"ordinary form-completion request, inspect, use form discover, then start",
+		"ordinary form-completion request, inspect and read bounded evidence, use form discover, then start",
 		"field_schema_digest",
 		"form_summary and collection_plan",
 		"reserve direct fill for a complete explicit stable-ID map",

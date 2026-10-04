@@ -29,6 +29,9 @@ const (
 	documentFormPlanMaxRunes          = 768
 	documentFormCandidateLimit        = 8
 	documentFormPlanningPageLimit     = 3
+	documentFormEvidencePageLimit     = 2
+	documentFormEvidenceTextLimit     = 4000
+	documentFormEvidenceRenderEdge    = 1024
 )
 
 type documentFormQuestionPresentation struct {
@@ -55,6 +58,7 @@ type safeDocumentFormJob struct {
 	ArtifactRef          string                `json:"artifact_ref,omitempty"`
 	ArtifactDigest       string                `json:"artifact_digest,omitempty"`
 	ExpiresAt            int64                 `json:"expires_at"`
+	NeedsInitialPlan     bool                  `json:"needs_initial_plan"`
 }
 
 type safeDocumentFormField struct {
@@ -93,6 +97,7 @@ type documentFormWindowSelection struct {
 }
 
 type safeDocumentFormWindow struct {
+	Selected   bool  `json:"selected"`
 	Pages      []int `json:"pages,omitempty"`
 	Offset     int   `json:"offset"`
 	Limit      int   `json:"limit"`
@@ -143,6 +148,7 @@ type safeDocumentFormResult struct {
 	Review            *safeDocumentFormReview  `json:"review,omitempty"`
 	Commit            *safeDocumentFormCommit  `json:"commit,omitempty"`
 	Failure           *safeDocumentFormFailure `json:"failure,omitempty"`
+	Evidence          *safeDocumentReport      `json:"evidence,omitempty"`
 }
 
 type safeDocumentFormCommit struct {
@@ -185,6 +191,10 @@ func (tool *DocumentTool) formWorkflow(
 		return tool.navigateFormWorkflow(ctx, store, mediaOwner, owner, args, formAction)
 	case "status":
 		return tool.statusFormWorkflow(ctx, store, mediaOwner, owner, args)
+	case "clarify_intent":
+		return tool.clarifyFormIntent(ctx, store, mediaOwner, owner, args)
+	case "evidence":
+		return tool.formEvidence(ctx, store, mediaOwner, owner, args)
 	case "correct":
 		return tool.collectFormWorkflow(ctx, store, mediaOwner, owner, args, "correct")
 	case "review":
@@ -785,7 +795,76 @@ func (tool *DocumentTool) navigateFormWorkflow(
 	}
 	return tool.formQuestionResult(ctx, owner, schema, record, fieldID, formAction, documentFormQuestionPresentation{
 		language: controls.Language, blankActions: controls.BlankActions,
+		question: controls.Question, checkedLabel: controls.CheckedLabel, uncheckedLabel: controls.UncheckedLabel,
 	})
+}
+
+func (tool *DocumentTool) clarifyFormIntent(
+	ctx context.Context,
+	store ownedDocumentMediaStore,
+	mediaOwner media.MediaOwner,
+	owner document.FormJobOwner,
+	args map[string]any,
+) *toolshared.ToolResult {
+	record, schema, err := tool.loadFormWorkflow(ctx, store, mediaOwner, owner, stringDocumentArg(args, "job_id"))
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	if record.State != document.FormJobPrepared || len(record.Fields) != 0 {
+		return documentFormToolFailure("form_job_conflict", "intent clarification is only available before collection")
+	}
+	return tool.formProgressResult(ctx, owner, schema, record, "clarify_intent", "")
+}
+
+func (tool *DocumentTool) formEvidence(
+	ctx context.Context,
+	store ownedDocumentMediaStore,
+	mediaOwner media.MediaOwner,
+	owner document.FormJobOwner,
+	args map[string]any,
+) *toolshared.ToolResult {
+	jobID := stringDocumentArg(args, "job_id")
+	record, schema, err := tool.loadFormWorkflow(ctx, store, mediaOwner, owner, jobID)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	progress := tool.formProgressWindowResult(ctx, owner, schema, record, "evidence", "", documentFormWindowArgs(args))
+	if progress.IsError {
+		return progress
+	}
+	ref, err := tool.formJobs.SourceRef(ctx, jobID, owner)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	readArgs := map[string]any{"pages": args["pages"], "max_characters": documentFormEvidenceTextLimit}
+	var read *toolshared.ToolResult
+	if stringDocumentArg(args, "evidence_mode") == "render" {
+		if !toolshared.ToolDocumentVisionAvailable(ctx) {
+			return documentToolFailure("render", document.StateUnavailable, document.FailureVisionUnavailable,
+				"the selected model route has no configured image-input path")
+		}
+		readArgs = map[string]any{"pages": args["pages"], "max_dimension": documentFormEvidenceRenderEdge}
+		read = tool.render(ctx, store, ref, mediaOwner, readArgs)
+	} else {
+		read = tool.extract(ctx, store, ref, mediaOwner, readArgs)
+	}
+	if read.IsError {
+		return read
+	}
+	var projection safeDocumentFormResult
+	var evidence safeDocumentReport
+	if json.Unmarshal([]byte(progress.ForLLM), &projection) != nil ||
+		json.Unmarshal([]byte(read.ForLLM), &evidence) != nil || evidence.Source == nil ||
+		evidence.Source.SHA256 != record.SourceDigest {
+		return documentFormToolFailure(
+			"form_job_stale",
+			"the planning evidence does not match the immutable form source",
+		)
+	}
+	projection.Evidence = &evidence
+	result := documentFormToolResult(projection)
+	result.ContextText, result.ContextMedia = read.ContextText, read.ContextMedia
+	return result
 }
 
 func (tool *DocumentTool) statusFormWorkflow(
@@ -891,6 +970,14 @@ func (tool *DocumentTool) collectFormWorkflow(
 	})
 	if fieldIndex < 0 {
 		return documentFormToolFailure("field_unresolved", "the requested form field is unavailable")
+	}
+	if schema.Fields[fieldIndex].Kind == document.FormFieldCheckbox &&
+		(strings.TrimSpace(stringDocumentArg(args, "checked_label")) == "" ||
+			strings.TrimSpace(stringDocumentArg(args, "unchecked_label")) == "") {
+		return documentFormToolFailure(
+			"checkbox_labels_required",
+			"checkbox questions require checked_label and unchecked_label matching their meanings",
+		)
 	}
 	language := ""
 	if rawLanguage := stringDocumentArg(args, "interaction_language"); rawLanguage != "" {
@@ -1076,7 +1163,11 @@ func (tool *DocumentTool) formQuestionResult(
 		JobID: record.JobID, ExpectedRevision: record.Revision, Owner: owner,
 		FieldID: fieldID, SupersedesEventID: supersedes,
 		QuestionControls: &document.FormQuestionControls{
-			Language: presentation.language, BlankActions: presentation.blankActions,
+			Language:       presentation.language,
+			BlankActions:   presentation.blankActions,
+			Question:       presentation.question,
+			CheckedLabel:   presentation.checkedLabel,
+			UncheckedLabel: presentation.uncheckedLabel,
 		},
 	})
 	if err != nil {
@@ -1102,6 +1193,9 @@ func (tool *DocumentTool) formQuestionResult(
 		Question:     documentFormQuestionText(presentation.question, label, field),
 		Options:      options,
 		MultiSelect:  field.MultiSelect,
+	}
+	if formAction == "clarify" {
+		question.Introduction = interactions.PromptText(presentation.language, interactions.PromptFormAnswerHint)
 	}
 	suspension := interactions.SuspensionRequest{
 		Kind: interactions.KindQuestion, Questions: []interactions.Question{question},
@@ -1490,6 +1584,7 @@ func documentFormMappingWindow(
 		WritableFieldCount: summary.WritableFieldCount,
 		Window: safeDocumentFormWindow{
 			Pages: append([]int(nil), window.pages...), Offset: window.offset, Limit: documentFormCandidateLimit,
+			Selected: window.explicit,
 		},
 	}
 	blockers := make(map[string]string, len(summary.Unresolved))
@@ -1811,6 +1906,7 @@ func safeDocumentFormJobProjection(record document.FormJobRecord) *safeDocumentF
 		ApprovalRevision: record.ApprovalRevision, OutputPolicyRevision: record.OutputPolicyRevision,
 		OperationID: record.OperationID, ArtifactRef: record.ArtifactRef,
 		ArtifactDigest: record.ArtifactDigest, ExpiresAt: record.ExpiresAt,
+		NeedsInitialPlan: len(record.Fields) == 0 && !documentFormTerminalState(record.State),
 	}
 }
 
