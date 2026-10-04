@@ -1866,11 +1866,14 @@ Done when:
 
 Dependencies: P7.1, P7.4
 
-Status: implementation in progress. See the focused
+Status: complete. See the
+[`P7.5 exit record`](local-coding-agent-p7-5-exit.md) for the merged
+implementation, exact production grant, direct read/write and artifact
+canaries, remote-task control and reconnect/no-replay proof, no-grant
+compatibility, health, backups, and rollback. The focused
 [`P7.5 companion capability access contract`](local-coding-agent-p7-5-companion-access.md)
-for the same-user IPC boundary, exact grant model, direct capability and
-remote-task ownership split, implementation sequence, validation matrix,
-rollout, rollback, and stop conditions.
+remains the normative same-user IPC, authority, ownership, validation, and
+stop-condition contract.
 
 Current implementation includes the authenticated same-user broker, explicit
 workspace read/write adapters, exact foreground/direct-argv execution, and
@@ -1893,9 +1896,8 @@ work. The local coding runtime now composes a separate `remote_coding_task`
 facade, writes bounded task links through canonical tool results, rebuilds
 active continuity across compaction/resume/restart, discloses copied fork links
 as historical, and projects placement/state/recovery through the shared
-TUI/plain/JSONL command-observation path. Remaining work is integrated
-qualification, production canaries, rollout/rollback evidence, and the final
-P7.5 exit record.
+TUI/plain/JSONL command-observation path. Integrated qualification, production
+canaries, rollout/rollback evidence, and the final exit record are complete.
 
 Scope:
 

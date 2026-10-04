@@ -66,6 +66,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Local Coding Agent P7.5 Companion Capability Access](local-coding-agent-p7-5-companion-access.md): admitted
   same-user gateway IPC, exact local-coding grants, direct paired capabilities, remote coding-task links,
   transcript and recovery ownership, implementation sequence, validation, rollout, and stop conditions.
+- [Local Coding Agent P7.5 Exit Record](local-coding-agent-p7-5-exit.md): merged implementation, exact production
+  grant, direct and remote-task canaries, reconnect/no-replay evidence, health, backups, and rollback.
 - [Local Coding Agent P7.7 Yolo Execution Profiles](local-coding-agent-p7-7-yolo-execution.md): completed
   project publication, direct machine work, explicit root execution, configuration migration, validation,
   production rollout, and stop conditions over the existing durable coding-task path.
