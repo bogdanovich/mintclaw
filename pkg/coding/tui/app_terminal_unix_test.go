@@ -41,6 +41,11 @@ type completingTerminalController struct {
 	once sync.Once
 }
 
+type failingTerminalController struct {
+	*fakeController
+	once sync.Once
+}
+
 func (controller *completingTerminalController) Subscribe(
 	ctx context.Context,
 ) (frontend.ThreadSnapshot, <-chan frontend.ThreadSnapshot, error) {
@@ -55,6 +60,24 @@ func (controller *completingTerminalController) Subscribe(
 				"END OF NATIVE HISTORY"
 			controller.AssistantAccumulated("turn-long-answer", answer, true)
 			controller.TurnCompleted("turn-long-answer", "completed")
+		}()
+	})
+	return snapshot, updates, nil
+}
+
+func (controller *failingTerminalController) Subscribe(
+	ctx context.Context,
+) (frontend.ThreadSnapshot, <-chan frontend.ThreadSnapshot, error) {
+	snapshot, updates, err := controller.fakeController.Subscribe(ctx)
+	if err != nil {
+		return frontend.ThreadSnapshot{}, nil, err
+	}
+	controller.once.Do(func() {
+		go func() {
+			controller.TurnStarted("turn-failed", "what this repo is about")
+			controller.Error("turn-failed", "provider-error", "agent error during llm")
+			controller.Error("turn-failed", "turn-error", "coding turn failed")
+			controller.TurnFailed("turn-failed", "coding turn failed")
 		}()
 	})
 	return snapshot, updates, nil
@@ -132,6 +155,8 @@ func TestTUIHelperProcess(t *testing.T) {
 		)
 		controller.AssistantAccumulated("turn-fallback", "Recovered once through the fallback provider.", true)
 		controller.TurnCompleted("turn-fallback", "completed")
+	case "failure":
+		active = &failingTerminalController{fakeController: controller}
 	case "resume":
 		controller.Open(true)
 		controller.ThreadMetadataUpdated(frontend.ThreadMetadata{
@@ -353,6 +378,50 @@ func TestTerminalPTYCommitsLongCompletedTurnToNativeScrollback(t *testing.T) {
 	}
 }
 
+func TestTerminalPTYClearsVisibleInlineFrameOnlyAfterResize(t *testing.T) {
+	session := startTerminalHelper(t, "fallback", []string{"NO_COLOR=1"}, 80, 24)
+	waitForTerminalSequence(t, session.output, "Recovered once through the fallback provider.")
+	beforeResize := session.output.String()
+	if strings.Contains(beforeResize, "\x1b[2J") {
+		t.Fatalf("initial inline paint cleared the visible terminal\n%q", beforeResize)
+	}
+
+	session.resize(t, 120, 32)
+	waitForTerminalSequenceAfter(t, session.output, len(beforeResize), "\x1b[2J")
+	afterResize := session.output.String()[len(beforeResize):]
+	if strings.Contains(afterResize, "\x1b[3J") {
+		t.Fatalf("inline resize purged native shell scrollback\n%q", afterResize)
+	}
+
+	session.write(t, "/exit\r")
+	rendered := session.finish(t)
+	assertTerminalRestored(t, "inline resize repaint", rendered)
+	assertOrdinarySessionStayedInline(t, "inline resize repaint", rendered)
+	if !strings.Contains(rendered, "shell scrollback sentinel") {
+		t.Fatalf("inline resize output omitted pre-TUI shell history\n%q", rendered)
+	}
+}
+
+func TestTerminalPTYReflowsCommittedHistoryAfterResize(t *testing.T) {
+	session := startTerminalHelper(t, "failure", []string{"NO_COLOR=1"}, 80, 24)
+	waitForTerminalSequence(t, session.output, "coding turn failed")
+	beforeResize := session.output.String()
+
+	session.resize(t, 120, 32)
+	waitForTerminalSequenceAfter(t, session.output, len(beforeResize), eraseTerminalScrollback)
+	afterResize := session.output.String()[len(beforeResize):]
+	for _, want := range []string{"agent error during llm", "coding turn failed"} {
+		if !strings.Contains(afterResize, want) {
+			t.Fatalf("inline resize replay omitted %q\n%q", want, afterResize)
+		}
+	}
+
+	session.write(t, "/exit\r")
+	rendered := session.finish(t)
+	assertTerminalRestored(t, "inline resize history replay", rendered)
+	assertOrdinarySessionStayedInline(t, "inline resize history replay", rendered)
+}
+
 func TestTranscriptOverlayTemporarilyOwnsAlternateScreen(t *testing.T) {
 	session := startTerminalHelper(t, "fallback", nil, 80, 24)
 	waitForTerminalSequence(t, session.output, "Recovered once through the fallback provider.")
@@ -393,6 +462,37 @@ func TestTranscriptOverlayTemporarilyOwnsAlternateScreen(t *testing.T) {
 		overlay < enter {
 		t.Fatalf("transcript overlay rendered before alternate-screen entry\n%q", rendered)
 	}
+}
+
+func TestTranscriptOverlayDefersResizeReflowUntilInlineRestored(t *testing.T) {
+	session := startTerminalHelper(t, "failure", []string{"NO_COLOR=1"}, 80, 24)
+	waitForTerminalSequence(t, session.output, "coding turn failed")
+	session.write(t, "/transcript\r")
+	waitForTerminalSequence(t, session.output, "\x1b[?1049h")
+	waitForTerminalSequence(t, session.output, "Full transcript")
+	beforeResize := session.output.String()
+
+	session.resize(t, 120, 32)
+	// Give the PTY's SIGWINCH delivery time to reach Bubble Tea before closing
+	// the overlay; the behavior under test is the resulting ordered repaint.
+	time.Sleep(250 * time.Millisecond)
+	session.write(t, "\x1b")
+	waitForTerminalSequenceAfter(t, session.output, len(beforeResize), eraseTerminalScrollback)
+	afterResize := session.output.String()[len(beforeResize):]
+	exitAlternate := strings.Index(afterResize, "\x1b[?1049l")
+	purgeScrollback := strings.Index(afterResize, eraseTerminalScrollback)
+	if exitAlternate < 0 || purgeScrollback < exitAlternate {
+		t.Fatalf("overlay resize reflow order exit=%d purge=%d\n%q", exitAlternate, purgeScrollback, afterResize)
+	}
+	for _, want := range []string{"agent error during llm", "coding turn failed"} {
+		if !strings.Contains(afterResize[purgeScrollback:], want) {
+			t.Fatalf("overlay resize replay omitted %q\n%q", want, afterResize)
+		}
+	}
+
+	session.write(t, "/exit\r")
+	rendered := session.finish(t)
+	assertTerminalRestored(t, "overlay resize history replay", rendered)
 }
 
 func TestTerminalLifecycleRunsInsideTmuxWhenAvailable(t *testing.T) {
@@ -542,6 +642,13 @@ func (session *terminalHelperSession) write(t *testing.T, value string) {
 	}
 }
 
+func (session *terminalHelperSession) resize(t *testing.T, width, height uint16) {
+	t.Helper()
+	if err := pty.Setsize(session.terminal, &pty.Winsize{Cols: width, Rows: height}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (session *terminalHelperSession) finish(t *testing.T) string {
 	t.Helper()
 	wait := make(chan error, 1)
@@ -589,6 +696,21 @@ func waitForTerminalSequence(t *testing.T, output *lockedBuffer, sequence string
 	for !strings.Contains(output.String(), sequence) {
 		if time.Now().After(deadline) {
 			t.Fatalf("terminal did not emit %q\n%q", sequence, output.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func waitForTerminalSequenceAfter(t *testing.T, output *lockedBuffer, offset int, sequence string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rendered := output.String()
+		if len(rendered) >= offset && strings.Contains(rendered[offset:], sequence) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("terminal did not emit %q after byte %d\n%q", sequence, offset, rendered)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

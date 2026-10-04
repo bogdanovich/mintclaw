@@ -121,16 +121,21 @@ func (m *Model) closeTranscriptOverlay() tea.Cmd {
 	m.commandPanel = savedPanel
 	m.commandPanelOffset = savedPanelOffset
 	m.refreshViewportAt(savedPosition)
-	if savedFocus && m.focused {
-		if m.adaptiveHeight {
-			return tea.Sequence(tea.DisableMouse, tea.ExitAltScreen, m.composer.Focus())
+	if !m.adaptiveHeight {
+		if savedFocus && m.focused {
+			return m.composer.Focus()
 		}
-		return m.composer.Focus()
+		return nil
 	}
-	if m.adaptiveHeight {
-		return tea.Sequence(tea.DisableMouse, tea.ExitAltScreen)
+	commands := []tea.Cmd{tea.DisableMouse, tea.ExitAltScreen}
+	if m.inlineReflowPending {
+		m.inlineReflowPending = false
+		commands = append(commands, m.reflowNativeHistoryAfterResize())
 	}
-	return nil
+	if savedFocus && m.focused {
+		commands = append(commands, m.composer.Focus())
+	}
+	return tea.Sequence(commands...)
 }
 
 func (m *Model) syncTranscriptOverlay() {

@@ -166,11 +166,15 @@ type Model struct {
 	firstPaintRecorded  bool
 	diagnostics         presentationDiagnosticsState
 	adaptiveHeight      bool
+	windowSizeObserved  bool
+	inlineReflowPending bool
 	showStartupStatus   bool
 	herdrReporter       *herdrLifecycleReporter
 	nativeHistoryTurns  map[string]struct{}
 	printNativeHistory  func(string) tea.Cmd
 }
+
+const eraseTerminalScrollback = "\x1b[3J"
 
 var _ tea.Model = (*Model)(nil)
 
@@ -358,7 +362,23 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.WindowSizeMsg:
+		width, height := max(1, message.Width), max(1, message.Height)
+		clearStaleInlineFrame := m.adaptiveHeight && m.windowSizeObserved &&
+			(m.width != width || m.height != height)
+		m.windowSizeObserved = true
 		m.resize(message.Width, message.Height)
+		if clearStaleInlineFrame {
+			if m.transcriptOverlay.active {
+				m.inlineReflowPending = true
+				return m, m.scheduleWorkingTick()
+			}
+			// Bubble Tea's inline renderer tracks logical rows from the old
+			// geometry. After a real resize those rows may wrap differently and
+			// survive later repaints as duplicated text. Rebuild the MintClaw
+			// transcript from semantic cells after clearing the stale terminal
+			// history, matching Codex's inline resize contract.
+			return m, tea.Batch(m.scheduleWorkingTick(), m.reflowNativeHistoryAfterResize())
+		}
 		return m, m.scheduleWorkingTick()
 	case SubscriptionMsg:
 		if message.Err != nil {
@@ -840,6 +860,30 @@ func (m *Model) renderNativeHistoryTurn(turnID string) string {
 	}
 	context := cellRenderContext{Width: m.viewport.Width, Theme: m.theme, ColorLevel: m.colorLevel}
 	return renderSemanticCellSpecs(groupedLiveCellSpecs(cells), context)
+}
+
+func (m *Model) reflowNativeHistoryAfterResize() tea.Cmd {
+	cells := make([]*presentationCell, 0, len(m.cells.ordered))
+	for _, cell := range m.cells.ordered {
+		if cell == nil {
+			continue
+		}
+		if _, committed := m.nativeHistoryTurns[cell.item.TurnID]; committed {
+			cells = append(cells, cell)
+		}
+	}
+	if len(cells) == 0 {
+		return tea.ClearScreen
+	}
+	context := cellRenderContext{Width: m.viewport.Width, Theme: m.theme, ColorLevel: m.colorLevel}
+	history := renderSemanticCellSpecs(groupedLiveCellSpecs(cells), context)
+	if history == "" {
+		return tea.ClearScreen
+	}
+	return tea.Sequence(
+		tea.ClearScreen,
+		m.printNativeHistory(eraseTerminalScrollback+history),
+	)
 }
 
 func (m *Model) Dimensions() (int, int) {
