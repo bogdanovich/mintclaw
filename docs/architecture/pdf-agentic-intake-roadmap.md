@@ -14,8 +14,9 @@ interaction identity and a protected receipt that a model could confuse. Those a
 rollback of its routing evidence.
 
 PDFI2 is complete; its implementation, deployment, and live evidence are recorded in the
-[PDFI2 exit report](pdf-agentic-intake-pdfi2-exit.md). PDFI3 is admitted and in progress under its
-[implementation goal](pdf-agentic-intake-pdfi3-goal.md); it has no exit evidence yet. PDFI4 remains not started.
+[PDFI2 exit report](pdf-agentic-intake-pdfi2-exit.md). PDFI3 is complete for its admitted bounded scope; its
+[exit report](pdf-agentic-intake-pdfi3-exit.md) records implementation, qualification, fixes, and channel limits.
+PDFI4 remains not started.
 PDFI5 remains conditional on a second accepted non-PDF protected-input consumer.
 
 ## Operator outcome
@@ -107,8 +108,8 @@ Completion gate:
 
 ### PDFI3: Bounded semantic fact plan and natural dialogue
 
-**Status:** Admitted; implementation and qualification in progress. The
-[PDFI3 implementation goal](pdf-agentic-intake-pdfi3-goal.md) freezes ownership, packets, budgets, and stop criteria.
+**Status:** Complete for the admitted bounded scope. See the [PDFI3 exit report](pdf-agentic-intake-pdfi3-exit.md).
+The [PDFI3 implementation goal](pdf-agentic-intake-pdfi3-goal.md) freezes ownership, packets, budgets, and stop criteria.
 
 Teach the bundled PDF skill to interpret the form before collecting values and add only the compact native projections
 needed to keep that plan bounded.

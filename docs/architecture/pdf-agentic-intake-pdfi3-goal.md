@@ -2,7 +2,8 @@
 
 ## Status
 
-Admitted on 2026-10-03. Implementation and qualification are in progress; this document does not claim an exit.
+Admitted on 2026-10-03; completed for the admitted scope on 2026-10-04. The
+[exit report](pdf-agentic-intake-pdfi3-exit.md) records exact revisions, qualification, and residual limits.
 The predecessor is the completed [PDFI2 packet](pdf-agentic-intake-pdfi2-exit.md). The active program is the
 [agentic intake roadmap](pdf-agentic-intake-roadmap.md).
 
