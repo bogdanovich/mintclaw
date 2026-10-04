@@ -2,8 +2,8 @@
 
 ## Status and scope
 
-Status: active. PR 1 is in CI/review at #1457. PR 2 implementation is complete
-on a dependent branch, with full-suite validation and merge pending. PR 3 is
+Status: active. PR 1 merged as #1457 (`5a58ce0fa`). PR 2 implementation and
+local validation are complete at #1461; CI/review/merge remain pending. PR 3 is
 pending. No production deployment yet.
 
 Fix the shared delegation contract behind the October 3 browser incident.
