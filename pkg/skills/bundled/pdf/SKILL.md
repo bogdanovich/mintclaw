@@ -40,19 +40,41 @@ use that discovery only when it is actually present in the current tool catalog.
 
 ## Protected conversational form workflow (only when `form` is admitted)
 
-1. Call `action: form`, `form_action: discover` with the inspected source. Do not call `fields`: discover returns an
+1. Read evidence before planning: call `extract` on at most two explicit pages with `max_characters: 4000`. If text
+   cannot establish the relevant labels/layout, render one page with `dpi: 72` and `max_dimension: 1024`, without retention.
+   Further evidence is another explicit bounded request, not a larger inventory. Source text/images exist for the next model
+   call only. Immediately interpret them into value-free notes, never copy names, existing values, or raw source text.
+   Call `action: form`, `form_action: discover` with the inspected source and these notes as `form_summary` (at most
+   512 characters) and `collection_plan` (at most 768 characters). They are conversation notes, not a native planner.
+   Do not call `fields`: discover returns an
    exact `field_schema_digest` and a small unresolved-first `candidate_fields` window while the complete inventory
    stays outside model context. Fields with a `blocker` still need input; value-free candidates without one are included
-   only when space remains so existing entries can be corrected. Candidates are page-ordered within those groups. From
-   the inspect evidence and candidates, briefly explain the form, applicable sections, and a bounded collection plan in
-   human terms. Clarify goals in ordinary conversation first. Do not dump field IDs or the raw inventory.
+   only when space remains so existing entries can be corrected. `field_window.truncated` reports omitted fields;
+   `next_offset` enables another eight-field window. Select at most three sorted unique `pages` or a `field_offset` to
+   browse deliberately. Counts are job-wide, not window counts. Candidate order is not question order: choose the
+   applicable section using evidence and the user's intent. Missing or cryptic labels do not authorize guessing an ID
+   from page order. Keep unresolved ambiguity in the plan, not invented assignments. Do not dump field IDs or the raw inventory.
 2. Call `action: form`, `form_action: start` with the same source and exact `field_schema_digest`; it prepares the job
    without asking a question. After successful discovery, the runtime requires this exact tool-only transition; do not
-   replace it with a plain-chat value question. Deliberately choose a candidate, then call `form_action: collect` for
+   replace it with a plain-chat value question. If intent changes applicable sections and remains ambiguous, call
+   `form_action: clarify_intent` with this `job_id`; then ask one ordinary intent question and wait. Never ask for a
+   personal form value at that checkpoint. Resume the same job after the reply, without asking for the attachment again.
+   Use `status` with explicit `pages` or `field_offset` to browse the prepared job, including after a protected receipt;
+   browsing keeps the protected-question fence active. An empty view means browse elsewhere, not guess a field.
+   If a later section's meaning is still unclear, use `form_action: evidence` with the same `job_id` and explicit
+   `pages`. Its `evidence_mode: text` reads at most two pages/4,000 characters; `evidence_mode: render` renders exactly
+   one page at a 1,024-pixel edge. It returns those pages' bounded schema window alongside current-call evidence,
+   preserves source identity and the protected-question fence, and never delivers the rendered page. Supply
+   `field_offset` when a page has more than eight candidates. Do not claim unread sections or guess cryptic IDs.
+   Deliberately choose a candidate, then call `form_action: collect` for
    a missing value or `form_action: correct` for an existing value the user asked to replace, with its `field_id`, the
    original `job_id`, and your concise human `question`. The first protected question also requires separate value-free
    user-facing `form_summary` and `collection_plan`; write both in the user's language and do not include existing or
    newly supplied field values.
+   Explain in the collection plan that personal answers use protected questions. Retain only value-free section and
+   applicability notes; do not copy a value between distinct fields/people, even if it seems reusable. The ledger alone
+   owns values. `status` distinguishes `preserved`, `confirmed`, `missing`, conflicts, and `optional_blank` without
+   showing them. If `job.needs_initial_plan` is true, supply the initial summary/plan even after browsing or clarification.
    Keep the question itself focused on one fact; do not repeat the summary or plan in it. Each section has its own
    character budget. Set `interaction_language` to the user's BCP-47 language so headers and controls match.
    Offer `blank_actions` only when the document's instructions and the user's intent justify leaving this particular
@@ -74,6 +96,8 @@ use that discovery only when it is actually present in the current tool catalog.
 4. Keep the job. Use `status`, `correct` with a safe field plus a new question, and `cancel` on request. `Skip` and
    `Not applicable` are typed blank-value decisions for optional fields; `Cancel` and `/stop` terminate the workflow.
    Translate ordinary correction intent yourself; never request a field ID or replace the job.
+   A correction outside the current window requires explicit bounded `status` or `evidence` browsing first. Preserve the user's
+   intended person/section; ask a focused applicability question before collection when that binding is ambiguous.
 5. At `ready_for_review`, call `form_action: review`. Its counts and bounded, value-free `fields` window summarize the
    complete internal review; prioritize any returned blockers and use the returned stable `field_id` with `correct`
    when needed. A ready review is a hard human boundary: summarize it and wait for a new user message; never call

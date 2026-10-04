@@ -206,6 +206,29 @@ collection for an unresolved form. For a review-ready job, default status keeps 
 field window exposes safe existing-field identities for a requested correction. No view grants assignment,
 approval, mutation, or delivery authority.
 
+Prepared jobs and protected-answer continuations can browse explicit `status` windows without releasing the
+tool-only question boundary. `field_window.selected` distinguishes these views from an ordinary status request;
+an empty view can browse elsewhere but cannot invent a field or commit. `job.needs_initial_plan` preserves the
+first-question summary/plan requirement across browsing and an ordinary intent checkpoint.
+
+The PDF skill reads at most two pages/4,000 characters initially, or one rendered page with a 1,024-pixel edge.
+It carries only value-free interpretation notes in the existing `form_summary` and `collection_plan` arguments
+to `discover`; the raw evidence still expires after one model call. Notes do not become native semantic state or
+assignment authority. Question order, applicability, and interpretation remain agent responsibilities.
+
+Within a prepared or continuing job, `form/evidence` uses its owner-authorized retained source: specify `job_id`,
+explicit `pages`, and `evidence_mode: text` (default, at most two pages/4,000 characters) or `render` (exactly one page,
+1,024-pixel edge at 72 DPI). The result pairs an eight-field window for those pages with current-call text or image
+evidence; `field_offset` reaches another window on the same pages. It checks the source digest, reports read truncation through
+the existing report, retains the question fence, and never delivers/retains a rendered page for the operator.
+
+Before any answer has been recorded, a prepared job can use `clarify_intent` for a response-only ordinary question
+about material intent/applicability. It retains the same source/job across the reply and must not ask for a personal
+form value. Personal facts use protected questions. Native code rejects agent-authored checkbox questions without
+both explicit labels; the agent is responsible for matching their meanings to its question. Value-free question
+wording and labels are bounded, field-scoped presentation retained for native Clarify/Back navigation, not a plan.
+Older jobs without authored presentation retain the generic native re-ask behavior.
+
 Submitted values are protected tool-call input. Ordinary history, task deliverables, traces, logs, and document
 journals keep only field IDs, assignment count/hash, source/request/output digests, assertion counts, operation ID,
 delivery identity, and opaque artifact ref.

@@ -26,7 +26,7 @@ func TestFormQuestionControlsAreDurableFieldScopedAndAuthorityChecked(t *testing
 	}
 	want := FormQuestionControls{Language: "ru", BlankActions: []interactions.ProtectedAnswerAction{
 		interactions.ProtectedAnswerActionSkip, interactions.ProtectedAnswerActionNotApplicable,
-	}}
+	}, Question: "Who is this form for?", CheckedLabel: "Another person", UncheckedLabel: "Myself"}
 	request.QuestionControls = &want
 	if _, err = store.NewProtectedAnswerBinding(t.Context(), request); err != nil {
 		t.Fatal(err)
@@ -44,7 +44,8 @@ func TestFormQuestionControlsAreDurableFieldScopedAndAuthorityChecked(t *testing
 	}
 	t.Cleanup(reopened.Close)
 	got, err := reopened.QuestionControls(t.Context(), request)
-	if err != nil || got.Language != want.Language || !slices.Equal(got.BlankActions, want.BlankActions) {
+	if err != nil || got.Language != want.Language || !slices.Equal(got.BlankActions, want.BlankActions) ||
+		got.Question != want.Question || got.CheckedLabel != want.CheckedLabel || got.UncheckedLabel != want.UncheckedLabel {
 		t.Fatalf("restarted controls = %#v, %v", got, err)
 	}
 	wrongOwner := request
@@ -59,6 +60,11 @@ func TestFormQuestionControlsAreDurableFieldScopedAndAuthorityChecked(t *testing
 	}
 	for _, invalid := range []FormQuestionControls{
 		{Language: "RU"},
+		{Question: strings.Repeat("x", interactions.MaxQuestionLength+1)},
+		{CheckedLabel: "Only one label"},
+		{CheckedLabel: "Same", UncheckedLabel: "same"},
+		{CheckedLabel: " padded ", UncheckedLabel: "Other"},
+		{CheckedLabel: strings.Repeat("x", interactions.MaxOptionLabelLength+1), UncheckedLabel: "Other"},
 		{BlankActions: []interactions.ProtectedAnswerAction{interactions.ProtectedAnswerActionBack}},
 		{BlankActions: []interactions.ProtectedAnswerAction{
 			interactions.ProtectedAnswerActionSkip, interactions.ProtectedAnswerActionSkip,

@@ -323,7 +323,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	clarifiedProjection := decodeWorkflowResult(t, clarified.ForLLM)
 	if clarified.IsError || clarified.Control.Suspension == nil || clarifiedProjection.FormAction != "clarify" ||
 		clarifiedProjection.NextField == nil || clarifiedProjection.NextField.FieldID != schema.Fields[0].ID ||
-		!strings.Contains(clarified.Control.Suspension.Questions[0].Question, "Provide Legal name") ||
+		clarified.Control.Suspension.Questions[0].Question != correction.Control.Suspension.Questions[0].Question ||
 		!slices.Equal(
 			clarified.Control.Suspension.ProtectedAnswer.Actions,
 			[]interactions.ProtectedAnswerAction{interactions.ProtectedAnswerActionClarify},

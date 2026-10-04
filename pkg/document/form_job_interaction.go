@@ -41,8 +41,11 @@ type FormProtectedAnswerBindingRequest struct {
 // FormQuestionControls is value-free presentation selected for one exact field.
 // It is retained by the job, not inferred from a PDF's Required flag on navigation.
 type FormQuestionControls struct {
-	Language     string                               `json:"language,omitempty"`
-	BlankActions []interactions.ProtectedAnswerAction `json:"blank_actions,omitempty"`
+	Language       string                               `json:"language,omitempty"`
+	BlankActions   []interactions.ProtectedAnswerAction `json:"blank_actions,omitempty"`
+	Question       string                               `json:"question,omitempty"`
+	CheckedLabel   string                               `json:"checked_label,omitempty"`
+	UncheckedLabel string                               `json:"unchecked_label,omitempty"`
 }
 
 type formJobQuestionControls struct {
@@ -53,6 +56,22 @@ type formJobQuestionControls struct {
 func validFormQuestionControls(controls FormQuestionControls) bool {
 	language, err := interactions.CanonicalPromptLanguage(controls.Language)
 	if controls.Language != "" && (err != nil || language != controls.Language) {
+		return false
+	}
+	if !utf8.ValidString(controls.Question) ||
+		utf8.RuneCountInString(controls.Question) > interactions.MaxQuestionLength {
+		return false
+	}
+	if (controls.CheckedLabel == "") != (controls.UncheckedLabel == "") {
+		return false
+	}
+	for _, label := range []string{controls.CheckedLabel, controls.UncheckedLabel} {
+		if !utf8.ValidString(label) || utf8.RuneCountInString(label) > interactions.MaxOptionLabelLength ||
+			label != strings.TrimSpace(label) {
+			return false
+		}
+	}
+	if controls.CheckedLabel != "" && strings.EqualFold(controls.CheckedLabel, controls.UncheckedLabel) {
 		return false
 	}
 	seen := make(map[interactions.ProtectedAnswerAction]bool, len(controls.BlankActions))
