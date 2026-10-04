@@ -200,18 +200,22 @@ func TestObjectiveOutcomeProjectsOnlyAuthoritativeOutputForResultOnlySuccess(t *
 	}
 }
 
-func TestTerminalObjectiveResultRetainsSummaryForMixedActionAndResult(t *testing.T) {
+func TestObjectiveOutcomeRetainsVerifiedReceiptSummaryForMixedActionAndResult(t *testing.T) {
 	outcome := &taskresult.Outcome{
 		Status: taskresult.OutcomeSucceeded,
 		CompletedItems: []taskresult.Item{
-			{Item: "publish listing", Kind: "external_action"},
+			{
+				Item:     "publish listing",
+				Kind:     "external_action",
+				Receipts: []taskresult.Receipt{{Summary: "Listing published."}},
+			},
 			{
 				Item: "return listing URL", Kind: "result",
 				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: "https://example.com/listing/42"},
 			},
 		},
 	}
-	got := terminalObjectiveResult("Listing published.", outcome)
+	got := objectiveOutcomeUserContent("Unvalidated producer summary.", outcome)
 	if got != "Listing published.\n\nhttps://example.com/listing/42" {
 		t.Fatalf("mixed terminal projection = %q", got)
 	}
@@ -239,7 +243,7 @@ func TestTerminalObjectiveResultSelectsOneExactJSONReportFromSupportingResults(t
 		},
 	}
 
-	if got := terminalObjectiveResult("The workflow completed.", outcome); got != exactJSON {
+	if got := objectiveOutcomeUserContent("The workflow completed.", outcome); got != exactJSON {
 		t.Fatalf("terminal structured result = %q, want exact JSON", got)
 	}
 }
@@ -310,7 +314,11 @@ func TestTerminalObjectiveResultDoesNotPromoteIncidentalJSON(t *testing.T) {
 	outcome := &taskresult.Outcome{
 		Status: taskresult.OutcomeSucceeded,
 		CompletedItems: []taskresult.Item{
-			{Item: "publish listing", Kind: taskresult.ObjectiveKindExternalAction},
+			{
+				Item:     "publish listing",
+				Kind:     taskresult.ObjectiveKindExternalAction,
+				Receipts: []taskresult.Receipt{{Summary: "Listing published."}},
+			},
 			{
 				Item: "return API payload", Kind: taskresult.ObjectiveKindResult,
 				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: `{"id":42}`},
@@ -318,7 +326,7 @@ func TestTerminalObjectiveResultDoesNotPromoteIncidentalJSON(t *testing.T) {
 		},
 	}
 
-	got := terminalObjectiveResult("Listing published.", outcome)
+	got := objectiveOutcomeUserContent("Unvalidated producer summary.", outcome)
 	if got != "Listing published.\n\n- id: 42" || strings.Contains(got, `{"id":42}`) {
 		t.Fatalf("incidental JSON changed terminal presentation: %q", got)
 	}

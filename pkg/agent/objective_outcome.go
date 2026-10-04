@@ -41,9 +41,8 @@ func objectiveOutcomeUserContent(content string, outcome *taskresult.Outcome) st
 	if presentation := objectivePresentation(outcome.UserSummary, outcome); presentation != "" {
 		return presentation
 	}
-	if outcome.Status == taskresult.OutcomeSucceeded {
-		return content
-	}
+	// Rejected producer prose is never a fallback, including mixed successes.
+	// Use only retained outputs and verified receipt summaries below.
 	var sections []string
 	for _, item := range outcome.CompletedItems {
 		if rendered := renderObjectiveOutput(item.Output); rendered != "" {
@@ -59,17 +58,23 @@ func objectiveOutcomeUserContent(content string, outcome *taskresult.Outcome) st
 	// A valid incomplete report supplies its specific blocker in the user's
 	// language. Checklist items are execution instructions, not headings or a
 	// second explanation. Preserve the legacy no-explanation fallback only.
-	if strings.TrimSpace(outcome.Explanation) == "" {
+	if outcome.Status != taskresult.OutcomeSucceeded && strings.TrimSpace(outcome.Explanation) == "" {
 		for _, item := range outcome.MissingItems {
 			if userVisibleObjectiveMissing(item) {
 				sections = append(sections, strings.TrimSpace(item))
 			}
 		}
 	}
-	if explanation := strings.TrimSpace(outcome.Explanation); explanation != "" {
+	if explanation := strings.TrimSpace(
+		outcome.Explanation,
+	); outcome.Status != taskresult.OutcomeSucceeded &&
+		explanation != "" {
 		sections = append(sections, explanation)
 	}
 	if len(sections) == 0 {
+		if outcome.Status == taskresult.OutcomeSucceeded {
+			return "Task completed."
+		}
 		return "Task could not be completed."
 	}
 	return strings.Join(sections, "\n\n")
@@ -305,7 +310,7 @@ func extractObjectiveOutcomeWithReceipts(
 	if outcome.UserSummary != "" {
 		clean = outcome.UserSummary
 	} else if outcome.Status == taskresult.OutcomeSucceeded {
-		clean = terminalObjectiveResult(reported.Result, outcome)
+		clean = objectiveOutcomeUserContent("", outcome)
 	}
 	return clean, outcome
 }
@@ -815,54 +820,6 @@ func validateObjectiveOutcomeWithPolicy(
 		outcome.UserSummary = objectivePresentation(reported.Result, outcome)
 	}
 	return outcome
-}
-
-func terminalObjectiveResult(summary string, outcome *taskresult.Outcome) string {
-	// Exact JSON is already a complete transport shape. When one verified
-	// result objective carries it, do not contaminate it with summaries or
-	// supporting prose from sibling objectives. This is especially important
-	// for multi-step delegated workflows whose final objective aggregates the
-	// earlier observations into one requested machine-readable report.
-	if exactJSON, ok := declaredExactJSONObjectiveOutput(outcome); ok {
-		return exactJSON
-	}
-	if presentation := objectivePresentation(outcome.UserSummary, outcome); presentation != "" {
-		return presentation
-	}
-	outputs := make([]string, 0, len(outcome.CompletedItems))
-	resultOnly := len(outcome.CompletedItems) > 0
-	for _, item := range outcome.CompletedItems {
-		if item.Kind != "result" {
-			resultOnly = false
-			continue
-		}
-		if item.Output == nil {
-			continue
-		}
-		rendered := renderObjectiveOutput(item.Output)
-		if rendered == "" {
-			continue
-		}
-		outputs = append(outputs, rendered)
-	}
-	// A result objective's standalone output is the validated payload promised
-	// to the caller. For result-only tasks, projecting the producer's separate
-	// summary as well can corrupt exact output formats or duplicate facts. Mixed
-	// action/result tasks retain the summary because it reports verified effects
-	// that result outputs do not represent.
-	if resultOnly && len(outputs) > 0 {
-		return strings.Join(outputs, "\n\n")
-	}
-	parts := make([]string, 0, len(outputs)+1)
-	if summary = strings.TrimSpace(summary); summary != "" {
-		parts = append(parts, summary)
-	}
-	for _, rendered := range outputs {
-		if !strings.Contains(summary, rendered) {
-			parts = append(parts, rendered)
-		}
-	}
-	return strings.Join(parts, "\n\n")
 }
 
 func declaredExactJSONObjectiveOutput(outcome *taskresult.Outcome) (string, bool) {

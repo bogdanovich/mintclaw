@@ -130,6 +130,8 @@ checker. Keep canonical outputs and receipts unchanged and persist the
 selected presentation with them. If coverage fails, project retained data
 without objective-instruction headings. Supporting JSON becomes field/value
 lines; explicitly requested exact JSON keeps its dedicated transport path.
+The same retained-data fallback applies to succeeded mixed action/result
+tasks: rejected producer prose is never recycled as a success summary.
 Carry the bounded root request as presentation-only evidence for ordinary
 result objectives as well as handoffs, so an internally translated task does
 not override the user's language. It does not grant additional authority.

@@ -171,6 +171,53 @@ func TestObjectivePresentationCannotHideRuntimeDowngrade(t *testing.T) {
 	}
 }
 
+func TestMixedSucceededOutcomeNeverRecyclesRejectedProducerAnswer(t *testing.T) {
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+		{Item: "publish using internal workflow", Kind: taskresult.ObjectiveKindExternalAction},
+		{Item: "report verified price", Kind: taskresult.ObjectiveKindResult},
+	})
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Tool: "browser_act", Success: true,
+		Summary:  "browser external action completed",
+		Metadata: map[string]string{"invocation_id": "verified-action", "effect": "external_commit"},
+	}}
+	for _, rejected := range []string{`Published. Supporting data: {"price":"$850"}`, "Published at $850.", "Published."} {
+		t.Run(rejected, func(t *testing.T) {
+			report := reportedObjectiveOutcome{
+				Status: "succeeded", Result: rejected,
+				CompletedItems: []reportedObjectiveItem{
+					{ObjectiveID: "objective_1", ReceiptIDs: []string{"verified-action"}},
+					{
+						ObjectiveID: "objective_2",
+						Output: &taskresult.ObjectiveOutput{
+							Kind:    "records",
+							Records: []map[string]string{{"price": "$85"}},
+						},
+					},
+				},
+			}
+			encoded, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			clean, outcome := extractObjectiveOutcome(objectiveOutcomeStart+string(encoded)+objectiveOutcomeEnd,
+				audits, true, checklist)
+			const expected = "browser external action completed\n\n- price: $85"
+			if outcome.Status != taskresult.OutcomeSucceeded || outcome.UserSummary != "" || clean != expected ||
+				len(outcome.CompletedItems) != 2 || len(outcome.CompletedItems[0].Receipts) != 1 ||
+				outcome.CompletedItems[0].Receipts[0].ID != "verified-action" {
+				t.Fatalf("mixed fallback reused rejected prose or lost evidence: %q, %#v", clean, outcome)
+			}
+			// Canonical reload/finalization must not treat retained rejected prose
+			// as admitted merely because the task itself succeeded.
+			outcome.UserSummary = rejected
+			if got := objectiveOutcomeUserContent(rejected, outcome); got != expected {
+				t.Fatalf("rejected answer escaped final projection: %q", got)
+			}
+		})
+	}
+}
+
 func TestObjectivePresentationFallbackRetainsOutputsWithoutInstructionHeadings(t *testing.T) {
 	const blocker = "The remaining account requires sign-in."
 	outcome := &taskresult.Outcome{
