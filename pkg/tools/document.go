@@ -338,7 +338,8 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"minLength": 1,
 				"maxLength": interactions.MaxQuestionLength,
 				"description": "REQUIRED for collect and correct: a user-facing question chosen by the agent for the " +
-					"exact field. Explain the requested fact without exposing field IDs.",
+					"exact field. Ask only for the requested fact; do not repeat form_summary or collection_plan. " +
+					"Do not expose field IDs.",
 			},
 			"form_summary": map[string]any{
 				"type":      "string",
@@ -367,6 +368,18 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"maxLength": interactions.MaxOptionLabelLength,
 				"description": "Localized user-facing choice that leaves a checkbox unset. Supply together with " +
 					"checked_label only for checkbox fields.",
+			},
+			"interaction_language": map[string]any{
+				"type": "string", "maxLength": interactions.MaxPromptLanguageLength,
+				"description": "BCP-47 language of this collect/correct question, e.g. ru. " +
+					"Supply it to localize the header and navigation buttons.",
+			},
+			"blank_actions": map[string]any{
+				"type": "array", "maxItems": 2, "uniqueItems": true,
+				"items": map[string]any{"type": "string", "enum": []string{"skip", "not_applicable"}},
+				"description": "Optional collect/correct controls explicitly justified by the form's meaning: " +
+					"skip leaves the field blank; not_applicable records that it does not apply. " +
+					"Default is none. PDF required=false alone does not justify either; required fields reject both.",
 			},
 		},
 		"required": []string{"action"},
@@ -572,7 +585,8 @@ func documentFormReviewToolOnlyFollowup(
 		ValidateArguments: func(arguments map[string]any) error {
 			for key := range arguments {
 				switch key {
-				case "action", "form_action", "job_id", "field_id", "question", "checked_label", "unchecked_label":
+				case "action", "form_action", "job_id", "field_id", "question", "checked_label", "unchecked_label",
+					"interaction_language", "blank_actions":
 				default:
 					return errors.New("protected form review follow-up contains an unrelated option")
 				}
@@ -654,12 +668,15 @@ func documentFormToolOnlyFollowup(
 			"form_action=correct for any other candidate, including an existing value the user asked to replace. " +
 			"Preserve the exact job_id and field_id, " +
 			"and include a concise user-facing question in the user's language." + planInstruction +
+			" Supply interaction_language to localize controls. Keep question distinct from summary/plan. " +
+			"Offer blank_actions only when the field is optional by meaning; PDF required=false is not enough." +
 			" Do not answer in prose, collect an existing value as missing, repeat a confirmed field unless the user " +
 			"asked to correct it, expose IDs to the user, or request the protected value again.",
 		ValidateArguments: func(arguments map[string]any) error {
 			for key := range arguments {
 				switch key {
-				case "action", "form_action", "job_id", "field_id", "question", "checked_label", "unchecked_label":
+				case "action", "form_action", "job_id", "field_id", "question", "checked_label", "unchecked_label",
+					"interaction_language", "blank_actions":
 				case "form_summary", "collection_plan":
 					if !prepared {
 						return errors.New("protected form follow-up contains an unrelated option")
@@ -864,10 +881,12 @@ func documentFormArgumentRecoveryMessage(args map[string]any) string {
 		return "form start requires only source and the exact field_schema_digest returned by form discover; retry start"
 	case "collect":
 		return "form collect requires job_id, field_id, and a non-empty agent-authored question; " +
-			"the first protected question also requires form_summary and collection_plan; retry the same field without asking in plain text"
+			"the first protected question also requires separate form_summary and collection_plan; " +
+			"respect each character limit and retry the same field without asking in plain text"
 	case "correct":
 		return "form correct requires job_id, field_id, and a non-empty agent-authored question; " +
-			"the first protected question also requires form_summary and collection_plan; retry the same field without asking in plain text"
+			"the first protected question also requires separate form_summary and collection_plan; " +
+			"respect each character limit and retry the same field without asking in plain text"
 	case "continue":
 		return "form continue requires exactly one protected answer_ref; retry without selecting or asking another field"
 	case "status", "review", "commit", "cancel":
@@ -1363,6 +1382,7 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 			"action": {}, "form_action": {}, "source": {}, "job_id": {}, "answer_ref": {}, "event_id": {},
 			"navigation_ref": {}, "field_id": {}, "question": {}, "field_schema_digest": {}, "form_summary": {},
 			"collection_plan": {}, "checked_label": {}, "unchecked_label": {},
+			"interaction_language": {}, "blank_actions": {},
 		},
 		"fill":   {"action": {}, "source": {}, "assignments": {}, "operation_id": {}},
 		"verify": {"action": {}, "source": {}, "operation_id": {}},
@@ -1439,10 +1459,25 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		if hasFormSummary != hasCollectionPlan ||
 			(hasFormSummary && (!utf8.ValidString(formSummary) || !utf8.ValidString(collectionPlan) ||
 				utf8.RuneCountInString(formSummary) > documentFormSummaryMaxRunes ||
-				utf8.RuneCountInString(collectionPlan) > documentFormPlanMaxRunes ||
-				utf8.RuneCountInString(formSummary)+utf8.RuneCountInString(collectionPlan)+
-					utf8.RuneCountInString(question)+4 > interactions.MaxQuestionLength)) {
+				utf8.RuneCountInString(collectionPlan) > documentFormPlanMaxRunes)) {
 			return errors.New("form summary and collection plan are invalid")
+		}
+		_, hasLanguage := args["interaction_language"]
+		_, hasBlankActions := args["blank_actions"]
+		if (hasLanguage || hasBlankActions) && formAction != "collect" && formAction != "correct" {
+			return errors.New("form presentation options apply only to collect and correct")
+		}
+		if hasLanguage {
+			if _, err := interactions.CanonicalPromptLanguage(
+				stringDocumentArg(args, "interaction_language"),
+			); err != nil {
+				return err
+			}
+		}
+		if hasBlankActions {
+			if _, err := documentFormBlankActions(args["blank_actions"]); err != nil {
+				return err
+			}
 		}
 		if hasCheckboxLabels && (checkedLabel == "" || uncheckedLabel == "" ||
 			!utf8.ValidString(checkedLabel) || !utf8.ValidString(uncheckedLabel) ||

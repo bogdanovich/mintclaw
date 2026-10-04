@@ -19,13 +19,19 @@ Attach or authorize the form and send an ordinary request like this:
 > missing, preserve existing values unless I ask to correct one, and wait for my final confirmation before writing or
 > sending a result.
 
-The first response must summarize the form and the bounded collection plan before asking for a value. During the same
-job, exercise these paths where they are valid:
+The first response must summarize the form and the bounded collection plan before asking for a value. The explanation
+and the actual question are separate presentation sections; a long explanation must never silently truncate the end
+of the question. In a Russian dialogue, the PDF header and protected navigation buttons must be localized. During the
+same job, exercise these paths where they are valid:
 
 1. Ask what one question means. The explanation must not become the field value.
 2. Give a free-text answer as a reply to the active protected prompt.
 3. Use Back, then answer the revisited field.
-4. Skip one optional field.
+4. Skip one semantically optional field. A PDF field's unset `Required` flag alone is not sufficient: the agent must
+   explicitly offer `blank_actions` (`skip` and/or `not_applicable`). Without that decision neither control is shown;
+   native required fields reject these actions even when requested by the agent. Clarify and Back restore the saved
+   language and blank actions for the target field, including after restart; they must not copy the current field's
+   controls or infer new blank permissions from the schema. Existing jobs without a saved selection stay conservative.
 5. Correct one existing or already answered field in ordinary language.
 6. Ask for status. It must report value-free progress without exposing protected answers.
 7. At review, check the confirmed, preserved, skipped, unresolved, and blocker counts.
@@ -38,7 +44,19 @@ delivered after final confirmation. Inspect the resulting PDF independently.
 
 Start a fresh job with the same ordinary request, then use the channel's Cancel action while a protected question is
 active. The job must become canceled, no value may be appended for that question, and no output artifact may be
-created.
+created. Telegram must deliver the cancellation acknowledgement and clear the prompt controls. In a callback, the
+event ID remains the idempotency/correlation identity, but the actual prompt message ID is the reply target; a long
+numeric callback-query ID must not be passed to Telegram as a message ID. Subsequent prompts and terminal responses
+must preserve this distinction too.
+
+For the truncation regression, use synthetic Russian text whose UTF-8 byte count exceeds 1000 while its character
+count stays within the question's 1000-character limit. The summary (512 characters) and plan (768 characters) have
+independent limits. An over-limit section must return a recoverable error, never a shortened question. Optional
+`interaction_language` is a BCP-47 tag; unsupported locales fall back to English control labels, not broken callbacks.
+
+The value-free per-field control selection is stored in the authenticated job snapshot and erased with terminal job
+cleanup. A binary rollback must not overwrite mutable state written by the new runtime: inspect snapshot compatibility
+and plan a forward migration or explicit restore before downgrading.
 
 ## Headless live-client path
 

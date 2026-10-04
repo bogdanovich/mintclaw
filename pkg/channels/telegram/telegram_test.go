@@ -26,6 +26,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
@@ -1832,6 +1833,45 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 	assert.Equal(t, bus.InboundInteractionSkipLabel, response)
 }
 
+func TestQuestionControlsLocalizeWithoutChangingCallbackIdentity(t *testing.T) {
+	cases := []struct {
+		language   string
+		wantLabels []string
+	}{
+		{
+			language:   "ru-RU",
+			wantLabels: []string{"Оставить пустым", "Не применимо", "Поясни вопрос", "Назад", "⛔ Отменить задачу"},
+		},
+		{language: "ja-JP", wantLabels: []string{"Skip", "Not applicable", "Clarify", "Back", "⛔ Cancel turn"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.language, func(t *testing.T) {
+			msg := bus.OutboundMessage{Metadata: bus.OutboundMetadata{
+				InteractionKind:     bus.OutboundInteractionQuestion,
+				InteractionControls: bus.OutboundInteractionControlsPrompt,
+				InteractionShortID:  "abc12345",
+				InteractionLanguage: tc.language,
+			}}
+			msg.Metadata = msg.Metadata.WithInteractionActions([]bus.InboundInteractionChoice{
+				bus.InboundInteractionChoiceClarify, bus.InboundInteractionChoiceBack,
+				bus.InboundInteractionChoiceSkip, bus.InboundInteractionChoiceNotApplicable,
+			})
+			markup := telegramInteractionReplyMarkup(msg).(*telego.InlineKeyboardMarkup)
+			wantActions := []string{"skip", "not_applicable", "clarify", "back", "cancel"}
+			index := 0
+			for _, row := range markup.InlineKeyboard {
+				for _, button := range row {
+					assert.Equal(t, tc.wantLabels[index], button.Text)
+					assert.Equal(t, "mc:i:abc12345:"+wantActions[index], button.CallbackData)
+					index++
+				}
+			}
+			assert.Equal(t, len(tc.wantLabels), index)
+		})
+	}
+	assert.Equal(t, "PDF-форма", interactions.PromptText("ru", interactions.PromptFormHeader))
+}
+
 func TestInteractionActionCallbackRequiresOfferedCurrentPrompt(t *testing.T) {
 	ch := &TelegramChannel{
 		interactionControls: map[telegramInteractionControlKey]telegramInteractionControls{
@@ -2084,6 +2124,34 @@ func TestSend_FinalReplyUsesTransportSend(t *testing.T) {
 	require.Len(t, caller.calls, 1)
 	assert.Contains(t, caller.calls[0].URL, "sendMessage")
 	assert.NotContains(t, caller.calls[0].URL, "editMessageText")
+}
+
+func TestSend_CancelAcknowledgementUsesActualPromptMessageID(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			var payload map[string]any
+			require.NoError(t, json.Unmarshal(data.BodyRaw, &payload))
+			reply := payload["reply_parameters"].(map[string]any)
+			require.Equal(t, float64(7716), reply["message_id"])
+			require.Contains(t, url, "sendMessage")
+			return successResponseWithMessageID(t, 7717), nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+	ids, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
+		ChatID: "12345", ReplyToMessageID: "7716", Content: "Task stopped. Current task was canceled.",
+		Metadata: bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsRemove,
+		},
+		Context: bus.InboundContext{
+			Channel: "telegram", MessageID: "10698105932921492", ReplyToMessageID: "7716",
+			Interaction: bus.InboundInteractionProjection{ResponseMessageID: "7716"},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"7717"}, ids)
+	require.Len(t, caller.calls, 1)
 }
 
 func TestSend_ToolFeedbackStaysSingleMessageAfterHTMLExpansion(t *testing.T) {

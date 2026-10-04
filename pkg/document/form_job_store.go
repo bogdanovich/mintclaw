@@ -66,6 +66,7 @@ type formJobStoredRecord struct {
 	Events             []formJobEnvelope          `json:"events,omitempty"`
 	PendingEvents      []formJobEnvelope          `json:"pending_events,omitempty"`
 	NavigationReceipts []formJobNavigationReceipt `json:"navigation_receipts,omitempty"`
+	QuestionControls   []formJobQuestionControls  `json:"question_controls,omitempty"`
 	IntegrityDigest    string                     `json:"integrity_digest"`
 }
 
@@ -645,16 +646,7 @@ func (store *FormJobStore) eraseStoredRecord(
 	failureCode string,
 	now time.Time,
 ) {
-	record.WrappedKey = nil
-	record.Source = nil
-	clear(record.Events)
-	record.Events = nil
-	clear(record.PendingEvents)
-	record.PendingEvents = nil
-	clear(record.NavigationReceipts)
-	record.NavigationReceipts = nil
-	record.Public.Fields = nil
-	record.Public.LedgerDigest = ""
+	clearStoredFormProtectedMaterial(record)
 	clearFormJobReviewProjection(&record.Public)
 	clearFormJobCommitProjection(&record.Public)
 	record.Public.State = state
@@ -835,7 +827,9 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 	}
 	if record.Public.State.terminal() {
 		if record.WrappedKey != nil || record.Source != nil || len(record.Events) != 0 ||
-			len(record.PendingEvents) != 0 || len(record.NavigationReceipts) != 0 ||
+			len(
+				record.PendingEvents,
+			) != 0 || len(record.NavigationReceipts) != 0 || len(record.QuestionControls) != 0 ||
 			len(record.Public.Fields) != 0 || record.Public.LedgerDigest != "" {
 			return ErrFormJobRecordCorrupt
 		}
@@ -844,6 +838,7 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 	if record.WrappedKey == nil || record.Source == nil ||
 		len(record.Events)+len(record.PendingEvents) > store.maxEventsPerJob ||
 		len(record.NavigationReceipts) > maxFormJobNavigationReceipts ||
+		len(record.QuestionControls) > store.maxEventsPerJob ||
 		record.WrappedKey.JobID != record.Public.JobID ||
 		record.WrappedKey.OwnerDigest != record.Public.OwnerDigest ||
 		record.Public.LedgerRevision != int64(len(record.Events)) {
@@ -901,6 +896,15 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 			return ErrFormJobRecordCorrupt
 		}
 		seenNavigation[receipt.ReferenceDigest] = struct{}{}
+	}
+	seenControls := make(map[string]bool, len(record.QuestionControls))
+	for _, selected := range record.QuestionControls {
+		if strings.TrimSpace(selected.FieldID) == "" || len(selected.FieldID) > maxFormJobFieldIDLength ||
+			!utf8.ValidString(selected.FieldID) || seenControls[selected.FieldID] ||
+			!validFormQuestionControls(selected.FormQuestionControls) {
+			return ErrFormJobRecordCorrupt
+		}
+		seenControls[selected.FieldID] = true
 	}
 	return nil
 }
@@ -1006,6 +1010,7 @@ func (store *FormJobStore) storedRecordIntegrity(record formJobStoredRecord) (st
 		Events             []formJobEnvelope          `json:"events,omitempty"`
 		PendingEvents      []formJobEnvelope          `json:"pending_events,omitempty"`
 		NavigationReceipts []formJobNavigationReceipt `json:"navigation_receipts,omitempty"`
+		QuestionControls   []formJobQuestionControls  `json:"question_controls,omitempty"`
 	}{
 		Public:             record.Public,
 		WrappedKey:         record.WrappedKey,
@@ -1013,6 +1018,7 @@ func (store *FormJobStore) storedRecordIntegrity(record formJobStoredRecord) (st
 		Events:             record.Events,
 		PendingEvents:      record.PendingEvents,
 		NavigationReceipts: record.NavigationReceipts,
+		QuestionControls:   record.QuestionControls,
 	})
 	if err != nil {
 		return "", err

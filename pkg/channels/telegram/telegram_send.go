@@ -14,6 +14,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
@@ -110,16 +111,25 @@ type sendChunkParams struct {
 
 func telegramInteractionReplyMarkup(msg bus.OutboundMessage) telego.ReplyMarkup {
 	metadata := msg.Metadata
+	language := metadata.InteractionLanguage
 	shortID := strings.TrimSpace(metadata.InteractionShortID)
 	if (metadata.IsApprovalPrompt() || metadata.IsQuestionPrompt()) && shortID == "" {
 		return nil
 	}
 	if metadata.IsApprovalPrompt() {
 		return &telego.InlineKeyboardMarkup{
-			InlineKeyboard: [][]telego.InlineKeyboardButton{{
-				{Text: "Allow once", CallbackData: telegramInteractionCallback(shortID, "allow", -1)},
-				{Text: "Deny", CallbackData: telegramInteractionCallback(shortID, "deny", -1)},
-			}},
+			InlineKeyboard: [][]telego.InlineKeyboardButton{
+				{
+					{
+						Text:         interactions.PromptText(language, interactions.PromptAllowOnce),
+						CallbackData: telegramInteractionCallback(shortID, "allow", -1),
+					},
+					{
+						Text:         interactions.PromptText(language, interactions.PromptDeny),
+						CallbackData: telegramInteractionCallback(shortID, "deny", -1),
+					},
+				},
+			},
 		}
 	}
 	if metadata.IsQuestionPrompt() {
@@ -143,13 +153,13 @@ func telegramInteractionReplyMarkup(msg bus.OutboundMessage) telego.ReplyMarkup 
 				label := ""
 				switch action {
 				case bus.InboundInteractionChoiceClarify:
-					label = bus.InboundInteractionClarifyLabel
+					label = interactions.PromptText(language, interactions.PromptClarify)
 				case bus.InboundInteractionChoiceBack:
-					label = bus.InboundInteractionBackLabel
+					label = interactions.PromptText(language, interactions.PromptBack)
 				case bus.InboundInteractionChoiceSkip:
-					label = bus.InboundInteractionSkipLabel
+					label = interactions.PromptText(language, interactions.PromptSkip)
 				case bus.InboundInteractionChoiceNotApplicable:
-					label = bus.InboundInteractionNotApplicableLabel
+					label = interactions.PromptText(language, interactions.PromptNotApplicable)
 				}
 				if label != "" {
 					row = append(row, telego.InlineKeyboardButton{
@@ -162,7 +172,7 @@ func telegramInteractionReplyMarkup(msg bus.OutboundMessage) telego.ReplyMarkup 
 			}
 		}
 		keyboard = append(keyboard, []telego.InlineKeyboardButton{{
-			Text:         bus.InboundInteractionCancelLabel,
+			Text:         interactions.PromptText(language, interactions.PromptCancel),
 			CallbackData: telegramInteractionCallback(shortID, "cancel", -1),
 		}})
 		return &telego.InlineKeyboardMarkup{

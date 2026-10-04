@@ -35,6 +35,65 @@ type FormProtectedAnswerBindingRequest struct {
 	Owner             FormJobOwner
 	FieldID           string
 	SupersedesEventID string
+	QuestionControls  *FormQuestionControls
+}
+
+// FormQuestionControls is value-free presentation selected for one exact field.
+// It is retained by the job, not inferred from a PDF's Required flag on navigation.
+type FormQuestionControls struct {
+	Language     string                               `json:"language,omitempty"`
+	BlankActions []interactions.ProtectedAnswerAction `json:"blank_actions,omitempty"`
+}
+
+type formJobQuestionControls struct {
+	FieldID string `json:"field_id"`
+	FormQuestionControls
+}
+
+func validFormQuestionControls(controls FormQuestionControls) bool {
+	language, err := interactions.CanonicalPromptLanguage(controls.Language)
+	if controls.Language != "" && (err != nil || language != controls.Language) {
+		return false
+	}
+	seen := make(map[interactions.ProtectedAnswerAction]bool, len(controls.BlankActions))
+	for _, action := range controls.BlankActions {
+		if seen[action] || (action != interactions.ProtectedAnswerActionSkip &&
+			action != interactions.ProtectedAnswerActionNotApplicable) {
+			return false
+		}
+		seen[action] = true
+	}
+	return true
+}
+
+// QuestionControls returns controls for the authorized target field, including
+// after restart. Legacy jobs without a saved selection keep conservative defaults.
+func (store *FormJobStore) QuestionControls(
+	ctx context.Context,
+	request FormProtectedAnswerBindingRequest,
+) (FormQuestionControls, error) {
+	if err := validateFormProtectedAnswerBindingRequest(request); err != nil {
+		return FormQuestionControls{}, err
+	}
+	var controls FormQuestionControls
+	err := store.update(ctx, func(document *formJobStoreDocument, _ time.Time) (bool, error) {
+		record, err := store.authorizedPublicRecord(document, request.JobID, request.Owner)
+		if err != nil {
+			return false, err
+		}
+		if record.Public.State.terminal() || record.Public.Revision != request.ExpectedRevision {
+			return false, ErrFormJobConflict
+		}
+		for _, selected := range record.QuestionControls {
+			if selected.FieldID == request.FieldID {
+				controls = selected.FormQuestionControls
+				controls.BlankActions = slices.Clone(controls.BlankActions)
+				break
+			}
+		}
+		return false, nil
+	})
+	return controls, err
 }
 
 type formProtectedAnswerBindingPayload struct {
@@ -98,7 +157,24 @@ func (store *FormJobStore) NewProtectedAnswerBinding(
 		}
 		defer clear(encoded)
 		token = base64.RawURLEncoding.EncodeToString(encoded)
-		return false, nil
+		if request.QuestionControls == nil {
+			return false, nil
+		}
+		selected := formJobQuestionControls{FieldID: payload.FieldID, FormQuestionControls: *request.QuestionControls}
+		selected.BlankActions = slices.Clone(selected.BlankActions)
+		index := slices.IndexFunc(record.QuestionControls, func(controls formJobQuestionControls) bool {
+			return controls.FieldID == payload.FieldID
+		})
+		if index < 0 {
+			if len(record.QuestionControls) >= store.maxEventsPerJob {
+				return false, ErrFormJobCapacityExceeded
+			}
+			record.QuestionControls = append(record.QuestionControls, selected)
+		} else {
+			record.QuestionControls[index] = selected
+		}
+		document.Records[request.JobID] = record
+		return true, nil
 	})
 	if err != nil {
 		return interactions.ProtectedAnswerBinding{}, err
@@ -115,6 +191,9 @@ func validateFormProtectedAnswerBindingRequest(request FormProtectedAnswerBindin
 		len(request.FieldID) > maxFormJobFieldIDLength || !utf8.ValidString(request.FieldID) ||
 		len(request.SupersedesEventID) > maxFormJobEventIDLength {
 		return errors.New("document protected answer binding request is invalid")
+	}
+	if request.QuestionControls != nil && !validFormQuestionControls(*request.QuestionControls) {
+		return errors.New("document form question controls are invalid")
 	}
 	return nil
 }

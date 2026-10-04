@@ -487,6 +487,8 @@ func clearStoredFormProtectedMaterial(record *formJobStoredRecord) {
 	record.PendingEvents = nil
 	clear(record.NavigationReceipts)
 	record.NavigationReceipts = nil
+	clear(record.QuestionControls)
+	record.QuestionControls = nil
 	record.Public.Fields = nil
 	record.Public.LedgerDigest = ""
 }

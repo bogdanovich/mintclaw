@@ -505,9 +505,10 @@ func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {
 		SpaceType: record.Route.SpaceType,
 	}
 	metadata := bus.OutboundMetadata{
-		MessageKind:        bus.OutboundMessageKindInteraction,
-		InteractionID:      record.ID,
-		InteractionShortID: record.ShortID,
+		MessageKind:         bus.OutboundMessageKindInteraction,
+		InteractionID:       record.ID,
+		InteractionShortID:  record.ShortID,
+		InteractionLanguage: record.PromptLanguage,
 	}
 	replyToMessageID := ""
 	requestID := ""
@@ -519,6 +520,12 @@ func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {
 	}
 	if strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") {
 		replyToMessageID = requestID
+		if record.Origin.ExecutionContext != nil {
+			replyToMessageID = firstNonEmptyString(
+				record.Origin.ExecutionContext.Interaction.ResponseMessageID,
+				requestID,
+			)
+		}
 	}
 	switch record.Kind {
 	case interactions.KindApproval:
@@ -689,6 +696,10 @@ func renderInteractionPrompt(record interactions.Record) string {
 			fmt.Fprintf(&builder, " %s", question.Header)
 		}
 		builder.WriteString("\n")
+		if question.Introduction != "" {
+			builder.WriteString(question.Introduction)
+			builder.WriteString("\n\n")
+		}
 		builder.WriteString(question.Question)
 		renderInteractionOptions(&builder, question.Options)
 	}
@@ -718,6 +729,10 @@ func soleExternalActionObjective(checklist []interactions.ObjectiveChecklistItem
 func renderSingleInteractionQuestion(builder *strings.Builder, question interactions.Question) {
 	if question.Header != "" {
 		builder.WriteString(question.Header)
+		builder.WriteString("\n\n")
+	}
+	if question.Introduction != "" {
+		builder.WriteString(question.Introduction)
 		builder.WriteString("\n\n")
 	}
 	builder.WriteString(question.Question)
