@@ -53,6 +53,8 @@ type CommandResultMsg struct {
 
 type transcriptOverlayReadyMsg struct{}
 
+type inlineReflowFinishedMsg struct{}
+
 // SubmitResultMsg completes one composer submission without discarding a
 // draft when controller admission fails.
 type SubmitResultMsg struct {
@@ -166,11 +168,16 @@ type Model struct {
 	firstPaintRecorded  bool
 	diagnostics         presentationDiagnosticsState
 	adaptiveHeight      bool
+	windowSizeObserved  bool
+	inlineReflowRunning bool
+	inlineReflowPending bool
 	showStartupStatus   bool
 	herdrReporter       *herdrLifecycleReporter
 	nativeHistoryTurns  map[string]struct{}
 	printNativeHistory  func(string) tea.Cmd
 }
+
+const eraseTerminalScrollback = "\x1b[3J"
 
 var _ tea.Model = (*Model)(nil)
 
@@ -357,8 +364,30 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.transcriptOverlay.opening = false
 		}
 		return m, nil
+	case inlineReflowFinishedMsg:
+		m.inlineReflowRunning = false
+		if m.transcriptOverlay.active {
+			return m, nil
+		}
+		return m, m.startPendingInlineReflow()
 	case tea.WindowSizeMsg:
+		width, height := max(1, message.Width), max(1, message.Height)
+		clearStaleInlineFrame := m.adaptiveHeight && m.windowSizeObserved &&
+			(m.width != width || m.height != height)
+		m.windowSizeObserved = true
 		m.resize(message.Width, message.Height)
+		if clearStaleInlineFrame {
+			m.inlineReflowPending = true
+			if m.transcriptOverlay.active {
+				return m, m.scheduleWorkingTick()
+			}
+			// Bubble Tea's inline renderer tracks logical rows from the old
+			// geometry. After a real resize those rows may wrap differently and
+			// survive later repaints as duplicated text. Rebuild the MintClaw
+			// transcript from semantic cells after clearing the stale terminal
+			// history, matching Codex's inline resize contract.
+			return m, tea.Batch(m.scheduleWorkingTick(), m.startPendingInlineReflow())
+		}
 		return m, m.scheduleWorkingTick()
 	case SubscriptionMsg:
 		if message.Err != nil {
@@ -840,6 +869,42 @@ func (m *Model) renderNativeHistoryTurn(turnID string) string {
 	}
 	context := cellRenderContext{Width: m.viewport.Width, Theme: m.theme, ColorLevel: m.colorLevel}
 	return renderSemanticCellSpecs(groupedLiveCellSpecs(cells), context)
+}
+
+func (m *Model) reflowNativeHistoryAfterResize() tea.Cmd {
+	cells := make([]*presentationCell, 0, len(m.cells.ordered))
+	for _, cell := range m.cells.ordered {
+		if cell == nil {
+			continue
+		}
+		if _, committed := m.nativeHistoryTurns[cell.item.TurnID]; committed {
+			cells = append(cells, cell)
+		}
+	}
+	if len(cells) == 0 {
+		return tea.ClearScreen
+	}
+	context := cellRenderContext{Width: m.viewport.Width, Theme: m.theme, ColorLevel: m.colorLevel}
+	history := renderSemanticCellSpecs(groupedLiveCellSpecs(cells), context)
+	if history == "" {
+		return tea.ClearScreen
+	}
+	return tea.Sequence(
+		tea.ClearScreen,
+		m.printNativeHistory(eraseTerminalScrollback+history),
+	)
+}
+
+func (m *Model) startPendingInlineReflow() tea.Cmd {
+	if !m.inlineReflowPending || m.inlineReflowRunning || m.transcriptOverlay.active {
+		return nil
+	}
+	m.inlineReflowPending = false
+	m.inlineReflowRunning = true
+	return tea.Sequence(
+		m.reflowNativeHistoryAfterResize(),
+		func() tea.Msg { return inlineReflowFinishedMsg{} },
+	)
 }
 
 func (m *Model) Dimensions() (int, int) {

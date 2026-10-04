@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -482,6 +483,205 @@ func TestModelHandlesResizeAndMultilineBracketedPaste(t *testing.T) {
 	if got := model.ComposerValue(); got != "first line\n第二行 👩🏽‍💻" {
 		t.Fatalf("composer value = %q", got)
 	}
+}
+
+func TestAdaptiveHeightResizeClearsStaleInlineFrameAfterInitialGeometry(t *testing.T) {
+	model, err := newModel(t.Context(), newController(t), modelOptions{adaptiveHeight: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, initialCommand := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if commandEmitsMessageType(initialCommand, tea.ClearScreen()) {
+		t.Fatal("initial terminal geometry cleared the compact inline startup surface")
+	}
+	_, unchangedCommand := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if commandEmitsMessageType(unchangedCommand, tea.ClearScreen()) {
+		t.Fatal("unchanged terminal geometry cleared the inline surface")
+	}
+	_, resizedCommand := model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	if !commandEmitsMessageType(resizedCommand, tea.ClearScreen()) {
+		t.Fatal("changed terminal geometry did not clear stale inline renderer cells")
+	}
+}
+
+func TestAdaptiveHeightResizeReflowsCommittedNativeHistory(t *testing.T) {
+	controller := newController(t)
+	controller.TurnStarted("turn-failed", "what this repo is about")
+	var printed []string
+	model, err := newModel(t.Context(), controller, modelOptions{
+		adaptiveHeight: true,
+		printHistory: func(value string) tea.Cmd {
+			printed = append(printed, value)
+			return func() tea.Msg { return nil }
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	controller.Error("turn-failed", "provider-error", "agent error during llm")
+	controller.Error("turn-failed", "turn-error", "coding turn failed")
+	controller.TurnFailed("turn-failed", "coding turn failed")
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+	if len(printed) != 1 {
+		t.Fatalf("initial native history writes = %d, want 1", len(printed))
+	}
+
+	model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	if len(printed) != 2 {
+		t.Fatalf("native history writes after resize = %d, want 2", len(printed))
+	}
+	replayed := printed[1]
+	if !strings.HasPrefix(replayed, eraseTerminalScrollback) ||
+		!strings.Contains(replayed, "agent error during llm") ||
+		!strings.Contains(replayed, "coding turn failed") {
+		t.Fatalf("resize replay = %q", ansi.Strip(replayed))
+	}
+}
+
+func TestAdaptiveHeightResizeSerializesAndCoalescesBackToBackReflows(t *testing.T) {
+	controller := newController(t)
+	controller.TurnStarted("turn-complete", "describe the repository with enough detail to wrap across widths")
+	var widths []int
+	var model *Model
+	model, err := newModel(t.Context(), controller, modelOptions{
+		adaptiveHeight: true,
+		printHistory: func(string) tea.Cmd {
+			widths = append(widths, model.viewport.Width)
+			return func() tea.Msg { return nil }
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	controller.AssistantAccumulated(
+		"turn-complete",
+		"This repository summary is deliberately long enough to produce width-sensitive native history.",
+		true,
+	)
+	controller.TurnCompleted("turn-complete", "completed")
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+
+	model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	model.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	if !model.inlineReflowRunning || !model.inlineReflowPending {
+		t.Fatalf(
+			"back-to-back resize state running=%t pending=%t, want both true",
+			model.inlineReflowRunning,
+			model.inlineReflowPending,
+		)
+	}
+	if want := []int{80, 120}; !slices.Equal(widths, want) {
+		t.Fatalf("reflow widths before first completion = %v, want %v", widths, want)
+	}
+
+	model.Update(inlineReflowFinishedMsg{})
+	if !model.inlineReflowRunning || model.inlineReflowPending {
+		t.Fatalf(
+			"coalesced resize state running=%t pending=%t, want running only",
+			model.inlineReflowRunning,
+			model.inlineReflowPending,
+		)
+	}
+	if want := []int{80, 120, 40}; !slices.Equal(widths, want) {
+		t.Fatalf("coalesced reflow widths = %v, want %v", widths, want)
+	}
+
+	model.Update(inlineReflowFinishedMsg{})
+	if model.inlineReflowRunning || model.inlineReflowPending {
+		t.Fatalf(
+			"settled resize state running=%t pending=%t, want idle",
+			model.inlineReflowRunning,
+			model.inlineReflowPending,
+		)
+	}
+}
+
+func TestAdaptiveHeightResizeDefersNativeHistoryReflowUntilOverlayCloses(t *testing.T) {
+	controller := newController(t)
+	controller.TurnStarted("turn-complete", "inspect repository")
+	var printed []string
+	model, err := newModel(t.Context(), controller, modelOptions{
+		adaptiveHeight: true,
+		printHistory: func(value string) tea.Cmd {
+			printed = append(printed, value)
+			return func() tea.Msg { return nil }
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	controller.AssistantAccumulated("turn-complete", "repository summary", true)
+	controller.TurnCompleted("turn-complete", "completed")
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+	if len(printed) != 1 {
+		t.Fatalf("initial native history writes = %d, want 1", len(printed))
+	}
+
+	model.openTranscriptOverlay()
+	model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	if !model.inlineReflowPending || len(printed) != 1 {
+		t.Fatalf(
+			"overlay resize pending=%t native writes=%d, want pending with one write",
+			model.inlineReflowPending,
+			len(printed),
+		)
+	}
+	model.closeTranscriptOverlay()
+	if model.inlineReflowPending || len(printed) != 2 ||
+		!strings.HasPrefix(printed[1], eraseTerminalScrollback) {
+		t.Fatalf("overlay close pending=%t native writes=%d", model.inlineReflowPending, len(printed))
+	}
+}
+
+func commandEmitsMessageType(command tea.Cmd, target tea.Msg) bool {
+	if command == nil {
+		return false
+	}
+	message := command()
+	if reflect.TypeOf(message) == reflect.TypeOf(target) {
+		return true
+	}
+	batch, ok := message.(tea.BatchMsg)
+	if ok {
+		for _, child := range batch {
+			if commandEmitsMessageType(child, target) {
+				return true
+			}
+		}
+		return false
+	}
+	sequence := reflect.ValueOf(message)
+	if sequence.Kind() != reflect.Slice {
+		return false
+	}
+	for index := range sequence.Len() {
+		child, childOK := sequence.Index(index).Interface().(tea.Cmd)
+		if !childOK {
+			continue
+		}
+		if commandEmitsMessageType(child, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestComposerSubmitsMultilineUnicodeAndNavigatesHistory(t *testing.T) {
