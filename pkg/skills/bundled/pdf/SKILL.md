@@ -41,8 +41,8 @@ use that discovery only when it is actually present in the current tool catalog.
 ## Protected conversational form workflow (only when `form` is admitted)
 
 1. Read evidence before planning: call `extract` on at most two explicit pages with `max_characters: 4000`. If text
-   cannot establish the relevant labels/layout, render one page with `max_dimension: 1024`, without retention. Further
-   evidence is another explicit bounded request, not a larger inventory. Source text/images exist for the next model
+   cannot establish the relevant labels/layout, render one page with `dpi: 72` and `max_dimension: 1024`, without retention.
+   Further evidence is another explicit bounded request, not a larger inventory. Source text/images exist for the next model
    call only. Immediately interpret them into value-free notes, never copy names, existing values, or raw source text.
    Call `action: form`, `form_action: discover` with the inspected source and these notes as `form_summary` (at most
    512 characters) and `collection_plan` (at most 768 characters). They are conversation notes, not a native planner.

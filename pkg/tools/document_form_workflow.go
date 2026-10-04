@@ -32,6 +32,7 @@ const (
 	documentFormEvidencePageLimit     = 2
 	documentFormEvidenceTextLimit     = 4000
 	documentFormEvidenceRenderEdge    = 1024
+	documentFormEvidenceRenderDPI     = 72
 )
 
 type documentFormQuestionPresentation struct {
@@ -843,7 +844,11 @@ func (tool *DocumentTool) formEvidence(
 			return documentToolFailure("render", document.StateUnavailable, document.FailureVisionUnavailable,
 				"the selected model route has no configured image-input path")
 		}
-		readArgs = map[string]any{"pages": args["pages"], "max_dimension": documentFormEvidenceRenderEdge}
+		readArgs = map[string]any{
+			"pages":         args["pages"],
+			"max_dimension": documentFormEvidenceRenderEdge,
+			"dpi":           documentFormEvidenceRenderDPI,
+		}
 		read = tool.render(ctx, store, ref, mediaOwner, readArgs)
 	} else {
 		read = tool.extract(ctx, store, ref, mediaOwner, readArgs)
@@ -1194,7 +1199,7 @@ func (tool *DocumentTool) formQuestionResult(
 		Options:      options,
 		MultiSelect:  field.MultiSelect,
 	}
-	if formAction == "clarify" {
+	if formAction == "clarify" || formAction == "back" {
 		question.Introduction = interactions.PromptText(presentation.language, interactions.PromptFormAnswerHint)
 	}
 	suspension := interactions.SuspensionRequest{

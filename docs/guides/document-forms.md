@@ -218,8 +218,8 @@ assignment authority. Question order, applicability, and interpretation remain a
 
 Within a prepared or continuing job, `form/evidence` uses its owner-authorized retained source: specify `job_id`,
 explicit `pages`, and `evidence_mode: text` (default, at most two pages/4,000 characters) or `render` (exactly one page,
-1,024-pixel edge). The result pairs an eight-field window for those pages with current-call text or image evidence;
-`field_offset` reaches another window on the same pages. It checks the source digest, reports read truncation through
+1,024-pixel edge at 72 DPI). The result pairs an eight-field window for those pages with current-call text or image
+evidence; `field_offset` reaches another window on the same pages. It checks the source digest, reports read truncation through
 the existing report, retains the question fence, and never delivers/retains a rendered page for the operator.
 
 Before any answer has been recorded, a prepared job can use `clarify_intent` for a response-only ordinary question

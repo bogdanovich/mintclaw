@@ -12,6 +12,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/document"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -310,18 +311,24 @@ func TestDocumentFormDialogueCheckboxFailsSafelyAndRetainsPresentation(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	reasked := tool.formQuestionResult(ctx, owner, schema, job, schema.Fields[0].ID, "clarify",
-		documentFormQuestionPresentation{
-			question: saved.Question, language: saved.Language,
-			checkedLabel: saved.CheckedLabel, uncheckedLabel: saved.UncheckedLabel,
-		})
-	if reasked.IsError || reasked.Control.Suspension == nil {
-		t.Fatalf("checkbox re-ask = %#v", reasked)
-	}
 	first := result.Control.Suspension.Questions[0]
-	next := reasked.Control.Suspension.Questions[0]
-	if first.Question != next.Question || !slices.Equal(first.Options, next.Options) || first.Header != next.Header {
-		t.Fatalf("navigation changed question meaning: %#v -> %#v", first, next)
+	for _, action := range []string{"clarify", "back"} {
+		reasked := tool.formQuestionResult(ctx, owner, schema, job, schema.Fields[0].ID, action,
+			documentFormQuestionPresentation{
+				question: saved.Question, language: saved.Language,
+				checkedLabel: saved.CheckedLabel, uncheckedLabel: saved.UncheckedLabel,
+			})
+		if reasked.IsError || reasked.Control.Suspension == nil {
+			t.Fatalf("checkbox %s re-ask = %#v", action, reasked)
+		}
+		next := reasked.Control.Suspension.Questions[0]
+		if first.Question != next.Question || !slices.Equal(first.Options, next.Options) ||
+			first.Header != next.Header {
+			t.Fatalf("%s changed question meaning: %#v -> %#v", action, first, next)
+		}
+		if next.Introduction != interactions.PromptText(saved.Language, interactions.PromptFormAnswerHint) {
+			t.Fatalf("%s omitted the localized answer hint: %#v", action, next)
+		}
 	}
 }
 
