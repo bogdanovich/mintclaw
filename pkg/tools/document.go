@@ -271,6 +271,13 @@ func (tool *DocumentTool) Parameters() map[string]any {
 					"type":    "integer",
 					"minimum": 1,
 				},
+				"description": "Explicit sorted unique pages for reading/rendering; form discover/start/status may " +
+					"select at most three pages for a bounded field view.",
+			},
+			"field_offset": map[string]any{
+				"type": "integer", "minimum": 0, "maximum": document.DefaultMaxFormFields,
+				"description": "Form discover/start/status only: offset within the deterministic eight-field window " +
+					"view. Use field_window.next_offset to browse omitted fields; preserve the same pages selection.",
 			},
 			"max_characters": map[string]any{
 				"type":    "integer",
@@ -532,15 +539,33 @@ func documentFormDiscoverToolOnlyFollowup(
 	}
 	return &toolshared.ToolOnlyFollowup{
 		Instruction: "The form was discovered successfully. Call the originating tool exactly once with " +
-			"action=form, form_action=start, source equal to the exact source_ref, and field_schema_digest equal to " +
+			"action=form. If evidence is missing, browse discover with the same source and explicit pages or " +
+			"field_offset. Otherwise use form_action=start, source equal to the exact source_ref, and field_schema_digest equal to " +
 			"the exact digest from the result. Do not answer in prose or ask for form values yet. The prepared " +
-			"follow-up will let you choose the first semantic field and present your form summary and collection plan.",
+			"follow-up will let you choose the first semantic field and present your form summary and collection plan. " +
+			"Preserve the current pages and offset when starting from a selected field window.",
 		ValidateArguments: func(arguments map[string]any) error {
-			if len(arguments) != 4 || strings.TrimSpace(stringDocumentArg(arguments, "action")) != "form" ||
-				strings.ToLower(strings.TrimSpace(stringDocumentArg(arguments, "form_action"))) != "start" ||
-				strings.TrimSpace(stringDocumentArg(arguments, "source")) != sourceRef ||
-				strings.TrimSpace(stringDocumentArg(arguments, "field_schema_digest")) != schemaDigest {
+			action := strings.ToLower(strings.TrimSpace(stringDocumentArg(arguments, "form_action")))
+			if strings.TrimSpace(stringDocumentArg(arguments, "action")) != "form" ||
+				strings.TrimSpace(stringDocumentArg(arguments, "source")) != sourceRef {
 				return errors.New("protected form discovery follow-up must start the exact discovered source")
+			}
+			switch action {
+			case "discover":
+				window := documentFormWindowArgs(arguments)
+				if !window.explicit {
+					return errors.New("form browsing requires an explicit page or field window")
+				}
+			case "start":
+				window := documentFormWindowArgs(arguments)
+				if strings.TrimSpace(stringDocumentArg(arguments, "field_schema_digest")) != schemaDigest ||
+					!slices.Equal(window.pages, projection.Mapping.Window.Pages) ||
+					window.offset != projection.Mapping.Window.Offset ||
+					(len(projection.Mapping.CandidateFields) == 0 && !projection.Mapping.ReadyForReview) {
+					return errors.New("form preparation must preserve the exact discovered schema and field window")
+				}
+			default:
+				return errors.New("form discovery follow-up must browse or prepare the exact source")
 			}
 			return validateDocumentActionOptions("form", arguments)
 		},
@@ -1381,7 +1406,7 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		"form": {
 			"action": {}, "form_action": {}, "source": {}, "job_id": {}, "answer_ref": {}, "event_id": {},
 			"navigation_ref": {}, "field_id": {}, "question": {}, "field_schema_digest": {}, "form_summary": {},
-			"collection_plan": {}, "checked_label": {}, "unchecked_label": {},
+			"collection_plan": {}, "checked_label": {}, "unchecked_label": {}, "pages": {}, "field_offset": {},
 			"interaction_language": {}, "blank_actions": {},
 		},
 		"fill":   {"action": {}, "source": {}, "assignments": {}, "operation_id": {}},
@@ -1433,6 +1458,9 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		formAction = strings.ToLower(strings.TrimSpace(formAction))
 		if !ok || formAction == "" {
 			return errors.New("form requires form_action")
+		}
+		if err := validateDocumentFormWindow(formAction, args); err != nil {
+			return err
 		}
 		hasSource := strings.TrimSpace(stringDocumentArg(args, "source")) != ""
 		hasJob := strings.TrimSpace(stringDocumentArg(args, "job_id")) != ""
@@ -1538,6 +1566,35 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 			}
 		default:
 			return errors.New("unsupported form_action")
+		}
+	}
+	return nil
+}
+
+func validateDocumentFormWindow(formAction string, args map[string]any) error {
+	_, hasPages := args["pages"]
+	_, hasOffset := args["field_offset"]
+	if !hasPages && !hasOffset {
+		return nil
+	}
+	if formAction != "discover" && formAction != "start" && formAction != "status" {
+		return errors.New("form field windows apply only to discover, start, or status")
+	}
+	if hasPages {
+		pages, valid := documentPagesArg(args["pages"])
+		if !valid || len(pages) == 0 || len(pages) > documentFormPlanningPageLimit || !slices.IsSorted(pages) {
+			return errors.New("form planning requires one to three sorted unique pages")
+		}
+		for index, page := range pages {
+			if page < 1 || page > document.DefaultMaxPages || (index > 0 && page == pages[index-1]) {
+				return errors.New("form planning pages are out of bounds or duplicated")
+			}
+		}
+	}
+	if hasOffset {
+		offset, valid := documentIntArg(args["field_offset"])
+		if !valid || offset < 0 || offset > document.DefaultMaxFormFields {
+			return errors.New("form field offset is invalid")
 		}
 	}
 	return nil

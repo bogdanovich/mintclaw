@@ -186,6 +186,26 @@ approval policy. Use the [natural form intake test](../operations/pdfi1-natural-
 flow. The lower-level [PDF3 conversational form test](../operations/pdf3-conversational-form-test.md) remains the
 qualification runbook for restart, no-replay, privacy, and cleanup checks.
 
+### Bounded form planning views
+
+The model-facing `form/discover`, `form/start`, and `form/status` actions accept an optional `pages` selection of one
+to three sorted unique pages and `field_offset`. Each view returns at most eight `candidate_fields`, with stable IDs,
+representative widget pages, value-free status, and explicit label truncation. A repeated field is included when any
+of its widgets is on a selected page. Page selection is browsing, not a declaration that a semantic section applies.
+
+`mapping.field_window` reports the selected pages, requested offset, fixed limit, total available candidates, whether
+fields were omitted, and `next_offset` when another window follows. Preserve the page selection when following that
+offset. Views are computed from current state: after an answer or correction changes the job revision, restart at
+offset zero rather than treating an old offset as a durable cursor. Counts summarize the complete job, not just the
+selected pages. Preserved, provided, optional blank, missing, and conflicting counts never contain raw values;
+`confirmed_field_count` retains its existing aggregate meaning, including preserved and resolved blank fields.
+
+Discovery may browse another explicit window before starting the same exact source and schema. Starting preserves
+the last discovered page/window selection and still asks no question. An empty selected window cannot start
+collection for an unresolved form. For a review-ready job, default status keeps the bounded review; an explicit
+field window exposes safe existing-field identities for a requested correction. No view grants assignment,
+approval, mutation, or delivery authority.
+
 Submitted values are protected tool-call input. Ordinary history, task deliverables, traces, logs, and document
 journals keep only field IDs, assignment count/hash, source/request/output digests, assertion counts, operation ID,
 delivery identity, and opaque artifact ref.

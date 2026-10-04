@@ -97,6 +97,17 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		!strings.Contains(missingDiscovery.ForLLM, `"code":"field_discovery_required"`) {
 		t.Fatalf("start without field discovery = %#v", missingDiscovery)
 	}
+	emptyWindow := tool.Execute(
+		workflowToolContext(t, "execution-start-empty-window", "call-start-empty-window", []string{sourceRef}),
+		map[string]any{
+			"action": "form", "form_action": "start", "source": sourceRef,
+			"field_schema_digest": discoveryProjection.FieldSchemaDigest, "pages": []int{2},
+		},
+	)
+	if !emptyWindow.IsError || emptyWindow.Control.Suspension != nil ||
+		!strings.Contains(emptyWindow.ForLLM, `"code":"invalid_input"`) {
+		t.Fatalf("empty starting field window = %#v", emptyWindow)
+	}
 	wrongDigest := strings.Repeat("f", sha256.Size*2)
 	if wrongDigest == workflowFieldDiscoveryDigest(t, schema) {
 		wrongDigest = strings.Repeat("e", sha256.Size*2)
