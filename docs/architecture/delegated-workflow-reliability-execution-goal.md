@@ -2,10 +2,10 @@
 
 ## Status and scope
 
-Status: active. PR 1 merged as #1457 (`5a58ce0fa`). PR 2 merged as #1461
-(`203fb0ff0`) after the mixed-handoff receipt-binding review fix. PR 3 is
-published as #1464 and rebased onto merged main; CI/review/merge remain
-pending. No production deployment or final live acceptance yet.
+Status: implementation and acceptance complete. PR 1 merged as #1457
+(`5a58ce0fa`), PR 2 as #1461 (`203fb0ff0`), and PR 3 as #1464 (`d97157636`).
+Each code PR passed current-head CI and review and received authorized merge
+approval.
 
 Fix the shared delegation contract behind the October 3 browser incident.
 Do not redesign the browser driver or add site-specific workarounds. The same
@@ -210,3 +210,171 @@ delivery ownership, relaxed commit evidence, or repeated cross-layer flags,
 perform the autonomous architecture checkpoint before adding more patches.
 New browser features and the separate context-compaction warning are outside
 this goal.
+
+## Implementation and acceptance record
+
+### Merged changes
+
+- [PR 1457](https://github.com/bogdanovich/mintclaw/pull/1457) preserves
+  already-handled terminal delivery ownership through retained outcomes and
+  outer text/media finalization.
+- [PR 1461](https://github.com/bogdanovich/mintclaw/pull/1461) makes
+  authentication-only handoff conditional and binds durable handoff evidence
+  to the correct required objective. One substantive review-fix cycle covered
+  mixed conditional and required handoffs.
+- [PR 1464](https://github.com/bogdanovich/mintclaw/pull/1464) selects a verified
+  complete answer, preserves exact JSON, and seals late queued feedback with
+  the existing terminal generation. One substantive review-fix cycle removed
+  the legacy success renderer so rejected producer prose cannot reappear in
+  mixed action/result fallback.
+
+Scope stayed within the declared delegation, presentation, and delivery
+contracts. The review fixes converged by removing a duplicate rendering path;
+they did not add a workflow engine, model pass, browser driver, access
+restriction, or site exception.
+
+### Deterministic verification
+
+The final reviewed code passed the full agent package (318.719 seconds),
+affected channel/protocol/task/interaction packages, tagged lint, formatting,
+and documentation lint. Focused race regressions include:
+
+- Twelve real parent/delegate/child/manager cases: Telegram and Discord
+  recording adapters, direct and durable delivery, and succeeded, partial,
+  and blocked outcomes. Each produced exactly one cohesive final adapter
+  send; canonical outcomes and summaries remained intact.
+- Six already-handled text/media cases: zero additional outer sends.
+- Four gateway/companion by Telegram/Discord first-party lifecycle cases:
+  browser close completed, conditional handoff was unnecessary, no post-close
+  handoff repair occurred, one final send, feedback created, and zero active
+  feedback carriers after completion.
+- Mixed required/conditional receipt ownership, durable suspension/restart,
+  timeout followed by fresh retry, authority loss, and no repeated completed
+  handoff or external mutation.
+- Conservative presentation coverage for every retained value, nested JSON,
+  URLs, prices, IDs, blockers, and runtime downgrades. Incidental JSON is not
+  promoted; explicitly declared exact JSON remains one document.
+
+These exercise the actual manager and recording adapters, not live Telegram
+or Discord network APIs. Production CLI smokes below use the running gateway's
+native MintClaw channel, which intentionally suppresses Working feedback.
+Therefore those smokes are not evidence of a live Telegram deletion request.
+
+After another agent deployed merged main `1299057e4`, the contract/feedback
+race suite passed again (agent 25.911 seconds; channels 1.799 seconds). The
+handoff/timeout/restart suite also passed again (agent 15.616 seconds; tools
+2.979 seconds; browser 1.681 seconds). Both revisions contain all three fixes.
+
+### Live deployment and smoke matrix
+
+The reviewed merge `d97157636` was built, validated, installed, and rolled
+through the five gateways and launcher on October 4, 2026. A stateless main
+response and a new diagnostic trace confirmed the runtime pipeline. A
+concurrent deployment later advanced production to `1299057e4`; effective
+gateway and launcher executable digests and embedded revisions were verified
+against that deployment. No unrelated console, desktop, or companion service
+was restarted by this work.
+
+All smokes use first-party tools, the managed profile, public fixture pages,
+and exactly one parent `delegate` call with `delivery_mode=user_only`. Ordinary
+multi-page cases retain multiple independently blockable results; exact JSON
+and the single cleanup probe keep their declared aggregate result. No account mutation,
+purchase, listing publication, logout, or cookie clearing is used as a test.
+
+| Live scenario | Gateway | Configured companion |
+| --- | --- | --- |
+| Two pages plus cleanup; conditional authentication | Succeeded; handoff not needed | Succeeded; handoff not needed |
+| Explicit human handoff, same-session resume, fresh observation, second navigation | Succeeded; one prompt and one final answer | Blocked truthfully: this headless target advertises no handoff capability; session closed |
+| First page succeeds; reserved `.invalid` page unavailable | Genuine partial; first findings and blocker retained | Genuine partial; first findings and blocker retained |
+| Requested exact JSON | One valid object, no appended prose/footer | One valid object, no appended prose/footer |
+| Reopen profile, observe blank page, close | Succeeded | Succeeded |
+| Plain request without prescribed objective fields | Succeeded without forced handoff | Not separately run |
+| Prose from independently accepted structured facts | Verified summary selected | Verified summary selected |
+
+The companion's negative handoff case is not a successful live resume test.
+Headed capability is required to test human control on that target; this fix
+does not change deployment display preferences. Supported handoff mechanics
+remain covered by the broker/tool/runtime tests, and real gateway handoff
+verifies the durable continuation path.
+
+For every accepted run, the authoritative task record and delivered response
+are compared. Successful and genuinely partial runs retain their distinct
+verified statuses. Unnecessary authentication is recorded as `not_needed`
+when declared; an explicitly required unsupported handoff remains missing.
+Normal runs have one positive final send. The gateway handoff has one prompt
+and one final send, one resolved interaction, one final-delivery ID, and the
+same browser resource ID for handoff, resume, and close. Empty control/progress
+events are not counted as final answers.
+
+Thirteen live cases completed their applicable positive or negative capability
+gates. Each has one verified delegation, one retained canonical task, matching
+delivered content, a terminal cleanup receipt, and zero active case interactions.
+Across them there are thirteen final sends and one explicit handoff prompt;
+all selected diagnostic envelopes are valid and untruncated.
+
+The invalid-origin cases intentionally reach terminal browser state `lost`
+with `close_state=already_closed`: network policy has already released the
+worker. Cleanup receipts and subsequent profile reuse confirm release; this
+is not reported as successful inspection of the unavailable page. One
+companion observation needed a fresh retry; the retained outcome comes from
+the successful observation, not the failed attempt.
+
+Presentation coverage deliberately rejects paraphrased standalone prose when
+it cannot preserve that entire retained output literally. These smokes cover
+both admitted summaries and the compact retained-facts fallback. That fallback
+can remain a factual list; it no longer exports objective instructions,
+Completed/Not completed bookkeeping, or supporting JSON. This guard preserves
+data; it is not a semantic fact checker or a guarantee of one fixed writing
+style.
+
+Unaccepted setup attempts are retained separately: one invalid model-generated
+acceptance declaration, one concurrency-slot timeout while another browser run
+was active, and one companion run interrupted by the concurrent deployment.
+They are not counted as passes. Browser work is serialized for the accepted
+retries; no historical task or diagnostic trace was edited.
+
+### Operator retest
+
+Use the deployed CLI, not a standalone agent process:
+
+```sh
+mintclaw agent live --json --trace-evidence-agent browser --timeout 420s \
+  --config /home/server/.mintclaw/main/config.json --message 'PROMPT'
+```
+
+A safe ordinary prompt is:
+
+```text
+Call delegate exactly once for agent_id=browser, delivery_mode=user_only.
+Use only first-party browser tools on gateway/managed.
+Check https://example.com/ and https://example.org/ in the same session.
+Report both actual final URLs and titles, and close the session.
+Hand over control only if authentication is required; otherwise do not interrupt.
+```
+
+Repeat with `companion/managed` for that boundary. In explicit declaration
+tests, acceptance belongs only to result items; `min_items` and
+`required_fields` belong only to records acceptance. Use `requirement=if_needed`
+only for conditional `live_handoff`, never for required data or commits.
+
+For a harmless explicit gateway handoff test, require a unique marker in the
+handoff question and use matching `--auto-answer-question continue` and
+`--auto-answer-question-match MARKER` options. Never use automatic answers for
+credential entry, purchases, publication, or business approvals. Confirm
+`execution_evidence.status=verified`, one parent delegation, fresh post-resume
+observation, actual close state, and authoritative task/interaction records.
+CLI transport `outcome=success` alone does not mean every task objective
+succeeded.
+
+Private, bounded acceptance evidence and checksum-verified rollback artifacts
+are retained on the deployment host. Rich diagnostic traces stay in their
+existing private stores and are not attached to this report. Live profile
+configs, browser access modes, cookies, credentials, workspaces, and harness
+source are preserved. Doctor load errors are zero for all five profiles;
+pre-existing policy findings are reported separately, not silently changed.
+All twelve expected services are active, failed-unit and legacy-process counts
+are zero, and the final ten-minute error-level journal window is empty.
+Operation-owned remote staging and the isolated local package cache are
+removed; the reusable agent worktree, private acceptance evidence, and verified
+pre-change rollback set are retained. Other agents' recovery artifacts and
+shared runtime/build caches are not treated as disposable operation-owned data.
