@@ -113,6 +113,15 @@ historical media admission and one-shot context presence/removal do. A missing
 live projection disables cache intent. Non-media keys remain unchanged because
 the additional digest fields are omitted when absent.
 
+Each live-only tool result carries a private occurrence identity, rather than
+using a provider tool-call ID as a globally unique identifier. The identity
+survives internal context rebuilds and media resolution, but is removed from
+durable results and provider projections and is excluded from cache hashes.
+Reused IDs across completed batches therefore preserve cache intent and cannot
+make cleanup rewrite older results. Missing or ambiguous owned occurrences
+still disable cache intent. Real multi-iteration and snapshot/privacy
+regressions are included in the bounded runner.
+
 An eagerly inspected image becomes lazy on the next coding root. Selecting it
 again adds a one-shot projection, then removes it after the model call. The
 regression requires lineage boundaries for both transitions while retaining

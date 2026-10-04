@@ -451,10 +451,12 @@ func TestDocumentRenderContextFailsClosedAfterBeforeLLMNonVisionRewrite(t *testi
 	}
 	exec.messages = append(exec.messages, providers.Message{
 		Role: "tool", ToolCallID: "render-call", Content: "rendered page",
-		Media: []string{"data:image/png;base64,aGVsbG8="},
+		LiveToolContextID: "render-context",
+		Media:             []string{"data:image/png;base64,aGVsbG8="},
 	})
 	exec.liveToolContexts = []liveToolContextProjection{{
 		toolCallID:             "render-call",
+		messageID:              "render-context",
 		requiresDocumentVision: true,
 	}}
 	llm := newLLMIterationState(2)

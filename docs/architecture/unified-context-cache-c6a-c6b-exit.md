@@ -110,10 +110,12 @@ contracts; they do not establish live-model answer quality or cached usage.
 Localhost wire captures deliberately omit unsupported cache controls and
 cannot establish a provider cache hit. Unsupported usage stays `unknown`.
 
-A non-blocking review follow-up remains: repeated historical tool-call IDs can
-conservatively disable cache intent for a valid one-shot projection. Execution
-and context correctness do not depend on that optimization; live qualification
-must not misreport a disabled/unknown cache path as a hit.
+A review follow-up identified repeated historical tool-call IDs conservatively
+disabling cache intent for a valid one-shot projection. Subsequent regression
+tests also exposed ID-only cleanup rewriting an older result. This was addressed
+with live-only occurrence identity for cache lookup and cleanup, documented in
+the [invariant suite](context-cache-invariant-suite.md#lifecycle-contracts-c6b).
+Live qualification must still not misreport a disabled/unknown cache path as a hit.
 
 C6d diagnostics/rollback had an implementation and
 [operations baseline](../operations/prompt-cache.md) from #1449. Rollback-ready

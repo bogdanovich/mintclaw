@@ -608,6 +608,7 @@ func llmHookToolDefinitionsUnchanged(before, after []providers.ToolDefinition) b
 }
 
 func providerVisibleMessage(msg providers.Message) providers.Message {
+	msg.LiveToolContextID = ""
 	msg.PromptLayer = ""
 	msg.PromptSlot = ""
 	msg.PromptSource = ""

@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -588,12 +590,18 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 		}
 		runner.exec.liveToolContexts = append(runner.exec.liveToolContexts, liveToolContextProjection{
 			toolCallID:             toolCallID,
+			messageID:              message.LiveToolContextID,
 			durableContent:         durable.Content,
 			durableMedia:           append([]string(nil), durable.Media...),
 			requiresDocumentVision: requiresDocumentVision,
 		})
 		return
 	}
+}
+
+func (projection liveToolContextProjection) matches(message providers.Message) bool {
+	return projection.messageID != "" && projection.toolCallID != "" && message.Role == "tool" &&
+		message.ToolCallID == projection.toolCallID && message.LiveToolContextID == projection.messageID
 }
 
 func (exec *turnExecution) hasLiveDocumentContextMedia() bool {
@@ -615,23 +623,16 @@ func consumeLiveToolContextMessages(
 	if len(messages) == 0 || len(projections) == 0 {
 		return
 	}
-	byToolCallID := make(map[string]liveToolContextProjection, len(projections))
 	for _, projection := range projections {
-		if projection.toolCallID != "" {
-			byToolCallID[projection.toolCallID] = projection
+		for index := range messages {
+			message := &messages[index]
+			if !projection.matches(*message) {
+				continue
+			}
+			message.Content = projection.durableContent
+			message.Media = append([]string(nil), projection.durableMedia...)
+			message.LiveToolContextID = ""
 		}
-	}
-	for index := range messages {
-		message := &messages[index]
-		if message.Role != "tool" {
-			continue
-		}
-		projection, ok := byToolCallID[message.ToolCallID]
-		if !ok {
-			continue
-		}
-		message.Content = projection.durableContent
-		message.Media = append([]string(nil), projection.durableMedia...)
 	}
 }
 
@@ -2371,6 +2372,10 @@ func buildToolResultJournalMessage(
 	if len(result.ContextMedia) > 0 && !result.Delivery.IsFinalHandled() {
 		message.Media = append(message.Media, result.ContextMedia...)
 	}
+	if !result.Delivery.IsFinalHandled() &&
+		(strings.TrimSpace(result.ContextText) != "" || len(result.ContextMedia) > 0) {
+		message.LiveToolContextID = uuid.NewString()
+	}
 	return message
 }
 
@@ -2380,6 +2385,7 @@ func durableToolResultJournalMessage(
 	content string,
 ) providers.Message {
 	durable := live
+	durable.LiveToolContextID = ""
 	durable.Content = content
 	durable.Media = nil
 	if result != nil && len(result.Media) > 0 && !result.Delivery.IsFinalHandled() {

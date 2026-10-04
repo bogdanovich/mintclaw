@@ -214,6 +214,7 @@ type turnExecution struct {
 
 type liveToolContextProjection struct {
 	toolCallID             string
+	messageID              string
 	durableContent         string
 	durableMedia           []string
 	requiresDocumentVision bool
@@ -1410,6 +1411,7 @@ func normalizeMessageForComparison(msg providers.Message) providers.Message {
 	msg.PromptLayer = ""
 	msg.PromptSlot = ""
 	msg.PromptSource = ""
+	msg.LiveToolContextID = ""
 
 	if len(msg.Media) == 0 {
 		msg.Media = nil

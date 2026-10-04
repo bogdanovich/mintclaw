@@ -43,6 +43,11 @@ run_context_contracts ./pkg/agent goolm,stdjson \
   TestSteeringEnvelopeReplaysSameProviderProjectionWithoutChangingDisplay \
   TestPromptCacheMediaBoundaryUsesAdmittedSnapshotAcrossRetries \
   TestPromptCacheMediaBoundaryTracksGenericOneShotContextWithoutRetainingIt \
+  TestLiveToolContextReusedIDKeepsCacheIntentAndHistoricalResults \
+  TestLiveToolContextMissingOccurrenceDoesNotBorrowHistoricalID \
+  TestLiveToolContextIdentitySurvivesRebuildButNotProviderOrDurableProjection \
+  TestLiveToolContextAmbiguousIdentityDisablesCacheIntent \
+  TestLiveToolContextReusedIDsAcrossRealToolIterations \
   TestFallbackAttemptUsesActualProviderAndModelLineage \
   TestCodingPromptKeepsFrozenContextAcrossCrossProviderFallback \
   TestCodingProviderRetryKeepsWorkspaceFrozenUntilNextRootTurn \
