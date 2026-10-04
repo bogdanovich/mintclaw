@@ -82,6 +82,7 @@ func TestDocumentFormEvidenceUsesRetainedSourceWithoutDurableRawEvidence(t *test
 			FieldID: field.ID, IdempotencyKey: fmt.Sprintf("evidence-ready-%d", index),
 			Value: document.FormProtectedValue{Kind: document.ProtectedValueText, Text: "Synthetic confirmed fact"},
 			State: document.FormValueConfirmed, Source: document.FormValueSourceUser,
+			Confidence: document.FormValueConfidenceExact, Validation: document.FormValueValidationValid,
 		})
 		if err != nil {
 			t.Fatal(err)
