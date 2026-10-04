@@ -545,6 +545,70 @@ func TestAdaptiveHeightResizeReflowsCommittedNativeHistory(t *testing.T) {
 	}
 }
 
+func TestAdaptiveHeightResizeSerializesAndCoalescesBackToBackReflows(t *testing.T) {
+	controller := newController(t)
+	controller.TurnStarted("turn-complete", "describe the repository with enough detail to wrap across widths")
+	var widths []int
+	var model *Model
+	model, err := newModel(t.Context(), controller, modelOptions{
+		adaptiveHeight: true,
+		printHistory: func(string) tea.Cmd {
+			widths = append(widths, model.viewport.Width)
+			return func() tea.Msg { return nil }
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	controller.AssistantAccumulated(
+		"turn-complete",
+		"This repository summary is deliberately long enough to produce width-sensitive native history.",
+		true,
+	)
+	controller.TurnCompleted("turn-complete", "completed")
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+
+	model.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	model.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	if !model.inlineReflowRunning || !model.inlineReflowPending {
+		t.Fatalf(
+			"back-to-back resize state running=%t pending=%t, want both true",
+			model.inlineReflowRunning,
+			model.inlineReflowPending,
+		)
+	}
+	if want := []int{80, 120}; !slices.Equal(widths, want) {
+		t.Fatalf("reflow widths before first completion = %v, want %v", widths, want)
+	}
+
+	model.Update(inlineReflowFinishedMsg{})
+	if !model.inlineReflowRunning || model.inlineReflowPending {
+		t.Fatalf(
+			"coalesced resize state running=%t pending=%t, want running only",
+			model.inlineReflowRunning,
+			model.inlineReflowPending,
+		)
+	}
+	if want := []int{80, 120, 40}; !slices.Equal(widths, want) {
+		t.Fatalf("coalesced reflow widths = %v, want %v", widths, want)
+	}
+
+	model.Update(inlineReflowFinishedMsg{})
+	if model.inlineReflowRunning || model.inlineReflowPending {
+		t.Fatalf(
+			"settled resize state running=%t pending=%t, want idle",
+			model.inlineReflowRunning,
+			model.inlineReflowPending,
+		)
+	}
+}
+
 func TestAdaptiveHeightResizeDefersNativeHistoryReflowUntilOverlayCloses(t *testing.T) {
 	controller := newController(t)
 	controller.TurnStarted("turn-complete", "inspect repository")
@@ -596,10 +660,23 @@ func commandEmitsMessageType(command tea.Cmd, target tea.Msg) bool {
 		return true
 	}
 	batch, ok := message.(tea.BatchMsg)
-	if !ok {
+	if ok {
+		for _, child := range batch {
+			if commandEmitsMessageType(child, target) {
+				return true
+			}
+		}
 		return false
 	}
-	for _, child := range batch {
+	sequence := reflect.ValueOf(message)
+	if sequence.Kind() != reflect.Slice {
+		return false
+	}
+	for index := range sequence.Len() {
+		child, childOK := sequence.Index(index).Interface().(tea.Cmd)
+		if !childOK {
+			continue
+		}
 		if commandEmitsMessageType(child, target) {
 			return true
 		}

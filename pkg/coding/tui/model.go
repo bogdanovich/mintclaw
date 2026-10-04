@@ -53,6 +53,8 @@ type CommandResultMsg struct {
 
 type transcriptOverlayReadyMsg struct{}
 
+type inlineReflowFinishedMsg struct{}
+
 // SubmitResultMsg completes one composer submission without discarding a
 // draft when controller admission fails.
 type SubmitResultMsg struct {
@@ -167,6 +169,7 @@ type Model struct {
 	diagnostics         presentationDiagnosticsState
 	adaptiveHeight      bool
 	windowSizeObserved  bool
+	inlineReflowRunning bool
 	inlineReflowPending bool
 	showStartupStatus   bool
 	herdrReporter       *herdrLifecycleReporter
@@ -361,6 +364,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.transcriptOverlay.opening = false
 		}
 		return m, nil
+	case inlineReflowFinishedMsg:
+		m.inlineReflowRunning = false
+		if m.transcriptOverlay.active {
+			return m, nil
+		}
+		return m, m.startPendingInlineReflow()
 	case tea.WindowSizeMsg:
 		width, height := max(1, message.Width), max(1, message.Height)
 		clearStaleInlineFrame := m.adaptiveHeight && m.windowSizeObserved &&
@@ -368,8 +377,8 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.windowSizeObserved = true
 		m.resize(message.Width, message.Height)
 		if clearStaleInlineFrame {
+			m.inlineReflowPending = true
 			if m.transcriptOverlay.active {
-				m.inlineReflowPending = true
 				return m, m.scheduleWorkingTick()
 			}
 			// Bubble Tea's inline renderer tracks logical rows from the old
@@ -377,7 +386,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			// survive later repaints as duplicated text. Rebuild the MintClaw
 			// transcript from semantic cells after clearing the stale terminal
 			// history, matching Codex's inline resize contract.
-			return m, tea.Batch(m.scheduleWorkingTick(), m.reflowNativeHistoryAfterResize())
+			return m, tea.Batch(m.scheduleWorkingTick(), m.startPendingInlineReflow())
 		}
 		return m, m.scheduleWorkingTick()
 	case SubscriptionMsg:
@@ -883,6 +892,18 @@ func (m *Model) reflowNativeHistoryAfterResize() tea.Cmd {
 	return tea.Sequence(
 		tea.ClearScreen,
 		m.printNativeHistory(eraseTerminalScrollback+history),
+	)
+}
+
+func (m *Model) startPendingInlineReflow() tea.Cmd {
+	if !m.inlineReflowPending || m.inlineReflowRunning || m.transcriptOverlay.active {
+		return nil
+	}
+	m.inlineReflowPending = false
+	m.inlineReflowRunning = true
+	return tea.Sequence(
+		m.reflowNativeHistoryAfterResize(),
+		func() tea.Msg { return inlineReflowFinishedMsg{} },
 	)
 }
 

@@ -129,8 +129,7 @@ func (m *Model) closeTranscriptOverlay() tea.Cmd {
 	}
 	commands := []tea.Cmd{tea.DisableMouse, tea.ExitAltScreen}
 	if m.inlineReflowPending {
-		m.inlineReflowPending = false
-		commands = append(commands, m.reflowNativeHistoryAfterResize())
+		commands = append(commands, m.startPendingInlineReflow())
 	}
 	if savedFocus && m.focused {
 		commands = append(commands, m.composer.Focus())
