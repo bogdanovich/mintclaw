@@ -1109,6 +1109,8 @@ func TestRegistryRoundTripsCurrentTaskResultOutcomes(t *testing.T) {
 			name: "partial", status: StatusFailed,
 			outcome: &taskresult.Outcome{
 				Status: taskresult.OutcomePartial, MissingItems: []string{"second item"},
+				Explanation: "The second account needs sign-in.",
+				UserSummary: "The first finding is verified. The second account needs sign-in.",
 			},
 		},
 		{name: "failed", status: StatusFailed, errorDetail: "child execution failed"},

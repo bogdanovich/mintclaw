@@ -272,16 +272,14 @@ func (s *StreamCoordinator) dismissToolFeedback(
 	ctx context.Context,
 	keys []string,
 	retained bool,
+	generations []string,
 ) {
 	if !s.hasToolFeedback() {
 		return
 	}
 	for _, key := range keys {
-		if retained {
-			s.toolFeedback.Dismiss(ctx, key)
-		} else {
-			s.toolFeedback.DismissTransient(ctx, key)
-		}
+		terminal := s.toolFeedback.beginTerminal(key, retained, generations)
+		s.toolFeedback.CompleteTerminal(ctx, terminal, true)
 	}
 }
 

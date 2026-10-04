@@ -51,9 +51,16 @@ func TestDelegateUserOnlyIncompleteOutcomeHasOneChannelDelivery(t *testing.T) {
 					})
 					missing = nil
 				}
+				answer := "The remaining account requires sign-in."
+				switch status {
+				case taskresult.OutcomePartial:
+					answer = "Verified first finding. " + answer
+				case taskresult.OutcomeSucceeded:
+					answer = "Verified first finding. Verified second finding."
+				}
 				encoded, err := json.Marshal(reportedObjectiveOutcome{
 					Status: string(status), CompletedItems: completed, MissingItems: missing,
-					Result: "Inspection finished.", Explanation: "The remaining account requires sign-in.",
+					Result: answer, Explanation: "The remaining account requires sign-in.",
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -110,6 +117,9 @@ func TestDelegateUserOnlyIncompleteOutcomeHasOneChannelDelivery(t *testing.T) {
 				if len(messages) != 1 {
 					t.Fatalf("adapter delivered %d messages, want exactly one: %#v", len(messages), messages)
 				}
+				if messages[0].Content != answer {
+					t.Fatalf("adapter did not receive one cohesive answer: %q, want %q", messages[0].Content, answer)
+				}
 				if status != taskresult.OutcomeBlocked &&
 					!strings.Contains(messages[0].Content, "Verified first finding.") {
 					t.Fatalf("delivered result lost the verified finding: %q", messages[0].Content)
@@ -123,7 +133,8 @@ func TestDelegateUserOnlyIncompleteOutcomeHasOneChannelDelivery(t *testing.T) {
 				}
 				last := history[len(history)-1]
 				if last.Deliverable == nil || last.Deliverable.ObjectiveOutcome == nil ||
-					last.Deliverable.ObjectiveOutcome.Status != status {
+					last.Deliverable.ObjectiveOutcome.Status != status ||
+					last.Deliverable.ObjectiveOutcome.UserSummary != answer {
 					t.Fatalf("canonical history lost the verified outcome: %#v", last)
 				}
 			})

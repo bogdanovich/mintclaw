@@ -142,7 +142,7 @@ func TestObjectiveOutcomeUserContentRendersReadableLocalizedPartialResult(t *tes
 	}
 
 	got := objectiveOutcomeUserContent("Все объявления проверены.", outcome)
-	if strings.Count(got, label) != 0 || strings.Count(got, strings.TrimSuffix(label, ".")) != 1 ||
+	if strings.Count(got, label) != 0 || strings.Count(got, strings.TrimSuffix(label, ".")) != 0 ||
 		strings.Contains(got, label+":") || strings.Contains(got, "Task completed") ||
 		strings.Contains(got, "Completed:") || strings.Contains(got, "producer reported") ||
 		strings.Contains(got, "Reported reason:") ||
@@ -191,6 +191,7 @@ func TestObjectiveOutcomeProjectsOnlyAuthoritativeOutputForResultOnlySuccess(t *
 		`"missing_items":[],"result":"Inspection finished."}` + objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
 		Item: "return exact JSON", Kind: "result",
+		Acceptance: &taskresult.ObjectiveAcceptance{OutputKind: "text", ExactJSON: true},
 	}})
 
 	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
@@ -318,7 +319,7 @@ func TestTerminalObjectiveResultDoesNotPromoteIncidentalJSON(t *testing.T) {
 	}
 
 	got := terminalObjectiveResult("Listing published.", outcome)
-	if got != "Listing published.\n\n{\"id\":42}" {
+	if got != "Listing published.\n\n- id: 42" || strings.Contains(got, `{"id":42}`) {
 		t.Fatalf("incidental JSON changed terminal presentation: %q", got)
 	}
 }
@@ -350,7 +351,7 @@ func TestObjectiveOutcomeProjectsEmptyResultOnlyRecordsExplicitly(t *testing.T) 
 	}})
 
 	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
-	if outcome.Status != taskresult.OutcomeSucceeded || clean != "return matches:\n- (no records)" {
+	if outcome.Status != taskresult.OutcomeSucceeded || clean != "No matches found." {
 		t.Fatalf("empty records terminal projection = %q, outcome = %#v", clean, outcome)
 	}
 }
@@ -891,9 +892,12 @@ func TestExtractObjectiveOutcomeDoesNotReuseReceiptAcrossActions(t *testing.T) {
 
 func TestObjectiveOutcomeUserContentReplacesContradictoryPartialProse(t *testing.T) {
 	outcome := &taskresult.Outcome{
-		Status:         taskresult.OutcomePartial,
-		CompletedItems: []taskresult.Item{{Item: "Yakima published"}},
-		MissingItems:   []string{"Vissani not verified"},
+		Status: taskresult.OutcomePartial,
+		CompletedItems: []taskresult.Item{{
+			Item: "Publish Yakima using the internal workflow", Kind: taskresult.ObjectiveKindExternalAction,
+			Receipts: []taskresult.Receipt{{Summary: "Yakima published"}},
+		}},
+		MissingItems: []string{"Vissani not verified"},
 	}
 	got := objectiveOutcomeUserContent("Both items were published.", outcome)
 	if strings.Contains(got, "Both items") || !strings.Contains(got, "Yakima published") ||

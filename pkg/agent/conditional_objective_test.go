@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
@@ -274,10 +273,11 @@ func TestDelegateConditionalHandoffDoesNotRepairAfterBrowserClose(t *testing.T) 
 					{Content: objectiveOutcomeStart + `{"status":"succeeded","completed_items":[` +
 						`{"objective_id":"objective_1","output":{"kind":"text","text":"First verified finding."}},` +
 						`{"objective_id":"objective_2","output":{"kind":"text","text":"Second verified finding; browser closed."}}],` +
-						`"missing_items":[],"not_needed_items":["objective_3"],"result":"Both results inspected."}` +
+						`"missing_items":[],"not_needed_items":["objective_3"],"result":"First verified finding. Second verified finding; browser closed."}` +
 						objectiveOutcomeEnd, FinishReason: "stop"},
 				}}
 				fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
+					cfg.Agents.Defaults.ToolFeedback = config.ToolFeedbackConfig{Enabled: true, Subagents: true}
 					cfg.Agents.List = []config.AgentConfig{
 						{
 							ID: "alpha", Default: true, Workspace: filepath.Join(cfg.WorkspacePath(), "alpha"),
@@ -294,9 +294,9 @@ func TestDelegateConditionalHandoffDoesNotRepairAfterBrowserClose(t *testing.T) 
 					),
 					source,
 				))
-				adapter := &fakeMediaChannel{}
-				fixture.Loop.SetChannelManager(newStartedTestChannelManager(
-					t, fixture.Bus, media.NewFileMediaStore(), channel, adapter,
+				adapter := &presentationFeedbackChannel{}
+				fixture.Loop.SetChannelManager(newStartedTestChannelManagerWithConfig(
+					t, fixture.Config, fixture.Bus, media.NewFileMediaStore(), channel, adapter,
 				))
 				response, err := fixture.Loop.runAgentLoop(t.Context(), fixture.Agent, turnSpec{
 					Dispatch: DispatchRequest{
@@ -311,10 +311,24 @@ func TestDelegateConditionalHandoffDoesNotRepairAfterBrowserClose(t *testing.T) 
 					t.Fatalf("unexpected recovery: closed=%t handoffs=%d provider_calls=%d",
 						source.closed, source.handoffCalls, provider.callCount)
 				}
-				messages := adapter.messagesSnapshot()
-				if len(messages) != 1 || !strings.Contains(messages[0].Content, "First verified finding.") ||
-					!strings.Contains(messages[0].Content, "Second verified finding") {
+				var messages []bus.OutboundMessage
+				feedbackCount := 0
+				for _, msg := range adapter.messagesSnapshot() {
+					if msg.Metadata.IsToolFeedback() {
+						feedbackCount++
+					} else {
+						messages = append(messages, msg)
+					}
+				}
+				if len(messages) != 1 ||
+					messages[0].Content != "First verified finding. Second verified finding; browser closed." {
 					t.Fatalf("channel result = %#v", messages)
+				}
+				adapter.feedbackMu.Lock()
+				activeFeedback := len(adapter.active)
+				adapter.feedbackMu.Unlock()
+				if feedbackCount == 0 || activeFeedback != 0 {
+					t.Fatalf("feedback cleanup: created=%d active=%d", feedbackCount, activeFeedback)
 				}
 				history := fixture.Agent.Sessions.GetHistory("conditional-auth")
 				outcome := history[len(history)-1].Deliverable.ObjectiveOutcome

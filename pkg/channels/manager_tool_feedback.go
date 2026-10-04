@@ -354,7 +354,9 @@ func (m *Manager) dismissToolFeedbackTargets(
 	keys, scoped := toolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	m.stream.dismissToolFeedback(ctx, keys, scoped || strings.TrimSpace(sessionKey) != "")
+	m.stream.dismissToolFeedback(
+		ctx, keys, scoped || strings.TrimSpace(sessionKey) != "", toolFeedbackGenerations(traceScopes),
+	)
 }
 
 func prepareToolFeedbackMessageContent(ch Channel, content string) string {

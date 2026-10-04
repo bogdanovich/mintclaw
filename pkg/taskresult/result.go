@@ -77,6 +77,9 @@ type Outcome struct {
 	MissingItems   []string      `json:"missing_items,omitempty"`
 	NotNeededItems []string      `json:"not_needed_items,omitempty"`
 	Explanation    string        `json:"explanation,omitempty"`
+	// UserSummary is the producer's complete answer admitted only after the
+	// runtime validates its status and coverage of the retained output facts.
+	UserSummary string `json:"user_summary,omitempty"`
 }
 
 type Item struct {
@@ -187,6 +190,7 @@ func CloneOutcome(input *Outcome) *Outcome {
 		MissingItems:   append([]string(nil), input.MissingItems...),
 		NotNeededItems: append([]string(nil), input.NotNeededItems...),
 		Explanation:    input.Explanation,
+		UserSummary:    input.UserSummary,
 	}
 	for _, item := range input.CompletedItems {
 		cloned := Item{

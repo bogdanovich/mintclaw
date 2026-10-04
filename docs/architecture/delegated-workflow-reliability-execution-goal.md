@@ -2,9 +2,10 @@
 
 ## Status and scope
 
-Status: active. PR 1 merged as #1457 (`5a58ce0fa`). PR 2 implementation and
-local validation are complete at #1461; CI/review/merge remain pending. PR 3 is
-pending. No production deployment yet.
+Status: active. PR 1 merged as #1457 (`5a58ce0fa`). PR 2 merged as #1461
+(`203fb0ff0`) after the mixed-handoff receipt-binding review fix. PR 3 is
+published as #1464 and rebased onto merged main; CI/review/merge remain
+pending. No production deployment or final live acceptance yet.
 
 Fix the shared delegation contract behind the October 3 browser incident.
 Do not redesign the browser driver or add site-specific workarounds. The same
@@ -118,6 +119,27 @@ Acceptance criteria:
 Separate validated task data from the ordinary user-facing answer. Preserve
 the verified status while allowing normal conversational presentation. Keep
 one explicit exact-JSON output path and a concise truthful fallback.
+
+Reuse the producer's existing `result` field as the complete answer; do not
+introduce another model call, renderer agent, or semantic evaluator. Retain
+it as `user_summary` only after the reported status matches the verified
+outcome and every output value, link, and ID survives a conservative literal
+coverage check. Incomplete answers must also retain the specific blocker.
+This is a data-preservation guard, not an independent natural-language fact
+checker. Keep canonical outputs and receipts unchanged and persist the
+selected presentation with them. If coverage fails, project retained data
+without objective-instruction headings. Supporting JSON becomes field/value
+lines; explicitly requested exact JSON keeps its dedicated transport path.
+Carry the bounded root request as presentation-only evidence for ordinary
+result objectives as well as handoffs, so an internally translated task does
+not override the user's language. It does not grant additional authority.
+
+The transport acceptance test also covers child feedback queued behind a
+rate limit. Preserve the exact turn generation when dismissing feedback,
+even when no progress message has reached admission yet. Reuse the existing
+terminal-generation mechanism; do not add a second cleanup state machine.
+Late progress from that completed turn must be suppressed, while progress
+from a genuinely later turn in the same durable session remains available.
 
 Acceptance criteria:
 

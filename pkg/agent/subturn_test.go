@@ -33,14 +33,14 @@ const (
 	testMaxConcurrentSubTurns = defaultMaxConcurrentSubTurns
 )
 
-func TestAppendLiveHandoffPresentationContextPreservesRootRequestLanguage(t *testing.T) {
+func TestAppendObjectivePresentationContextPreservesRootRequestLanguage(t *testing.T) {
 	task := "Open Amazon, inspect the requested page, and hand the live browser to the user."
 	userMessage := "Открой Amazon и передай мне управление этим же окном."
 	liveChecklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
 		Item: "hand the live browser to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
 	}})
 
-	got := appendLiveHandoffPresentationContext(task, userMessage, liveChecklist)
+	got := appendObjectivePresentationContext(task, userMessage, liveChecklist)
 	for _, want := range []string{
 		task,
 		userMessage,
@@ -55,8 +55,17 @@ func TestAppendLiveHandoffPresentationContextPreservesRootRequestLanguage(t *tes
 	resultOnly := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
 		Item: "return page status", Kind: taskresult.ObjectiveKindResult,
 	}})
-	if got = appendLiveHandoffPresentationContext(task, userMessage, resultOnly); got != task {
-		t.Fatalf("result-only task gained presentation context: %q", got)
+	if got = appendObjectivePresentationContext(task, userMessage, resultOnly); !strings.Contains(got, userMessage) ||
+		!strings.Contains(got, "final answer") {
+		t.Fatalf("result-only task lost root presentation evidence: %q", got)
+	}
+	if got = appendObjectivePresentationContext(task, userMessage, nil); got != task {
+		t.Fatalf("legacy undeclared task gained presentation context: %q", got)
+	}
+	longRequest := strings.Repeat("Ж", maxObjectivePresentationRunes+100)
+	got = appendObjectivePresentationContext(task, longRequest, resultOnly)
+	if strings.Contains(got, longRequest) || !strings.Contains(got, strings.Repeat("Ж", 100)) {
+		t.Fatalf("root request presentation evidence was not bounded: %d bytes", len(got))
 	}
 }
 
@@ -558,7 +567,7 @@ func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
 		Content: "Both items were published.\n" + objectiveOutcomeStart +
 			`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
 			`"output":{"kind":"text","text":"Yakima published."}}],` +
-			`"missing_items":["objective_2"],"explanation":"the second item was not published"}` +
+			`"missing_items":["objective_2"],"explanation":"Vissani not published"}` +
 			objectiveOutcomeEnd,
 		FinishReason: "stop",
 	}}}
@@ -4679,8 +4688,9 @@ func TestDurableSyncDelegateUserOnlyPublishesAuthoritativeResultOutput(t *testin
 					"task":          "return exact JSON",
 					"delivery_mode": string(toolshared.AsyncDeliveryUserOnly),
 					"objective_items": []any{map[string]any{
-						"item": "return exact JSON",
-						"kind": "result",
+						"item":       "return exact JSON",
+						"kind":       "result",
+						"acceptance": map[string]any{"output_kind": "text", "exact_json": true},
 					}},
 				},
 			}},
