@@ -118,6 +118,7 @@ type ToolLoopOutcome struct {
 
 type turnResult struct {
 	finalContent                 string
+	responseDisposition          finalResponseDisposition
 	modelName                    string
 	defaultModelName             string
 	usageInputTokens             int
@@ -134,7 +135,8 @@ type turnResult struct {
 }
 
 func (result turnResult) responseContent() string {
-	if result.status == TurnEndStatusAborted || result.status == TurnEndStatusSuspended {
+	if result.status == TurnEndStatusAborted || result.status == TurnEndStatusSuspended ||
+		result.responseDisposition == finalResponseAlreadyHandled {
 		return ""
 	}
 	return result.finalContent

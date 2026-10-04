@@ -228,6 +228,7 @@ func (p *Pipeline) Finalize(
 func (f *FinalizationContext) result(includeCompaction bool) turnResult {
 	result := turnResult{
 		finalContent:           f.content,
+		responseDisposition:    f.disposition,
 		modelName:              f.modelName,
 		defaultModelName:       f.defaultModelName,
 		usageInputTokens:       f.usage.inputTokens,
