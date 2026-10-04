@@ -200,13 +200,14 @@ func objectiveItemsParameter(allowedKinds ...string) map[string]any {
 	kindDescription := "result=read/lifecycle; external_action=durable change."
 	if objectiveKindAllowed(kinds, taskresult.ObjectiveKindLiveHandoff) {
 		description += " handoff=separate live_handoff with suspension receipt; observation/close=separate results."
+		description += " Explicit handoff=required; authentication-only=if_needed."
 		kindDescription += " live_handoff=separate handoff; never combine with result."
 	} else {
 		description += " Handoff unavailable; use durable spawn or delegate."
 	}
 	description += " Approval: declare external_action and invoke the protected tool; never a result. Omitted intent " +
 		"is not inferred."
-	return map[string]any{
+	schema := map[string]any{
 		"type":        "array",
 		"description": description,
 		"items": map[string]any{
@@ -243,6 +244,16 @@ func objectiveItemsParameter(allowedKinds ...string) map[string]any {
 			"required": []string{"item", "kind"},
 		},
 	}
+	if objectiveKindAllowed(kinds, taskresult.ObjectiveKindLiveHandoff) {
+		itemSchema := schema["items"].(map[string]any)
+		properties := itemSchema["properties"].(map[string]any)
+		properties["requirement"] = map[string]any{
+			"type":        "string",
+			"enum":        []string{taskresult.ObjectiveRequirementRequired, taskresult.ObjectiveRequirementIfNeeded},
+			"description": "Default required. if_needed only for conditional live_handoff, never explicit human control.",
+		}
+	}
+	return schema
 }
 
 func parseObjectiveItems(raw any, allowedKinds ...string) ([]toolshared.ObjectiveSpec, error) {
@@ -274,6 +285,21 @@ func parseObjectiveItems(raw any, allowedKinds ...string) ([]toolshared.Objectiv
 				strings.Join(kinds, "|"),
 			)
 		}
+		requirement := ""
+		if rawRequirement, present := entry["requirement"]; present {
+			var valid bool
+			requirement, valid = rawRequirement.(string)
+			if !valid {
+				return nil, fmt.Errorf("objective_items[%d] requirement must be a string", index)
+			}
+		}
+		requirement, valid := taskresult.NormalizeObjectiveRequirement(requirement, kind)
+		if !valid {
+			return nil, fmt.Errorf(
+				"objective_items[%d] requirement must be required, or if_needed for live_handoff only",
+				index,
+			)
+		}
 		acceptance, err := parseObjectiveAcceptance(entry["acceptance"], kind)
 		if err != nil {
 			return nil, fmt.Errorf("objective_items[%d] acceptance: %w", index, err)
@@ -284,7 +310,9 @@ func parseObjectiveItems(raw any, allowedKinds ...string) ([]toolshared.Objectiv
 				return nil, errors.New("objective_items accepts at most one exact_json result")
 			}
 		}
-		items = append(items, toolshared.ObjectiveSpec{Item: item, Kind: kind, Acceptance: acceptance})
+		items = append(items, toolshared.ObjectiveSpec{
+			Item: item, Kind: kind, Requirement: requirement, Acceptance: acceptance,
+		})
 	}
 	return items, nil
 }

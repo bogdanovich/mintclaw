@@ -23,6 +23,7 @@ type reportedObjectiveOutcome struct {
 	Status         string                  `json:"status"`
 	CompletedItems []reportedObjectiveItem `json:"completed_items"`
 	MissingItems   []string                `json:"missing_items"`
+	NotNeededItems []string                `json:"not_needed_items,omitempty"`
 	Result         string                  `json:"result,omitempty"`
 	Explanation    string                  `json:"explanation,omitempty"`
 }
@@ -72,10 +73,11 @@ type reportedObjectiveItem struct {
 }
 
 type runtimeObjectiveItem struct {
-	ID         string
-	Item       string
-	Kind       string
-	Acceptance *taskresult.ObjectiveAcceptance
+	ID          string
+	Item        string
+	Kind        string
+	Requirement string
+	Acceptance  *taskresult.ObjectiveAcceptance
 }
 
 func cloneRuntimeObjectiveChecklist(items []runtimeObjectiveItem) []runtimeObjectiveItem {
@@ -93,10 +95,11 @@ func normalizeObjectiveChecklist(specs []toolshared.ObjectiveSpec) []runtimeObje
 	for _, spec := range specs {
 		item := boundedObjectiveText(spec.Item)
 		kind := strings.TrimSpace(spec.Kind)
+		requirement, validRequirement := taskresult.NormalizeObjectiveRequirement(spec.Requirement, kind)
 		acceptance, valid := normalizeObjectiveAcceptance(spec.Acceptance, kind)
 		if item == "" || (kind != taskresult.ObjectiveKindResult &&
 			kind != taskresult.ObjectiveKindExternalAction && kind != taskresult.ObjectiveKindLiveHandoff) || !valid ||
-			len(items) >= objectiveOutcomeLimit {
+			len(items) >= objectiveOutcomeLimit || !validRequirement {
 			return nil
 		}
 		if acceptance != nil && acceptance.ExactJSON {
@@ -106,7 +109,8 @@ func normalizeObjectiveChecklist(specs []toolshared.ObjectiveSpec) []runtimeObje
 			}
 		}
 		items = append(items, runtimeObjectiveItem{
-			ID: fmt.Sprintf("objective_%d", len(items)+1), Item: item, Kind: kind, Acceptance: acceptance,
+			ID: fmt.Sprintf("objective_%d", len(items)+1), Item: item, Kind: kind,
+			Requirement: requirement, Acceptance: acceptance,
 		})
 	}
 	return items
@@ -116,7 +120,7 @@ func interactionObjectiveChecklist(items []runtimeObjectiveItem) []interactions.
 	out := make([]interactions.ObjectiveChecklistItem, 0, len(items))
 	for _, item := range items {
 		out = append(out, interactions.ObjectiveChecklistItem{
-			ID: item.ID, Item: item.Item, Kind: item.Kind,
+			ID: item.ID, Item: item.Item, Kind: item.Kind, Requirement: item.Requirement,
 			Acceptance: taskresult.CloneObjectiveAcceptance(item.Acceptance),
 		})
 	}
@@ -126,8 +130,12 @@ func interactionObjectiveChecklist(items []runtimeObjectiveItem) []interactions.
 func runtimeObjectiveChecklist(items []interactions.ObjectiveChecklistItem) []runtimeObjectiveItem {
 	out := make([]runtimeObjectiveItem, 0, len(items))
 	for _, item := range items {
+		requirement, valid := taskresult.NormalizeObjectiveRequirement(item.Requirement, item.Kind)
+		if !valid {
+			return nil
+		}
 		out = append(out, runtimeObjectiveItem{
-			ID: item.ID, Item: item.Item, Kind: item.Kind,
+			ID: item.ID, Item: item.Item, Kind: item.Kind, Requirement: requirement,
 			Acceptance: taskresult.CloneObjectiveAcceptance(item.Acceptance),
 		})
 	}
@@ -181,10 +189,15 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 	encoded, _ := json.Marshal(interactionObjectiveChecklist(checklist))
 	instruction := task + "\n\nRuntime outcome contract (required): finish with exactly one JSON block " +
 		objectiveOutcomeStart +
-		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":[],"output":{"kind":"text|records|artifact","text":"standalone result","records":[{"field":"value"}],"artifact_refs":["stable-ref"]}}],"missing_items":["objective_2"],"result":"concise terminal summary when succeeded","explanation":"specific blocker when partial or blocked"}` +
+		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":[],"output":{"kind":"text|records|artifact","text":"standalone result","records":[{"field":"value"}],"artifact_refs":["stable-ref"]}}],"missing_items":["objective_2"],"not_needed_items":[],"result":"concise terminal summary when succeeded","explanation":"specific blocker when partial or blocked"}` +
 		objectiveOutcomeEnd +
 		". The runtime-owned objective checklist is: " + string(encoded) +
-		". Put every checklist ID exactly once in completed_items or missing_items; never add or rename IDs. " +
+		". Put every checklist ID exactly once in completed_items, missing_items, or not_needed_items; never add or rename IDs. " +
+		"Only live_handoff with requirement=if_needed can go in not_needed_items, and only when human control " +
+		"was unnecessary (for example, authentication was already valid). Do not perform an unnecessary handoff " +
+		"or reopen a closed resource to satisfy that conditional step. If a conditional handoff actually occurred, " +
+		"claim its durable receipt in completed_items; if needed but not completed, use missing_items. " +
+		"Omitted requirement means required. Never skip a required result, external action, or explicit handoff. " +
 		"Every completed result item must include output containing the actual standalone result, never a claim that " +
 		"the result appears elsewhere in tool output or prior context. Use kind=text with non-empty text for prose, " +
 		"kind=records with the complete records array only for requested lists or tables; every field value in every " +
@@ -196,7 +209,8 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 		"output_kind, required_fields, and min_items exactly. Set " +
 		"truncated=true if any requested output is missing due to size; truncated output is not accepted as complete. " +
 		"For result items, omit receipt_ids or use an empty array. " +
-		"For every live_handoff item, call a handoff-capable tool that returns a durable human-input suspension. " +
+		"For every live_handoff item that is required or actually needed, call a handoff-capable tool that returns " +
+		"a durable human-input suspension. " +
 		"Opening a live resource or saying it was left open does not complete that objective. Do not return a terminal " +
 		"outcome while the user should control the resource. After the user releases control and the continuation " +
 		"resumes, copy the runtime-provided handoff receipt ID into receipt_ids. "
@@ -338,7 +352,8 @@ func liveHandoffRecoveryInstruction(
 ) (string, bool) {
 	required := 0
 	for _, item := range checklist {
-		if item.Kind == taskresult.ObjectiveKindLiveHandoff {
+		if item.Kind == taskresult.ObjectiveKindLiveHandoff &&
+			item.Requirement != taskresult.ObjectiveRequirementIfNeeded {
 			required++
 		}
 	}
@@ -528,6 +543,28 @@ func validateObjectiveOutcomeWithPolicy(
 		missingSeen[item] = struct{}{}
 		outcome.MissingItems[len(outcome.MissingItems)-1] = item
 	}
+	for _, id := range reported.NotNeededItems {
+		id = strings.TrimSpace(id)
+		item, found := expected[id]
+		if !found {
+			partitionValid = false
+			appendMissing("objective outcome contained an unknown checklist ID")
+			continue
+		}
+		if _, duplicate := partitioned[id]; duplicate {
+			partitionValid = false
+			appendMissing(item.Item + " (objective ID was reported more than once)")
+			continue
+		}
+		partitioned[id] = struct{}{}
+		if item.Kind != taskresult.ObjectiveKindLiveHandoff ||
+			item.Requirement != taskresult.ObjectiveRequirementIfNeeded {
+			partitionValid = false
+			appendMissing(item.Item + " (required objective cannot be not needed)")
+			continue
+		}
+		outcome.NotNeededItems = append(outcome.NotNeededItems, item.Item)
+	}
 	for _, id := range reported.MissingItems {
 		id = strings.TrimSpace(id)
 		item, found := expected[id]
@@ -594,7 +631,8 @@ func validateObjectiveOutcomeWithPolicy(
 			outcome.CompletedItems = append(outcome.CompletedItems, item)
 			continue
 		}
-		if item.Kind == taskresult.ObjectiveKindLiveHandoff && policy.allowUnverifiedLiveHandoff {
+		if item.Kind == taskresult.ObjectiveKindLiveHandoff && policy.allowUnverifiedLiveHandoff &&
+			spec.Requirement != taskresult.ObjectiveRequirementIfNeeded {
 			outcome.CompletedItems = append(outcome.CompletedItems, item)
 			continue
 		}
@@ -681,7 +719,7 @@ func validateObjectiveOutcomeWithPolicy(
 		)
 	}
 	switch {
-	case len(outcome.MissingItems) == 0 && len(outcome.CompletedItems) > 0:
+	case len(outcome.MissingItems) == 0 && (len(outcome.CompletedItems) > 0 || len(outcome.NotNeededItems) > 0):
 		outcome.Status = taskresult.OutcomeSucceeded
 	case len(outcome.CompletedItems) > 0:
 		outcome.Status = taskresult.OutcomePartial

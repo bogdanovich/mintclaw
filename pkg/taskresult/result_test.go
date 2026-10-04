@@ -25,7 +25,8 @@ func TestDeliverableJSONRoundTrip(t *testing.T) {
 					Metadata: map[string]string{"effect": "external_commit"},
 				}},
 			}},
-			MissingItems: []string{"Vissani could not be verified"},
+			MissingItems:   []string{"Vissani could not be verified"},
+			NotNeededItems: []string{"authentication handoff"},
 		},
 		LifecycleReceipts: []Receipt{{
 			ID: "browser_cleanup_receipt", Kind: ReceiptKindResourceCleanup,
@@ -45,6 +46,15 @@ func TestDeliverableJSONRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(&got, want) {
 		t.Fatalf("round trip = %#v, want %#v", &got, want)
+	}
+}
+
+func TestCloneOutcomeDetachesNotNeededItems(t *testing.T) {
+	original := &Outcome{Status: OutcomeSucceeded, NotNeededItems: []string{"authentication handoff"}}
+	cloned := CloneOutcome(original)
+	cloned.NotNeededItems[0] = "mutated"
+	if original.NotNeededItems[0] != "authentication handoff" {
+		t.Fatal("conditional lifecycle disposition escaped outcome cloning")
 	}
 }
 

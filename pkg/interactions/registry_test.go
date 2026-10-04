@@ -564,6 +564,9 @@ func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 		Acceptance: &taskresult.ObjectiveAcceptance{
 			OutputKind: "records", RequiredFields: []string{"title", "price"}, MinItems: 1,
 		},
+	}, {
+		ID: "objective_3", Item: "authentication handoff if needed", Kind: "live_handoff",
+		Requirement: taskresult.ObjectiveRequirementIfNeeded,
 	}}
 	record, err := registry.Create(request)
 	if err != nil {
@@ -580,7 +583,9 @@ func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 	got, ok := reloaded.Get(record.ID)
 	if !ok || len(got.OutcomeReceipts) != 1 || got.OutcomeReceipts[0].ID != "inv-1" ||
 		got.Origin.ModelName != "gpt-5.6-sol" ||
-		len(got.Origin.ObjectiveChecklist) != 2 || got.Origin.ObjectiveChecklist[0].ID != "objective_1" ||
+		len(got.Origin.ObjectiveChecklist) != 3 || got.Origin.ObjectiveChecklist[0].ID != "objective_1" ||
+		got.Origin.ObjectiveChecklist[0].Requirement != "" ||
+		got.Origin.ObjectiveChecklist[2].Requirement != taskresult.ObjectiveRequirementIfNeeded ||
 		got.Origin.ObjectiveChecklist[1].Acceptance == nil ||
 		got.Origin.ObjectiveChecklist[1].Acceptance.RequiredFields[1] != "price" {
 		t.Fatalf("reloaded receipts = %#v, found=%v", got.OutcomeReceipts, ok)

@@ -21,7 +21,24 @@ const (
 	// capability. It is never accepted from a caller-authored checklist.
 	ObjectiveKindResourceDisposition = "resource_disposition"
 	ReceiptKindResourceCleanup       = "resource_cleanup"
+	ObjectiveRequirementRequired     = "required"
+	ObjectiveRequirementIfNeeded     = "if_needed"
 )
+
+// NormalizeObjectiveRequirement admits conditional lifecycle work, not
+// optional results or commits. Empty declarations preserve required semantics
+// for existing callers and durable records.
+func NormalizeObjectiveRequirement(requirement, kind string) (string, bool) {
+	requirement = strings.TrimSpace(requirement)
+	switch requirement {
+	case "", ObjectiveRequirementRequired:
+		return requirement, true
+	case ObjectiveRequirementIfNeeded:
+		return requirement, kind == ObjectiveKindLiveHandoff
+	default:
+		return "", false
+	}
+}
 
 // Deliverable describes what a task produced, independent from model context,
 // user-facing wording, and delivery state.
@@ -58,6 +75,7 @@ type Outcome struct {
 	Status         OutcomeStatus `json:"status"`
 	CompletedItems []Item        `json:"completed_items,omitempty"`
 	MissingItems   []string      `json:"missing_items,omitempty"`
+	NotNeededItems []string      `json:"not_needed_items,omitempty"`
 	Explanation    string        `json:"explanation,omitempty"`
 }
 
@@ -165,9 +183,10 @@ func CloneOutcome(input *Outcome) *Outcome {
 		return nil
 	}
 	out := &Outcome{
-		Status:       input.Status,
-		MissingItems: append([]string(nil), input.MissingItems...),
-		Explanation:  input.Explanation,
+		Status:         input.Status,
+		MissingItems:   append([]string(nil), input.MissingItems...),
+		NotNeededItems: append([]string(nil), input.NotNeededItems...),
+		Explanation:    input.Explanation,
 	}
 	for _, item := range input.CompletedItems {
 		cloned := Item{
