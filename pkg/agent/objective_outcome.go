@@ -360,19 +360,6 @@ func liveHandoffRecoveryInstruction(
 	if required == 0 {
 		return "", false
 	}
-	verified := 0
-	for _, receipt := range receipts {
-		if receipt.Kind == taskresult.ObjectiveKindLiveHandoff &&
-			strings.TrimSpace(receipt.ID) != "" &&
-			strings.TrimSpace(receipt.Action) == "handoff" &&
-			strings.TrimSpace(receipt.Metadata["resource_kind"]) != "" &&
-			strings.TrimSpace(receipt.Metadata["resource_id"]) != "" {
-			verified++
-		}
-	}
-	if verified >= required {
-		return "", false
-	}
 	start := strings.LastIndex(content, objectiveOutcomeStart)
 	end := strings.LastIndex(content, objectiveOutcomeEnd)
 	if start < 0 || end < start {
@@ -404,11 +391,12 @@ func liveHandoffRecoveryInstruction(
 	}
 	claimedReceipts := make([]taskresult.Receipt, 0, len(claimedReceiptIDs))
 	for _, receipt := range receipts {
-		if _, claimed := claimedReceiptIDs[strings.TrimSpace(receipt.ID)]; claimed {
+		if _, claimed := claimedReceiptIDs[strings.TrimSpace(receipt.ID)]; claimed ||
+			receipt.Kind == taskresult.ObjectiveKindLiveHandoff {
 			claimedReceipts = append(claimedReceipts, receipt)
 		}
 	}
-	if outcome := validateObjectiveOutcomeWithPolicy(
+	outcome := validateObjectiveOutcomeWithPolicy(
 		reported,
 		audits,
 		claimedReceipts,
@@ -417,7 +405,42 @@ func liveHandoffRecoveryInstruction(
 			allowUnverifiedLiveHandoff:     true,
 			ignoreUnclaimedHandoffReceipts: true,
 		},
-	); outcome.Status != taskresult.OutcomeSucceeded {
+	)
+	if outcome.Status != taskresult.OutcomeSucceeded {
+		return "", false
+	}
+	// Valid claimed handoffs remain bound to their own objectives, including
+	// conditional ones. Only required objectives without a receipt need recovery.
+	missingRequired := 0
+	claimedHandoffs := make(map[string]struct{})
+	for _, item := range outcome.CompletedItems {
+		if item.Kind != taskresult.ObjectiveKindLiveHandoff {
+			continue
+		}
+		if len(item.Receipts) == 0 {
+			missingRequired++
+		}
+		for _, receipt := range item.Receipts {
+			claimedHandoffs[receipt.ID] = struct{}{}
+		}
+	}
+	// A continuation may have durable handoff evidence that the producer forgot
+	// to claim. Leave that to model-only report repair instead of repeating the
+	// transfer. Claimed conditional evidence is never available for this purpose.
+	unclaimedHandoffs := make(map[string]struct{})
+	for _, receipt := range receipts {
+		id := strings.TrimSpace(receipt.ID)
+		if receipt.Kind != taskresult.ObjectiveKindLiveHandoff || id == "" ||
+			strings.TrimSpace(receipt.Action) != "handoff" ||
+			strings.TrimSpace(receipt.Metadata["resource_kind"]) == "" ||
+			strings.TrimSpace(receipt.Metadata["resource_id"]) == "" {
+			continue
+		}
+		if _, claimed := claimedHandoffs[id]; !claimed {
+			unclaimedHandoffs[id] = struct{}{}
+		}
+	}
+	if missingRequired == 0 || len(unclaimedHandoffs) >= missingRequired {
 		return "", false
 	}
 	return "Live-resource handoff recovery required: a declared live_handoff objective has no durable runtime " +
@@ -631,11 +654,6 @@ func validateObjectiveOutcomeWithPolicy(
 			outcome.CompletedItems = append(outcome.CompletedItems, item)
 			continue
 		}
-		if item.Kind == taskresult.ObjectiveKindLiveHandoff && policy.allowUnverifiedLiveHandoff &&
-			spec.Requirement != taskresult.ObjectiveRequirementIfNeeded {
-			outcome.CompletedItems = append(outcome.CompletedItems, item)
-			continue
-		}
 		valid := true
 		seenReceipts := make(map[string]struct{})
 		stagedReceiptIDs := make([]string, 0, len(reportedItem.ReceiptIDs))
@@ -662,6 +680,12 @@ func validateObjectiveOutcomeWithPolicy(
 			valid = false
 		}
 		if !valid {
+			if item.Kind == taskresult.ObjectiveKindLiveHandoff && policy.allowUnverifiedLiveHandoff &&
+				spec.Requirement != taskresult.ObjectiveRequirementIfNeeded && len(reportedItem.ReceiptIDs) == 0 {
+				item.Receipts = nil
+				outcome.CompletedItems = append(outcome.CompletedItems, item)
+				continue
+			}
 			partitionValid = false
 			appendMissing(item.Item + " (missing verified runtime receipt)")
 			continue

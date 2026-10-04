@@ -146,6 +146,58 @@ func TestConditionalChecklistSurvivesContinuationProjection(t *testing.T) {
 	}
 }
 
+func TestMixedConditionalAndRequiredHandoffRecoveryBindsReceipts(t *testing.T) {
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+		{Item: "explicitly hand control to the user", Kind: taskresult.ObjectiveKindLiveHandoff},
+		{Item: "sign-in handoff if needed", Kind: taskresult.ObjectiveKindLiveHandoff, Requirement: "if_needed"},
+	})
+	receipt := func(id string) taskresult.Receipt {
+		return taskresult.Receipt{
+			ID: id, Kind: taskresult.ObjectiveKindLiveHandoff, Action: "handoff",
+			Metadata: map[string]string{"resource_kind": "browser_session", "resource_id": "session_" + id},
+		}
+	}
+	for _, test := range []struct {
+		name          string
+		requiredIDs   []string
+		conditionalID string
+		receipts      []taskresult.Receipt
+		wantRecovery  bool
+	}{
+		{"conditional receipt cannot cover required", nil, "conditional", []taskresult.Receipt{receipt("conditional")}, true},
+		{"both verified", []string{"required"}, "conditional", []taskresult.Receipt{receipt("required"), receipt("conditional")}, false},
+		{"unclaimed required evidence is repaired without replay", nil, "conditional", []taskresult.Receipt{receipt("conditional"), receipt("required")}, false},
+		{"conditional needs its own evidence", nil, "invented", nil, false},
+		{"invented required receipt needs report repair", []string{"invented"}, "conditional", []taskresult.Receipt{receipt("conditional")}, false},
+		{"required evidence cannot cover conditional", []string{"required"}, "invented", []taskresult.Receipt{receipt("required")}, false},
+		{"duplicate receipt cannot cover two objectives", []string{"conditional"}, "conditional", []taskresult.Receipt{receipt("conditional")}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			report := reportedObjectiveOutcome{
+				Status: "succeeded", Result: "Both control steps completed.",
+				CompletedItems: []reportedObjectiveItem{
+					{ObjectiveID: "objective_1", ReceiptIDs: test.requiredIDs},
+					{ObjectiveID: "objective_2", ReceiptIDs: []string{test.conditionalID}},
+				},
+			}
+			for _, reversed := range []bool{false, true} {
+				if reversed {
+					report.CompletedItems[0], report.CompletedItems[1] = report.CompletedItems[1], report.CompletedItems[0]
+				}
+				encoded, err := json.Marshal(report)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, recovery := liveHandoffRecoveryInstruction(objectiveOutcomeStart+string(encoded)+objectiveOutcomeEnd,
+					nil, test.receipts, checklist)
+				if recovery != test.wantRecovery {
+					t.Fatalf("recovery = %t, want %t (reversed=%t)", recovery, test.wantRecovery, reversed)
+				}
+			}
+		})
+	}
+}
+
 func TestConditionalHandoffDoesNotUpgradeProducerPartialOrBlocked(t *testing.T) {
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
 		{Item: "report data", Kind: taskresult.ObjectiveKindResult},
