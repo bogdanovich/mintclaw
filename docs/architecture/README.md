@@ -121,6 +121,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   verification, and single-delivery evidence.
 - [PDFI3 Semantic Form Planning Goal](pdf-agentic-intake-pdfi3-goal.md): bounded evidence and field browsing,
   value-free progress, natural dialogue, coherent controls, qualification, and explicit completion criteria.
+- [PDFI3 Semantic Form Planning Exit](pdf-agentic-intake-pdfi3-exit.md): merged packets, deployed dialogue,
+  bounded large-form planning, single-delivery/privacy evidence, and explicit channel limits.
 - [Native PDF Backend Provenance](pdf-native-backend-provenance.md): exact
   Ubuntu package revisions, executable identities, capability and Doctor
   diagnostics, reproducible qualification, and paired rollback.
