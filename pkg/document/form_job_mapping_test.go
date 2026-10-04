@@ -107,6 +107,9 @@ func TestFormJobMappingConfirmsAndReusesFactAcrossRestart(t *testing.T) {
 		!slices.Equal(summary.ConfirmedFieldIDs, []string{schema.Fields[0].ID}) {
 		t.Fatalf("mapping summary = %#v, err=%v", summary, err)
 	}
+	if !slices.Equal(summary.FieldProgress, []FormFieldProgress{{FieldID: schema.Fields[0].ID, Status: "confirmed"}}) {
+		t.Fatalf("confirmed value-free progress = %#v", summary.FieldProgress)
+	}
 	store.Close()
 	reopened, err := OpenFormJobStore(options)
 	if err != nil {
@@ -114,7 +117,8 @@ func TestFormJobMappingConfirmsAndReusesFactAcrossRestart(t *testing.T) {
 	}
 	t.Cleanup(reopened.Close)
 	restarted, err := reopened.FormMappingSummary(t.Context(), mapped.Job.JobID, owner, schema)
-	if err != nil || !restarted.ReadyForReview || restarted.Revision != mapped.Job.Revision {
+	if err != nil || !restarted.ReadyForReview || restarted.Revision != mapped.Job.Revision ||
+		!slices.Equal(summary.FieldProgress, restarted.FieldProgress) {
 		t.Fatalf("restart summary = %#v, err=%v", restarted, err)
 	}
 	data, err := os.ReadFile(formJobStatePath(options))

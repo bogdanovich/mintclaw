@@ -28,6 +28,7 @@ const (
 	documentFormSummaryMaxRunes       = 512
 	documentFormPlanMaxRunes          = 768
 	documentFormCandidateLimit        = 8
+	documentFormPlanningPageLimit     = 3
 )
 
 type documentFormQuestionPresentation struct {
@@ -57,24 +58,47 @@ type safeDocumentFormJob struct {
 }
 
 type safeDocumentFormField struct {
-	FieldID     string                 `json:"field_id"`
-	Label       string                 `json:"label"`
-	Kind        document.FormFieldKind `json:"kind"`
-	Required    bool                   `json:"required"`
-	Page        int                    `json:"page,omitempty"`
-	DateFormat  string                 `json:"date_format,omitempty"`
-	MultiSelect bool                   `json:"multi_select,omitempty"`
-	Options     []string               `json:"options,omitempty"`
-	Blocker     string                 `json:"blocker,omitempty"`
+	FieldID        string                 `json:"field_id"`
+	Label          string                 `json:"label"`
+	Kind           document.FormFieldKind `json:"kind"`
+	Required       bool                   `json:"required"`
+	Page           int                    `json:"page,omitempty"`
+	DateFormat     string                 `json:"date_format,omitempty"`
+	MultiSelect    bool                   `json:"multi_select,omitempty"`
+	Options        []string               `json:"options,omitempty"`
+	Blocker        string                 `json:"blocker,omitempty"`
+	Status         string                 `json:"status,omitempty"`
+	LabelTruncated bool                   `json:"label_truncated,omitempty"`
 }
 
 type safeDocumentFormMapping struct {
-	Revision             int64                   `json:"revision,omitempty"`
-	ConfirmedFieldCount  int                     `json:"confirmed_field_count"`
-	UnresolvedFieldCount int                     `json:"unresolved_field_count"`
-	ReadyForReview       bool                    `json:"ready_for_review"`
-	WritableFieldCount   int                     `json:"writable_field_count"`
-	CandidateFields      []safeDocumentFormField `json:"candidate_fields,omitempty"`
+	Revision              int64                   `json:"revision,omitempty"`
+	ConfirmedFieldCount   int                     `json:"confirmed_field_count"`
+	UnresolvedFieldCount  int                     `json:"unresolved_field_count"`
+	ReadyForReview        bool                    `json:"ready_for_review"`
+	WritableFieldCount    int                     `json:"writable_field_count"`
+	CandidateFields       []safeDocumentFormField `json:"candidate_fields,omitempty"`
+	PreservedFieldCount   int                     `json:"preserved_field_count"`
+	ProvidedFieldCount    int                     `json:"provided_field_count"`
+	OptionalBlankCount    int                     `json:"optional_blank_count"`
+	MissingFieldCount     int                     `json:"missing_field_count"`
+	ConflictingFieldCount int                     `json:"conflicting_field_count"`
+	Window                safeDocumentFormWindow  `json:"field_window"`
+}
+
+type documentFormWindowSelection struct {
+	pages    []int
+	offset   int
+	explicit bool
+}
+
+type safeDocumentFormWindow struct {
+	Pages      []int `json:"pages,omitempty"`
+	Offset     int   `json:"offset"`
+	Limit      int   `json:"limit"`
+	Total      int   `json:"total"`
+	Truncated  bool  `json:"truncated"`
+	NextOffset *int  `json:"next_offset,omitempty"`
 }
 
 type safeDocumentFormReview struct {
@@ -195,7 +219,8 @@ func (tool *DocumentTool) discoverFormWorkflow(
 	summary := documentFormDiscoverySummary(schema)
 	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "discover",
-		SourceRef: ref, FieldSchemaDigest: discoveryDigest, Mapping: documentFormMappingProjection(summary, schema),
+		SourceRef: ref, FieldSchemaDigest: discoveryDigest,
+		Mapping: documentFormMappingWindow(summary, schema, "", documentFormWindowArgs(args)),
 	}))
 }
 
@@ -621,6 +646,14 @@ func (tool *DocumentTool) startFormWorkflow(
 	if err != nil {
 		return documentFormToolFailure("form_job_conflict", "form workflow identity is unavailable")
 	}
+	window := documentFormWindowArgs(args)
+	if window.explicit {
+		summary := documentFormDiscoverySummary(schema)
+		view := documentFormMappingWindow(summary, schema, "", window)
+		if !summary.ReadyForReview && len(view.CandidateFields) == 0 {
+			return documentFormToolFailure("invalid_input", "the selected field window is empty; browse another window")
+		}
+	}
 	preparedSource, err := prepareDocumentFormSource(store, mediaOwner, ref, startKey, schema.SourceSHA256)
 	if err != nil {
 		logDocumentFormSourceRetentionFailure("prepare", err)
@@ -665,7 +698,7 @@ func (tool *DocumentTool) startFormWorkflow(
 			"the immutable form source could not be retained",
 		)
 	}
-	return tool.formProgressResult(ctx, owner, schema, record, "start", "")
+	return tool.formProgressWindowResult(ctx, owner, schema, record, "start", "", window)
 }
 
 func (tool *DocumentTool) continueFormWorkflow(
@@ -784,7 +817,8 @@ func (tool *DocumentTool) statusFormWorkflow(
 		FormAction:    "status",
 		Job:           safeDocumentFormJobProjection(record),
 	}
-	if record.AuditRevision != 0 {
+	window := documentFormWindowArgs(args)
+	if record.AuditRevision != 0 && !window.explicit {
 		review, reviewErr := tool.formJobs.CurrentFormReview(ctx, jobID, owner, schema)
 		if reviewErr != nil {
 			return documentFormToolError(reviewErr)
@@ -795,7 +829,7 @@ func (tool *DocumentTool) statusFormWorkflow(
 		if summaryErr != nil {
 			return documentFormToolError(summaryErr)
 		}
-		projection.Mapping = documentFormMappingProjection(summary, schema)
+		projection.Mapping = documentFormMappingWindow(summary, schema, "", window)
 	}
 	return documentFormToolResult(projection)
 }
@@ -925,6 +959,19 @@ func (tool *DocumentTool) formProgressResult(
 	formAction string,
 	recentlyCompletedFieldID string,
 ) *toolshared.ToolResult {
+	return tool.formProgressWindowResult(ctx, owner, schema, record, formAction, recentlyCompletedFieldID,
+		documentFormWindowSelection{})
+}
+
+func (tool *DocumentTool) formProgressWindowResult(
+	ctx context.Context,
+	owner document.FormJobOwner,
+	schema document.FormFieldsFacts,
+	record document.FormJobRecord,
+	formAction string,
+	recentlyCompletedFieldID string,
+	window documentFormWindowSelection,
+) *toolshared.ToolResult {
 	if record.State == document.FormJobReviewReady {
 		review, err := tool.formJobs.CurrentFormReview(ctx, record.JobID, owner, schema)
 		if err != nil {
@@ -942,10 +989,11 @@ func (tool *DocumentTool) formProgressResult(
 	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: formAction,
 		Job: safeDocumentFormJobProjection(record),
-		Mapping: documentFormMappingProjectionExcludingConfirmed(
+		Mapping: documentFormMappingWindow(
 			summary,
 			schema,
 			recentlyCompletedFieldID,
+			window,
 		),
 	}))
 }
@@ -1427,13 +1475,22 @@ func documentFormMappingProjectionExcludingConfirmed(
 	schema document.FormFieldsFacts,
 	excludedConfirmedFieldID string,
 ) *safeDocumentFormMapping {
+	return documentFormMappingWindow(summary, schema, excludedConfirmedFieldID, documentFormWindowSelection{})
+}
+
+func documentFormMappingWindow(
+	summary document.FormJobMappingSummary,
+	schema document.FormFieldsFacts,
+	excludedConfirmedFieldID string,
+	window documentFormWindowSelection,
+) *safeDocumentFormMapping {
 	projection := &safeDocumentFormMapping{
 		Revision: summary.Revision, ConfirmedFieldCount: len(summary.ConfirmedFieldIDs),
 		UnresolvedFieldCount: len(summary.Unresolved), ReadyForReview: summary.ReadyForReview,
 		WritableFieldCount: summary.WritableFieldCount,
-	}
-	if summary.ReadyForReview || len(summary.Unresolved) == 0 {
-		return projection
+		Window: safeDocumentFormWindow{
+			Pages: append([]int(nil), window.pages...), Offset: window.offset, Limit: documentFormCandidateLimit,
+		},
 	}
 	blockers := make(map[string]string, len(summary.Unresolved))
 	for _, blocker := range summary.Unresolved {
@@ -1442,6 +1499,10 @@ func documentFormMappingProjectionExcludingConfirmed(
 	confirmed := make(map[string]struct{}, len(summary.ConfirmedFieldIDs))
 	for _, fieldID := range summary.ConfirmedFieldIDs {
 		confirmed[fieldID] = struct{}{}
+	}
+	statuses := make(map[string]string, len(summary.FieldProgress))
+	for _, field := range summary.FieldProgress {
+		statuses[field.FieldID] = field.Status
 	}
 	type candidate struct {
 		field safeDocumentFormField
@@ -1456,13 +1517,52 @@ func documentFormMappingProjectionExcludingConfirmed(
 		if field.ReadOnly || (!unresolved && !isConfirmed) {
 			continue
 		}
+		status := statuses[field.ID]
+		if unresolved {
+			status = blocker
+			if status == "field_unresolved" {
+				status = "missing"
+			}
+		} else if status == "" {
+			status = "confirmed"
+			if field.HasValue {
+				status = "preserved"
+			}
+		}
+		switch status {
+		case "preserved":
+			projection.PreservedFieldCount++
+		case "confirmed":
+			projection.ProvidedFieldCount++
+		case "optional_blank":
+			projection.OptionalBlankCount++
+		case "missing":
+			projection.MissingFieldCount++
+		case "field_conflicting", "field_ambiguous":
+			projection.ConflictingFieldCount++
+		}
 		if isConfirmed && !unresolved && field.ID == excludedConfirmedFieldID {
 			continue
 		}
+		if len(window.pages) != 0 && !slices.ContainsFunc(field.Widgets, func(widget document.FormFieldWidget) bool {
+			return slices.Contains(window.pages, widget.Page)
+		}) {
+			continue
+		}
 		page := documentFormFieldPage(field)
+		if len(window.pages) != 0 {
+			page = 0
+			for _, widget := range field.Widgets {
+				if slices.Contains(window.pages, widget.Page) && (page == 0 || widget.Page < page) {
+					page = widget.Page
+				}
+			}
+		}
 		entry := candidate{
 			field: *documentFormFieldProjection(field, blocker), page: page, index: index,
 		}
+		entry.field.Status = status
+		entry.field.Page = page
 		if unresolved {
 			unresolvedCandidates = append(unresolvedCandidates, entry)
 			continue
@@ -1489,15 +1589,12 @@ func documentFormMappingProjectionExcludingConfirmed(
 	}
 	slices.SortStableFunc(unresolvedCandidates, compareCandidates)
 	slices.SortStableFunc(confirmedCandidates, compareCandidates)
-	selected := make([]candidate, 0, documentFormCandidateLimit)
-	selectedIndexes := make(map[int]struct{}, documentFormCandidateLimit)
+	selected := make([]candidate, 0, len(unresolvedCandidates)+len(confirmedCandidates))
+	selectedIndexes := make(map[int]struct{}, cap(selected))
 	selectedKinds := make(map[document.FormFieldKind]struct{}, documentFormCandidateLimit)
 	appendCandidates := func(candidates []candidate) {
 		start := len(selected)
 		for _, entry := range candidates {
-			if len(selected) == documentFormCandidateLimit {
-				break
-			}
 			if _, ok := selectedKinds[entry.field.Kind]; ok {
 				continue
 			}
@@ -1506,9 +1603,6 @@ func documentFormMappingProjectionExcludingConfirmed(
 			selectedKinds[entry.field.Kind] = struct{}{}
 		}
 		for _, entry := range candidates {
-			if len(selected) == documentFormCandidateLimit {
-				break
-			}
 			if _, ok := selectedIndexes[entry.index]; ok {
 				continue
 			}
@@ -1516,15 +1610,44 @@ func documentFormMappingProjectionExcludingConfirmed(
 			selectedIndexes[entry.index] = struct{}{}
 			selectedKinds[entry.field.Kind] = struct{}{}
 		}
-		slices.SortStableFunc(selected[start:], compareCandidates)
+		for offset := start; offset < len(selected); offset += documentFormCandidateLimit {
+			end := min(offset+documentFormCandidateLimit, len(selected))
+			slices.SortStableFunc(selected[offset:end], compareCandidates)
+		}
 	}
 	appendCandidates(unresolvedCandidates)
 	appendCandidates(confirmedCandidates)
+	projection.Window.Total = len(selected)
+	if (summary.ReadyForReview || len(summary.Unresolved) == 0) && !window.explicit {
+		projection.Window.Truncated = len(selected) != 0
+		return projection
+	}
+	start := min(window.offset, len(selected))
+	end := min(start+documentFormCandidateLimit, len(selected))
+	projection.Window.Truncated = start != 0 || end < len(selected)
+	if end < len(selected) {
+		nextOffset := end
+		projection.Window.NextOffset = &nextOffset
+	}
+	selected = selected[start:end]
 	projection.CandidateFields = make([]safeDocumentFormField, 0, len(selected))
 	for _, candidate := range selected {
 		projection.CandidateFields = append(projection.CandidateFields, candidate.field)
 	}
 	return projection
+}
+
+func documentFormWindowArgs(args map[string]any) documentFormWindowSelection {
+	pages, pagesPresent := args["pages"]
+	offset, offsetPresent := args["field_offset"]
+	selection := documentFormWindowSelection{explicit: pagesPresent || offsetPresent}
+	if pagesPresent {
+		selection.pages, _ = documentPagesArg(pages)
+	}
+	if offsetPresent {
+		selection.offset, _ = documentIntArg(offset)
+	}
+	return selection
 }
 
 func documentFormReviewProjection(review document.FormReview) *safeDocumentFormReview {
@@ -1605,8 +1728,14 @@ func documentFormDiscoverySummary(schema document.FormFieldsFacts) document.Form
 		summary.WritableFieldCount++
 		if field.HasValue {
 			summary.ConfirmedFieldIDs = append(summary.ConfirmedFieldIDs, field.ID)
+			summary.FieldProgress = append(summary.FieldProgress, document.FormFieldProgress{
+				FieldID: field.ID, Status: "preserved",
+			})
 			continue
 		}
+		summary.FieldProgress = append(summary.FieldProgress, document.FormFieldProgress{
+			FieldID: field.ID, Status: "missing",
+		})
 		summary.Unresolved = append(summary.Unresolved, document.FormFieldMappingBlocker{
 			FieldID: field.ID, Code: "field_unresolved",
 		})
@@ -1621,6 +1750,11 @@ func documentFormFieldProjection(field document.FormField, blocker string) *safe
 		Required: field.Required, Page: documentFormFieldPage(field), DateFormat: field.DateFormat,
 		MultiSelect: field.MultiSelect, Blocker: blocker,
 	}
+	label := strings.TrimSpace(field.AlternateName)
+	if label == "" {
+		label = strings.TrimSpace(field.Name)
+	}
+	projection.LabelTruncated = utf8.RuneCountInString(label) > 256
 	if len(field.Options) >= 2 && len(field.Options) <= interactions.MaxOptions {
 		projection.Options = make([]string, 0, len(field.Options))
 		for _, option := range field.Options {

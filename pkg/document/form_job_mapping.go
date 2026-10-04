@@ -59,6 +59,14 @@ type FormJobMappingSummary struct {
 	NextUnresolvedID   string                    `json:"next_unresolved_id,omitempty"`
 	ReadyForReview     bool                      `json:"ready_for_review"`
 	WritableFieldCount int                       `json:"writable_field_count"`
+	FieldProgress      []FormFieldProgress       `json:"field_progress,omitempty"`
+}
+
+// FormFieldProgress distinguishes existing and collected facts without opening
+// the encrypted value ledger. Status is a projection, not assignment authority.
+type FormFieldProgress struct {
+	FieldID string `json:"field_id"`
+	Status  string `json:"status"`
 }
 
 type mappedFormValue struct {
@@ -214,9 +222,8 @@ func formValueSourceMappable(source FormJobValueEvent) bool {
 	}
 }
 
-// FormMappingSummary returns the next unresolved stable field without reading
-// or exposing protected values. Confirmed fields are omitted from the prompt
-// candidate so they are not re-asked after restart or compaction.
+// FormMappingSummary reports value-free progress without reading protected
+// values. Its legacy next-field hint is not authority to select a question.
 func (store *FormJobStore) FormMappingSummary(
 	ctx context.Context,
 	jobID string,
@@ -243,6 +250,19 @@ func (store *FormJobStore) FormMappingSummary(
 		}
 		summary.WritableFieldCount++
 		state, found := current[field.ID]
+		progress := FormFieldProgress{FieldID: field.ID, Status: "missing"}
+		switch {
+		case found && formFieldStateResolved(state, field):
+			progress.Status = "confirmed"
+			if state.ValueKind == ProtectedValueBlank {
+				progress.Status = "optional_blank"
+			}
+		case found:
+			progress.Status = formFieldBlockerCode(state, field)
+		case field.HasValue:
+			progress.Status = "preserved"
+		}
+		summary.FieldProgress = append(summary.FieldProgress, progress)
 		if !found {
 			if field.HasValue {
 				summary.ConfirmedFieldIDs = append(summary.ConfirmedFieldIDs, field.ID)
