@@ -4120,6 +4120,54 @@ func TestDismissToolFeedback_StableSessionSpansTurnScopes(t *testing.T) {
 	}
 }
 
+func TestDismissToolFeedback_BeforeQueuedFeedbackAdmission(t *testing.T) {
+	for _, stableSession := range []bool{false, true} {
+		name := "trace-only"
+		if stableSession {
+			name = "stable-session"
+		}
+		t.Run(name, func(t *testing.T) {
+			m := newTestManager()
+			enableTestToolFeedbackCoordinator(t, m, false)
+			ch := &toolFeedbackTestChannel{}
+			m.lifecycle.storeChannel("test", ch)
+			w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+			turnOne := runtimeevents.NewTraceScope("/workspace/browser", "child-turn-1")
+			feedback := testOutboundMessage(bus.OutboundMessage{
+				Channel: "test", ChatID: "chat-1", Content: "Working...",
+				Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+				TraceScopes: []runtimeevents.TraceScope{turnOne},
+				Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
+			})
+			if stableSession {
+				feedback.SessionKey = "child-session"
+			}
+			// The child can finish before a rate-limited progress send reaches
+			// admission. Its exact generation must remain terminal nevertheless.
+			m.DismissToolFeedback(t.Context(), feedback)
+			ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback)
+			if err != nil || !sent || len(ids) != 0 {
+				t.Fatalf("late feedback escaped terminal generation: (%v, %v, %v)", ids, sent, err)
+			}
+			if count := m.stream.activeToolFeedbackCount(); count != 0 {
+				t.Fatalf("late progress remains active: %d", count)
+			}
+			// Do not seal future turns in a legitimate durable session.
+			feedback.TraceScopes = []runtimeevents.TraceScope{
+				runtimeevents.NewTraceScope("/workspace/browser", "child-turn-2"),
+			}
+			ids, sent, _, err = sendWithRetryTuple(m, t.Context(), "test", w, feedback)
+			if err != nil || !sent || len(ids) != 1 {
+				t.Fatalf("fresh turn feedback was suppressed: (%v, %v, %v)", ids, sent, err)
+			}
+			m.DismissToolFeedback(t.Context(), feedback)
+			if count := m.stream.activeToolFeedbackCount(); count != 0 {
+				t.Fatalf("fresh turn cleanup left progress: %d", count)
+			}
+		})
+	}
+}
+
 func TestToolFeedbackTerminal_StableSessionSpansTurnScopes(t *testing.T) {
 	tests := []struct {
 		name       string

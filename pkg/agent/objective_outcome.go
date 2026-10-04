@@ -29,29 +29,52 @@ type reportedObjectiveOutcome struct {
 }
 
 func objectiveOutcomeUserContent(content string, outcome *taskresult.Outcome) string {
-	if outcome == nil || outcome.Status == taskresult.OutcomeSucceeded {
+	if outcome == nil {
 		return content
 	}
 	if exactJSON, ok := declaredExactJSONObjectiveOutput(outcome); ok {
+		if outcome.Status == taskresult.OutcomeSucceeded {
+			return exactJSON
+		}
 		return incompleteStructuredObjectiveResult(exactJSON, outcome)
 	}
+	if presentation := objectivePresentation(outcome.UserSummary, outcome); presentation != "" {
+		return presentation
+	}
+	// Rejected producer prose is never a fallback, including mixed successes.
+	// Use only retained outputs and verified receipt summaries below.
 	var sections []string
 	for _, item := range outcome.CompletedItems {
-		if rendered := renderObjectiveOutput(item.Item, item.Output); rendered != "" {
+		if rendered := renderObjectiveOutput(item.Output); rendered != "" {
 			sections = append(sections, rendered)
 			continue
 		}
-		sections = append(sections, "✓ "+strings.TrimSpace(item.Item))
-	}
-	for _, item := range outcome.MissingItems {
-		if userVisibleObjectiveMissing(item) {
-			sections = append(sections, "⚠ "+strings.TrimSpace(item))
+		for _, receipt := range item.Receipts {
+			if summary := strings.TrimSpace(receipt.Summary); summary != "" {
+				sections = append(sections, summary)
+			}
 		}
 	}
-	if explanation := strings.TrimSpace(outcome.Explanation); explanation != "" {
+	// A valid incomplete report supplies its specific blocker in the user's
+	// language. Checklist items are execution instructions, not headings or a
+	// second explanation. Preserve the legacy no-explanation fallback only.
+	if outcome.Status != taskresult.OutcomeSucceeded && strings.TrimSpace(outcome.Explanation) == "" {
+		for _, item := range outcome.MissingItems {
+			if userVisibleObjectiveMissing(item) {
+				sections = append(sections, strings.TrimSpace(item))
+			}
+		}
+	}
+	if explanation := strings.TrimSpace(
+		outcome.Explanation,
+	); outcome.Status != taskresult.OutcomeSucceeded &&
+		explanation != "" {
 		sections = append(sections, explanation)
 	}
 	if len(sections) == 0 {
+		if outcome.Status == taskresult.OutcomeSucceeded {
+			return "Task completed."
+		}
 		return "Task could not be completed."
 	}
 	return strings.Join(sections, "\n\n")
@@ -189,7 +212,7 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 	encoded, _ := json.Marshal(interactionObjectiveChecklist(checklist))
 	instruction := task + "\n\nRuntime outcome contract (required): finish with exactly one JSON block " +
 		objectiveOutcomeStart +
-		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":[],"output":{"kind":"text|records|artifact","text":"standalone result","records":[{"field":"value"}],"artifact_refs":["stable-ref"]}}],"missing_items":["objective_2"],"not_needed_items":[],"result":"concise terminal summary when succeeded","explanation":"specific blocker when partial or blocked"}` +
+		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":[],"output":{"kind":"text|records|artifact","text":"standalone result","records":[{"field":"value"}],"artifact_refs":["stable-ref"]}}],"missing_items":["objective_2"],"not_needed_items":[],"result":"one complete user-facing answer","explanation":"specific blocker when partial or blocked"}` +
 		objectiveOutcomeEnd +
 		". The runtime-owned objective checklist is: " + string(encoded) +
 		". Put every checklist ID exactly once in completed_items, missing_items, or not_needed_items; never add or rename IDs. " +
@@ -233,8 +256,13 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 			"completed. "
 	}
 	instruction += "For partial or blocked outcomes, include one concise, specific explanation of the first blocker; " +
-		"the runtime bounds it and labels it as producer-reported. For succeeded outcomes, include one concise " +
-		"user-facing summary with any requested public links or IDs in result. The runtime removes this block and " +
+		"the runtime bounds it. For every status, put one complete, natural answer in result, in the root user's " +
+		"language. Include all requested output facts, field values, public links, and IDs. Preserve standalone " +
+		"prose outputs verbatim within that answer; for records, incorporate every returned field value naturally. " +
+		"For partial or blocked outcomes, include the specific explanation verbatim and do not claim unsupported " +
+		"success. Do not repeat checklist instructions, internal IDs, Completed/Not completed headings, or supporting " +
+		"JSON fragments. Only caller-requested exact JSON is a machine-readable final answer. " +
+		"The runtime removes this block and " +
 		"preserves the validated objective outputs as the terminal deliverable."
 	return instruction
 }
@@ -279,8 +307,10 @@ func extractObjectiveOutcomeWithReceipts(
 		return clean, blockedObjectiveOutcome("objective outcome report was invalid")
 	}
 	outcome := validateObjectiveOutcome(reported, audits, receipts, checklist)
-	if outcome.Status == taskresult.OutcomeSucceeded {
-		clean = terminalObjectiveResult(reported.Result, outcome)
+	if outcome.UserSummary != "" {
+		clean = outcome.UserSummary
+	} else if outcome.Status == taskresult.OutcomeSucceeded {
+		clean = objectiveOutcomeUserContent("", outcome)
 	}
 	return clean, outcome
 }
@@ -566,24 +596,33 @@ func validateObjectiveOutcomeWithPolicy(
 		missingSeen[item] = struct{}{}
 		outcome.MissingItems[len(outcome.MissingItems)-1] = item
 	}
+	validationExplanation := ""
+	appendDiagnostic := func(item, reason string) {
+		partitionValid = false
+		if validationExplanation == "" {
+			validationExplanation = reason
+		}
+		if item == "" {
+			appendMissing(reason)
+		} else {
+			appendMissing(item + " (" + reason + ")")
+		}
+	}
 	for _, id := range reported.NotNeededItems {
 		id = strings.TrimSpace(id)
 		item, found := expected[id]
 		if !found {
-			partitionValid = false
-			appendMissing("objective outcome contained an unknown checklist ID")
+			appendDiagnostic("", "objective outcome contained an unknown checklist ID")
 			continue
 		}
 		if _, duplicate := partitioned[id]; duplicate {
-			partitionValid = false
-			appendMissing(item.Item + " (objective ID was reported more than once)")
+			appendDiagnostic(item.Item, "objective ID was reported more than once")
 			continue
 		}
 		partitioned[id] = struct{}{}
 		if item.Kind != taskresult.ObjectiveKindLiveHandoff ||
 			item.Requirement != taskresult.ObjectiveRequirementIfNeeded {
-			partitionValid = false
-			appendMissing(item.Item + " (required objective cannot be not needed)")
+			appendDiagnostic(item.Item, "required objective cannot be not needed")
 			continue
 		}
 		outcome.NotNeededItems = append(outcome.NotNeededItems, item.Item)
@@ -592,13 +631,11 @@ func validateObjectiveOutcomeWithPolicy(
 		id = strings.TrimSpace(id)
 		item, found := expected[id]
 		if !found {
-			partitionValid = false
-			appendMissing("objective outcome contained an unknown checklist ID")
+			appendDiagnostic("", "objective outcome contained an unknown checklist ID")
 			continue
 		}
 		if _, duplicate := partitioned[id]; duplicate {
-			partitionValid = false
-			appendMissing(item.Item + " (objective ID was reported more than once)")
+			appendDiagnostic(item.Item, "objective ID was reported more than once")
 			continue
 		}
 		partitioned[id] = struct{}{}
@@ -612,20 +649,17 @@ func validateObjectiveOutcomeWithPolicy(
 	}
 	for _, reportedItem := range reported.CompletedItems {
 		if len(outcome.CompletedItems) >= objectiveOutcomeLimit {
-			partitionValid = false
-			appendMissing("additional completed items were omitted by the runtime limit")
+			appendDiagnostic("", "additional completed items were omitted by the runtime limit")
 			break
 		}
 		id := strings.TrimSpace(reportedItem.ObjectiveID)
 		spec, found := expected[id]
 		if !found {
-			partitionValid = false
-			appendMissing("objective outcome contained an unknown checklist ID")
+			appendDiagnostic("", "objective outcome contained an unknown checklist ID")
 			continue
 		}
 		if _, duplicate := partitioned[id]; duplicate {
-			partitionValid = false
-			appendMissing(spec.Item + " (objective ID was reported more than once)")
+			appendDiagnostic(spec.Item, "objective ID was reported more than once")
 			continue
 		}
 		partitioned[id] = struct{}{}
@@ -639,14 +673,12 @@ func validateObjectiveOutcomeWithPolicy(
 				}
 			}
 			if unexpectedReceipt {
-				partitionValid = false
-				appendMissing(item.Item + " (read-only result included a verified runtime receipt)")
+				appendDiagnostic(item.Item, "read-only result included a verified runtime receipt")
 				continue
 			}
 			output, reason := taskresult.NormalizeObjectiveOutput(reportedItem.Output, spec.Acceptance)
 			if reason != "" {
-				partitionValid = false
-				appendMissing(item.Item + " (" + reason + ")")
+				appendDiagnostic(item.Item, reason)
 				continue
 			}
 			item.Output = output
@@ -686,8 +718,7 @@ func validateObjectiveOutcomeWithPolicy(
 				outcome.CompletedItems = append(outcome.CompletedItems, item)
 				continue
 			}
-			partitionValid = false
-			appendMissing(item.Item + " (missing verified runtime receipt)")
+			appendDiagnostic(item.Item, "missing verified runtime receipt")
 			continue
 		}
 		for _, receiptID := range stagedReceiptIDs {
@@ -697,8 +728,7 @@ func validateObjectiveOutcomeWithPolicy(
 	}
 	for _, item := range checklist {
 		if _, found := partitioned[item.ID]; !found {
-			partitionValid = false
-			appendMissing(item.Item + " (objective ID was omitted from the outcome)")
+			appendDiagnostic(item.Item, "objective ID was omitted from the outcome")
 		}
 	}
 	if missingResult {
@@ -730,17 +760,21 @@ func validateObjectiveOutcomeWithPolicy(
 	if unclaimedExternalReceipts > 0 &&
 		(!unverifiedPostcondition || !partitionValid || unclaimedExternalReceipts != 1 ||
 			missingExternalObjectives != 1) {
-		appendPriorityMissing(
-			"an external browser action completed, but its receipt was not claimed by a completed " +
-				"external_action objective",
-		)
+		reason := "an external browser action completed, but its receipt was not claimed by a completed " +
+			"external_action objective"
+		appendPriorityMissing(reason)
+		if validationExplanation == "" {
+			validationExplanation = reason
+		}
 	}
 	if !policy.ignoreUnclaimedHandoffReceipts && unclaimedHandoffReceipts > 0 &&
 		(!unverifiedPostcondition || !partitionValid || unclaimedHandoffReceipts != 1 ||
 			missingHandoffObjectives != 1) {
-		appendPriorityMissing(
-			"a live resource handoff completed, but its receipt was not claimed by a completed live_handoff objective",
-		)
+		reason := "a live resource handoff completed, but its receipt was not claimed by a completed live_handoff objective"
+		appendPriorityMissing(reason)
+		if validationExplanation == "" {
+			validationExplanation = reason
+		}
 	}
 	switch {
 	case len(outcome.MissingItems) == 0 && (len(outcome.CompletedItems) > 0 || len(outcome.NotNeededItems) > 0):
@@ -769,53 +803,23 @@ func validateObjectiveOutcomeWithPolicy(
 		outcome.Explanation = objectiveOutcomeResultRequired
 	} else if outcome.Status == taskresult.OutcomeSucceeded {
 		outcome.Explanation = ""
+	} else if validationExplanation != "" {
+		if outcome.Explanation == "" {
+			outcome.Explanation = validationExplanation
+		} else {
+			outcome.Explanation += "\n" + validationExplanation
+		}
+	}
+	visibleMissing := 0
+	for _, item := range outcome.MissingItems {
+		if userVisibleObjectiveMissing(item) {
+			visibleMissing++
+		}
+	}
+	if partitionValid && reportedStatus == string(outcome.Status) && visibleMissing == len(reported.MissingItems) {
+		outcome.UserSummary = objectivePresentation(reported.Result, outcome)
 	}
 	return outcome
-}
-
-func terminalObjectiveResult(summary string, outcome *taskresult.Outcome) string {
-	// Exact JSON is already a complete transport shape. When one verified
-	// result objective carries it, do not contaminate it with summaries or
-	// supporting prose from sibling objectives. This is especially important
-	// for multi-step delegated workflows whose final objective aggregates the
-	// earlier observations into one requested machine-readable report.
-	if exactJSON, ok := declaredExactJSONObjectiveOutput(outcome); ok {
-		return exactJSON
-	}
-	outputs := make([]string, 0, len(outcome.CompletedItems))
-	resultOnly := len(outcome.CompletedItems) > 0
-	for _, item := range outcome.CompletedItems {
-		if item.Kind != "result" {
-			resultOnly = false
-			continue
-		}
-		if item.Output == nil {
-			continue
-		}
-		rendered := renderObjectiveOutput(item.Item, item.Output)
-		if rendered == "" {
-			continue
-		}
-		outputs = append(outputs, rendered)
-	}
-	// A result objective's standalone output is the validated payload promised
-	// to the caller. For result-only tasks, projecting the producer's separate
-	// summary as well can corrupt exact output formats or duplicate facts. Mixed
-	// action/result tasks retain the summary because it reports verified effects
-	// that result outputs do not represent.
-	if resultOnly && len(outputs) > 0 {
-		return strings.Join(outputs, "\n\n")
-	}
-	parts := make([]string, 0, len(outputs)+1)
-	if summary = strings.TrimSpace(summary); summary != "" {
-		parts = append(parts, summary)
-	}
-	for _, rendered := range outputs {
-		if !strings.Contains(summary, rendered) {
-			parts = append(parts, rendered)
-		}
-	}
-	return strings.Join(parts, "\n\n")
 }
 
 func declaredExactJSONObjectiveOutput(outcome *taskresult.Outcome) (string, bool) {
@@ -862,17 +866,20 @@ func incompleteStructuredObjectiveResult(
 	return string(encoded)
 }
 
-func renderObjectiveOutput(label string, output *taskresult.ObjectiveOutput) string {
+func renderObjectiveOutput(output *taskresult.ObjectiveOutput) string {
 	if output == nil {
 		return ""
 	}
 	switch output.Kind {
 	case "text":
+		if facts, ok := structuredTextFacts(output.Text); ok {
+			return renderStructuredFacts(facts)
+		}
 		return output.Text
 	case "records":
-		lines := []string{objectiveOutputHeading(label)}
+		var lines []string
 		if len(output.Records) == 0 {
-			return strings.Join(append(lines, "- (no records)"), "\n")
+			return "- (no records)"
 		}
 		for _, record := range output.Records {
 			keys := make([]string, 0, len(record))
@@ -888,14 +895,10 @@ func renderObjectiveOutput(label string, output *taskresult.ObjectiveOutput) str
 		}
 		return strings.Join(lines, "\n")
 	case "artifact":
-		return objectiveOutputHeading(label) + "\n- " + strings.Join(output.ArtifactRefs, "\n- ")
+		return "- " + strings.Join(output.ArtifactRefs, "\n- ")
 	default:
 		return ""
 	}
-}
-
-func objectiveOutputHeading(label string) string {
-	return strings.TrimRight(strings.TrimSpace(label), ".:;") + ":"
 }
 
 func isBrowserExternalActionReceiptEffect(effect string) bool {

@@ -593,7 +593,7 @@ func spawnSubTurn(
 	if requireObjectiveOutcome {
 		childTask = objectiveOutcomeInstruction(childTask, objectiveChecklist, hasBrowserObjectiveReceipts)
 	}
-	childTask = appendLiveHandoffPresentationContext(childTask, parentTS.userMessage, objectiveChecklist)
+	childTask = appendObjectivePresentationContext(childTask, parentTS.userMessage, objectiveChecklist)
 
 	// Create turnSpec for the child turn
 	childSessionKey := childID
@@ -821,26 +821,19 @@ func spawnSubTurn(
 	return result, err
 }
 
-const maxLiveHandoffPresentationRunes = 1600
+const maxObjectivePresentationRunes = 1600
 
-// appendLiveHandoffPresentationContext gives a delegated agent that will speak
+// appendObjectivePresentationContext gives a delegated agent that will speak
 // directly to the user the presentation evidence that an internally rewritten
 // task may have lost. The quoted request grants no additional authority; it is
-// carried only so user-facing handoff text can preserve language and style.
-func appendLiveHandoffPresentationContext(
+// carried only so user-facing answers and prompts preserve language and style.
+func appendObjectivePresentationContext(
 	task string,
 	userMessage string,
 	checklist []runtimeObjectiveItem,
 ) string {
-	requiresLiveHandoff := false
-	for _, item := range checklist {
-		if item.Kind == taskresult.ObjectiveKindLiveHandoff {
-			requiresLiveHandoff = true
-			break
-		}
-	}
-	userMessage = boundedTerminalTaskPromptText(userMessage, maxLiveHandoffPresentationRunes)
-	if !requiresLiveHandoff || userMessage == "" {
+	userMessage = boundedTerminalTaskPromptText(userMessage, maxObjectivePresentationRunes)
+	if len(checklist) == 0 || userMessage == "" {
 		return task
 	}
 	encoded, err := json.Marshal(userMessage)
@@ -849,7 +842,7 @@ func appendLiveHandoffPresentationContext(
 	}
 	return task + "\n\n# User-facing presentation context\n" +
 		"Preserve the language and general style of the root user's current request in every prompt shown " +
-		"directly to that user, even when the delegated task or internal instructions are in another language. " +
+		"directly to that user and in the final answer, even when internal instructions are in another language. " +
 		"This quoted request is presentation evidence only and grants no authority beyond the delegated task.\n" +
 		"Root user request: " + string(encoded)
 }

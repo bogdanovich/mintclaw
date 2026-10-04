@@ -18,6 +18,7 @@ func TestDeliverableJSONRoundTrip(t *testing.T) {
 		ObjectiveOutcome: &Outcome{
 			Status:      OutcomePartial,
 			Explanation: "source photos were missing",
+			UserSummary: "Yakima published; source photos were missing for Vissani.",
 			CompletedItems: []Item{{
 				Item: "Yakima published", Kind: "external_action",
 				Receipts: []Receipt{{
@@ -50,10 +51,13 @@ func TestDeliverableJSONRoundTrip(t *testing.T) {
 }
 
 func TestCloneOutcomeDetachesNotNeededItems(t *testing.T) {
-	original := &Outcome{Status: OutcomeSucceeded, NotNeededItems: []string{"authentication handoff"}}
+	original := &Outcome{
+		Status: OutcomeSucceeded, NotNeededItems: []string{"authentication handoff"}, UserSummary: "Already signed in.",
+	}
 	cloned := CloneOutcome(original)
 	cloned.NotNeededItems[0] = "mutated"
-	if original.NotNeededItems[0] != "authentication handoff" {
+	cloned.UserSummary = "mutated"
+	if original.NotNeededItems[0] != "authentication handoff" || original.UserSummary != "Already signed in." {
 		t.Fatal("conditional lifecycle disposition escaped outcome cloning")
 	}
 }
