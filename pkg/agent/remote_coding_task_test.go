@@ -607,6 +607,55 @@ func TestRemoteCodingStaleAndConflictingResultsHaveNoSideEffects(t *testing.T) {
 	}
 }
 
+func TestRemoteCodingEqualRevisionClearsTransientUnavailableProgress(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &mockProvider{})
+	configureRemoteCodingTestGrant(fixture.Config)
+	if err := fixture.Loop.ConfigureRemoteCodingTaskRuntime(
+		func(*config.Config) (RemoteCodingInvoker, error) { return newFakeRemoteCodingInvoker(), nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	record := createRemoteCodingTestRecord(t, fixture, taskregistry.StatusRunning)
+	tasks := fixture.Loop.taskRegistryForWorkspace(fixture.Agent.Workspace)
+	waiting := nodes.CodingTaskResult{
+		TaskID: record.TaskID, TaskGenerationID: record.GenerationID,
+		ScopeAlias: record.Coding.Scope, ScopeRevision: record.Coding.Revision,
+		Profile: record.Coding.Profile, ThreadID: record.Coding.ThreadID,
+		ThreadOpenMode: codingtask.ThreadOpenNew, WorkerGenerationID: record.Coding.WorkerGenerationID,
+		State: codingtask.StateWaitingInput, Revision: 2, Activity: codingtask.ActivityWaitingInput,
+		AcceptedAt: 1, UpdatedAt: 2,
+	}
+	if err := fixture.Loop.remoteCoding.projectResult(
+		fixture.Agent.Workspace,
+		tasks,
+		record,
+		waiting,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.Heartbeat(record.TaskID, "coding node is unavailable; task state remains uncertain"); err != nil {
+		t.Fatal(err)
+	}
+	retained, found := tasks.Get(record.TaskID)
+	if !found {
+		t.Fatal("coding task was not retained")
+	}
+	if err := fixture.Loop.remoteCoding.projectResult(
+		fixture.Agent.Workspace,
+		tasks,
+		retained,
+		waiting,
+	); err != nil {
+		t.Fatal(err)
+	}
+	recovered, found := tasks.Get(record.TaskID)
+	if !found || recovered.ProgressSummary != "coding task is waiting for correlated user input" ||
+		recovered.Status != taskregistry.StatusRunning || recovered.Coding == nil ||
+		recovered.Coding.NodeRevision != waiting.Revision {
+		t.Fatalf("recovered equal-revision projection = %#v, %v", recovered, found)
+	}
+}
+
 func TestRemoteCodingProjectionSerializesRevisionSideEffects(t *testing.T) {
 	fixture := newAgentLoopTestFixture(t, &mockProvider{})
 	configureRemoteCodingTestGrant(fixture.Config)

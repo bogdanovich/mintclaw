@@ -960,6 +960,10 @@ func (runtime *remoteCodingRuntime) projectResult(
 				return
 			}
 			accepted = true
+			if !result.State.Terminal() {
+				record.Status = taskregistry.StatusRunning
+				record.ProgressSummary = remoteCodingProgress(result)
+			}
 			return
 		}
 		accepted = true
