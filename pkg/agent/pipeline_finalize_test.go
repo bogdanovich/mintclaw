@@ -125,6 +125,9 @@ func TestFinalizationContextAlreadyHandledSkipsHistoryButChecksCompactionPressur
 	if !result.checkCompactionAfterDelivery {
 		t.Fatal("already-handled response skipped the post-turn pressure check")
 	}
+	if result.responseDisposition != finalResponseAlreadyHandled {
+		t.Fatal("turn result lost already-handled delivery ownership")
+	}
 	if result.modelName != "active-model" || result.defaultModelName != "default-model" {
 		t.Fatalf("result models = (%q, %q)", result.modelName, result.defaultModelName)
 	}
@@ -154,6 +157,10 @@ func TestFinalizationContextExactTerminalOverridesHandledDisposition(t *testing.
 
 	if finalization.disposition != finalResponsePending {
 		t.Fatalf("disposition = %v, want pending persistence", finalization.disposition)
+	}
+	if result := finalization.result(false); result.responseDisposition != finalResponsePending ||
+		result.responseContent() != "runtime-owned halt reason" {
+		t.Fatalf("exact terminal lost publishable ownership: %#v", result)
 	}
 	if finalization.historyMessage == nil || finalization.historyMessage.Content != "runtime-owned halt reason" {
 		t.Fatalf("history message = %#v, want exact terminal content", finalization.historyMessage)

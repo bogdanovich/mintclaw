@@ -309,7 +309,9 @@ func (al *AgentLoop) deliverFinalTurnResult(
 	if al == nil || al.bus == nil || agent == nil {
 		return
 	}
-	if !opts.SendResponse {
+	// A retained deliverable or receipt-backed terminal correction is not new
+	// delivery authority. Preserve the disposition before checking text/media.
+	if !opts.SendResponse || result.responseDisposition == finalResponseAlreadyHandled {
 		return
 	}
 
