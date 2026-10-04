@@ -38,8 +38,19 @@ func TestBuildCodexParams_BasicMessage(t *testing.T) {
 	if params.MaxOutputTokens.Valid() {
 		t.Fatalf("MaxOutputTokens should not be set for Codex backend")
 	}
-	if params.Reasoning.Effort != shared.ReasoningEffortNone {
-		t.Fatalf("Reasoning.Effort = %q, want none", params.Reasoning.Effort)
+	if params.Reasoning.Effort != "" {
+		t.Fatalf("Reasoning.Effort = %q, want provider default", params.Reasoning.Effort)
+	}
+	wire, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err = json.Unmarshal(wire, &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["reasoning"]; ok {
+		t.Fatalf("default request serialized reasoning: %s", wire)
 	}
 }
 
@@ -115,19 +126,21 @@ func TestBuildCodexParams_SystemAsInstructions(t *testing.T) {
 
 func TestBuildCodexParams_ThinkingLevel(t *testing.T) {
 	tests := []struct {
-		name  string
-		level any
-		want  shared.ReasoningEffort
+		name       string
+		level      any
+		want       shared.ReasoningEffort
+		configured bool
 	}{
-		{name: "default", level: nil, want: shared.ReasoningEffortNone},
-		{name: "off", level: "off", want: shared.ReasoningEffortNone},
-		{name: "low", level: "low", want: shared.ReasoningEffortLow},
-		{name: "medium", level: "medium", want: shared.ReasoningEffortMedium},
-		{name: "adaptive", level: "adaptive", want: shared.ReasoningEffortMedium},
-		{name: "high", level: "high", want: shared.ReasoningEffortHigh},
-		{name: "xhigh", level: "xhigh", want: shared.ReasoningEffortXhigh},
-		{name: "max", level: "max", want: shared.ReasoningEffort("max")},
-		{name: "unknown", level: "banana", want: shared.ReasoningEffortNone},
+		{name: "default", level: nil},
+		{name: "empty", level: ""},
+		{name: "off", level: "off", want: shared.ReasoningEffortNone, configured: true},
+		{name: "low", level: "low", want: shared.ReasoningEffortLow, configured: true},
+		{name: "medium", level: "medium", want: shared.ReasoningEffortMedium, configured: true},
+		{name: "adaptive", level: "adaptive", want: shared.ReasoningEffortMedium, configured: true},
+		{name: "high", level: "high", want: shared.ReasoningEffortHigh, configured: true},
+		{name: "xhigh", level: "xhigh", want: shared.ReasoningEffortXhigh, configured: true},
+		{name: "max", level: "max", want: shared.ReasoningEffort("max"), configured: true},
+		{name: "unknown", level: "banana"},
 	}
 
 	for _, tt := range tests {
@@ -139,6 +152,18 @@ func TestBuildCodexParams_ThinkingLevel(t *testing.T) {
 			params := buildCodexParams([]Message{{Role: "user", Content: "Hi"}}, nil, "gpt-5.4", opts, false)
 			if params.Reasoning.Effort != tt.want {
 				t.Fatalf("Reasoning.Effort = %q, want %q", params.Reasoning.Effort, tt.want)
+			}
+			wire, err := json.Marshal(params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			if err = json.Unmarshal(wire, &body); err != nil {
+				t.Fatal(err)
+			}
+			_, gotConfigured := body["reasoning"]
+			if gotConfigured != tt.configured {
+				t.Fatalf("serialized reasoning = %v, want configured %v: %s", gotConfigured, tt.configured, wire)
 			}
 		})
 	}
