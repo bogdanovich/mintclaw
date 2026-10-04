@@ -347,11 +347,11 @@ func normalizeFieldBase(
 	if failure != nil {
 		return FormField{}, failure
 	}
-	hasDefault, failure := fieldHasEntry(context, backendID, "DV")
+	_, hasDefault, failure := fieldEntry(context, backendID, "DV")
 	if failure != nil {
 		return FormField{}, failure
 	}
-	hasValue, failure := fieldHasEntry(context, backendID, "V")
+	hasValue, failure := fieldHasValue(context, backendID)
 	if failure != nil {
 		return FormField{}, failure
 	}
@@ -463,25 +463,61 @@ func fieldInteger(context *model.Context, backendID string, key string) (int, *F
 	return value, nil
 }
 
-func fieldHasEntry(context *model.Context, backendID string, key string) (bool, *Failure) {
+func fieldEntry(context *model.Context, backendID string, key string) (types.Object, bool, *Failure) {
 	numbers, failure := fieldObjectNumbers(backendID)
 	if failure != nil {
-		return false, failure
+		return nil, false, failure
 	}
 	for index := len(numbers) - 1; index >= 0; index-- {
 		object, err := context.FindObject(numbers[index])
 		if err != nil {
-			return false, malformedFormField()
+			return nil, false, malformedFormField()
 		}
 		dictionary, err := context.DereferenceDict(object)
 		if err != nil || dictionary == nil {
-			return false, malformedFormField()
+			return nil, false, malformedFormField()
 		}
-		if _, found := dictionary.Find(key); found {
-			return true, nil
+		if value, found := dictionary.Find(key); found {
+			return value, true, nil
 		}
 	}
-	return false, nil
+	return nil, false, nil
+}
+
+func fieldHasValue(context *model.Context, backendID string) (bool, *Failure) {
+	object, found, failure := fieldEntry(context, backendID, "V")
+	if failure != nil || !found {
+		return false, failure
+	}
+	resolved, err := context.Dereference(object)
+	if err != nil {
+		return false, malformedFormField()
+	}
+	switch value := resolved.(type) {
+	case nil:
+		return false, nil
+	case types.StringLiteral, types.HexLiteral:
+		decoded, decodeErr := types.StringOrHexLiteral(value)
+		if decodeErr != nil || decoded == nil {
+			return false, malformedFormField()
+		}
+		return *decoded != "", nil
+	case types.Array:
+		present := false
+		for _, item := range value {
+			decoded, decodeFailure := decodeChoiceString(context, item, defaultFormFieldLimits().MaxTextBytes)
+			if decodeFailure != nil {
+				return false, decodeFailure
+			}
+			present = present || decoded != ""
+		}
+		return present, nil
+	case types.Name:
+		// Button names, including Off, are explicit source values rather than empty text.
+		return value != "", nil
+	default:
+		return false, malformedFormField()
+	}
 }
 
 func validateFieldActions(
