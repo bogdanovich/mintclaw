@@ -265,6 +265,9 @@ func (client *playwrightLibraryClient) ExecutePrivileged(
 	if err != nil {
 		return DriverExecutionResult{}, err
 	}
+	if settledErr := playwrightLibrarySettledExecutionError(result); settledErr != nil {
+		return DriverExecutionResult{}, settledErr
+	}
 	if playwrightLibraryExecutionTimedOut(result) {
 		return DriverExecutionResult{}, errors.Join(ErrExecutionTimeout, ErrDriverRejected)
 	}
@@ -302,6 +305,24 @@ func (client *playwrightLibraryClient) ExecutePrivileged(
 		})
 	}
 	return decoded, nil
+}
+
+func playwrightLibrarySettledExecutionError(result *sdkmcp.CallToolResult) error {
+	if result == nil || !result.IsError || len(result.Content) != 1 {
+		return nil
+	}
+	text, ok := result.Content[0].(*sdkmcp.TextContent)
+	if !ok || text == nil {
+		return nil
+	}
+	switch text.Text {
+	case "MINTCLAW_EXECUTION_FAILED_V1|execution_rejected":
+		return errors.Join(ErrExecutionSettled, ErrDriverRejected)
+	case "MINTCLAW_EXECUTION_FAILED_V1|execution_timeout":
+		return errors.Join(ErrExecutionSettled, ErrExecutionTimeout, ErrDriverRejected)
+	default:
+		return nil
+	}
 }
 
 func playwrightLibraryExecutionTimedOut(result *sdkmcp.CallToolResult) bool {

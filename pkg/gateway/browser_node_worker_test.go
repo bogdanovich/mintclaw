@@ -35,6 +35,7 @@ type browserNodeTestHandler struct {
 	executePlanInputs        []json.RawMessage
 	executeSources           []string
 	executeFailureCode       string
+	executeSettledReason     string
 	executeLoseResponse      bool
 	executeWaitForContext    bool
 	executeVisibilityDelay   time.Duration
@@ -297,6 +298,11 @@ func (handler *browserNodeTestHandler) Invoke(
 		result = nodes.BrowserExecuteResult{
 			InvocationID: input.InvocationID, State: "succeeded",
 			Value: json.RawMessage(`{"items":["one","two"]}`), Actions: 2,
+		}
+		if handler.executeSettledReason != "" {
+			result = nodes.BrowserExecuteResult{
+				InvocationID: input.InvocationID, State: "failed", Reason: handler.executeSettledReason,
+			}
 		}
 	case nodes.BrowserCommandAct:
 		var input nodes.BrowserActInput
@@ -2249,6 +2255,77 @@ func TestGatewayNodeBrowserPrivilegedExecutionUsesEphemeralSourceAndNoReplay(t *
 
 func TestGatewayNodeBrowserPrivilegedExecutionPreservesTimeoutWithoutReplay(t *testing.T) {
 	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, false, false, 0)
+}
+
+func TestGatewayNodeBrowserSettledExecutionFailurePreservesSession(t *testing.T) {
+	for _, reason := range []string{"execution_rejected", "execution_timeout", "untrusted_failure"} {
+		t.Run(reason, func(t *testing.T) {
+			cfg, runtime, handler := browserNodeTestRuntimeWithExecution(t, true)
+			handler.executeSettledReason = reason
+			factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := browser.NewMemoryStore()
+			broker, err := browser.NewBroker(cfg, store, factory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := browser.Owner{
+				ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
+				SessionKey: "session_test", ExecutionID: "execution_test",
+			}
+			session, err := broker.Open(
+				t.Context(),
+				browser.OpenRequest{Owner: owner, Target: "companion", Profile: "managed"},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := `async ({page}) => page.title()`
+			prepared, err := broker.PrepareExecution(t.Context(), browser.PrepareExecutionRequest{
+				Owner: owner, RequestID: "settled_execution", SessionID: session.ID, TabID: session.TabID,
+				SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+				Source: source, Language: browser.ExecutionJavaScript, DeclaredEffect: browser.EffectRead,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := gatewayBrowserArtifactContext(cfg.Agents.Defaults.Workspace)
+			invocation, err := broker.ExecuteExecution(ctx, owner, prepared.Invocation.ID, source, nil, nil)
+			wantState := browser.InvocationFailed
+			if reason == "untrusted_failure" {
+				wantState = browser.InvocationUnknown
+			}
+			if err != nil || invocation.State != wantState {
+				t.Fatalf("execution = %+v, %v", invocation, err)
+			}
+			if _, err = broker.ExecuteExecution(ctx, owner, prepared.Invocation.ID, source, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if len(handler.executeInputs) != 1 {
+				t.Fatalf("replayed %d times", len(handler.executeInputs))
+			}
+			persisted, err := store.GetSession(t.Context(), session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if wantState == browser.InvocationFailed {
+				if persisted.State != browser.SessionReady {
+					t.Fatalf("session lost: %+v", persisted)
+				}
+				if _, err = broker.Observe(t.Context(), owner, session.ID, session.TabID); err != nil {
+					t.Fatal(err)
+				}
+			} else if persisted.State != browser.SessionLost {
+				t.Fatalf("untrusted failure retained session: %+v", persisted)
+			}
+		})
+	}
 }
 
 func TestGatewayNodeBrowserPrivilegedExecutionRecoversTimeoutAfterLostResponse(t *testing.T) {

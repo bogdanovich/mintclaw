@@ -626,6 +626,37 @@ func TestBrowserHostExecutesBoundPrivilegedSourceOnceAndRegistersArtifacts(t *te
 	if refreshErr != nil {
 		t.Fatalf("Observe(after execution) error = %v", refreshErr)
 	}
+	for _, settledErr := range []error{
+		errors.Join(browserworker.ErrExecutionSettled, browserworker.ErrDriverRejected),
+		errors.Join(browserworker.ErrExecutionSettled, browserworker.ErrExecutionTimeout, browserworker.ErrDriverRejected),
+	} {
+		worker.executionErr = settledErr
+		failedRequest := request
+		failedRequest.SnapshotGeneration = refreshed.SnapshotGeneration
+		failedRequest.DocumentID = refreshed.DocumentID
+		failedRequest.InvocationID = "settled_" + browserworker.SettledExecutionFailure(settledErr)
+		failed, failedErr := host.Execute(t.Context(), failedRequest)
+		if failedErr != nil || failed.State != "failed" ||
+			failed.Reason != browserworker.SettledExecutionFailure(settledErr) {
+			t.Fatalf("settled failure = %+v, %v", failed, failedErr)
+		}
+		count := len(worker.executionRequests)
+		if _, replayErr := host.Execute(
+			t.Context(),
+			failedRequest,
+		); replayErr == nil ||
+			len(worker.executionRequests) != count {
+			t.Fatalf("settled source replay: %v; dispatches=%d", replayErr, len(worker.executionRequests))
+		}
+		worker.observations = append(worker.observations, observation, observation)
+		worker.navigationIdentities = append(worker.navigationIdentities,
+			"navigation_execute", "navigation_execute", "navigation_execute", "navigation_execute")
+		observeAgain.SnapshotGeneration = refreshed.SnapshotGeneration + 2
+		refreshed, refreshErr = host.Observe(t.Context(), observeAgain)
+		if refreshErr != nil {
+			t.Fatalf("same-session observation after failure: %v", refreshErr)
+		}
+	}
 	worker.executionErr = errors.Join(
 		browserworker.ErrExecutionTimeout,
 		browserworker.ErrDriverRejected,
@@ -638,7 +669,7 @@ func TestBrowserHostExecutesBoundPrivilegedSourceOnceAndRegistersArtifacts(t *te
 	timeoutRequest.InvocationID = "browser_execute_timeout"
 	timeoutRequest.PreparedHash = strings.Repeat("c", 64)
 	if _, err = host.Execute(t.Context(), timeoutRequest); !errors.Is(err, ErrBrowserHostLost) ||
-		!errors.Is(err, ErrBrowserHostExecutionTimeout) || len(worker.executionRequests) != 2 {
+		!errors.Is(err, ErrBrowserHostExecutionTimeout) || len(worker.executionRequests) != 4 {
 		t.Fatalf("timeout Execute() error = %v; requests = %d", err, len(worker.executionRequests))
 	}
 	status, statusErr := host.Status(t.Context(), BrowserHostStatusRequest{

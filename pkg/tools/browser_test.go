@@ -265,6 +265,33 @@ func TestBrowserTargetsAdvertisesOnlySafePrivilegedExecutionFacts(t *testing.T) 
 	}
 }
 
+func TestBrowserExecuteSettledFailuresOfferFreshSameSessionRecovery(t *testing.T) {
+	for _, reason := range []string{"execution_rejected", "execution_timeout"} {
+		fake := &fakeBrowserToolSource{
+			available: true,
+			executionPreparation: browser.ExecutionPreparation{Invocation: browser.Invocation{
+				ID: "execute_1", Execution: &browser.ExecutionBinding{TabID: "tab_primary"},
+			}},
+			executionInvocation: browser.Invocation{
+				ID: "execute_1", SessionID: "browser_session_1", State: browser.InvocationFailed,
+				Effect: browser.EffectRead, AcceptedAt: 1, SafeFailure: reason,
+				Execution: &browser.ExecutionBinding{},
+			},
+		}
+		tool := NewBrowserExecuteTool(browserExecuteToolTestConfig(), fake)
+		result := tool.Execute(browserToolTestContext(), map[string]any{
+			"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+			"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+			"language": "javascript", "source": `async () => true`, "effect": "read",
+		})
+		if result == nil || !result.IsError || len(result.WriteAudit) != 0 ||
+			!strings.Contains(result.ContentForLLM(), `"recovery_action":"observe_same_session_and_correct_source"`) ||
+			!strings.Contains(result.ContentForLLM(), `"state":"failed"`) {
+			t.Fatalf("settled failure response: %+v", result)
+		}
+	}
+}
+
 func TestBrowserActDurableArgumentsRedactDialogPromptIncludingEmptyValue(t *testing.T) {
 	tool := &BrowserActTool{}
 	for _, value := range []string{"dialog-canary-secret", ""} {

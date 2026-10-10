@@ -2939,7 +2939,11 @@ func (*BrowserExecuteTool) Description() string {
 		"Use typed browser tools for ordinary work. Use this only when browser_targets advertises privileged_execution for the exact profile " +
 		"and a required browser API is not available as a typed action. Copy all document authority from one fresh browser_observe result. " +
 		"The function receives {page, context, artifacts}; it cannot access process, files, imports, environment variables, browser endpoints, " +
-		"profile paths, or host credentials. Declare the complete workflow effect and request confirmation only when the user asked for it."
+		"profile paths, or host credentials. For read-only extraction use await page.title(), page.content(), or " +
+		"page.locator(selector).innerText(), textContent(), getAttribute(name), count(), or isVisible(). " +
+		"Arbitrary page.evaluate(expression) or locator.evaluate(functionExpression) requires external_commit or unknown, " +
+		"even if your expression is intended only to read. Declare the complete workflow effect and " +
+		"request confirmation only when the user asked for it."
 }
 
 func (*BrowserExecuteTool) Parameters() map[string]any {
@@ -3033,13 +3037,14 @@ func (tool *BrowserExecuteTool) ApprovalArguments(
 }
 
 type browserExecutionResultView struct {
-	InvocationID string                      `json:"invocation_id"`
-	Effect       browser.Effect              `json:"effect"`
-	State        browser.InvocationState     `json:"state"`
-	Reason       string                      `json:"reason,omitempty"`
-	FailureClass browser.OutcomeFailureClass `json:"failure_class,omitempty"`
-	Execution    *browser.ExecutionResult    `json:"execution,omitempty"`
-	Observation  *browserObservationView     `json:"observation,omitempty"`
+	InvocationID   string                      `json:"invocation_id"`
+	Effect         browser.Effect              `json:"effect"`
+	State          browser.InvocationState     `json:"state"`
+	Reason         string                      `json:"reason,omitempty"`
+	FailureClass   browser.OutcomeFailureClass `json:"failure_class,omitempty"`
+	Execution      *browser.ExecutionResult    `json:"execution,omitempty"`
+	Observation    *browserObservationView     `json:"observation,omitempty"`
+	RecoveryAction string                      `json:"recovery_action,omitempty"`
 }
 
 func (tool *BrowserExecuteTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
@@ -3095,6 +3100,10 @@ func (tool *BrowserExecuteTool) Execute(ctx context.Context, args map[string]any
 	if invocation.Diagnostic != nil {
 		view.FailureClass = invocation.Diagnostic.FailureClass
 	}
+	if invocation.State == browser.InvocationFailed && invocation.Execution != nil &&
+		(invocation.SafeFailure == "execution_rejected" || invocation.SafeFailure == "execution_timeout") {
+		view.RecoveryAction = "observe_same_session_and_correct_source"
+	}
 	if invocation.State == browser.InvocationSucceeded {
 		var terminal browser.ExecutionResult
 		if json.Unmarshal(invocation.TerminalResult, &terminal) != nil {
@@ -3110,6 +3119,9 @@ func (tool *BrowserExecuteTool) Execute(ctx context.Context, args map[string]any
 		}
 	}
 	result := tool.runtime.result(view)
+	if view.RecoveryAction != "" {
+		result.IsError = true
+	}
 	if invocation.State == browser.InvocationSucceeded &&
 		(invocation.Effect == browser.EffectExternalCommit || invocation.Effect == browser.EffectUnknown) {
 		result.WithWriteAudit(toolshared.WriteAuditEntry{

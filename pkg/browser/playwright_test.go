@@ -5618,6 +5618,20 @@ func TestRealBrowserPrivilegedExecutionSandboxAndBudgets(t *testing.T) {
 	timed := `async () => await new Promise(() => {})`
 	timeoutLimits := limits
 	timeoutLimits.RuntimeSeconds = 1
+	for name, source := range map[string]string{
+		"source error":    `async () => { throw new Error("fixture failure"); }`,
+		"effect mismatch": `async ({page}) => page.evaluate("document.title")`,
+		"missing locator": `async ({page}) => page.locator('#missing').innerText()`,
+	} {
+		if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
+			ctx, navigationID, executionRequest(source, ExecutionJavaScript, EffectRead, timeoutLimits),
+		); !errors.Is(err, ErrExecutionSettled) {
+			t.Fatalf("%s did not confirm safe settlement: %v", name, err)
+		}
+		if err = worker.client.Ping(ctx); err != nil {
+			t.Fatalf("%s lost the browser: %v", name, err)
+		}
+	}
 	started := time.Now()
 	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
 		ctx, navigationID, executionRequest(timed, ExecutionJavaScript, EffectRead, timeoutLimits),
@@ -5625,8 +5639,27 @@ func TestRealBrowserPrivilegedExecutionSandboxAndBudgets(t *testing.T) {
 		time.Since(started) > 5*time.Second {
 		t.Fatalf("bounded timeout error = %v after %s", err, time.Since(started))
 	}
+	if err = worker.client.Ping(ctx); err != nil {
+		t.Fatalf("settled read timeout lost the browser: %v", err)
+	}
+	if _, err = worker.Observe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	navigationID, err = worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutatingTimeout := `async ({page}) => {
+  await page.locator('#value').evaluate("element => { element.textContent = 'changed'; }");
+  await new Promise(() => {});
+}`
+	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
+		ctx, navigationID, executionRequest(mutatingTimeout, ExecutionJavaScript, EffectExternalCommit, timeoutLimits),
+	); !errors.Is(err, ErrExecutionTimeout) || errors.Is(err, ErrExecutionSettled) {
+		t.Fatalf("ambiguous mutation received settlement authority: %v", err)
+	}
 	if err = worker.client.Ping(ctx); err == nil {
-		t.Fatal("timed-out privileged runtime remained reusable")
+		t.Fatal("ambiguous mutating runtime remained reusable")
 	}
 	if err = worker.Close(ctx); err != nil {
 		t.Fatal(err)

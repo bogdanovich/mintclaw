@@ -867,7 +867,11 @@ func (host *BrowserHost) Execute(
 	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
 	defer cancelAction()
 	runtimeNow := host.now().UTC()
-	runtimeDeadline := runtimeNow.Add(time.Duration(input.Limits.RuntimeSeconds) * time.Second)
+	// Source time is enforced by the sidecar. Give it a bounded cleanup window
+	// to stop the worker and return settlement evidence before losing transport.
+	runtimeDeadline := runtimeNow.Add(
+		time.Duration(input.Limits.RuntimeSeconds)*time.Second + browserworker.ExecutionSettlementGrace,
+	)
 	if runtimeDeadline.Before(actionDeadline) {
 		var cancelRuntime context.CancelFunc
 		actionCtx, cancelRuntime = context.WithTimeout(actionCtx, max(runtimeDeadline.Sub(runtimeNow), 0))
@@ -918,6 +922,14 @@ func (host *BrowserHost) Execute(
 			Limits: browserHostExecutionConfig(input.Limits),
 		},
 	)
+	if reason := browserworker.SettledExecutionFailure(executeErr); reason != "" &&
+		actionCtx.Err() == nil && host.now().UTC().Before(actionDeadline) {
+		session.snapshotGeneration++
+		session.elementRefs = make(map[string]browserworker.DriverElement)
+		session.observationDigest = nil
+		session.navigationIdentity = ""
+		return nodes.BrowserExecuteResult{InvocationID: input.InvocationID, State: "failed", Reason: reason}, nil
+	}
 	if executeErr != nil || actionCtx.Err() != nil || !host.now().UTC().Before(actionDeadline) {
 		host.quarantineActionLocked(session)
 		if errors.Is(executeErr, browserworker.ErrExecutionTimeout) ||

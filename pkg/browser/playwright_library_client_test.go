@@ -109,6 +109,26 @@ func TestPlaywrightLibraryExecutionTimeoutRequiresExactPrivateResponse(t *testin
 	}
 }
 
+func TestPlaywrightLibrarySettlementRequiresExactPrivateFailure(t *testing.T) {
+	for _, code := range []string{"execution_rejected", "execution_timeout"} {
+		text := "MINTCLAW_EXECUTION_FAILED_V1|" + code
+		valid := &sdkmcp.CallToolResult{IsError: true, Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: text}}}
+		if got := SettledExecutionFailure(playwrightLibrarySettledExecutionError(valid)); got != code {
+			t.Fatalf("settlement code = %q, want %q", got, code)
+		}
+		for _, invalid := range []*sdkmcp.CallToolResult{
+			nil,
+			{IsError: false, Content: valid.Content},
+			{IsError: true, Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: text + " private detail"}}},
+			{IsError: true, Content: append(append([]sdkmcp.Content(nil), valid.Content...), &sdkmcp.TextContent{Text: text})},
+		} {
+			if err := playwrightLibrarySettledExecutionError(invalid); err != nil {
+				t.Fatalf("unconfirmed settlement accepted: %v", err)
+			}
+		}
+	}
+}
+
 func TestPlaywrightLibraryCloseRetriesProcessCleanup(t *testing.T) {
 	transient := errors.New("transient process cleanup failure")
 	connection := &retryableLibraryConnection{closeErrors: []error{transient, nil}}
