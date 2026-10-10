@@ -488,8 +488,19 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 		return err
 	}
 	actualOutput, err := canonicalJSON(descriptor.OutputSchema)
-	if err != nil || !bytes.Equal(actualOutput, expectedOutput) {
+	if err != nil {
 		return fmt.Errorf("%w: browser output schema does not match typed contract", ErrInvalidCapability)
+	}
+	if !bytes.Equal(actualOutput, expectedOutput) {
+		// Existing peers and registry records omit the two optional navigation
+		// evidence fields. Admit exactly that preceding typed contract, without
+		// rewriting its catalog hash or relaxing any other schema constraint.
+		previousOutput, err := canonicalJSON(browserCommandOutputSchema(
+			descriptor.Name, descriptor.BrowserProfiles, false,
+		))
+		if err != nil || !bytes.Equal(actualOutput, previousOutput) {
+			return fmt.Errorf("%w: browser output schema does not match typed contract", ErrInvalidCapability)
+		}
 	}
 	return nil
 }
