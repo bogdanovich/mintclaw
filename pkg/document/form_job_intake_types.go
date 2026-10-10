@@ -144,19 +144,24 @@ const (
 )
 
 type formIntakeStoredInput struct {
-	ID                 string                             `json:"id"`
-	MessageDigest      string                             `json:"message_digest"`
-	BodyDigest         string                             `json:"body_digest"`
-	InteractionID      string                             `json:"interaction_id,omitempty"`
-	State              formIntakeInputState               `json:"state"`
-	Intent             interactions.ProtectedAnswerIntent `json:"intent"`
-	Text               string                             `json:"text,omitempty"`
-	Origin             formIntakeBindingPayload           `json:"origin"`
-	CreatedAt          int64                              `json:"created_at"`
-	CommittedAt        int64                              `json:"committed_at,omitempty"`
-	Passes             int                                `json:"passes"`
-	LastPassID         string                             `json:"last_pass_id,omitempty"`
-	LastPassKeyDigest  string                             `json:"last_pass_key_digest,omitempty"`
-	LastPassRevision   int64                              `json:"last_pass_revision,omitempty"`
-	LastPassCandidates []string                           `json:"last_pass_candidates,omitempty"`
+	ID            string                             `json:"id"`
+	MessageDigest string                             `json:"message_digest"`
+	BodyDigest    string                             `json:"body_digest"`
+	InteractionID string                             `json:"interaction_id,omitempty"`
+	State         formIntakeInputState               `json:"state"`
+	Intent        interactions.ProtectedAnswerIntent `json:"intent"`
+	Text          string                             `json:"text,omitempty"`
+	Origin        formIntakeBindingPayload           `json:"origin"`
+	CreatedAt     int64                              `json:"created_at"`
+	CommittedAt   int64                              `json:"committed_at,omitempty"`
+	Reservations  []formIntakeStoredPass             `json:"reservations,omitempty"`
+}
+
+// The bounded reservation list is also the budget: no separately mutable
+// counter or latest-only binding can drift from durable replay identity.
+type formIntakeStoredPass struct {
+	ID           string   `json:"id"`
+	KeyDigest    string   `json:"key_digest"`
+	Revision     int64    `json:"revision"`
+	CandidateIDs []string `json:"candidate_field_ids"`
 }

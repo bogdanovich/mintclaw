@@ -345,20 +345,26 @@ func (store *FormJobStore) ReserveFormIntakePass(
 		}
 		input := &source.Intake.Inputs[index]
 		digest := keyedDigest(store.profileKey, "intake_pass", input.ID, request.IdempotencyKey)
-		reused := input.LastPassKeyDigest == digest
+		reservationIndex := slices.IndexFunc(input.Reservations, func(pass formIntakeStoredPass) bool {
+			return constantTimeStringEqual(pass.KeyDigest, digest)
+		})
+		reused := reservationIndex >= 0
+		var reservation formIntakeStoredPass
 		if reused {
-			if input.LastPassRevision != request.ExpectedRevision ||
-				!slices.Equal(input.LastPassCandidates, request.CandidateIDs) {
+			reservation = input.Reservations[reservationIndex]
+			if reservation.Revision != request.ExpectedRevision ||
+				!slices.Equal(reservation.CandidateIDs, request.CandidateIDs) {
 				return false, ErrFormJobAnswerConflict
 			}
 		} else {
-			if input.Passes >= MaxFormIntakeExtractionPasses {
+			if len(input.Reservations) >= MaxFormIntakeExtractionPasses {
 				return false, ErrFormJobCapacityExceeded
 			}
-			input.Passes++
-			input.LastPassKeyDigest, input.LastPassID = digest, "form_pass_"+digest[:32]
-			input.LastPassRevision = request.ExpectedRevision
-			input.LastPassCandidates = slices.Clone(request.CandidateIDs)
+			reservation = formIntakeStoredPass{
+				ID: "form_pass_" + digest[:32], KeyDigest: digest, Revision: request.ExpectedRevision,
+				CandidateIDs: slices.Clone(request.CandidateIDs),
+			}
+			input.Reservations = append(input.Reservations, reservation)
 			if saveErr := store.writeFormIntakeSource(&record, key, source, now); saveErr != nil {
 				return false, saveErr
 			}
@@ -366,8 +372,8 @@ func (store *FormJobStore) ReserveFormIntakePass(
 		}
 		result = FormIntakePass{
 			Input: formIntakeInput(record.Public, source.Intake, *input), Fields: fields,
-			ID: input.LastPassID, Revision: input.LastPassRevision,
-			CandidateIDs: slices.Clone(input.LastPassCandidates), Reused: reused,
+			ID: reservation.ID, Revision: reservation.Revision,
+			CandidateIDs: slices.Clone(reservation.CandidateIDs), Reused: reused,
 		}
 		return !reused, nil
 	})
@@ -468,7 +474,7 @@ func formIntakeAdmission(
 func formIntakeInput(record FormJobRecord, mode *formIntakeStoredMode, input formIntakeStoredInput) FormIntakeInput {
 	return FormIntakeInput{
 		JobID: record.JobID, ModeID: mode.ID, Reference: formIntakeReceiptPrefix + record.JobID + "." + input.ID,
-		Revision: record.Revision, Passes: input.Passes, Consumed: input.State == formIntakeInputConsumed,
+		Revision: record.Revision, Passes: len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
 		Intent: input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
 	}
 }
@@ -585,7 +591,7 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 			input.Origin.Version != FormIntakeVersion || input.Origin.JobID != record.JobID || input.Origin.ModeID != mode.ID ||
 			input.Origin.SchemaDigest != mode.SchemaDigest || input.Origin.ExpectedRevision < mode.StartRevision ||
 			input.Origin.ExpectedRevision > record.Revision || !validFormIntakeContext(input.Origin.Context) ||
-			input.Passes < 0 || input.Passes > MaxFormIntakeExtractionPasses ||
+			len(input.Reservations) > MaxFormIntakeExtractionPasses ||
 			(input.Intent != interactions.ProtectedAnswerValue && input.Intent != interactions.ProtectedAnswerClarify &&
 				input.Intent != interactions.ProtectedAnswerBack) {
 			return ErrFormJobRecordCorrupt
@@ -594,7 +600,7 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 		switch input.State {
 		case formIntakeInputStaged:
 			staged++
-			if input.InteractionID == "" || input.CommittedAt != 0 || input.Passes != 0 ||
+			if input.InteractionID == "" || input.CommittedAt != 0 || len(input.Reservations) != 0 ||
 				input.Origin.ExpectedRevision != record.Revision || mode.State != FormIntakeActive {
 				return ErrFormJobRecordCorrupt
 			}
@@ -608,15 +614,15 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 		if input.State != formIntakeInputConsumed && !validFormIntakeText(input.Intent, input.Text) {
 			return ErrFormJobRecordCorrupt
 		}
-		if input.Passes == 0 {
-			if input.LastPassID != "" || input.LastPassKeyDigest != "" || input.LastPassRevision != 0 ||
-				len(input.LastPassCandidates) != 0 {
+		seenReservations := make(map[string]bool, len(input.Reservations))
+		for _, reservation := range input.Reservations {
+			if !validDocumentDigest(reservation.KeyDigest) ||
+				reservation.ID != "form_pass_"+prefixFormIntakeDigest(reservation.KeyDigest) ||
+				seenReservations[reservation.ID] || reservation.Revision <= 0 || reservation.Revision > record.Revision ||
+				!validFormIntakeCandidateIDs(reservation.CandidateIDs) {
 				return ErrFormJobRecordCorrupt
 			}
-		} else if !validDocumentDigest(input.LastPassKeyDigest) || input.LastPassID != "form_pass_"+prefixFormIntakeDigest(input.LastPassKeyDigest) ||
-			input.LastPassRevision <= 0 || input.LastPassRevision > record.Revision ||
-			!validFormIntakeCandidateIDs(input.LastPassCandidates) {
-			return ErrFormJobRecordCorrupt
+			seenReservations[reservation.ID] = true
 		}
 	}
 	progress := formIntakeProgress(record, mode)

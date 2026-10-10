@@ -106,8 +106,12 @@ new messages while exact stored retries recover. Native review preparation/publi
 must all fence both staged and committed unresolved input, including a stage-versus-audit-publication race.
 
 Tests freeze the per-input, pending-text and extraction/candidate bounds; exhausting them retains previous unresolved
-input. Pass reservations are durable and keyed, so retry or restart cannot reset the extraction budget. Pausing retains
-private text, resuming preserves the same job, closing cannot discard unresolved input, and cancel/expiry erases the
+input. Pass reservations are durable and keyed, so retry or restart cannot reset the extraction budget.
+Retain all reserved-key bindings in one bounded list (at most 32 per input); the list length is the budget,
+not a second mutable counter. Interleaved A/B/A retries, including after restart and at the full budget, reuse their
+original exact views without another charge. A reused key cannot change candidates, ordering or revision, and an old
+view cannot become authority at a newer job revision. Pausing retains private text, resuming preserves the same job,
+closing cannot discard unresolved input, and cancel/expiry erases the
 existing source/key material. Source-reference preservation, old-reader fail-closed behavior, legacy single-field
 tests, race tests and Linux/macOS/Windows CI qualify compatibility. These are substrate tests, not real Telegram or
 natural-language filling evidence; those remain mandatory in later packets before the PDFI4 goal can be complete.

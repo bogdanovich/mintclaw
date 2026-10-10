@@ -346,6 +346,13 @@ func TestFormIntakeBudgetCapsPersistAndDoNotResetOnRetry(t *testing.T) {
 	if err != nil || !last.Reused || last.Input.Passes != MaxFormIntakeExtractionPasses {
 		t.Fatalf("last budget reservation not recoverable: %v", err)
 	}
+	for _, originalKey := range []string{"pass-0", "pass-17"} {
+		passRequest.IdempotencyKey = originalKey
+		old, err := reopened.ReserveFormIntakePass(t.Context(), passRequest)
+		if err != nil || !old.Reused || old.Input.Passes != MaxFormIntakeExtractionPasses {
+			t.Fatalf("older reservation retry at the full budget: %v", err)
+		}
+	}
 	passRequest.IdempotencyKey = "one-too-many"
 	if result, err := reopened.ReserveFormIntakePass(
 		t.Context(),
@@ -980,5 +987,97 @@ func TestFormIntakeReceiptCapacityNeverEvictsPriorReplayIdentity(t *testing.T) {
 	if err != nil || !replayed.Reused || replayed.Receipt != first.Receipt ||
 		replayed.Progress.InputCount != MaxFormIntakeReceipts {
 		t.Fatalf("capacity evicted original replay identity = %#v, %v", replayed, err)
+	}
+}
+
+func TestFormIntakeInterleavedPassReplayRetainsExactBindingAcrossRestart(t *testing.T) {
+	store, options := newTestFormJobStore(t)
+	request := intakeFixtureRequest(t, store)
+	started, err := store.StartFormIntake(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := store.AdmitFormIntakeMessage(t.Context(), intakeMessage(
+		request, started.Progress.ModeID, started.Job.Revision, "platform-1", intakePrivateSentinel,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRequest := FormIntakePassRequest{
+		Reference:        admitted.Receipt,
+		ExpectedRevision: admitted.Job.Revision,
+		Owner:            request.Owner,
+		Schema:           request.Schema,
+		CandidateIDs:     slices.Clone(request.Context.CandidateFieldIDs[:4]),
+		IdempotencyKey:   "pass-A",
+	}
+	secondRequest := firstRequest
+	secondRequest.IdempotencyKey = "pass-B"
+	secondRequest.CandidateIDs = slices.Clone(request.Context.CandidateFieldIDs[4:])
+	first, err := store.ReserveFormIntakePass(t.Context(), firstRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ReserveFormIntakePass(t.Context(), secondRequest)
+	if err != nil || second.ID == first.ID || second.Input.Passes != 2 {
+		t.Fatal("distinct extraction views did not reserve two distinct IDs")
+	}
+	before, err := os.ReadFile(formJobStatePath(options))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	reopened, err := OpenFormJobStore(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reopened.Close)
+	for _, retry := range []struct {
+		request FormIntakePassRequest
+		id      string
+	}{
+		{firstRequest, first.ID}, {secondRequest, second.ID}, {firstRequest, first.ID},
+	} {
+		replayed, err := reopened.ReserveFormIntakePass(t.Context(), retry.request)
+		if err != nil || !replayed.Reused || replayed.ID != retry.id || replayed.Input.Passes != 2 ||
+			!slices.Equal(replayed.CandidateIDs, retry.request.CandidateIDs) {
+			t.Fatalf("interleaved reservation replay = %#v, %v", replayed, err)
+		}
+	}
+	changed := firstRequest
+	changed.CandidateIDs = secondRequest.CandidateIDs
+	if result, err := reopened.ReserveFormIntakePass(
+		t.Context(),
+		changed,
+	); !errors.Is(err, ErrFormJobAnswerConflict) ||
+		result.ID != "" {
+		t.Fatal("original A key acquired B's candidate view")
+	}
+	changed.CandidateIDs = slices.Clone(firstRequest.CandidateIDs)
+	slices.Reverse(changed.CandidateIDs)
+	if _, err := reopened.ReserveFormIntakePass(t.Context(), changed); !errors.Is(err, ErrFormJobAnswerConflict) {
+		t.Fatal("original A key changed candidate ordering")
+	}
+	after, err := os.ReadFile(formJobStatePath(options))
+	if err != nil || string(after) != string(before) {
+		t.Fatal("interleaved retries or conflicts charged or mutated a reservation")
+	}
+	newInput, err := reopened.AdmitFormIntakeMessage(t.Context(), intakeMessage(
+		request, started.Progress.ModeID, admitted.Job.Revision, "platform-2", "Further supplied facts",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed = firstRequest
+	changed.ExpectedRevision = newInput.Job.Revision
+	if _, err := reopened.ReserveFormIntakePass(t.Context(), changed); !errors.Is(err, ErrFormJobAnswerConflict) {
+		t.Fatal("original A key rebound itself to a newer revision")
+	}
+	if _, err := reopened.ReserveFormIntakePass(t.Context(), firstRequest); !errors.Is(err, ErrFormJobConflict) {
+		t.Fatal("old A view became current interpretation authority")
+	}
+	input, err := reopened.ReadFormIntakeInput(t.Context(), admitted.Receipt, request.Owner)
+	if err != nil || input.Passes != 2 || input.Text != intakePrivateSentinel {
+		t.Fatal("stale reservation failure charged budget or dropped retained facts")
 	}
 }
