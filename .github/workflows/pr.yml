@@ -352,6 +352,9 @@ jobs:
       - name: Run portable composite form ledger contract
         run: go test -count=1 -run '^TestFormComposite' ./pkg/document
 
+      - name: Run portable protected conversational intake contract
+        run: go test -count=1 -run '^TestFormIntake' ./pkg/document
+
       - name: Run portable real-process document contract
         run: >-
           go test -count=1

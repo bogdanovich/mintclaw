@@ -232,10 +232,22 @@ func TestProtectedAnswerIdempotencyPrefersStablePlatformMessageIdentity(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	stableDomainIdentity, err := protectedAnswerIdempotencyKey("", message)
+	if err != nil || stableDomainIdentity == first {
+		t.Fatalf("stable domain identity = %q, %v", stableDomainIdentity, err)
+	}
+	otherPrompt, err := protectedAnswerIdempotencyKey("interaction-2", message)
+	if err != nil || otherPrompt == first {
+		t.Fatal("legacy prompt-scoped idempotency changed")
+	}
 	message.SpoolID = "delivery-attempt-2"
 	replayed, err := protectedAnswerIdempotencyKey("interaction-1", message)
 	if err != nil || replayed != first {
 		t.Fatalf("stable message replay key = %q, %v; want %q", replayed, err, first)
+	}
+	stableRetry, err := protectedAnswerIdempotencyKey("", message)
+	if err != nil || stableRetry != stableDomainIdentity {
+		t.Fatal("domain transport identity changed with spool delivery attempt")
 	}
 	message.Context.MessageID = ""
 	fallback, err := protectedAnswerIdempotencyKey("interaction-1", message)
@@ -273,7 +285,8 @@ func TestProtectedInteractionAcceptsExplicitAnswerCommand(t *testing.T) {
 	}
 	accepted := sink.acceptedRequests()
 	if len(accepted) != 1 || accepted[0].Intent != interactions.ProtectedAnswerValue ||
-		accepted[0].Text != protectedInteractionSentinel {
+		accepted[0].Text != protectedInteractionSentinel || accepted[0].MessageIdentity == "" ||
+		accepted[0].MessageIdentity == accepted[0].IdempotencyKey {
 		t.Fatalf("explicit protected answer = %#v", accepted)
 	}
 }

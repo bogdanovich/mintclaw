@@ -209,8 +209,11 @@ type ProtectedAnswerSinkRequest struct {
 	Route          Route
 	InteractionID  string
 	IdempotencyKey string
-	Intent         ProtectedAnswerIntent
-	Text           string
+	// MessageIdentity is stable across interaction prompts and standalone
+	// domain admission. Legacy sinks continue to use IdempotencyKey.
+	MessageIdentity string
+	Intent          ProtectedAnswerIntent
+	Text            string
 }
 
 type ProtectedAnswerCancelRequest struct {

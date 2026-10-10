@@ -254,6 +254,13 @@ func (sink *FormProtectedAnswerSink) Accept(
 		strings.TrimSpace(request.InteractionID) == "" || strings.TrimSpace(request.IdempotencyKey) == "" {
 		return interactions.ProtectedAnswerReceipt{}, ErrFormJobStoreUnavailable
 	}
+	envelope, err := decodeFormProtectedBindingEnvelope(request.Binding.Token)
+	if err != nil {
+		return interactions.ProtectedAnswerReceipt{}, err
+	}
+	if envelope.Kind == formIntakeBindingKind {
+		return sink.acceptFormIntake(ctx, request, envelope)
+	}
 	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
 	if err != nil {
 		return interactions.ProtectedAnswerReceipt{}, err
@@ -810,6 +817,13 @@ func (sink *FormProtectedAnswerSink) Commit(
 		request.Receipt.State != "stored" {
 		return ErrFormJobStoreUnavailable
 	}
+	envelope, err := decodeFormProtectedBindingEnvelope(request.Binding.Token)
+	if err != nil {
+		return err
+	}
+	if envelope.Kind == formIntakeBindingKind {
+		return sink.commitFormIntake(ctx, request, envelope)
+	}
 	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
 	if err != nil {
 		return err
@@ -841,6 +855,13 @@ func (sink *FormProtectedAnswerSink) Discard(
 	if sink == nil || sink.store == nil || request.Binding.Namespace != FormProtectedAnswerNamespace ||
 		strings.TrimSpace(request.InteractionID) == "" {
 		return ErrFormJobStoreUnavailable
+	}
+	envelope, err := decodeFormProtectedBindingEnvelope(request.Binding.Token)
+	if err != nil {
+		return err
+	}
+	if envelope.Kind == formIntakeBindingKind {
+		return sink.discardFormIntake(ctx, request, envelope)
 	}
 	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
 	if err != nil {
@@ -885,6 +906,9 @@ func (store *FormJobStore) stageProtectedValue(
 			return false, err
 		}
 		defer clear(jobKey)
+		if intakeErr := rejectLegacyFormAdmissionDuringIntake(record, jobKey); intakeErr != nil {
+			return false, intakeErr
+		}
 		idempotencyDigest := keyedDigest(store.profileKey, "answer", record.Public.JobID, request.IdempotencyKey)
 		eventID := "form_value_" + idempotencyDigest[:32]
 		bindingDigest, err := formJobJSONKeyedDigest(store.profileKey, struct {
@@ -1096,6 +1120,13 @@ func (sink *FormProtectedAnswerSink) Cancel(
 		strings.TrimSpace(request.InteractionID) == "" || strings.TrimSpace(request.IdempotencyKey) == "" {
 		return ErrFormJobStoreUnavailable
 	}
+	intakeEnvelope, err := decodeFormProtectedBindingEnvelope(request.Binding.Token)
+	if err != nil {
+		return err
+	}
+	if intakeEnvelope.Kind == formIntakeBindingKind {
+		return sink.cancelFormIntake(ctx, request, intakeEnvelope)
+	}
 	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
 	if err != nil {
 		return err
@@ -1175,6 +1206,17 @@ func (store *FormJobStore) openProtectedAnswerBinding(
 }
 
 func decodeFormProtectedAnswerBinding(token string) (formJobEnvelope, error) {
+	envelope, err := decodeFormProtectedBindingEnvelope(token)
+	if err != nil {
+		return envelope, err
+	}
+	if envelope.Kind != "answer_binding" || strings.TrimSpace(envelope.FieldID) == "" {
+		return envelope, ErrFormJobRecordCorrupt
+	}
+	return envelope, nil
+}
+
+func decodeFormProtectedBindingEnvelope(token string) (formJobEnvelope, error) {
 	var envelope formJobEnvelope
 	if strings.TrimSpace(token) != token || token == "" || len(token) > maxFormProtectedBindingBytes*2 {
 		return envelope, ErrFormJobRecordCorrupt
@@ -1193,8 +1235,9 @@ func decodeFormProtectedAnswerBinding(token string) (formJobEnvelope, error) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return envelope, ErrFormJobRecordCorrupt
 	}
-	if envelope.Kind != "answer_binding" || strings.TrimSpace(envelope.JobID) == "" ||
-		strings.TrimSpace(envelope.FieldID) == "" || envelope.Revision <= 0 {
+	if (envelope.Kind != "answer_binding" && envelope.Kind != formIntakeBindingKind) ||
+		!validFormIntakeJobID(envelope.JobID) || envelope.Revision <= 0 ||
+		(envelope.Kind == formIntakeBindingKind && (!validFormIntakeJobID(envelope.EventID) || envelope.FieldID != "")) {
 		return envelope, ErrFormJobRecordCorrupt
 	}
 	return envelope, nil

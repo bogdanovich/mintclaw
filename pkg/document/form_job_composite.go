@@ -109,6 +109,9 @@ func (store *FormJobStore) AppendComposite(
 				record.Public.State != FormJobReviewReady && record.Public.State != FormJobAwaitingApproval) {
 			return false, ErrFormJobConflict
 		}
+		if intakeErr := requireNoStagedFormIntake(record, jobKey); intakeErr != nil {
+			return false, intakeErr
+		}
 		if len(record.Events)+len(assignments) > store.maxEventsPerJob {
 			return false, ErrFormJobCapacityExceeded
 		}

@@ -62,9 +62,13 @@ func (store *FormJobStore) PrepareFormCommitApproval(
 	var result FormJobRecord
 	var binding FormCommitBinding
 	err := store.update(ctx, func(document *formJobStoreDocument, now time.Time) (bool, error) {
-		record, err := store.authorizedPublicRecord(document, request.JobID, request.Owner)
+		record, jobKey, err := store.authorizedRecord(document, request.JobID, request.Owner)
 		if err != nil {
 			return false, err
+		}
+		defer clear(jobKey)
+		if intakeErr := requireSettledFormIntake(record, jobKey); intakeErr != nil {
+			return false, intakeErr
 		}
 		if matchErr := formJobMatchesSchema(record.Public, request.Schema); matchErr != nil {
 			return false, matchErr
@@ -159,9 +163,13 @@ func (store *FormJobStore) BeginFormCommit(
 	}
 	var result FormJobRecord
 	err := store.update(ctx, func(document *formJobStoreDocument, now time.Time) (bool, error) {
-		record, err := store.authorizedPublicRecord(document, request.JobID, request.Owner)
+		record, jobKey, err := store.authorizedRecord(document, request.JobID, request.Owner)
 		if err != nil {
 			return false, err
+		}
+		defer clear(jobKey)
+		if intakeErr := requireSettledFormIntake(record, jobKey); intakeErr != nil {
+			return false, intakeErr
 		}
 		if record.Public.State == FormJobCommitting {
 			binding, bindingErr := formCommitBindingFromRecord(record.Public)
@@ -209,6 +217,9 @@ func (store *FormJobStore) MaterializeFormCommit(
 			return false, err
 		}
 		defer clear(jobKey)
+		if intakeErr := requireSettledFormIntake(record, jobKey); intakeErr != nil {
+			return false, intakeErr
+		}
 		if record.Public.State != FormJobCommitting || record.Public.Revision != request.ExpectedRevision ||
 			record.Public.AuditPolicyRevision != request.AuditPolicyRevision ||
 			record.Public.OutputPolicyRevision != request.OutputPolicyRevision {
