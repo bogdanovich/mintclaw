@@ -15,6 +15,10 @@ import (
 // ErrContextAuthorityStale marks a deterministic pre-dispatch context mismatch.
 var ErrContextAuthorityStale = errors.New("browser context authority changed before dispatch")
 
+// ErrActionContextMismatch distinguishes incorrect caller-supplied selection
+// authority from an expired snapshot. Refreshing a snapshot alone cannot repair it.
+var ErrActionContextMismatch = errors.New("browser action context does not match the observed selection")
+
 const (
 	MaxContextTabs         = 16
 	MaxContextFramesPerTab = 64

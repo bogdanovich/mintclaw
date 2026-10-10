@@ -2583,6 +2583,49 @@ func TestBrowserActionToolStaleErrorInstructsAuthorityCopy(t *testing.T) {
 	}
 }
 
+func TestBrowserObserveMakesTopLevelFrameAuthorityExplicit(t *testing.T) {
+	runtime := newBrowserToolRuntime(browserToolTestConfig(), &fakeBrowserToolSource{})
+	for _, frame := range []string{"", "frame_child"} {
+		encoded, err := json.Marshal(runtime.observationResult(browser.Observation{
+			SessionID: "session_1", TabID: "tab_primary", FrameID: frame,
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]any
+		if err = json.Unmarshal(encoded, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if got, present := fields["frame_id"]; !present || got != frame {
+			t.Fatalf("selected frame authority = %#v, present=%v, want %q", got, present, frame)
+		}
+	}
+}
+
+func TestBrowserActContextMismatchGivesSelectionRepairWithoutDispatch(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true, err: errors.Join(browser.ErrStale, browser.ErrActionContextMismatch),
+	}
+	tool := NewBrowserActTool(browserToolTestConfig(), source)
+	result := tool.Execute(browserToolTestContext(), map[string]any{
+		"browser_session_id": "session_1", "tab_id": "tab_primary", "frame_id": "frame_child",
+		"context_catalog_id": "catalog_1", "context_generation": 1,
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+		"effect": "navigation", "action": map[string]any{"kind": "click", "ref": "ref_1"},
+	})
+	if result == nil || !result.IsError || source.prepareCalls != 1 || source.executeCalls != 0 ||
+		!strings.Contains(result.ContentForLLM(), `"code":"context_binding_mismatch"`) ||
+		!strings.Contains(result.ContentForLLM(), "omit frame_id") ||
+		!strings.Contains(result.ContentForLLM(), "browser_context select") {
+		t.Fatalf(
+			"context repair result = %#v; prepares=%d executes=%d",
+			result,
+			source.prepareCalls,
+			source.executeCalls,
+		)
+	}
+}
+
 func TestBrowserActionNoProgressErrorRequiresScopeReplanning(t *testing.T) {
 	result := browserActionToolError(browser.ErrNoProgress)
 	if result == nil || !result.IsError ||
