@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,7 +15,119 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 )
+
+func TestRealBrowserActionRepairsUnselectedChildFrame(t *testing.T) {
+	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER") != "1" ||
+		os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_MODE") != config.BrowserDriverPlaywrightLibrary {
+		t.Skip("set the direct Playwright real-driver environment to run this fixture")
+	}
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.URL.Path == "/child" {
+			_, _ = fmt.Fprint(w, "<!doctype html><title>Child</title><p>Unselected child frame</p>")
+			return
+		}
+		_, _ = fmt.Fprint(w, `<!doctype html><title>Context repair</title>
+<button onclick="document.querySelector('output').textContent='ROOT_CLICK_OK'">Root action</button>
+<output>NOT_CLICKED</output><iframe src="/child"></iframe>`)
+	}))
+	defer fixture.Close()
+	root := runtimeAdmittedBrowserConfig(t, false)
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.NetworkMode, profile.AllowedOrigins = config.BrowserNetworkAnyHTTP, nil
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	configureRealPlaywrightLibraryDriver(t, root)
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := NewBroker(root, NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	session, err := broker.Open(ctx, OpenRequest{Owner: testOwner(), Target: "gateway", Profile: "managed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = broker.Close(context.Background(), testOwner(), session.ID) })
+	observation, err := broker.Observe(ctx, testOwner(), session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := PrepareActionRequest{
+		Owner: testOwner(), RequestID: "context_fixture_nav", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionNavigate, URL: fixture.URL},
+	}
+	prepared, err := broker.PrepareAction(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invocation, executeErr := broker.ExecuteAction(
+		ctx,
+		testOwner(),
+		prepared.Action.ID,
+		nil,
+	); executeErr != nil ||
+		invocation.State != InvocationSucceeded {
+		t.Fatalf("fixture navigation = %#v, %v", invocation, executeErr)
+	}
+	catalog, err := broker.ListContexts(ctx, testOwner(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.TabID = catalog.SelectedTabID
+	observation, err = broker.Observe(ctx, testOwner(), session.ID, session.TabID)
+	if errors.Is(err, ErrStale) {
+		observation, err = broker.Observe(ctx, testOwner(), session.ID, session.TabID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := broker.Status(ctx, testOwner(), session.ID)
+	if err != nil || state.ContextAuthority == nil || len(state.ContextAuthority.Tabs[0].Frames) == 0 {
+		t.Fatalf("fixture context = %#v, %v", state, err)
+	}
+	request = PrepareActionRequest{
+		Owner: testOwner(), RequestID: "context_fixture_click", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		ContextCatalogID: observation.ContextCatalogID, ContextGeneration: observation.ContextGeneration,
+		FrameID: state.ContextAuthority.Tabs[0].Frames[0].ID,
+		Action: Action{Kind: ActionClick, Ref: mustSnapshotRef(t, observation.Snapshot,
+			`button "Root action" \[ref=(ref_[a-z0-9]+)\]`)}, DeclaredEffect: EffectLocalEdit,
+	}
+	if _, err = broker.PrepareAction(ctx, request); !errors.Is(err, ErrActionContextMismatch) {
+		t.Fatalf("unselected child frame = %v", err)
+	}
+	request.FrameID = observation.FrameID
+	prepared, err = broker.PrepareAction(ctx, request)
+	if err != nil {
+		t.Fatalf("corrected main-page selection = %v", err)
+	}
+	if invocation, executeErr := broker.ExecuteAction(
+		ctx,
+		testOwner(),
+		prepared.Action.ID,
+		nil,
+	); executeErr != nil ||
+		invocation.State != InvocationSucceeded {
+		t.Fatalf("corrected root click = %#v, %v", invocation, executeErr)
+	}
+	observation, err = broker.Observe(ctx, testOwner(), session.ID, session.TabID)
+	if err != nil || !strings.Contains(observation.Snapshot, "ROOT_CLICK_OK") {
+		t.Fatalf("root result = %#v, %v", observation, err)
+	}
+	closed, err := broker.Close(ctx, testOwner(), session.ID)
+	if err != nil || closed.State != SessionClosed {
+		t.Fatalf("close = %#v, %v", closed, err)
+	}
+}
 
 func testContextCatalog() ContextCatalog {
 	return ContextCatalog{
