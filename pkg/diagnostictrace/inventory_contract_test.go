@@ -16,6 +16,20 @@ import (
 
 const codingInventorySchemaV1 = "mintclaw.coding_diagnostic_inventory.v1"
 
+var requiredCodingDiagnosticPathIDs = []string{
+	"local_coding_turn",
+	"provider_retry_and_fallback",
+	"tool_and_process_lifecycle",
+	"compaction_and_resume",
+	"human_interaction",
+	"async_task_and_channel_delivery",
+	"remote_coding_task",
+	"companion_capability_invocation",
+	"repository_and_worktree_state",
+	"tui_and_headless_projection",
+	"diagnostic_pipeline_health",
+}
+
 type codingDiagnosticInventory struct {
 	SchemaVersion  string                 `json:"schema_version"`
 	BaselineCommit string                 `json:"baseline_commit"`
@@ -75,6 +89,11 @@ func TestCodingDiagnosticInventoryContract(t *testing.T) {
 	seenPaths := make(map[string]struct{}, len(inventory.Paths))
 	for _, path := range inventory.Paths {
 		validateCodingDiagnosticPath(t, path, seenPaths, knownEvents, knownRecords)
+	}
+	for _, pathID := range requiredCodingDiagnosticPathIDs {
+		if _, found := seenPaths[pathID]; !found {
+			t.Fatalf("inventory does not preserve required path %q", pathID)
+		}
 	}
 }
 
