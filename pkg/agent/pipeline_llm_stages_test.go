@@ -12,9 +12,56 @@ import (
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
+
+type protocolRetryReceiptTool struct{ projectionRepairTestTool }
+
+func (*protocolRetryReceiptTool) ProtectedDurableResult(map[string]any) bool { return true }
+
+func TestTurnProviderProtocolFallbackPreservesCompletedToolReceipt(t *testing.T) {
+	parseErr := json.Unmarshal([]byte(`{"response":`), new(any))
+	provider := &sequenceProvider{
+		responses: []*providers.LLMResponse{
+			{ToolCalls: []providers.ToolCall{{
+				ID: "receipt-once", Name: "projection_repair_test", Arguments: map[string]any{},
+			}}},
+			nil,
+			{Content: "Verified execution completed."},
+		},
+		errors: []error{nil, &providererrors.ProviderError{
+			Kind: providererrors.KindTransient, SafeMessage: "Codex returned a malformed response", Cause: parseErr,
+		}},
+	}
+	al, agent, cleanup := newTurnCoordFallbackTestLoop(t, provider)
+	defer cleanup()
+	tool := &protocolRetryReceiptTool{}
+	agent.Tools.Register(tool)
+	pipeline := newTestPipeline(al)
+	useRecordingRetrySleeper(pipeline)
+	ts := newTurnState(agent, makeTestTurnSpec("protocol-fallback-receipt"), turnEventScope{
+		turnID: "protocol-fallback-receipt", context: newTurnContext(nil, nil, nil),
+	})
+	result, err := runTestTurn(al, t.Context(), ts, pipeline)
+	if err != nil || result.finalContent != "Verified execution completed." ||
+		tool.executions != 1 || provider.callCount != 3 {
+		t.Fatalf("result=%#v error=%v tool_executions=%d model_calls=%d", result, err,
+			tool.executions, provider.callCount)
+	}
+	failedRequest, err := json.Marshal(provider.requests[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallbackRequest, err := json.Marshal(provider.requests[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(failedRequest, fallbackRequest) || !bytes.Contains(fallbackRequest, []byte("verified execution")) {
+		t.Fatal("provider fallback lost or changed the completed tool receipt")
+	}
+}
 
 type (
 	durableProjectionTestTool    struct{}
