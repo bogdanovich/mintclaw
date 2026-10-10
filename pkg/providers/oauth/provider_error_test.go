@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/openai/openai-go/v3"
+	"golang.org/x/net/http2"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
@@ -151,6 +152,15 @@ func TestNormalizeCodexTransportContract(t *testing.T) {
 	}{
 		{name: "timeout", err: context.DeadlineExceeded, kind: providererrors.KindTimeout},
 		{name: "canceled", err: context.Canceled, kind: providererrors.KindCanceled},
+		{
+			name: "peer HTTP/2 internal stream failure",
+			err: fmt.Errorf("response stream: %w", http2.StreamError{
+				StreamID: 21,
+				Code:     http2.ErrCodeInternal,
+				Cause:    errors.New("received from peer"),
+			}),
+			kind: providererrors.KindNetwork,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
