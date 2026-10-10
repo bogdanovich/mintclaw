@@ -25,6 +25,8 @@ envelopes, ledger chain, snapshot publication, and terminal cleanup.
 - Bind idempotency to the entire canonical assignment set, original revision, job, and schema. Reordering a retry is
   harmless; changing a value, member set, or original revision conflicts. Duplicate retries never overwrite later
   corrections or produce another write.
+- Reject noncanonical job IDs before lookup. Derive composite identity and snapshot publication from the authorized
+  record's canonical ID; malformed caller input must never create a second map key or corrupt unrelated jobs.
 - Return one opaque `form_composite` receipt and value-free field identities/progress. Receipt resolution reads safe
   current progress only; it does not replay assignments or return values.
 - Persist versioned composite membership inside each member's encrypted payload. Validate complete membership,

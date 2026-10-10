@@ -82,14 +82,14 @@ func (store *FormJobStore) AppendComposite(
 		if matchErr := formJobMatchesSchema(record.Public, request.Schema); matchErr != nil {
 			return false, matchErr
 		}
-		id := "form_batch_" + keyedDigest(store.profileKey, "composite", request.JobID, request.IdempotencyKey)[:32]
+		id := "form_batch_" + keyedDigest(store.profileKey, "composite", record.Public.JobID, request.IdempotencyKey)[:32]
 		digest, digestErr := formJobJSONKeyedDigest(store.profileKey, struct {
 			Version      string
 			JobID        string
 			Revision     int64
 			SchemaDigest string
 			Assignments  []FormCompositeAssignment
-		}{FormCompositeVersion, request.JobID, request.ExpectedRevision, record.Public.FieldSchemaDigest, assignments})
+		}{FormCompositeVersion, record.Public.JobID, request.ExpectedRevision, record.Public.FieldSchemaDigest, assignments})
 		if digestErr != nil {
 			return false, digestErr
 		}
@@ -138,7 +138,7 @@ func (store *FormJobStore) AppendComposite(
 				return false, appendErr
 			}
 		}
-		snapshot.Records[request.JobID] = record
+		snapshot.Records[record.Public.JobID] = record
 		result = formCompositeResult(record, id, payloads, false)
 		return true, nil
 	})
@@ -152,7 +152,8 @@ func validateFormCompositeRequest(request FormCompositeRequest) ([]FormComposite
 	if _, err := request.Owner.canonical(); err != nil {
 		return nil, err
 	}
-	if request.JobID == "" || len(request.JobID) > maxFormJobIDLength || request.ExpectedRevision <= 0 ||
+	if !safeFormJobCodePattern.MatchString(request.JobID) || len(request.JobID) > maxFormJobIDLength ||
+		request.ExpectedRevision <= 0 ||
 		!validFormFieldsFacts(request.Schema) || strings.TrimSpace(request.IdempotencyKey) == "" ||
 		len(request.IdempotencyKey) > maxFormJobIdempotencyLength || !utf8.ValidString(request.IdempotencyKey) ||
 		len(request.Assignments) == 0 || len(request.Assignments) > MaxFormCompositeAssignments {

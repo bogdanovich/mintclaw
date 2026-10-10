@@ -132,6 +132,69 @@ func TestFormCompositeRejectsInvalidSetWithoutAnyPrefix(t *testing.T) {
 	}
 }
 
+func TestFormCompositeRejectsNoncanonicalJobIDWithoutCorruptingSharedStore(t *testing.T) {
+	store, options := newTestFormJobStore(t)
+	request := compositeFixtureRequest(t, store)
+	other := request
+	other.Owner.SenderID = "separate-owner"
+	otherJob := createMappedFormJob(t, store, other.Owner, other.Schema)
+	other.JobID, other.ExpectedRevision = otherJob.JobID, otherJob.Revision
+	acceptedOther, err := store.AppendComposite(t.Context(), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(formJobStatePath(options))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := store.writeFile
+	writes := 0
+	store.writeFile = func(path string, data []byte, mode os.FileMode) error {
+		writes++
+		return write(path, data, mode)
+	}
+	for name, jobID := range map[string]string{
+		"leading":  " " + request.JobID,
+		"trailing": request.JobID + " ",
+		"both":     " " + request.JobID + " ",
+		"newline":  "\n" + request.JobID + "\n",
+		"tab":      "\t" + request.JobID,
+		"unicode":  "\u00a0" + request.JobID + "\u00a0",
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := request
+			invalid.JobID = jobID
+			result, appendErr := store.AppendComposite(t.Context(), invalid)
+			if appendErr == nil || result.Receipt != "" || result.Job.JobID != "" || len(result.FieldIDs) != 0 {
+				t.Fatalf("noncanonical ID advertised acceptance: %#v, %v", result, appendErr)
+			}
+		})
+	}
+	after, err := os.ReadFile(formJobStatePath(options))
+	if err != nil || writes != 0 || !slices.Equal(before, after) {
+		t.Fatalf("invalid IDs mutated shared snapshot: writes=%d err=%v", writes, err)
+	}
+	store.Close()
+	reopened, err := OpenFormJobStore(options)
+	if err != nil {
+		t.Fatalf("invalid IDs corrupted shared store: %v", err)
+	}
+	t.Cleanup(reopened.Close)
+	unchanged, err := reopened.Get(t.Context(), request.JobID, request.Owner)
+	if err != nil || unchanged.Revision != request.ExpectedRevision || len(unchanged.Fields) != 0 {
+		t.Fatalf("rejected job changed after restart: %#v, %v", unchanged, err)
+	}
+	preserved, err := reopened.ReadCompositeReceipt(t.Context(), acceptedOther.Receipt, other.Owner)
+	if err != nil || preserved.Job.Revision != acceptedOther.Job.Revision ||
+		!slices.Equal(preserved.FieldIDs, acceptedOther.FieldIDs) {
+		t.Fatalf("unrelated accepted job lost after restart: %#v, %v", preserved, err)
+	}
+	accepted, err := reopened.AppendComposite(t.Context(), request)
+	if err != nil || accepted.Receipt == "" || accepted.Receipt == acceptedOther.Receipt {
+		t.Fatalf("canonical append after rejection: %#v, %v", accepted, err)
+	}
+}
+
 func TestFormCompositeIdempotencyBindsWholeOriginalSet(t *testing.T) {
 	store, _ := newTestFormJobStore(t)
 	request := compositeFixtureRequest(t, store)
