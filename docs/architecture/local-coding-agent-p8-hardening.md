@@ -194,6 +194,9 @@ workspace-rewind implementation is implied by the release gate.
 
 #### H1a — Evidence inventory and correlation tests
 
+Execution inventory:
+[P8 diagnostic evidence inventory](local-coding-agent-p8-diagnostic-inventory.md).
+
 - Build a machine-readable inventory of supported local, delegated, remote
   capability, remote coding task, interaction, compaction, and delivery paths.
 - For each path, record its authorities, emitted identifiers, terminal facts,
@@ -217,6 +220,8 @@ needed for local coding plus P7.4/P7.5/P7.7 paths.
   terminal, or uncertainty fact.
 - Preserve bounded queues, best-effort writing, content modes, stable
   truncation markers, and one-way runtime-to-diagnostics dependencies.
+- Make trace terminal projection and writer close agree so a retained terminal
+  record cannot also be labelled `runtime_closed_before_terminal_outcome`.
 - Update the trace-debug skill whenever a field remains intentionally absent.
 
 Done when healthy, failed, canceled, timed-out, disconnected, truncated, and

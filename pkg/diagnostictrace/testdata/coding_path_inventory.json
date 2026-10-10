@@ -1,0 +1,196 @@
+{
+  "schema_version": "mintclaw.coding_diagnostic_inventory.v1",
+  "baseline_commit": "96d5b9d235886f0e478e6d6444476ca0c98d6acd",
+  "paths": [
+    {
+      "id": "local_coding_turn",
+      "support": "supported",
+      "authorities": ["coding_jsonl", "coding_metadata", "git_filesystem"],
+      "runtime_events": ["agent.turn.start", "agent.llm.request", "agent.llm.response", "agent.tool.exec_start", "agent.tool.exec_end", "agent.context.snapshot", "agent.turn.end", "agent.error"],
+      "trace_records": ["turn.start", "model.request", "model.response", "tool.call", "tool.result", "context.snapshot", "turn.end", "runtime.error"],
+      "required_ids": ["deployment_commit", "project_hash", "thread_id", "session_hash", "turn_id", "model_attempt_id", "tool_call_id", "event_id", "repository_commit"],
+      "available_ids": ["thread_id", "session_hash", "turn_id", "tool_call_id", "event_id", "repository_commit"],
+      "missing_trace_joins": [
+        {"id": "deployment_commit", "disposition": "close_h1b", "observation": "Trace source commit is optional and not proven for every coding runtime."},
+        {"id": "project_hash", "disposition": "close_h1b", "observation": "Project identity is authoritative in coding metadata but absent from the trace envelope."},
+        {"id": "model_attempt_id", "disposition": "close_h1b", "observation": "Request and response records do not share a runtime-generated model-attempt identity."}
+      ],
+      "terminal_facts": ["agent.turn.end", "trace.outcome"],
+      "retention_owner": "coding_thread_and_diagnostic_store",
+      "export_class": "metadata_safe"
+    },
+    {
+      "id": "provider_retry_and_fallback",
+      "support": "supported",
+      "authorities": ["agent_runtime", "provider_response"],
+      "runtime_events": ["agent.llm.request", "agent.llm.response", "agent.llm.retry", "agent.llm.fallback_attempt"],
+      "trace_records": ["model.request", "model.response", "model.retry", "model.fallback_attempt"],
+      "required_ids": ["turn_id", "model_attempt_id", "provider_request_id", "event_id"],
+      "available_ids": ["turn_id", "event_id"],
+      "missing_trace_joins": [
+        {"id": "model_attempt_id", "disposition": "close_h1b", "observation": "Sequence alone cannot reliably join concurrent or retried model attempts."},
+        {"id": "provider_request_id", "disposition": "external_when_unavailable", "observation": "Some providers do not expose a request ID; retain it only when safely available."}
+      ],
+      "terminal_facts": ["model.response", "model.retry", "model.fallback_attempt", "agent.turn.end"],
+      "retention_owner": "diagnostic_store",
+      "export_class": "metadata_safe"
+    },
+    {
+      "id": "tool_and_process_lifecycle",
+      "support": "supported",
+      "authorities": ["coding_jsonl", "tool_runtime", "process_owner"],
+      "runtime_events": ["agent.tool.exec_start", "agent.tool.exec_progress", "agent.tool.exec_end", "agent.tool.exec_skipped", "agent.tool.loop_decision"],
+      "trace_records": ["tool.call", "tool.result", "tool.skipped", "tool.loop_decision"],
+      "required_ids": ["turn_id", "tool_call_id", "tool_call_generation", "event_id"],
+      "available_ids": ["turn_id", "tool_call_id", "event_id"],
+      "missing_trace_joins": [
+        {"id": "tool_call_generation", "disposition": "close_h1b", "observation": "Loop decisions have tool and argument hash but no exact call/generation correlation."}
+      ],
+      "terminal_facts": ["tool.result", "tool.skipped", "tool.loop_decision", "agent.turn.end"],
+      "retention_owner": "coding_thread_and_process_owner",
+      "export_class": "private_redacted"
+    },
+    {
+      "id": "compaction_and_resume",
+      "support": "supported",
+      "authorities": ["coding_jsonl", "seahorse", "coding_metadata", "git_filesystem"],
+      "runtime_events": ["agent.context.compress_start", "agent.context.compress_progress", "agent.context.compress_end", "agent.context.compress", "agent.context.snapshot", "agent.workspace.snapshot"],
+      "trace_records": ["context.compaction", "context.snapshot"],
+      "required_ids": ["thread_id", "turn_id", "compaction_attempt_id", "context_snapshot_hash", "repository_snapshot_hash", "repository_commit"],
+      "available_ids": ["thread_id", "turn_id", "context_snapshot_hash", "repository_commit"],
+      "missing_trace_joins": [
+        {"id": "compaction_attempt_id", "disposition": "close_h1b", "observation": "Coding presentation owns the attempt ID but the passive trace records only a coarse compaction result."},
+        {"id": "repository_snapshot_hash", "disposition": "close_h1b", "observation": "Workspace snapshot events are not projected into a bounded trace record."}
+      ],
+      "terminal_facts": ["agent.context.compress_end", "context.snapshot", "coding_resume_reconciliation"],
+      "retention_owner": "coding_thread_seahorse_and_diagnostic_store",
+      "export_class": "metadata_safe"
+    },
+    {
+      "id": "human_interaction",
+      "support": "supported",
+      "authorities": ["interaction_registry", "interaction_event_log", "outbound_outbox"],
+      "runtime_events": ["agent.interaction.created", "agent.interaction.delivery", "agent.interaction.waiting", "agent.interaction.answer", "agent.interaction.resume", "agent.interaction.end"],
+      "trace_records": [],
+      "required_ids": ["turn_id", "interaction_id", "interaction_revision", "task_id", "delivery_id"],
+      "available_ids": ["turn_id", "interaction_id", "interaction_revision", "task_id", "delivery_id"],
+      "missing_trace_joins": [
+        {"id": "interaction_id", "disposition": "close_h1b", "observation": "Existing bounded interaction runtime events are not projected into turn traces."},
+        {"id": "interaction_revision", "disposition": "close_h1b", "observation": "Answer and resume must join the exact question revision."},
+        {"id": "task_id", "disposition": "close_h1b", "observation": "Task-owned interactions need a safe parent task reference in passive evidence."},
+        {"id": "delivery_id", "disposition": "close_h1b", "observation": "Prompt/final delivery identity remains only in authoritative interaction/outbox state."}
+      ],
+      "terminal_facts": ["agent.interaction.end", "interaction_terminal_event", "durable_delivery_outcome"],
+      "retention_owner": "interaction_registry_and_outbox",
+      "export_class": "private_redacted"
+    },
+    {
+      "id": "async_task_and_channel_delivery",
+      "support": "supported",
+      "authorities": ["task_registry", "outbound_outbox", "channel_receipt"],
+      "runtime_events": ["agent.async.completion", "channel.message.outbound_queued", "channel.message.outbound_sent", "channel.message.outbound_failed"],
+      "trace_records": ["delivery.decision", "delivery.attempt", "delivery.outcome"],
+      "required_ids": ["turn_id", "task_id", "task_generation_id", "completion_id", "delivery_id", "event_id"],
+      "available_ids": ["turn_id", "task_id", "task_generation_id", "completion_id", "delivery_id", "event_id"],
+      "missing_trace_joins": [
+        {"id": "task_id", "disposition": "close_h1b", "observation": "Async completion payload carries the task ID but projection discards it."},
+        {"id": "task_generation_id", "disposition": "close_h1b", "observation": "Reused task IDs require generation correlation from the authoritative registry."},
+        {"id": "completion_id", "disposition": "close_h1b", "observation": "Async completion payload carries the completion ID but projection discards it."},
+        {"id": "delivery_id", "disposition": "close_h1b", "observation": "Channel payload carries the durable delivery ID but projection discards it."}
+      ],
+      "terminal_facts": ["task_terminal_event", "delivery.outcome", "durable_delivery_outcome"],
+      "retention_owner": "task_registry_outbox_and_diagnostic_store",
+      "export_class": "metadata_safe"
+    },
+    {
+      "id": "remote_coding_task",
+      "support": "supported",
+      "authorities": ["task_registry", "companion_worker_ledger", "remote_coding_thread", "interaction_registry"],
+      "runtime_events": ["agent.async.completion", "agent.interaction.created", "agent.interaction.end", "channel.message.outbound_sent", "channel.message.outbound_failed"],
+      "trace_records": ["delivery.decision", "delivery.outcome"],
+      "required_ids": ["task_id", "task_generation_id", "worker_generation_id", "remote_thread_id", "scope_alias", "profile_alias", "interaction_id", "completion_id", "delivery_id"],
+      "available_ids": ["task_id", "task_generation_id", "worker_generation_id", "remote_thread_id", "scope_alias", "profile_alias", "interaction_id", "completion_id", "delivery_id"],
+      "missing_trace_joins": [
+        {"id": "task_id", "disposition": "close_h1b", "observation": "Parent trace lacks the durable remote coding task reference."},
+        {"id": "task_generation_id", "disposition": "close_h1b", "observation": "Generation identity must prevent stale or reused-task ambiguity."},
+        {"id": "worker_generation_id", "disposition": "close_h1b", "observation": "Worker restart/reconciliation needs the admitted worker generation."},
+        {"id": "remote_thread_id", "disposition": "close_h1b", "observation": "The remote transcript owner is not joinable from the parent trace."},
+        {"id": "scope_alias", "disposition": "close_h1b", "observation": "Safe configured scope placement is absent from parent passive evidence."},
+        {"id": "profile_alias", "disposition": "close_h1b", "observation": "Investigate/mutate/yolo authority is absent from parent passive evidence."},
+        {"id": "interaction_id", "disposition": "close_h1b", "observation": "Remote blocking questions are not projected into parent turn traces."},
+        {"id": "completion_id", "disposition": "close_h1b", "observation": "Final completion cannot be joined without external time matching."},
+        {"id": "delivery_id", "disposition": "close_h1b", "observation": "Final Telegram delivery is authoritative but not correlated in the trace."}
+      ],
+      "terminal_facts": ["task_terminal_event", "worker.stopped", "delivery.outcome", "uncertain_remote_outcome"],
+      "retention_owner": "task_registry_companion_ledger_remote_thread_and_outbox",
+      "export_class": "metadata_safe"
+    },
+    {
+      "id": "companion_capability_invocation",
+      "support": "supported",
+      "authorities": ["gateway_invocation_store", "companion_invocation_ledger"],
+      "runtime_events": ["agent.tool.exec_start", "node.invocation.observed", "agent.tool.exec_end"],
+      "trace_records": ["tool.call", "tool.result"],
+      "required_ids": ["turn_id", "tool_call_id", "invocation_id", "target_alias", "scope_alias", "profile_alias", "policy_revision", "event_id"],
+      "available_ids": ["turn_id", "tool_call_id", "invocation_id", "target_alias", "scope_alias", "profile_alias", "policy_revision", "event_id"],
+      "missing_trace_joins": [
+        {"id": "invocation_id", "disposition": "close_h1b", "observation": "Projection hashes the invocation ID into result_hash, preventing exact store lookup."},
+        {"id": "target_alias", "disposition": "close_h1b", "observation": "Safe configured target alias is present in the event but absent from the trace record."},
+        {"id": "scope_alias", "disposition": "close_h1b", "observation": "Configured workspace/scope alias should be retained without node-local paths."},
+        {"id": "profile_alias", "disposition": "close_h1b", "observation": "The admitted capability/profile needs a safe authority reference."},
+        {"id": "policy_revision", "disposition": "close_h1b", "observation": "Stale-policy incidents need the prepared policy/catalog revision."}
+      ],
+      "terminal_facts": ["node.invocation.observed", "tool.result", "uncertain_remote_outcome"],
+      "retention_owner": "gateway_invocation_store_companion_ledger_and_diagnostic_store",
+      "export_class": "metadata_safe"
+    },
+    {
+      "id": "repository_and_worktree_state",
+      "support": "supported",
+      "authorities": ["git_filesystem", "coding_metadata", "worktree_store"],
+      "runtime_events": ["agent.workspace.snapshot", "agent.context.snapshot"],
+      "trace_records": ["context.snapshot"],
+      "required_ids": ["project_hash", "thread_id", "worktree_id", "repository_commit", "repository_snapshot_hash"],
+      "available_ids": ["project_hash", "thread_id", "worktree_id", "repository_commit"],
+      "missing_trace_joins": [
+        {"id": "repository_snapshot_hash", "disposition": "close_h1b", "observation": "Deterministic workspace snapshot identity is not passively projected."}
+      ],
+      "terminal_facts": ["workspace_snapshot", "worktree_handoff", "git_filesystem_observation"],
+      "retention_owner": "coding_thread_worktree_store_and_git_filesystem",
+      "export_class": "private_redacted"
+    },
+    {
+      "id": "tui_and_headless_projection",
+      "support": "supported",
+      "authorities": ["coding_jsonl", "coding_frontend_projector"],
+      "runtime_events": ["agent.turn.start", "agent.assistant_message.committed", "agent.tool.exec_start", "agent.tool.exec_progress", "agent.tool.exec_end", "agent.context.compress_end", "agent.turn.end"],
+      "trace_records": ["turn.start", "tool.call", "tool.result", "context.compaction", "turn.end"],
+      "required_ids": ["thread_id", "turn_id", "presentation_revision", "event_id"],
+      "available_ids": ["thread_id", "turn_id", "presentation_revision", "event_id"],
+      "missing_trace_joins": [
+        {"id": "presentation_revision", "disposition": "close_h1c", "observation": "Support export needs bounded current-view/version facts; exact cell history remains deliberately unretained."}
+      ],
+      "terminal_facts": ["agent.turn.end", "worker.turn.terminal", "headless_terminal_event"],
+      "retention_owner": "coding_thread_and_in_process_projector",
+      "export_class": "private_redacted"
+    },
+    {
+      "id": "diagnostic_pipeline_health",
+      "support": "supported",
+      "authorities": ["diagnostic_trace_envelope", "diagnostic_writer_counters", "service_logs"],
+      "runtime_events": [],
+      "trace_records": [],
+      "required_ids": ["trace_id", "capture_policy", "redactor_version", "retention_window", "drop_count", "truncation_reason", "source_commit"],
+      "available_ids": ["trace_id", "capture_policy", "redactor_version", "retention_window", "drop_count", "truncation_reason", "source_commit"],
+      "missing_trace_joins": [
+        {"id": "trace_id", "disposition": "close_h1c", "observation": "A bounded operator command is needed to locate and summarize health without broad content scans."}
+      ],
+      "known_lifecycle_gaps": [
+        {"id": "terminal_consistency", "disposition": "close_h1b", "observation": "A completed stateless production turn retained turn.end and a completed envelope outcome but was also marked runtime_closed_before_terminal_outcome; terminal projection and writer close must agree."}
+      ],
+      "terminal_facts": ["trace.outcome", "trace.truncation", "writer_drop_log", "retention_expiry_or_missing"],
+      "retention_owner": "diagnostic_store_and_service_logs",
+      "export_class": "metadata_safe"
+    }
+  ]
+}
