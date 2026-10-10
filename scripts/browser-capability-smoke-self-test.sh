@@ -75,8 +75,9 @@ if [ "$is_cleanup" = false ] && [ "$is_privileged_execute" = true ] && {
 	[ "$(printf '%s\n' "$message" | sed -n '/^BEGIN_BROWSER_EXECUTE_SOURCE_2$/,/^END_BROWSER_EXECUTE_SOURCE_2$/p' | sed '1d;$d')" != 'async () => { let denied = false; try { void process.env; } catch { denied = true; } return {denied}; }' ] ||
 	[ "$(printf '%s\n' "$message" | sed -n '/^BEGIN_BROWSER_EXECUTE_SOURCE_3$/,/^END_BROWSER_EXECUTE_SOURCE_3$/p' | sed '1d;$d')" != 'async () => await new Promise(() => {})' ] ||
 	! printf '%s' "$message" | grep -Fq 'exclude both delimiter lines' ||
-	! printf '%s' "$message" | grep -Fq 'do not retry it' ||
-	! printf '%s' "$message" | grep -Fq 'call browser_session with operation=status exactly once' ||
+	! printf '%s' "$message" | grep -Fq 'Do not retry it' ||
+	! printf '%s' "$message" | grep -Fq 'Observe fresh state in this exact same session' ||
+	! printf '%s' "$message" | grep -Fq 'A lost session fails this probe.' ||
 	! printf '%s' "$message" | grep -Fq 'other than the three exact browser_execute calls';
 }; then
 	echo "privileged execution smoke prompt was not exact and bounded" >&2
@@ -209,9 +210,7 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
         calls = {"browser_targets": 1, "browser_session": 2, "browser_observe": 1}
         sessions = [
             {"operation": "open", "target": sys.argv[4], "profile": sys.argv[5]},
-            {"operation": "status", "state": "lost"}
-            if stage == "privileged-execute"
-            else {"operation": "close"},
+            {"operation": "close"},
         ]
     else:
         calls = {
@@ -222,7 +221,7 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
             "ephemeral-verify": {"browser_targets": 1, "browser_session": 2, "browser_observe": 2, "browser_act": 1},
             "driver-conformance": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
             "playwright-library": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
-            "privileged-execute": {"browser_targets": 1, "browser_session": 2, "browser_observe": 2, "browser_act": 1, "browser_execute": 3},
+            "privileged-execute": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 1, "browser_execute": 3},
             "provider-open-one": {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
             "provider-open-two": {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
             "steel-cloud": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2, "browser_capture": 1},
@@ -252,12 +251,29 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
         sessions[1]["operation"] = "handoff"
     if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NONTERMINAL_STATUS") == "1":
         sessions[1]["state"] = "ready"
+    failures = {"browser_execute": 1} if stage == "privileged-execute" and not cleanup else {}
+    failure_mode = os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_TOOL_FAILURE")
+    if not cleanup:
+        if failure_mode == "missing":
+            failures = {}
+        elif failure_mode == "extra":
+            failures = {"browser_execute": 2}
+        elif failure_mode == "wrong":
+            failures = {"browser_observe": 1}
+        elif failure_mode == "boolean":
+            failures = {"browser_execute": True}
+        elif failure_mode == "lost":
+            sessions[-1] = {"operation": "status", "state": "lost"}
+        elif failure_mode == "replayed":
+            calls["browser_execute"] += 1
+    elif failure_mode == "cleanup":
+        failures = {"browser_execute": 1}
     trace = {
         "agent_id": "browser",
         "outcome": "completed",
         "incomplete": False,
         "tool_calls": calls,
-        "tool_failures": {},
+        "tool_failures": failures,
         "unpaired_calls": {},
         "browser_sessions": sessions,
     }
@@ -302,7 +318,7 @@ expected_primary_calls = {
     "ephemeral-cleanup": {"browser_act": 3, "browser_observe": 5, "browser_session": 4, "browser_targets": 2},
     "driver-conformance": {"browser_act": 2, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
     "playwright-library": {"browser_act": 2, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
-    "privileged-execute": {"browser_act": 1, "browser_execute": 3, "browser_observe": 2, "browser_session": 2, "browser_targets": 1},
+    "privileged-execute": {"browser_act": 1, "browser_execute": 3, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
     "provider-lifecycle": {"browser_observe": 2, "browser_session": 4, "browser_targets": 2},
 }[sys.argv[2]]
 expected_delegations = 1 if sys.argv[2] in {"core", "driver-conformance", "playwright-library", "privileged-execute"} else 2
@@ -520,6 +536,18 @@ if MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_TERMINAL_OPERATION=1 \
 	exit 1
 fi
 grep -Fq '"code": "invalid_execution_evidence"' "$wrong_terminal_output"
+
+for failure_mode in missing extra wrong boolean cleanup lost replayed; do
+	output="$test_root/execute-failure-$failure_mode.json"
+	if MINTCLAW_BROWSER_SMOKE_FAKE_TOOL_FAILURE="$failure_mode" \
+		MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+		"$repo_root/scripts/browser-capability-smoke.sh" \
+		--target gateway --profile managed --suite privileged-execute --json-output "$output"; then
+		echo "browser smoke self-test: $failure_mode timeout evidence unexpectedly passed" >&2
+		exit 1
+	fi
+	grep -Fq '"code": "invalid_execution_evidence"' "$output"
+done
 
 nonterminal_status_output="$test_root/nonterminal-status.json"
 if MINTCLAW_BROWSER_SMOKE_FAKE_NONTERMINAL_STATUS=1 \

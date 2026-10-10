@@ -159,7 +159,7 @@ SUITE_STAGES = {
             {
                 "browser_targets": 1,
                 "browser_session": 2,
-                "browser_observe": 2,
+                "browser_observe": 3,
                 "browser_act": 1,
                 "browser_execute": 3,
             },
@@ -441,6 +441,7 @@ def verify_execution_evidence(
     required_calls: dict[str, int],
     terminal_session_operations: frozenset[str] = frozenset({"close"}),
     exact_session_operations: tuple[str, ...] | None = None,
+    expected_tool_failures: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     evidence = outer.get("execution_evidence")
     if not isinstance(evidence, dict) or set(evidence) != {
@@ -501,7 +502,11 @@ def verify_execution_evidence(
     ):
         raise ValueError("invalid_execution_evidence")
     tool_failures = child.get("tool_failures")
-    if not isinstance(tool_failures, dict) or tool_failures:
+    if (
+        not isinstance(tool_failures, dict)
+        or any(type(count) is not int for count in tool_failures.values())
+        or tool_failures != (expected_tool_failures or {})
+    ):
         raise ValueError("invalid_execution_evidence")
     calls = child.get("tool_calls")
     if not isinstance(calls, dict) or set(calls).difference(
@@ -520,6 +525,10 @@ def verify_execution_evidence(
         not isinstance(count, int) or isinstance(count, bool) or count < 0
         for count in calls.values()
     ) or any(calls.get(name, 0) < count for name, count in required_calls.items()):
+        raise ValueError("invalid_execution_evidence")
+    if expected_tool_failures and any(
+        calls.get(name) != required_calls.get(name) for name in expected_tool_failures
+    ):
         raise ValueError("invalid_execution_evidence")
     if "browser_act" not in required_calls and calls.get("browser_act", 0) != 0:
         raise ValueError("invalid_execution_evidence")
@@ -605,11 +614,12 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
                 args.target,
                 args.profile,
                 required_calls,
-                frozenset({"close", "status"})
-                if stage_name == "privileged-execute"
-                else frozenset({"close"}),
+                frozenset({"close"}),
                 ("open", "handoff", "resume", "close")
                 if stage_name == "steel-handoff"
+                else None,
+                expected_tool_failures={"browser_execute": 1}
+                if stage_name == "privileged-execute"
                 else None,
             )
             raw_capabilities = result.get("capabilities")

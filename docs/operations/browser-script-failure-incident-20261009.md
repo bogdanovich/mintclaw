@@ -57,11 +57,16 @@ or source code is included here. Historical state is not modified.
 - Restart/recovery returns the same durable failure, never resubmits it.
 - Model-facing failures are errors, contain the safe failure classification
   and recovery action, and cannot emit external-action success receipts.
+- The privileged-execution smoke requires exactly one intentional
+  `browser_execute` tool error for its read-only timeout, followed by fresh
+  observation in the same session and confirmed close. Extra, missing,
+  wrong-tool, cleanup, or ambiguously lost-session failures do not pass.
 - A genuinely expired approval is never silently converted into an allowed
   approval. A later verified success must not be mislabeled as a timed-out
   task.
-- Live acceptance uses disposable browser profiles and local fixture pages,
-  not another real order, cart edit, or account mutation.
+- Live acceptance uses local fixture pages and reversible fixture-only DOM
+  changes, preserving existing profile cookies. It never places another real
+  order, edits a cart, or mutates an account.
 
 ## Remaining Diagnostic Boundary
 
