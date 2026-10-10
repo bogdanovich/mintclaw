@@ -1,6 +1,7 @@
 # Local Coding Agent Roadmap
 
-Status: proposed
+Status: implementation in progress. P0-P7 foundations are implemented, P7.6
+is explicitly deferred, and P8 hardening is active.
 
 MintClaw audit baseline: `origin/main` at `7b886f1a`, 2026-08-08
 
@@ -1949,6 +1950,10 @@ Done when:
 
 Dependencies: P6.1, P6.4
 
+Status: deferred; implementation is not admitted for P8. See the
+[`P7.6 decision`](local-coding-agent-p7-6-decision.md) for current behavior and
+the evidence, safety, and cost gates required before reconsideration.
+
 Scope:
 
 - Evaluate whether message-level undo should also offer an explicit filesystem
@@ -2001,6 +2006,11 @@ capabilities used *from* a local coding session and P7.6 workspace rewind.
 ### P8 — Hardening and release
 
 Goal: make the coding surface supportable as a stable MintClaw feature.
+
+Status: active. The focused
+[`P8 hardening and stable-release plan`](local-coding-agent-p8-hardening.md)
+starts with passive diagnostic correlation and an incident-to-regression loop,
+then executes P8.1-P8.4 and integrated production qualification.
 
 #### P8.1 — Performance and startup budgets
 
@@ -2117,6 +2127,18 @@ P5.1 -> P5.2 -> P5.3 -> P5.4 -> P5.5 -> P5.6
 P6.* -> P7.* -> P8.*
 ```
 
+For P8, the admitted order is:
+
+```text
+H0 admission/P7.6 defer
+  -> H1 diagnostic correlation and incident closure
+  -> H2/P8.1 performance
+  -> H3/P8.2 platform qualification
+  -> H4/P8.3 privacy and state lifecycle
+  -> H5/P8.4 documentation/migration
+  -> H6 integrated production exit
+```
+
 Within a phase, packets whose declared dependencies are satisfied may proceed
 in parallel only when they do not edit the same contracts. The default should
 remain sequential until P5 because runtime layout, thread identity, frontend
@@ -2141,6 +2163,7 @@ Every production packet should select relevant rows from this matrix:
 | Code intelligence | Optional-server startup, diagnostics, navigation, audited workspace edits, timeout/crash fallback |
 | Chat handoff | Allowed sender/target/project, idempotent dispatch, progress, question/answer, cancel, offline recovery, deduplicated delivery, local resume |
 | Coding remote capabilities | Local IPC identity, exact grants, discovery freshness, typed invoke, task delegation, cancel, disconnect, uncertainty, no replay |
+| Diagnostics | Passive capture independence, stable cross-store correlation, terminal/uncertain truth, bounds, drops, retention, redaction, safe export, incident-to-regression drill |
 | Privacy | Cross-project isolation, preview redaction, summary redaction, diagnostics |
 | Cross-platform | Build, paths, locks, process groups, signals, terminal lifecycle |
 
