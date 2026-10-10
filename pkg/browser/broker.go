@@ -556,16 +556,18 @@ type InvocationExecutor func(context.Context) (json.RawMessage, error)
 // is remembered separately from durable session completion so a CAS retry never
 // requires Worker.Close to be idempotent.
 type workerSlot struct {
-	worker          Worker
-	refs            map[string]DriverElement
-	refPositions    map[string]uint32
-	inputs          map[string]string
-	uploads         map[string]UploadBinding
-	navigationID    string
-	safeFailure     string
-	cleanupComplete bool
-	terminalState   SessionState
-	terminalFailure string
+	worker             Worker
+	refs               map[string]DriverElement
+	refPositions       map[string]uint32
+	inputs             map[string]string
+	uploads            map[string]UploadBinding
+	navigationID       string
+	safeFailure        string
+	cleanupComplete    bool
+	terminalState      SessionState
+	terminalFailure    string
+	navigationEvidence navigationEvidence
+	observedURL        string
 }
 
 type Broker struct {

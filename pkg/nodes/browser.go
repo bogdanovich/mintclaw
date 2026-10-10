@@ -861,6 +861,8 @@ type BrowserObservationResult struct {
 	URL                string                    `json:"url"`
 	Origin             string                    `json:"origin"`
 	Title              string                    `json:"title,omitempty"`
+	HTTPStatus         int                       `json:"http_status,omitempty"`
+	AntiBotBlock       string                    `json:"anti_bot_block,omitempty"`
 	Snapshot           string                    `json:"snapshot"`
 	Elements           []BrowserElement          `json:"elements"`
 	PendingDialog      *BrowserDialogObservation `json:"pending_dialog,omitempty"`
@@ -2223,6 +2225,8 @@ func browserObservationSchema(limits BrowserLimits, streamedSnapshotMaximum int)
 		"url":                 map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
 		"origin":              map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
 		"title":               map[string]any{"type": "string", "maxLength": MaxBrowserTitleBytes},
+		"http_status":         map[string]any{"type": "integer", "minimum": 100, "maximum": 599},
+		"anti_bot_block":      map[string]any{"enum": []string{"", "cloudflare", "datadome", "perimeterx", "imperva"}},
 		"snapshot":            map[string]any{"type": "string", "maxLength": limits.SnapshotBytes},
 		"truncated":           map[string]any{"type": "boolean"},
 		"elements": map[string]any{

@@ -757,6 +757,18 @@ func (source *gatewayBrowserToolSource) ExecuteAction(
 	)
 }
 
+func (source *gatewayBrowserToolSource) RecoverNavigation(
+	ctx context.Context, owner browser.Owner, invocationID, snapshotID string,
+) (browser.NavigationRecovery, error) {
+	return withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) (browser.NavigationRecovery, error) {
+			return broker.RecoverNavigation(ctx, owner, invocationID, snapshotID)
+		},
+	)
+}
+
 func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningServices *services) error {
 	if cfg == nil || agentLoop == nil || runningServices == nil {
 		return nil

@@ -216,6 +216,8 @@ type DriverObservation struct {
 	Elements      []DriverElement
 	PendingDialog *DialogObservation
 	Truncated     bool
+	HTTPStatus    int
+	AntiBotBlock  string
 }
 
 type DriverElement struct {
@@ -2509,9 +2511,16 @@ func parsePlaywrightObservation(
 		return DriverObservation{}, err
 	}
 	elements := parsePlaywrightElements(projected)
+	var evidence navigationEvidence
+	if raw := extractPlaywrightLine(text[:start-len(marker)], "- Navigation evidence: "); raw != "" {
+		if len(raw) > 256 || json.Unmarshal([]byte(raw), &evidence) != nil || !evidence.valid() {
+			return DriverObservation{}, ErrDriverIncompatible
+		}
+	}
 	return DriverObservation{
 		URL: safeURL, Origin: origin, Title: title, Snapshot: projected, Elements: elements,
-		Truncated: truncated,
+		Truncated:  truncated,
+		HTTPStatus: evidence.HTTPStatus, AntiBotBlock: evidence.AntiBotBlock,
 	}, nil
 }
 
