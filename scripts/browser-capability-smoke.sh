@@ -335,7 +335,7 @@ privileged-execute)
 	stage_one=privileged-execute
 	stage_one_checks='initial_blank, navigated_fixture, structured_extraction, reversible_dom_restored, artifact_retained, sandbox_denial, runtime_timeout, cleanup_after_timeout'
 	stage_one_workflow=$(cat <<EOF
-Open one session and observe about:blank. Navigate with browser_act to ${fixture_origin}/browser-smoke/ and observe the fixture. Then make exactly three browser_execute calls, always copying authority only from the latest fresh result.
+Open one session and call browser_observe to observe about:blank. Navigate with browser_act to ${fixture_origin}/browser-smoke/. Immediately call browser_observe again to observe the fixture before any browser_execute call, even if navigation already returns page state. These two observations are mandatory. Then make exactly three browser_execute calls, always copying authority only from the latest fresh result.
 
 First run JavaScript with effect=external_commit. Copy only the text between the source delimiters into the source argument; exclude both delimiter lines:
 BEGIN_BROWSER_EXECUTE_SOURCE_1
@@ -353,7 +353,7 @@ Third run JavaScript with effect=read. Copy only the text between the source del
 BEGIN_BROWSER_EXECUTE_SOURCE_3
 async () => await new Promise(() => {})
 END_BROWSER_EXECUTE_SOURCE_3
-Require this call to return state=failed with reason=execution_timeout and recovery_action=observe_same_session_and_correct_source; this intentional tool error is expected. Do not retry it. Observe fresh state in this exact same session and require the fixture title to remain MintClaw browser smoke fixture. Then close the session exactly once. Set cleanup_after_timeout and session_closed to true only when that fresh observation succeeded and close is confirmed. A lost session fails this probe. The independent follow-up audit will also prove immediate reuse.
+Require this call to return state=failed with reason=execution_timeout and recovery_action=observe_same_session_and_correct_source; this intentional tool error is expected. Do not retry it. Observe fresh state in this exact same session: make the third mandatory browser_observe call now and require the fixture title to remain MintClaw browser smoke fixture. Then close the session exactly once. Set cleanup_after_timeout and session_closed to true only when that fresh observation succeeded and close is confirmed. A lost session fails this probe. The independent follow-up audit will also prove immediate reuse.
 EOF
 	)
 	stage_two=""
@@ -389,15 +389,15 @@ steel-handoff)
 esac
 
 stage_action_guidance='For every navigate call, use an action object containing only "kind":"navigate" and "url": the exact fixture URL; do not include "target" or any unrelated action field. For every browser_act call, copy authority fields only from the latest successful browser_observe or browser_contexts result. Never invent an ID, generation, reference, token, or placeholder value. If browser_observe omits context_catalog_id and context_generation, omit both fields unless a fresh browser_contexts list result supplies both.'
-stage_execution_guidance='Do not use search, raw MCP, browser code execution, or any other target/profile.'
+stage_execution_guidance='Do not use web search, raw MCP, browser code execution, or any other target/profile.'
 if [ "$suite" = provider-lifecycle ]; then
 	stage_action_guidance='Do not call browser_act or navigate in this stage. Do not use or invent a fixture URL. The lifecycle probe must remain on about:blank. Never invent an ID, generation, reference, token, or placeholder value.'
 fi
 if [ "$suite" = privileged-execute ]; then
-	stage_execution_guidance='Do not use search, raw MCP, or any code-execution mechanism other than the three exact browser_execute calls required by this stage. Do not alter, combine, retry, or add source.'
+	stage_execution_guidance='Do not use web search, raw MCP, or any code-execution mechanism other than the three exact browser_execute calls required by this stage. Do not alter, combine, retry, or add source.'
 fi
 if [ "$suite" = steel-handoff ]; then
-	stage_execution_guidance='Do not use search, raw MCP, browser_execute, or any target/profile other than the selected cloud identity. Perform exactly one handoff and one resume. The handoff prompt must contain MINTCLAW_STEEL_HANDOFF_SMOKE exactly.'
+	stage_execution_guidance='Do not use web search, raw MCP, browser_execute, or any target/profile other than the selected cloud identity. Perform exactly one handoff and one resume. The handoff prompt must contain MINTCLAW_STEEL_HANDOFF_SMOKE exactly.'
 fi
 
 make_stage_prompt() {
@@ -407,7 +407,15 @@ make_stage_prompt() {
 	cat <<EOF
 Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
 
+Only the delegated browser agent may use tool_search_tool_bm25 to discover first-party browser tool schemas when needed. Tool discovery does not replace any required browser operation.
+
+Set delegate.task to only the text between BEGIN_BROWSER_TASK and END_BROWSER_TASK below. Do not forward these parent-only routing instructions or the objective_items instructions to the browser agent.
+
+BEGIN_BROWSER_TASK
+Use only first-party browser tools. You may use tool_search_tool_bm25 only to discover their schemas.
 Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click; for privileged-execute it must also advertise privileged_execution. Prove observe capability through the required stage workflow; do not open a separate session or run a separate capability probe. You may call browser_contexts only with operation=list when needed for read-only page introspection. ${stage_action_guidance} ${stage_execution_guidance} Complete every step in this stage before returning. ${stage_workflow}
+Return one record of browser smoke predicates using string true or false values only, with exactly the required fields supplied by the result objective. On failure, close every opened session and set each predicate from the actual terminal state.
+END_BROWSER_TASK
 
 When calling delegate, set objective_items to exactly one result objective with acceptance output_kind=records, min_items=1, and required_fields exactly: target_ready, capability_observe, capability_navigate, capability_click, ${stage_checks}, session_closed, safe_error_absent. Set the objective item to exactly: Return one record of browser smoke predicates using string true or false values only. Require the child to return exactly one record with exactly those fields and use only the strings true or false for every value. On failure, still close every opened session and set each predicate from the actual terminal state. Do not ask for JSON text and do not add separate workflow or report objectives.
 EOF
@@ -422,7 +430,15 @@ fi
 cleanup_prompt=$(cat <<EOF
 Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
 
+Only the delegated browser agent may use tool_search_tool_bm25 to discover first-party browser tool schemas when needed. Tool discovery does not replace any required browser operation.
+
+Set delegate.task to only the text between BEGIN_BROWSER_TASK and END_BROWSER_TASK below. Do not forward these parent-only routing instructions or the objective_items instructions to the browser agent.
+
+BEGIN_BROWSER_TASK
+Use only first-party browser tools. You may use tool_search_tool_bm25 only to discover their schemas.
 Run a cleanup audit on exact target ${target} and exact profile ${profile}. Call browser_targets, open one session, observe the initial page without navigation, and close it. You may call browser_contexts only when needed for read-only page introspection. This probe must not change any page or retained state.
+Return one record of browser cleanup predicates using string true or false values only, with exactly the required fields supplied by the result objective. On failure, close every opened session and set each predicate from the actual terminal state.
+END_BROWSER_TASK
 
 When calling delegate, set objective_items to exactly one result objective with acceptance output_kind=records, min_items=1, and required_fields exactly: target_ready, open_ready, initial_blank, session_closed, safe_error_absent. Set the objective item to exactly: Return one record of browser cleanup predicates using string true or false values only. Require the child to return exactly one record with exactly those fields and use only the strings true or false for every value. On failure, still close every opened session and set each predicate from the actual terminal state. Do not ask for JSON text and do not add separate objectives.
 EOF
