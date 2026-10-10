@@ -16,9 +16,12 @@ mapping/review, approval, PDF2-handoff, single-delivery, deployment, live-channe
 evidence is recorded in the [PDF3 exit record](pdf3-exit-record.md).
 The separately admitted [Generic Agentic PDF Intake mini-roadmap](pdf-agentic-intake-roadmap.md) improves the ordinary
 operator experience on top of PDF3 without reopening its protected storage or document transaction architecture.
-PDFI1 natural-language orchestration and PDFI2 agent-owned form dialogue are complete; PDFI2 evidence is recorded in
-its [exit report](pdf-agentic-intake-pdfi2-exit.md). PDFI3 remains the next ordered candidate and is not admitted by
-this exit.
+PDFI1 natural-language orchestration, PDFI2 agent-owned form dialogue, and bounded PDFI3 semantic planning are complete;
+their evidence and limits are recorded in the [PDFI2 exit report](pdf-agentic-intake-pdfi2-exit.md) and
+[PDFI3 exit report](pdf-agentic-intake-pdfi3-exit.md). PDFI4 free-text, multi-fact intake and large-form qualification are
+admitted under the [PDFI4 implementation goal](pdf-agentic-intake-pdfi4-goal.md); implementation, deployment, and
+qualification are not complete. PDFI4 includes explicit partial drafts and real Telegram ingress, not just a
+section-by-section questionnaire.
 Two completed follow-up lanes kept runtime maintenance separate from platform
 expansion: the archived
 [PDF Runtime Reliability mini-roadmap](archive/pdf-runtime-reliability-roadmap.md)
