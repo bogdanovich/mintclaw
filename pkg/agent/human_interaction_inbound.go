@@ -1641,7 +1641,10 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	terminalDeliverable := terminalTurnDeliverable(deliverable, projection, objectiveOutcome)
 	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalReady)
 	var taskErr error
-	if record.Outcome == interactions.OutcomeTimedOut {
+	// An interaction deadline is not the result of the whole continuation.
+	// Preserve genuine timeouts, but do not override a verified later success.
+	if record.Outcome == interactions.OutcomeTimedOut &&
+		(objectiveOutcome == nil || objectiveOutcome.Status != taskresult.OutcomeSucceeded) {
 		taskErr = taskRegistry.Settle(
 			taskID,
 			taskregistry.StatusTimedOut,
