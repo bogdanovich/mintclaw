@@ -1930,11 +1930,20 @@ func BrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
+	return browserCommandOutputSchema(command, profiles, true)
+}
+
+func browserCommandOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+	navigationEvidence bool,
+) json.RawMessage {
 	if len(profiles) == 0 {
 		return json.RawMessage("false")
 	}
 	limits := strictestBrowserLimits(profiles)
 	streamedSnapshotMaximum := BrowserSnapshotPayloadLimit(limits)
+	observation := browserObservationSchema(limits, streamedSnapshotMaximum, navigationEvidence)
 	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
 	state := map[string]any{
 		"enum": []string{"opening", "ready", "closing", "closed", "lost", "unknown"},
@@ -1985,7 +1994,7 @@ func BrowserCommandOutputSchema(
 		})
 	case BrowserCommandObserve:
 		return mustJSON(map[string]any{"oneOf": []any{
-			rawSchema(browserObservationSchema(limits, streamedSnapshotMaximum)),
+			rawSchema(observation),
 			browserProtectedResultReceiptSchema(nil),
 		}})
 	case BrowserCommandDiagnostics:
@@ -2017,12 +2026,9 @@ func BrowserCommandOutputSchema(
 				"action_invocation_id": identifier,
 				"state":                map[string]any{"enum": []string{"accepted", "succeeded", "failed", "unknown"}},
 				"reason":               safeReason,
-				"observation": rawSchema(browserObservationSchema(
-					limits,
-					streamedSnapshotMaximum,
-				)),
-				"artifact": browserArtifactSchema(limits.DownloadBytes),
-				"output":   browserDownloadOutputDescriptorSchema(limits.DownloadBytes),
+				"observation":          rawSchema(observation),
+				"artifact":             browserArtifactSchema(limits.DownloadBytes),
+				"output":               browserDownloadOutputDescriptorSchema(limits.DownloadBytes),
 			},
 		})
 	case BrowserCommandExecute:
@@ -2052,7 +2058,7 @@ func BrowserCommandOutputSchema(
 		})
 	case BrowserCommandContexts:
 		return mustJSON(map[string]any{"oneOf": []any{
-			browserContextCommandResultSchema(limits, streamedSnapshotMaximum),
+			browserContextCommandResultSchemaWithObservation(limits, observation),
 			browserProtectedResultReceiptSchema(map[string]any{
 				"operation": map[string]any{"enum": []string{"list", "open", "select", "close"}},
 			}),
@@ -2060,16 +2066,6 @@ func BrowserCommandOutputSchema(
 	default:
 		return json.RawMessage("false")
 	}
-}
-
-func browserContextCommandResultSchema(
-	limits BrowserLimits,
-	streamedSnapshotMaximum int,
-) map[string]any {
-	return browserContextCommandResultSchemaWithObservation(
-		limits,
-		browserObservationSchema(limits, streamedSnapshotMaximum),
-	)
 }
 
 func browserContextCommandResultSchemaWithObservation(
@@ -2216,7 +2212,11 @@ func browserExecutionLimitsSchema(limits BrowserExecutionLimits) map[string]any 
 	}
 }
 
-func browserObservationSchema(limits BrowserLimits, streamedSnapshotMaximum int) json.RawMessage {
+func browserObservationSchema(
+	limits BrowserLimits,
+	streamedSnapshotMaximum int,
+	navigationEvidence bool,
+) json.RawMessage {
 	properties := map[string]any{
 		"session_id":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 		"tab_id":              map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
@@ -2225,8 +2225,6 @@ func browserObservationSchema(limits BrowserLimits, streamedSnapshotMaximum int)
 		"url":                 map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
 		"origin":              map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
 		"title":               map[string]any{"type": "string", "maxLength": MaxBrowserTitleBytes},
-		"http_status":         map[string]any{"type": "integer", "minimum": 100, "maximum": 599},
-		"anti_bot_block":      map[string]any{"enum": []string{"", "cloudflare", "datadome", "perimeterx", "imperva"}},
 		"snapshot":            map[string]any{"type": "string", "maxLength": limits.SnapshotBytes},
 		"truncated":           map[string]any{"type": "boolean"},
 		"elements": map[string]any{
@@ -2252,6 +2250,12 @@ func browserObservationSchema(limits BrowserLimits, streamedSnapshotMaximum int)
 				},
 			},
 		},
+	}
+	if navigationEvidence {
+		properties["http_status"] = map[string]any{"type": "integer", "minimum": 100, "maximum": 599}
+		properties["anti_bot_block"] = map[string]any{
+			"enum": []string{"", "cloudflare", "datadome", "perimeterx", "imperva"},
+		}
 	}
 	schema := map[string]any{
 		"type":                 "object",
