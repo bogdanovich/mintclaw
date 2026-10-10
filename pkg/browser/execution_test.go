@@ -187,6 +187,80 @@ func TestPrivilegedExecutionCancellationNeverReplaysAcceptedSource(t *testing.T)
 	}
 }
 
+func TestPrivilegedExecutionSettledFailurePreservesSessionWithoutReplay(t *testing.T) {
+	for _, failure := range []struct {
+		name       string
+		err        error
+		wantState  InvocationState
+		wantReason string
+	}{
+		{"rejected", errors.Join(ErrExecutionSettled, ErrDriverRejected), InvocationFailed, "execution_rejected"},
+		{
+			"timeout", errors.Join(ErrExecutionSettled, ErrExecutionTimeout, ErrDriverRejected),
+			InvocationFailed, "execution_timeout",
+		},
+		{"unconfirmed rejection", ErrDriverRejected, InvocationUnknown, "outcome_unknown"},
+		{"unconfirmed timeout", ErrExecutionTimeout, InvocationUnknown, "outcome_unknown"},
+		{
+			"transport loss", errors.Join(ErrExecutionSettled, ErrDriverRejected, ErrWorkerUnavailable),
+			InvocationUnknown, "outcome_unknown",
+		},
+		{"cancellation", errors.Join(ErrExecutionSettled, context.Canceled), InvocationUnknown, "outcome_unknown"},
+	} {
+		t.Run(failure.name, func(t *testing.T) {
+			store := NewMemoryStore()
+			broker, worker, session := openActionTestBrokerWithConfig(t, executionTestConfig(), store)
+			owner := testOwner()
+			observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := `async ({page}) => page.locator('#missing').innerText()`
+			prepared, err := broker.PrepareExecution(t.Context(), PrepareExecutionRequest{
+				Owner: owner, RequestID: "settled_execution", SessionID: session.ID, TabID: observed.TabID,
+				SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+				Source: source, Language: ExecutionJavaScript, DeclaredEffect: EffectRead,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker.executionErr = failure.err
+			invocation, err := broker.ExecuteExecution(t.Context(), owner, prepared.Invocation.ID, source, nil, nil)
+			if err != nil || invocation.State != failure.wantState || invocation.SafeFailure != failure.wantReason {
+				t.Fatalf("execution = %+v, %v", invocation, err)
+			}
+			recovered, err := broker.ExecuteExecution(t.Context(), owner, prepared.Invocation.ID, source, nil, nil)
+			if err != nil || recovered.State != failure.wantState || len(worker.executionRequests) != 1 {
+				t.Fatalf("recovery = %+v, %v; dispatches=%d", recovered, err, len(worker.executionRequests))
+			}
+			persisted, err := store.GetSession(t.Context(), session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if failure.wantState == InvocationUnknown {
+				if persisted.State != SessionLost {
+					t.Fatalf("ambiguous session = %+v", persisted)
+				}
+				return
+			}
+			if persisted.State != SessionReady || persisted.SnapshotID != "" {
+				t.Fatalf("settled failure lost session or retained stale authority: %+v", persisted)
+			}
+			if _, err = broker.Observe(t.Context(), owner, session.ID, session.TabID); err != nil {
+				t.Fatalf("same-session observation: %v", err)
+			}
+		})
+	}
+}
+
+func TestSettledExecutionFailureDoesNotOverrideNetworkOrTransportFailure(t *testing.T) {
+	for _, boundaryErr := range []error{ErrDenied, ErrDriverIncompatible, ErrStale, ErrWorkerUnavailable} {
+		if got := SettledExecutionFailure(errors.Join(ErrExecutionSettled, ErrDriverRejected, boundaryErr)); got != "" {
+			t.Fatalf("boundary error %v was classified as settled: %q", boundaryErr, got)
+		}
+	}
+}
+
 func TestPrivilegedExecutionRestrictedPolicyBindsAllowAskAndDeny(t *testing.T) {
 	for _, test := range []struct {
 		decision     string

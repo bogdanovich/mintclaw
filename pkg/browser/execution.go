@@ -44,12 +44,33 @@ type ExecutionArtifactSink func(
 	DriverScreenshot,
 ) (RetainedScreenshot, error)
 
+// ExecutionSettlementGrace bounds source-worker shutdown and in-flight read
+// settlement after the independently enforced source runtime budget.
+const ExecutionSettlementGrace = 5 * time.Second
+
 type ExecutionResult struct {
 	Status          string               `json:"status"`
 	Value           json.RawMessage      `json:"value"`
 	Actions         int                  `json:"actions"`
 	NetworkRequests int                  `json:"network_requests"`
 	Artifacts       []RetainedScreenshot `json:"artifacts,omitempty"`
+}
+
+// SettledExecutionFailure accepts only host-confirmed, non-mutating failures.
+// Transport loss or cancellation always overrides the settlement evidence.
+func SettledExecutionFailure(err error) string {
+	if !errors.Is(err, ErrExecutionSettled) || errors.Is(err, ErrWorkerUnavailable) ||
+		errors.Is(err, ErrDriverIncompatible) || errors.Is(err, ErrDenied) || errors.Is(err, ErrStale) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return ""
+	}
+	if errors.Is(err, ErrExecutionTimeout) {
+		return "execution_timeout"
+	}
+	if errors.Is(err, ErrDriverRejected) {
+		return "execution_rejected"
+	}
+	return ""
 }
 
 func ExecutionSourceDigest(source string) string {
@@ -303,7 +324,7 @@ func (broker *Broker) ExecuteExecution(
 			}
 			runtimeCtx, cancel := context.WithTimeout(
 				executeCtx,
-				time.Duration(binding.Limits.RuntimeSeconds)*time.Second,
+				time.Duration(binding.Limits.RuntimeSeconds)*time.Second+ExecutionSettlementGrace,
 			)
 			defer cancel()
 			result, runErr := executor.ExecutePrivilegedAfterNavigationCheck(

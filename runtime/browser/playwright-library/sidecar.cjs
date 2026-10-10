@@ -814,7 +814,9 @@ class Driver {
     const artifacts = [];
     let page = null;
     let worker = null;
+    let executionStopped = false;
     let timedOut = false;
+    let readTimedOut = false;
     let retainNetworkGuard = false;
     let networkGuardInstalled = false;
     const pendingRPCs = new Set();
@@ -865,6 +867,10 @@ class Driver {
           stackSizeMb: 4,
         },
       });
+      const executionDeadline = Date.now() + runtimeSeconds * 1000;
+      // Leave time for the native read to reject and its worker RPC to settle
+      // before the source budget expires. Do not change global page timeouts.
+      const readOptions = () => ({ timeout: Math.max(1, executionDeadline - Date.now() - 25) });
 
       const safeString = (value, maximum = 4096) => {
       if (typeof value !== 'string' || !value || Buffer.byteLength(value) > maximum) {
@@ -916,8 +922,9 @@ class Driver {
       return result;
     };
     const waitOptions = raw => {
-      const result = {};
+      const result = readOptions();
       timeoutOption(optionObject(raw).timeout, result);
+      result.timeout = Math.max(1, Math.min(result.timeout || runtimeSeconds * 1000, readOptions().timeout));
       return result;
     };
     const screenshotOptions = raw => {
@@ -968,9 +975,9 @@ class Driver {
           case 'check': await locator.check(); return null;
           case 'uncheck': await locator.uncheck(); return null;
           case 'hover': await locator.hover(); return null;
-          case 'textContent': return await locator.textContent();
-          case 'innerText': return await locator.innerText();
-          case 'getAttribute': return await locator.getAttribute(safeString(args.name, 256));
+          case 'textContent': return await locator.textContent(readOptions());
+          case 'innerText': return await locator.innerText(readOptions());
+          case 'getAttribute': return await locator.getAttribute(safeString(args.name, 256), readOptions());
           case 'isVisible': return await locator.isVisible();
           case 'selectOption': return await locator.selectOption(args.value);
           case 'evaluate': {
@@ -1036,14 +1043,15 @@ class Driver {
           reject(new Error('privileged execution timed out'));
         }, runtimeSeconds * 1000);
         worker.on('message', message => {
-          if (!message || typeof message !== 'object') return;
+          if (executionStopped || !message || typeof message !== 'object') return;
           if (message.type === 'rpc') {
             const pending = (async () => {
               try {
                 const value = boundedRPCResult(await perform(String(message.method), message.args));
-                worker.postMessage({ type: 'rpc_result', id: message.id, value });
+                if (!executionStopped) worker.postMessage({ type: 'rpc_result', id: message.id, value });
               } catch (error) {
-                worker.postMessage({ type: 'rpc_result', id: message.id, error: boundedError(error) });
+                if (error && error.name === 'TimeoutError' && !retainNetworkGuard) readTimedOut = true;
+                if (!executionStopped) worker.postMessage({ type: 'rpc_result', id: message.id, error: boundedError(error) });
               }
             })();
             pendingRPCs.add(pending);
@@ -1073,12 +1081,31 @@ class Driver {
         ],
       };
     } catch (error) {
+      executionStopped = true;
+      let workerStopped = !worker;
+      if (worker) {
+        try {
+          await worker.terminate();
+          worker = null;
+          workerStopped = true;
+        } catch (_) {}
+      }
+      if (workerStopped && !retainNetworkGuard && !networkViolationSignaled) {
+        let settlementTimer;
+        const settled = await Promise.race([
+          Promise.allSettled([...pendingRPCs]).then(() => true),
+          new Promise(resolve => { settlementTimer = setTimeout(() => resolve(false), 1000); }),
+        ]);
+        clearTimeout(settlementTimer);
+        if (settled && !networkViolationSignaled && page && !page.isClosed() && !this.closed) {
+          // This marker is private driver evidence. It is never derived from
+          // page text, the submitted effect, or an exception's message.
+          const code = timedOut || readTimedOut ? 'execution_timeout' : 'execution_rejected';
+          return textResult(`MINTCLAW_EXECUTION_FAILED_V1|${code}`, true);
+        }
+      }
       if (timedOut) {
         this.executionQuarantined = true;
-        if (worker) {
-          await worker.terminate().catch(() => {});
-          worker = null;
-        }
         await this.closeBrowser().catch(() => {});
         await Promise.allSettled([...pendingRPCs]);
       }

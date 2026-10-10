@@ -1024,6 +1024,23 @@ func (worker *nodeBrowserWorker) ExecutePrivilegedAfterNavigationCheck(
 	); err != nil {
 		return browser.DriverExecutionResult{}, err
 	}
+	if result.InvocationID == request.InvocationID && result.State == "failed" &&
+		len(result.Value) == 0 && result.Actions == 0 && result.NetworkRequests == 0 && len(result.Outputs) == 0 {
+		switch result.Reason {
+		case "execution_rejected":
+			if err = worker.invalidateExecutionDocument(generation, documentID); err != nil {
+				return browser.DriverExecutionResult{}, err
+			}
+			return browser.DriverExecutionResult{}, errors.Join(browser.ErrExecutionSettled, browser.ErrDriverRejected)
+		case "execution_timeout":
+			if err = worker.invalidateExecutionDocument(generation, documentID); err != nil {
+				return browser.DriverExecutionResult{}, err
+			}
+			return browser.DriverExecutionResult{}, errors.Join(
+				browser.ErrExecutionSettled, browser.ErrExecutionTimeout, browser.ErrDriverRejected,
+			)
+		}
+	}
 	if result.InvocationID != request.InvocationID || result.State != "succeeded" ||
 		len(result.Value) == 0 || !json.Valid(result.Value) || result.Actions > request.Limits.Actions ||
 		result.NetworkRequests > request.Limits.NetworkRequests || len(result.Outputs) > request.Limits.Artifacts {
@@ -1075,10 +1092,17 @@ func (worker *nodeBrowserWorker) ExecutePrivilegedAfterNavigationCheck(
 			},
 		})
 	}
+	if err = worker.invalidateExecutionDocument(generation, documentID); err != nil {
+		return browser.DriverExecutionResult{}, err
+	}
+	return driverResult, nil
+}
+
+func (worker *nodeBrowserWorker) invalidateExecutionDocument(generation uint64, documentID string) error {
 	worker.mu.Lock()
+	defer worker.mu.Unlock()
 	if worker.closed || worker.snapshotGeneration != generation || worker.documentID != documentID {
-		worker.mu.Unlock()
-		return browser.DriverExecutionResult{}, browser.ErrStale
+		return browser.ErrStale
 	}
 	worker.snapshotGeneration = generation + 1
 	worker.cachedObservation = nil
@@ -1086,8 +1110,7 @@ func (worker *nodeBrowserWorker) ExecutePrivilegedAfterNavigationCheck(
 	worker.currentOrigin = ""
 	worker.documentID = ""
 	worker.clearPublishedAuthorityLocked()
-	worker.mu.Unlock()
-	return driverResult, nil
+	return nil
 }
 
 func browserExecutionOutputMatches(

@@ -2042,6 +2042,11 @@ func (broker *Broker) executePreparedLocked(
 	)
 	defer cancelCompletion()
 	if executeErr != nil || executionContextErr != nil {
+		if reason := SettledExecutionFailure(executeErr); executionContextErr == nil &&
+			invocation.Execution != nil && reason != "" {
+			failed, failErr := broker.completeInvocationLocked(completionCtx, invocation, InvocationFailed, nil, reason)
+			return diagnoseRecoveredOutcome(failed), failErr
+		}
 		if executionContextErr == nil && errors.Is(executeErr, ErrDenied) {
 			failed, failErr := broker.completeInvocationLocked(
 				completionCtx,

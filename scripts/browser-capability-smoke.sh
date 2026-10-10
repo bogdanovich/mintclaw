@@ -353,7 +353,7 @@ Third run JavaScript with effect=read. Copy only the text between the source del
 BEGIN_BROWSER_EXECUTE_SOURCE_3
 async () => await new Promise(() => {})
 END_BROWSER_EXECUTE_SOURCE_3
-Require this call to return the typed runtime timeout failure state and do not retry it. If the result reports the session as lost, call browser_session with operation=status exactly once to confirm that terminal state; otherwise close the session exactly once. Treat either closed or confirmed lost as terminal cleanup: set cleanup_after_timeout and session_closed to true only when no live session remains. The independent follow-up audit will also prove immediate reuse.
+Require this call to return state=failed with reason=execution_timeout and recovery_action=observe_same_session_and_correct_source; this intentional tool error is expected. Do not retry it. Observe fresh state in this exact same session and require the fixture title to remain MintClaw browser smoke fixture. Then close the session exactly once. Set cleanup_after_timeout and session_closed to true only when that fresh observation succeeded and close is confirmed. A lost session fails this probe. The independent follow-up audit will also prove immediate reuse.
 EOF
 	)
 	stage_two=""

@@ -69,6 +69,11 @@ var (
 	elementRoleRegexp          = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 )
 
+// ErrExecutionSettled is evidence from the execution host, not a declared
+// effect: the source worker stopped, every RPC settled, and no mutating RPC
+// was dispatched. An invocation still cannot be replayed.
+var ErrExecutionSettled = errors.New("browser execution failed without an ambiguous effect")
+
 type DriverScreenshot struct {
 	Data        []byte
 	ContentType string

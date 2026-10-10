@@ -5618,6 +5618,20 @@ func TestRealBrowserPrivilegedExecutionSandboxAndBudgets(t *testing.T) {
 	timed := `async () => await new Promise(() => {})`
 	timeoutLimits := limits
 	timeoutLimits.RuntimeSeconds = 1
+	for name, source := range map[string]string{
+		"source error":    `async () => { throw new Error("fixture failure"); }`,
+		"effect mismatch": `async ({page}) => page.evaluate("document.title")`,
+		"missing locator": `async ({page}) => page.locator('#missing').innerText()`,
+	} {
+		if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
+			ctx, navigationID, executionRequest(source, ExecutionJavaScript, EffectRead, timeoutLimits),
+		); !errors.Is(err, ErrExecutionSettled) {
+			t.Fatalf("%s did not confirm safe settlement: %v", name, err)
+		}
+		if err = worker.client.Ping(ctx); err != nil {
+			t.Fatalf("%s lost the browser: %v", name, err)
+		}
+	}
 	started := time.Now()
 	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
 		ctx, navigationID, executionRequest(timed, ExecutionJavaScript, EffectRead, timeoutLimits),
@@ -5625,8 +5639,27 @@ func TestRealBrowserPrivilegedExecutionSandboxAndBudgets(t *testing.T) {
 		time.Since(started) > 5*time.Second {
 		t.Fatalf("bounded timeout error = %v after %s", err, time.Since(started))
 	}
+	if err = worker.client.Ping(ctx); err != nil {
+		t.Fatalf("settled read timeout lost the browser: %v", err)
+	}
+	if _, err = worker.Observe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	navigationID, err = worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutatingTimeout := `async ({page}) => {
+  await page.locator('#value').evaluate("element => { element.textContent = 'changed'; }");
+  await new Promise(() => {});
+}`
+	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
+		ctx, navigationID, executionRequest(mutatingTimeout, ExecutionJavaScript, EffectExternalCommit, timeoutLimits),
+	); !errors.Is(err, ErrExecutionTimeout) || errors.Is(err, ErrExecutionSettled) {
+		t.Fatalf("ambiguous mutation received settlement authority: %v", err)
+	}
 	if err = worker.client.Ping(ctx); err == nil {
-		t.Fatal("timed-out privileged runtime remained reusable")
+		t.Fatal("ambiguous mutating runtime remained reusable")
 	}
 	if err = worker.Close(ctx); err != nil {
 		t.Fatal(err)
@@ -5707,6 +5740,83 @@ func TestRealBrowserPrivilegedExecutionRetainsDelayedNetworkBoundary(t *testing.
 		time.Sleep(750 * time.Millisecond)
 		return result.Value
 	}
+
+	t.Run("violation during read settlement", func(t *testing.T) {
+		for _, networkMode := range []string{config.BrowserNetworkPublicWeb, config.BrowserNetworkAnyHTTP} {
+			t.Run(networkMode, func(t *testing.T) {
+				var hits atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+					if request.URL.Path == "/request" {
+						hits.Add(1)
+					}
+					writer.Header().Set("Content-Type", "text/html")
+					_, _ = writer.Write([]byte("<!doctype html><title>Read settlement</title>"))
+				}))
+				defer server.Close()
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				defer cancel()
+				opened, openErr := factory.Open(ctx, WorkerOpenRequest{
+					SessionID: "library_read_settlement_" + networkMode, Target: "gateway", Profile: "managed",
+					ProfileRevision: profile.Revision, DryRun: profile.DryRun, Limits: config.BrowserLimitsConfig{},
+				})
+				if openErr != nil {
+					t.Fatal(openErr)
+				}
+				worker := opened.Owner.(*playwrightWorker)
+				defer func() { _ = worker.Close(context.Background()) }()
+				seed, seedErr := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+					"code": fmt.Sprintf(`async (page) => {
+  await page.goto(%q);
+  const wait = page.waitForTimeout.bind(page);
+  page.waitForTimeout = async (milliseconds) => {
+    if (milliseconds === 800) {
+      await page.evaluate(url => setTimeout(async () => {
+        await fetch(url).catch(() => {});
+        void fetch(url).catch(() => {});
+      }, 200), %q);
+    }
+    return wait(milliseconds);
+  };
+  return true;
+}`, server.URL, server.URL+"/request"),
+				})
+				if seedErr != nil || seed == nil || seed.IsError {
+					t.Fatalf("seed pending-read network violation = %#v, %v", seed, seedErr)
+				}
+				if _, observeErr := worker.Observe(ctx); observeErr != nil {
+					t.Fatal(observeErr)
+				}
+				navigationID, navigationErr := worker.NavigationIdentity(ctx)
+				if navigationErr != nil {
+					t.Fatal(navigationErr)
+				}
+				requestLimits := limits
+				requestLimits.NetworkRequests = 1
+				source := `async ({page}) => {
+  void page.waitForTimeout(800);
+  await page.waitForTimeout(1);
+  throw new Error("source rejected while a read remains pending");
+}`
+				_, executeErr := worker.ExecutePrivilegedAfterNavigationCheck(ctx, navigationID, DriverExecutionRequest{
+					Source: source, SourceDigest: ExecutionSourceDigest(source), Language: ExecutionJavaScript,
+					Effect: EffectRead, Limits: requestLimits, NetworkMode: networkMode,
+					CapabilityMode: browserpolicy.CapabilityFullAccess,
+				})
+				if !errors.Is(executeErr, ErrDriverRejected) || errors.Is(executeErr, ErrExecutionSettled) {
+					t.Fatalf("network violation during pending-read settlement granted reuse authority: %v", executeErr)
+				}
+				maxHits := int32(0)
+				if networkMode == config.BrowserNetworkAnyHTTP {
+					maxHits = 1
+				}
+				// Other host guards can reject the first request too; none may
+				// exceed this execution's destination or request-budget boundary.
+				if got := hits.Load(); got > maxHits {
+					t.Fatalf("network requests past the execution boundary = %d, maximum %d", got, maxHits)
+				}
+			})
+		}
+	})
 
 	t.Run("authority", func(t *testing.T) {
 		var deniedHits atomic.Int32

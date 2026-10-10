@@ -215,6 +215,29 @@ Execution uses the profile's existing `approval_mode`: `none` runs unattended,
 configured policy. This tool does not add a separate hard-coded approval rule.
 Keep it disabled on profiles that need only typed browser actions.
 
+### Script Failures And Recovery
+
+A rejected or timed-out source does not necessarily mean the browser died.
+The private driver can confirm a settled failure only after stopping the
+source worker, settling every in-flight RPC, and confirming that no mutating
+RPC was dispatched. These failures become terminal `failed` invocations with
+reason `execution_rejected` or `execution_timeout`; the session remains ready.
+The tool instructs the agent to observe the same session again and correct its
+source. The original invocation is never replayed, even after restart.
+
+For extraction, use the facade's `page.title()`, `page.content()`, or locator
+`innerText()`, `textContent()`, `getAttribute()`, `count()`, and `isVisible()`.
+An arbitrary evaluate expression still requires `external_commit` or
+`unknown`, regardless of whether its author intends it to be read-only.
+
+The source runtime budget is unchanged. Gateway and companion allow up to
+five additional seconds for bounded worker shutdown, read settlement, and
+receipt return, still capped by the action, session, and caller deadlines.
+If settlement cannot be confirmed, transport is lost, network authority is
+violated, or a mutating RPC was dispatched, the result remains unknown and
+the session is quarantined. Never retry an ambiguous purchase or submission
+without inspecting its external postcondition first.
+
 Restricted profiles evaluate privileged execution with the policy-only action
 name `execute`. Declarative rules and hooks receive only bounded metadata
 (effect, origin, and revisions), never source text or browser data. Gateway and

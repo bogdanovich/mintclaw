@@ -58,6 +58,15 @@ func classifyAcceptedOutcomeFailure(executeErr, executionContextErr error) Outco
 // when the process that observed the original failure is no longer available.
 // The projection remains ephemeral and cannot authorize a retry.
 func diagnoseRecoveredOutcome(invocation Invocation) Invocation {
+	if invocation.State == InvocationFailed && invocation.Execution != nil && invocation.Diagnostic == nil {
+		switch invocation.SafeFailure {
+		case "execution_timeout":
+			invocation.Diagnostic = &InvocationDiagnostic{FailureClass: OutcomeFailureTimeout}
+		case "execution_rejected":
+			invocation.Diagnostic = &InvocationDiagnostic{FailureClass: OutcomeFailureDriverRejected}
+		}
+		return invocation
+	}
 	if invocation.State != InvocationUnknown || invocation.Diagnostic != nil {
 		return invocation
 	}
