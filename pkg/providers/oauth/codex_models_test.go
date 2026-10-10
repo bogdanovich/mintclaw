@@ -66,3 +66,22 @@ func TestBundledCodexModelNormalizesOpenAINamespace(t *testing.T) {
 		t.Fatalf("bundled model = %+v, %v", got, ok)
 	}
 }
+
+func TestBundledCodexModelIncludesGPT61Sol(t *testing.T) {
+	got, ok := BundledCodexModel("gpt-6.1-sol")
+	if !ok {
+		t.Fatal("gpt-6.1-sol is missing from the bundled catalog")
+	}
+	if got.DefaultReasoningLevel != "medium" || got.ContextWindow != 272_000 || got.MaxContextWindow != 1_050_000 {
+		t.Fatalf("bundled gpt-6.1-sol = %+v", got)
+	}
+	want := []string{"low", "medium", "high", "xhigh", "max"}
+	if len(got.SupportedReasoningLevels) != len(want) {
+		t.Fatalf("supported reasoning levels = %+v", got.SupportedReasoningLevels)
+	}
+	for index, level := range got.SupportedReasoningLevels {
+		if level.Effort != want[index] {
+			t.Fatalf("supported reasoning levels = %+v", got.SupportedReasoningLevels)
+		}
+	}
+}

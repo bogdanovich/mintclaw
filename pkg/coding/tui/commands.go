@@ -973,6 +973,12 @@ func (m *Model) selectModel(selection frontend.ModelSelection) tea.Cmd {
 		return nil
 	}
 	m.clearCommandDraft()
+	if m.commandPanel == commandPanelModel {
+		m.commandPanel = commandPanelNone
+		m.commandPanelOffset = 0
+		m.modelSearching = false
+		m.modelSearch.Blur()
+	}
 	m.err = nil
 	m.pendingSlashCommand = "model"
 	return typedCommandCmd(m.ctx, "model", func(ctx context.Context) error {

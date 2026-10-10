@@ -564,6 +564,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if message.Operation == "review" {
 				m.commandPanel = commandPanelNone
 				m.commandPanelOffset = 0
+			} else if message.Operation == "model" && m.pendingModel != "" {
+				m.commandPanel = commandPanelModel
+				m.commandPanelOffset = 0
 			}
 			m.err = slashCommandError(message.Operation, message.Err)
 		} else {

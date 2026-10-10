@@ -608,13 +608,33 @@ func TestSlashModelSelectsConfiguredAlias(t *testing.T) {
 	}
 	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(*Model)
-	if command == nil || model.pendingSlashCommand != "model" {
-		t.Fatalf("model selection admission = command %v pending %q", command, model.pendingSlashCommand)
+	if command == nil || model.pendingSlashCommand != "model" || model.commandPanel != commandPanelNone {
+		t.Fatalf(
+			"model selection admission = command %v pending %q panel %v",
+			command,
+			model.pendingSlashCommand,
+			model.commandPanel,
+		)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	if model.composer.Value() != "/" || model.modelSearching {
+		t.Fatalf(
+			"composer while model selection is saving = value %q search %v",
+			model.composer.Value(),
+			model.modelSearching,
+		)
 	}
 	model = updateModel(t, model, command())
 	wantDeep := frontend.ModelSelection{Model: "deep", Provider: "anthropic", ReasoningEffort: "xhigh"}
-	if controller.selected != wantDeep || model.commandPanel != commandPanelNone || model.err != nil {
-		t.Fatalf("model selection = %+v panel %v err %v", controller.selected, model.commandPanel, model.err)
+	if controller.selected != wantDeep || model.commandPanel != commandPanelNone || model.err != nil ||
+		model.composer.Value() != "/" {
+		t.Fatalf(
+			"model selection = %+v panel %v composer %q err %v",
+			controller.selected,
+			model.commandPanel,
+			model.composer.Value(),
+			model.err,
+		)
 	}
 	snapshot, err := controller.Snapshot(t.Context())
 	if err != nil {
