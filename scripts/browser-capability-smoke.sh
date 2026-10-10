@@ -4,7 +4,7 @@ set -eu
 
 usage() {
 	cat >&2 <<'EOF'
-usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff> --json-output <path> [options]
+usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|click-recovery|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff> --json-output <path> [options]
 
 Options:
   --gateway-host <ssh-host>  Run the live client on the gateway over SSH.
@@ -106,7 +106,7 @@ if [ "${#profile}" -gt 64 ]; then
 	exit 2
 fi
 case "$suite" in
-core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff) ;;
+core|click-recovery|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff) ;;
 *)
 	echo "unsupported browser smoke suite" >&2
 	exit 2
@@ -318,6 +318,12 @@ ephemeral-cleanup)
 	stage_two=ephemeral-verify
 	stage_two_checks='cookie_removed, local_storage_removed, cache_removed, service_worker_removed'
 	stage_two_workflow="Open the verification session with the same target and profile and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check, call browser_observe until it shows cookie=false, local_storage=false, cache=false, and service_worker=false, and close this session."
+	;;
+click-recovery)
+	stage_one=click-recovery
+	stage_one_checks='initial_blank, navigated_fixture, click_not_dispatched, same_session_preserved, no_photo_click, alternative_control_succeeded'
+	stage_one_workflow="Open exactly one session and observe about:blank. Navigate to ${fixture_origin}/browser-smoke/ and observe it. Click the image named Blocked smoke photo once with effect=read. This intentionally blocked image must return code=click_not_dispatched, click_dispatched=false, and session_preserved=true; this one tool error is expected and is not safe_error. Do not retry or force-click that image. Observe fresh state in the exact same session and require NO_PHOTO_CLICK. Click the alternative button named Open smoke photo once with effect=local_edit, then observe PHOTO_OPENED_ONCE. Require the same browser_session_id throughout. Close that session exactly once. A lost session, unknown outcome, or missing expected failure fails this probe."
+	stage_two=""
 	;;
 driver-conformance)
 	stage_one=driver-conformance

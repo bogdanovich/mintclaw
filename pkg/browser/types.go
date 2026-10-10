@@ -48,6 +48,7 @@ var (
 	ErrDenied                  = errors.New("browser authority denied")
 	ErrDriverIncompatible      = errors.New("browser driver is incompatible")
 	ErrDriverRejected          = errors.New("browser driver rejected the operation")
+	ErrClickNotDispatched      = errors.New("browser click was not dispatched")
 	ErrExecutionTimeout        = errors.New("browser privileged execution timed out")
 	ErrNavigationFailed        = errors.New("browser navigation failed")
 	ErrInvalid                 = browseraction.ErrInvalid

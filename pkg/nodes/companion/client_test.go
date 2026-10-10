@@ -89,6 +89,15 @@ func TestInvocationCommandFailurePreservesBrowserNavigationFailed(t *testing.T) 
 	}
 }
 
+func TestInvocationCommandFailurePreservesBrowserClickNotDispatched(t *testing.T) {
+	err := newCommandFailure(nodes.InvocationDispatchBrowserClickNotDispatched,
+		"browser click was not dispatched", nodes.ErrBrowserHostClickNotDispatched)
+	code, message := invocationCommandFailure(err)
+	if code != nodes.InvocationDispatchBrowserClickNotDispatched || message != "browser click was not dispatched" {
+		t.Fatalf("failure = %q, %q", code, message)
+	}
+}
+
 func TestInvocationCommandFailurePreservesCodingClassification(t *testing.T) {
 	for _, failureCode := range []string{
 		nodes.InvocationDispatchCodingScopeNotFound,

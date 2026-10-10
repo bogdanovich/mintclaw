@@ -593,6 +593,10 @@ func browserCommandFailure(err error) error {
 			"browser navigation failed",
 			err,
 		)
+	case errors.Is(err, nodes.ErrBrowserHostClickNotDispatched):
+		return newCommandFailure(
+			nodes.InvocationDispatchBrowserClickNotDispatched, "browser click was not dispatched", err,
+		)
 	case errors.Is(err, nodes.ErrBrowserHostLost):
 		return newCommandFailure("SESSION_LOST", "browser session is lost", err)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

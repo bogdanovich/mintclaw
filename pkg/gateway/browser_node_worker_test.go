@@ -984,7 +984,47 @@ func TestNodeBrowserWorkerFreshObservationInvalidatesOlderActionCache(t *testing
 }
 
 func TestNodeBrowserWorkerPreservesVerifiedNavigationFailure(t *testing.T) {
+	testNodeBrowserWorkerPreservesFailedAction(
+		t,
+		nodes.InvocationDispatchBrowserNavigationFailed,
+		browser.ErrNavigationFailed,
+	)
+}
+
+func TestNodeBrowserWorkerPreservesClickNotDispatched(t *testing.T) {
+	testNodeBrowserWorkerPreservesFailedAction(
+		t,
+		nodes.InvocationDispatchBrowserClickNotDispatched,
+		browser.ErrClickNotDispatched,
+	)
+}
+
+func testNodeBrowserWorkerPreservesFailedAction(t *testing.T, code string, want error) {
+	t.Helper()
 	cfg, runtime, handler := browserNodeTestRuntime(t)
+	if code == nodes.InvocationDispatchBrowserClickNotDispatched {
+		registration, mutateErr := browserNodeTestMutateCatalog(t, runtime, func(catalog *nodes.CapabilityCatalog) {
+			for index := range catalog.Commands {
+				catalog.Commands[index].BrowserProfiles[0].Actions = []string{"click", "download", "navigate", "scroll"}
+			}
+		})
+		if mutateErr != nil {
+			t.Fatal(mutateErr)
+		}
+		if _, approveErr := runtime.registry.Approve(registration.Snapshot.ID, nodes.PairingApproval{
+			Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: registration.AllowedCommands,
+			At: registration.ApprovedAt + 1,
+		}); approveErr != nil {
+			t.Fatal(approveErr)
+		}
+		registration, _, mutateErr = runtime.registry.Registration(registration.Snapshot.ID)
+		if mutateErr != nil {
+			t.Fatal(mutateErr)
+		}
+		handler.registration = registration
+		handler.currentURL = "https://example.com/"
+		handler.currentOrigin = "https://example.com"
+	}
 	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
 	if err != nil {
 		t.Fatal(err)
@@ -1002,11 +1042,13 @@ func TestNodeBrowserWorkerPreservesVerifiedNavigationFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	worker := opened.Owner.(*nodeBrowserWorker)
-	if _, err = worker.Observe(t.Context()); err != nil {
+	observation, err := worker.Observe(t.Context())
+	if err != nil {
 		t.Fatal(err)
 	}
+	initialURL := observation.URL
 	handler.mu.Lock()
-	handler.actFailureCode = nodes.InvocationDispatchBrowserNavigationFailed
+	handler.actFailureCode = code
 	handler.mu.Unlock()
 	request := browser.WorkerPreparedAction{
 		InvocationID: "invocation_navigation_failed",
@@ -1020,10 +1062,18 @@ func TestNodeBrowserWorkerPreservesVerifiedNavigationFailure(t *testing.T) {
 		},
 		DriverAction: browser.DriverAction{Kind: browser.DriverNavigate, URL: "https://blocked.example/"},
 	}
-	if err = worker.ExecutePrepared(t.Context(), request); !errors.Is(err, browser.ErrNavigationFailed) {
+	if code == nodes.InvocationDispatchBrowserClickNotDispatched {
+		request.Action = browser.Action{Kind: browser.ActionClick, Ref: observation.Elements[0].Target}
+		request.Prepared.Action = request.Action
+		request.Prepared.Effect = browser.EffectRead
+		request.Prepared.CurrentOrigin = observation.Origin
+		request.Prepared.ElementRole, request.Prepared.ElementName = "button", "Save"
+		request.DriverAction = browser.DriverAction{Kind: browser.DriverClick, Target: "host_ref_1"}
+	}
+	if err = worker.ExecutePrepared(t.Context(), request); !errors.Is(err, want) {
 		t.Fatalf("ExecutePrepared() error = %v, want navigation failed", err)
 	}
-	if err = worker.ExecutePrepared(t.Context(), request); !errors.Is(err, browser.ErrNavigationFailed) {
+	if err = worker.ExecutePrepared(t.Context(), request); !errors.Is(err, want) {
 		t.Fatalf("replayed ExecutePrepared() error = %v, want navigation failed", err)
 	}
 	status, statusErr := worker.Status(t.Context())
@@ -1032,7 +1082,7 @@ func TestNodeBrowserWorkerPreservesVerifiedNavigationFailure(t *testing.T) {
 	actCalls := len(handler.actInputs)
 	handler.mu.Unlock()
 	if statusErr != nil || status != browser.WorkerReady || observeErr != nil ||
-		observation.URL != "about:blank" || actCalls != 1 {
+		observation.URL != initialURL || actCalls != 1 {
 		t.Fatalf(
 			"preserved worker status = %q, %v; observation = %#v, %v; actions = %d",
 			status, statusErr, observation, observeErr, actCalls,

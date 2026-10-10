@@ -2044,6 +2044,15 @@ func (broker *Broker) executePreparedLocked(
 	)
 	defer cancelCompletion()
 	if executeErr != nil || executionContextErr != nil {
+		if executionContextErr == nil && invocation.PreparedActionID != "" && ClickNotDispatched(executeErr) {
+			prepared, preparedErr := broker.store.GetPreparedAction(completionCtx, invocation.PreparedActionID)
+			if preparedErr == nil && prepared.Action.Kind == ActionClick {
+				failed, failErr := broker.completeInvocationLocked(
+					completionCtx, invocation, InvocationFailed, nil, "click_not_dispatched",
+				)
+				return diagnoseRecoveredOutcome(failed), failErr
+			}
+		}
 		if reason := SettledExecutionFailure(executeErr); executionContextErr == nil &&
 			invocation.Execution != nil && reason != "" {
 			failed, failErr := broker.completeInvocationLocked(completionCtx, invocation, InvocationFailed, nil, reason)

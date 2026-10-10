@@ -2722,6 +2722,9 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 	if invocation.State == browser.InvocationFailed && invocation.SafeFailure == "navigation_failed" {
 		return browserNavigationFailureResult(invocation)
 	}
+	if invocation.State == browser.InvocationFailed && invocation.SafeFailure == "click_not_dispatched" {
+		return browserClickNotDispatchedResult(invocation)
+	}
 	result := browserActionResult{
 		InvocationID: invocation.ID, Effect: invocation.Effect,
 		State: invocation.State, Reason: invocation.SafeFailure,
@@ -2860,6 +2863,24 @@ func browserNavigationFailureResult(invocation browser.Invocation) *toolshared.T
 		"effect":             invocation.Effect,
 		"state":              invocation.State,
 		"reason":             invocation.SafeFailure,
+	})
+	return toolshared.ErrorResult(string(encoded))
+}
+
+func browserClickNotDispatchedResult(invocation browser.Invocation) *toolshared.ToolResult {
+	encoded, _ := json.Marshal(map[string]any{
+		"status":             "failed",
+		"code":               "click_not_dispatched",
+		"message":            "No click was sent. The same browser session remains available. Observe fresh state and choose a usable control; do not force-click or replay this invocation.",
+		"action":             "observe_same_session_then_choose_usable_control",
+		"session_preserved":  true,
+		"click_dispatched":   false,
+		"invocation_id":      invocation.ID,
+		"browser_session_id": invocation.SessionID,
+		"effect":             invocation.Effect,
+		"state":              invocation.State,
+		"reason":             invocation.SafeFailure,
+		"failure_class":      browser.OutcomeFailureClickNotDispatched,
 	})
 	return toolshared.ErrorResult(string(encoded))
 }

@@ -2447,25 +2447,49 @@ func TestBrowserHostReservesInvocationAndQuarantinesAmbiguousExecute(t *testing.
 }
 
 func TestBrowserHostPreservesReadySessionAfterVerifiedNavigationFailure(t *testing.T) {
+	testBrowserHostPreservesReadyAfterFailure(t, browserworker.ErrNavigationFailed, ErrBrowserHostNavigationFailed)
+}
+
+func TestBrowserHostPreservesReadySessionAfterClickNotDispatched(t *testing.T) {
+	testBrowserHostPreservesReadyAfterFailure(
+		t,
+		browserworker.ErrClickNotDispatched,
+		nodes.ErrBrowserHostClickNotDispatched,
+	)
+}
+
+func testBrowserHostPreservesReadyAfterFailure(t *testing.T, driverErr error, want error) {
+	t.Helper()
 	stable := browserworker.DriverObservation{
-		URL: "about:blank", Origin: "about:blank", Snapshot: "stable page",
+		URL: "https://example.com", Origin: "https://example.com", Snapshot: "stable page",
+		Elements: []browserworker.DriverElement{{Target: "photo", Role: "img", Name: "Photo"}},
 	}
 	worker := &fakeBrowserHostWorker{
-		executeErr: browserworker.ErrNavigationFailed,
+		executeErr: driverErr,
 		observations: []browserworker.DriverObservation{
 			stable, stable, stable,
 		},
 	}
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	profile := host.profiles["managed"]
+	profile.AllowedActions = []string{"click", "download", "navigate", "scroll"}
+	host.profiles["managed"] = profile
 	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
-		t.Fatal(err)
+	initial, initialErr := host.Observe(t.Context(), browserHostObserveFixture())
+	if initialErr != nil {
+		t.Fatal(initialErr)
 	}
 	request := browserHostNavigateFixture()
 	request.SnapshotGeneration = 1
-	if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostNavigationFailed) {
+	request.CurrentOrigin = stable.Origin
+	if errors.Is(driverErr, browserworker.ErrClickNotDispatched) {
+		request.Action = browserworker.Action{Kind: browserworker.ActionClick, Ref: initial.Elements[0].Ref}
+		request.Effect = "read"
+		request.ExpectedRole, request.ExpectedName = "img", "Photo"
+	}
+	if _, err := host.Act(t.Context(), request); !errors.Is(err, want) {
 		t.Fatalf("Navigate() error = %v, want verified navigation failure", err)
 	}
 	status, err := host.Status(t.Context(), BrowserHostStatusRequest{

@@ -1293,6 +1293,11 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	if action.Kind == DriverDialog {
 		return ErrStale
 	}
+	if action.Kind == DriverClick {
+		if err := worker.preflightClickLocked(ctx, action); err != nil {
+			return err
+		}
+	}
 	code, err := playwrightNavigationCheckedActionCode(worker.navigationID, action, worker.limits)
 	if err != nil {
 		return err
@@ -1338,6 +1343,13 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 		return nil
 	}
 	err = parsePlaywrightNavigationDispatch(text)
+	if errors.Is(err, ErrClickNotDispatched) {
+		err = ErrDriverIncompatible // This marker is valid only in the preflight call.
+	}
+	if action.Kind == DriverClick && errors.Is(err, ErrStale) {
+		// The conditional dispatch callback returned before sending input.
+		return ErrClickNotDispatched
+	}
 	if errors.Is(err, ErrNavigationFailed) {
 		if verifyErr := worker.verifyNavigationRollbackLocked(ctx, confirmedPageStateHash); verifyErr != nil {
 			return verifyErr
@@ -1347,6 +1359,44 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	if err != nil &&
 		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) &&
 		!errors.Is(err, ErrNavigationFailed) {
+		worker.lost = true
+	}
+	return err
+}
+
+// Run actionability checks in a separate, bounded call. A modal result cannot
+// then be mistaken for proof that the real click was sent. The subsequent
+// dispatch repeats the navigation check; there is no automatic input replay.
+func (worker *playwrightWorker) preflightClickLocked(ctx context.Context, action DriverAction) error {
+	target, err := json.Marshal(action.Target)
+	if err != nil || !playwrightTargetPattern.MatchString(action.Target) {
+		return ErrInvalid
+	}
+	timeoutMS := min(5000, max(1, worker.limits.Effective().ActionSeconds*1000/4))
+	dispatch := fmt.Sprintf(`try {
+    await page.locator("aria-ref=" + %s).click({ button: "left", trial: true, timeout: %d });
+  } catch (error) {
+    // Never interpret page/selector/error text as recovery authority. Only
+    // this host-controlled branch ran, and the real click has not started.
+    if (page.isClosed()) throw error;
+    await page.title();
+    const tree = await state.cdp.send("Page.getFrameTree");
+    if (!tree.frameTree || !tree.frameTree.frame || !tree.frameTree.frame.id) throw error;
+    return "MINTCLAW_NAV_ACT_V1|click_not_dispatched";
+  }`, string(target), timeoutMS)
+	code := playwrightNavigationCheckedCode(worker.navigationID, dispatch)
+	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
+	if err != nil {
+		return err
+	}
+	if worker.pendingDialog != nil {
+		return ErrDriverRejected
+	}
+	err = parsePlaywrightNavigationDispatch(text)
+	if errors.Is(err, ErrStale) || errors.Is(err, ErrClickNotDispatched) {
+		return ErrClickNotDispatched
+	}
+	if err != nil && !errors.Is(err, ErrDenied) {
 		worker.lost = true
 	}
 	return err
@@ -1637,6 +1687,8 @@ func parsePlaywrightNavigationDispatch(text string) error {
 		return ErrDenied
 	case playwrightNavigationCheckedActionMarker + "|navigation_failed":
 		return ErrNavigationFailed
+	case playwrightNavigationCheckedActionMarker + "|click_not_dispatched":
+		return ErrClickNotDispatched
 	default:
 		return ErrDriverIncompatible
 	}

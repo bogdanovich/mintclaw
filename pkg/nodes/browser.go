@@ -24,6 +24,7 @@ var (
 	ErrBrowserHostNotFound            = errors.New("companion browser session not found")
 	ErrBrowserHostStale               = errors.New("companion browser state is stale")
 	ErrBrowserHostNavigationFailed    = errors.New("companion browser navigation failed")
+	ErrBrowserHostClickNotDispatched  = errors.New("companion browser click was not dispatched")
 	ErrBrowserHostLost                = errors.New("companion browser session is lost")
 	ErrBrowserHostExecutionTimeout    = errors.New("companion browser privileged execution timed out")
 	ErrBrowserHostCleanupRequired     = errors.New("companion browser cleanup requires operator attention")

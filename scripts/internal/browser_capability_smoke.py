@@ -19,6 +19,10 @@ SCHEMA_VERSION = "mintclaw.browser_smoke.v1"
 MAX_INPUT_BYTES = 1024 * 1024
 
 SUITE_CHECKS = {
+    "click-recovery": (
+        "initial_blank", "navigated_fixture", "click_not_dispatched",
+        "same_session_preserved", "no_photo_click", "alternative_control_succeeded",
+    ),
     "core": (
         "initial_blank",
         "navigated_fixture",
@@ -96,6 +100,10 @@ SUITE_CHECKS = {
 }
 
 SUITE_STAGES = {
+    "click-recovery": (
+        ("click-recovery", SUITE_CHECKS["click-recovery"],
+         {"browser_targets": 1, "browser_session": 2, "browser_observe": 4, "browser_act": 3}),
+    ),
     "core": (
         (
             "core",
@@ -223,6 +231,14 @@ FIXTURE_HTML = b"""<!doctype html>
   <button type="button" aria-label="Seed ephemeral smoke state" id="ephemeral">Seed ephemeral smoke state</button>
   <button type="button" aria-label="Clear browser smoke state" id="clear">Clear browser smoke state</button>
   <output aria-label="Smoke status" id="status">SMOKE_LOADING</output>
+  <div style="position:relative;width:64px;height:64px">
+    <img alt="Blocked smoke photo" style="width:64px;height:64px"
+         src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'/%3E"
+         onclick="document.querySelector('#photo-status').textContent='UNEXPECTED_PHOTO_CLICK'">
+    <div style="position:absolute;inset:0;background:transparent"></div>
+  </div>
+  <button type="button" onclick="document.querySelector('#photo-status').textContent='PHOTO_OPENED_ONCE'">Open smoke photo</button>
+  <output id="photo-status">NO_PHOTO_CLICK</output>
 </main>
 <script>
 const status = document.querySelector('#status');
@@ -621,6 +637,7 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
                 else None,
                 expected_tool_failures={"browser_execute": 1}
                 if stage_name == "privileged-execute"
+                else {"browser_act": 1} if stage_name == "click-recovery"
                 else None,
             )
             raw_capabilities = result.get("capabilities")

@@ -1717,7 +1717,12 @@ func (host *BrowserHost) executeAction(
 		if action == "download" && errors.As(executeErr, &artifactFailure) {
 			downloadArtifactUnavailable = true
 		} else {
+			actionContextErr := actionCtx.Err()
 			cancelAction()
+			if action == "click" && actionContextErr == nil &&
+				host.now().UTC().Before(actionDeadline) && browserworker.ClickNotDispatched(executeErr) {
+				return BrowserHostObservation{}, nodes.ErrBrowserHostClickNotDispatched
+			}
 			if errors.Is(executeErr, browserworker.ErrStale) {
 				return BrowserHostObservation{}, ErrBrowserHostStale
 			}
