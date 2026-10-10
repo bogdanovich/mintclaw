@@ -32,6 +32,27 @@ func TestReasoningProfileUsesConcreteCodexCatalog(t *testing.T) {
 	}
 }
 
+func TestReasoningProfileUsesGPT61SolCatalog(t *testing.T) {
+	profile := ReasoningProfile(&config.ModelConfig{
+		Provider: "openai", Model: "gpt-6.1-sol", AuthMethod: "oauth", ThinkingLevel: "medium",
+	})
+	got := make([]reasoning.Effort, 0, len(profile.Options))
+	for _, option := range profile.Options {
+		got = append(got, option.ID)
+	}
+	want := []reasoning.Effort{
+		reasoning.EffortLow,
+		reasoning.EffortMedium,
+		reasoning.EffortHigh,
+		reasoning.EffortXHigh,
+		reasoning.EffortMax,
+	}
+	if !slices.Equal(got, want) || profile.Default != reasoning.EffortMedium ||
+		profile.Source != "bundled_codex_catalog" {
+		t.Fatalf("ReasoningProfile() = %+v", profile)
+	}
+}
+
 func TestReasoningProfileUnknownRouteIsConservative(t *testing.T) {
 	profile := ReasoningProfile(&config.ModelConfig{Provider: "openrouter", Model: "unknown", Enabled: true})
 	if len(profile.Options) != 0 || profile.Default != "" {

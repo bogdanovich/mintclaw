@@ -24,6 +24,11 @@ const (
 )
 
 var bundledCodexModels = map[string]CodexModelInfo{
+	"gpt-6.1-sol": {
+		Slug: "gpt-6.1-sol", ContextWindow: 272_000, MaxContextWindow: 1_050_000, Priority: 0,
+		DefaultReasoningLevel:    "medium",
+		SupportedReasoningLevels: codexReasoningLevels("low", "medium", "high", "xhigh", "max"),
+	},
 	"gpt-5.6-sol": {
 		Slug: "gpt-5.6-sol", ContextWindow: 272_000, MaxContextWindow: 872_000, Priority: 1,
 		DefaultReasoningLevel:    "low",
