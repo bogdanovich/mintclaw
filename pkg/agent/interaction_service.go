@@ -475,6 +475,10 @@ func (service interactionService) acceptProtectedAnswer(
 			"This answer has no durable message identity. The question is still waiting; please retry.",
 		)
 	}
+	messageIdentity, err := protectedAnswerIdempotencyKey("", command.Message)
+	if err != nil {
+		return result, err
+	}
 	intent := interactions.ProtectedAnswerValue
 	text := parsed.Text
 	projectedChoice := bus.InboundInteractionChoice(
@@ -499,13 +503,14 @@ func (service interactionService) acceptProtectedAnswer(
 		text = ""
 	}
 	receipt, err := sink.Accept(ctx, interactions.ProtectedAnswerSinkRequest{
-		Binding:        *record.ProtectedAnswer,
-		Workspace:      command.Workspace,
-		Route:          record.Route,
-		InteractionID:  record.ID,
-		IdempotencyKey: idempotencyKey,
-		Intent:         intent,
-		Text:           text,
+		Binding:         *record.ProtectedAnswer,
+		Workspace:       command.Workspace,
+		Route:           record.Route,
+		InteractionID:   record.ID,
+		IdempotencyKey:  idempotencyKey,
+		MessageIdentity: messageIdentity,
+		Intent:          intent,
+		Text:            text,
 	})
 	if err != nil {
 		return service.notice(

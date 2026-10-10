@@ -39,7 +39,8 @@ type FormJobStoreOptions struct {
 }
 
 type formJobSourceSecret struct {
-	SourceRef string `json:"source_ref"`
+	SourceRef string                `json:"source_ref"`
+	Intake    *formIntakeStoredMode `json:"intake,omitempty"`
 }
 
 type formJobValuePayload struct {
@@ -441,6 +442,9 @@ func (store *FormJobStore) AppendValue(
 		}
 		if len(record.PendingEvents) != 0 {
 			return false, ErrFormJobConflict
+		}
+		if intakeErr := requireNoStagedFormIntake(record, jobKey); intakeErr != nil {
+			return false, intakeErr
 		}
 		if len(record.Events)+len(record.PendingEvents) >= store.maxEventsPerJob {
 			return false, ErrFormJobCapacityExceeded
@@ -921,6 +925,9 @@ func (store *FormJobStore) validateProtectedRecord(record formJobStoredRecord, j
 	if record.Source == nil || openFormJobEnvelope(jobKey, *record.Source, &source) != nil ||
 		strings.TrimSpace(source.SourceRef) == "" {
 		return ErrFormJobRecordCorrupt
+	}
+	if err := validateStoredFormIntake(record.Public, source.Intake); err != nil {
+		return err
 	}
 	previousDigest := ""
 	events := make(map[string]formJobValuePayload, len(record.Events))

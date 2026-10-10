@@ -270,6 +270,9 @@ func (store *FormJobStore) prepareFormAudit(
 			return false, err
 		}
 		defer clear(jobKey)
+		if intakeErr := requireSettledFormIntake(record, jobKey); intakeErr != nil {
+			return false, intakeErr
+		}
 		if record.Public.Revision != request.ExpectedRevision {
 			return false, ErrFormJobConflict
 		}
@@ -382,9 +385,13 @@ func (store *FormJobStore) commitFormAudit(
 	var result FormJobRecord
 	var review FormReview
 	err := store.update(ctx, func(document *formJobStoreDocument, now time.Time) (bool, error) {
-		record, err := store.authorizedPublicRecord(document, request.JobID, request.Owner)
+		record, jobKey, err := store.authorizedRecord(document, request.JobID, request.Owner)
 		if err != nil {
 			return false, err
+		}
+		defer clear(jobKey)
+		if intakeErr := requireSettledFormIntake(record, jobKey); intakeErr != nil {
+			return false, intakeErr
 		}
 		if record.Public.Revision != prepared.record.Revision ||
 			record.Public.LedgerDigest != prepared.record.LedgerDigest {
