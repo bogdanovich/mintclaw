@@ -32,6 +32,12 @@ or source code is included here. Historical state is not modified.
   but the task registry incorrectly labels the owning task timed out because
   it uses the earlier interaction outcome. This is a separate bookkeeping
   fix; the historical approval outcome must remain unchanged.
+- Live companion repetition exposed the remaining deadline race: the same
+  intentional hanging read settled after approximately 19.66 seconds in one
+  invocation, but another became unknown after approximately 20.45 seconds.
+  Both retained the same 15-second source budget. A controlled broker test
+  reproduces the loss when preflight/transport consumes a source-sized outer
+  timer before the driver can return settlement evidence.
 
 ## Fix Units
 
@@ -42,6 +48,13 @@ or source code is included here. Historical state is not modified.
 2. Separate an expired approval's outcome from a subsequently verified
    successful task outcome. Preserve genuine timeout behavior and one-time
    delivery semantics.
+3. Give source runtime and control-plane work distinct budget owners. The
+   sidecar enforces the unchanged source runtime. Gateway and companion use
+   their existing bounded action contexts for transport, preflight,
+   settlement, and artifact publication; they must not start a second
+   source-sized timer before dispatch. Caller, session, idle, and configured
+   action deadlines remain authoritative, and cancellation still prevents a
+   settled-success or settled-failure claim.
 
 ## Acceptance
 
@@ -64,6 +77,11 @@ or source code is included here. Historical state is not modified.
 - A genuinely expired approval is never silently converted into an allowed
   approval. A later verified success must not be mislabeled as a timed-out
   task.
+- A controlled delayed read retains its one-second source budget, settles
+  within its ten-second action budget, permits same-session observation, and
+  never redispatches source. A shorter caller deadline still quarantines the
+  session with an unknown outcome. The companion forwards the existing
+  action deadline to its driver without a premature source-sized cutoff.
 - Live acceptance uses local fixture pages and reversible fixture-only DOM
   changes, preserving existing profile cookies. It never places another real
   order, edits a cart, or mutates an account.

@@ -44,10 +44,6 @@ type ExecutionArtifactSink func(
 	DriverScreenshot,
 ) (RetainedScreenshot, error)
 
-// ExecutionSettlementGrace bounds source-worker shutdown and in-flight read
-// settlement after the independently enforced source runtime budget.
-const ExecutionSettlementGrace = 5 * time.Second
-
 type ExecutionResult struct {
 	Status          string               `json:"status"`
 	Value           json.RawMessage      `json:"value"`
@@ -322,13 +318,12 @@ func (broker *Broker) ExecuteExecution(
 			); policyErr != nil {
 				return nil, policyErr
 			}
-			runtimeCtx, cancel := context.WithTimeout(
-				executeCtx,
-				time.Duration(binding.Limits.RuntimeSeconds)*time.Second+ExecutionSettlementGrace,
-			)
-			defer cancel()
+			// The sidecar owns the source runtime budget. Transport, document
+			// revalidation, settlement, and artifact retention use the existing
+			// bounded action context; starting a source-sized timer here races
+			// the host's later source timer and can kill a settled read.
 			result, runErr := executor.ExecutePrivilegedAfterNavigationCheck(
-				runtimeCtx,
+				executeCtx,
 				slot.navigationID,
 				driverRequest,
 			)
@@ -343,7 +338,7 @@ func (broker *Broker) ExecuteExecution(
 				if sink == nil {
 					return nil, ErrDriverIncompatible
 				}
-				retained, retainErr := sink(runtimeCtx, invocation, index, artifact)
+				retained, retainErr := sink(executeCtx, invocation, index, artifact)
 				if retainErr != nil {
 					return nil, retainErr
 				}

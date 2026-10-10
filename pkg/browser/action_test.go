@@ -57,6 +57,7 @@ type actionTestWorker struct {
 	executionResult        DriverExecutionResult
 	executionErr           error
 	executionRequests      []DriverExecutionRequest
+	executionFunc          func(context.Context, DriverExecutionRequest) (DriverExecutionResult, error)
 }
 
 func (worker *actionTestWorker) ExecutePrivilegedAfterNavigationCheck(
@@ -72,6 +73,9 @@ func (worker *actionTestWorker) ExecutePrivilegedAfterNavigationCheck(
 		return DriverExecutionResult{}, ErrStale
 	}
 	worker.executionRequests = append(worker.executionRequests, request)
+	if worker.executionFunc != nil {
+		return worker.executionFunc(ctx, request)
+	}
 	return worker.executionResult, worker.executionErr
 }
 
