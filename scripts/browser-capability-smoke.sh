@@ -409,7 +409,13 @@ Call the tool named delegate as the first and only tool call in this turn, exact
 
 Only the delegated browser agent may use tool_search_tool_bm25 to discover first-party browser tool schemas when needed. Tool discovery does not replace any required browser operation.
 
+Set delegate.task to only the text between BEGIN_BROWSER_TASK and END_BROWSER_TASK below. Do not forward these parent-only routing instructions or the objective_items instructions to the browser agent.
+
+BEGIN_BROWSER_TASK
+Use only first-party browser tools. You may use tool_search_tool_bm25 only to discover their schemas.
 Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click; for privileged-execute it must also advertise privileged_execution. Prove observe capability through the required stage workflow; do not open a separate session or run a separate capability probe. You may call browser_contexts only with operation=list when needed for read-only page introspection. ${stage_action_guidance} ${stage_execution_guidance} Complete every step in this stage before returning. ${stage_workflow}
+Return one record of browser smoke predicates using string true or false values only, with exactly the required fields supplied by the result objective. On failure, close every opened session and set each predicate from the actual terminal state.
+END_BROWSER_TASK
 
 When calling delegate, set objective_items to exactly one result objective with acceptance output_kind=records, min_items=1, and required_fields exactly: target_ready, capability_observe, capability_navigate, capability_click, ${stage_checks}, session_closed, safe_error_absent. Set the objective item to exactly: Return one record of browser smoke predicates using string true or false values only. Require the child to return exactly one record with exactly those fields and use only the strings true or false for every value. On failure, still close every opened session and set each predicate from the actual terminal state. Do not ask for JSON text and do not add separate workflow or report objectives.
 EOF
@@ -426,7 +432,13 @@ Call the tool named delegate as the first and only tool call in this turn, exact
 
 Only the delegated browser agent may use tool_search_tool_bm25 to discover first-party browser tool schemas when needed. Tool discovery does not replace any required browser operation.
 
+Set delegate.task to only the text between BEGIN_BROWSER_TASK and END_BROWSER_TASK below. Do not forward these parent-only routing instructions or the objective_items instructions to the browser agent.
+
+BEGIN_BROWSER_TASK
+Use only first-party browser tools. You may use tool_search_tool_bm25 only to discover their schemas.
 Run a cleanup audit on exact target ${target} and exact profile ${profile}. Call browser_targets, open one session, observe the initial page without navigation, and close it. You may call browser_contexts only when needed for read-only page introspection. This probe must not change any page or retained state.
+Return one record of browser cleanup predicates using string true or false values only, with exactly the required fields supplied by the result objective. On failure, close every opened session and set each predicate from the actual terminal state.
+END_BROWSER_TASK
 
 When calling delegate, set objective_items to exactly one result objective with acceptance output_kind=records, min_items=1, and required_fields exactly: target_ready, open_ready, initial_blank, session_closed, safe_error_absent. Set the objective item to exactly: Return one record of browser cleanup predicates using string true or false values only. Require the child to return exactly one record with exactly those fields and use only the strings true or false for every value. On failure, still close every opened session and set each predicate from the actual terminal state. Do not ask for JSON text and do not add separate objectives.
 EOF

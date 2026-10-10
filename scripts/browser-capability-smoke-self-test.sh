@@ -34,6 +34,7 @@ fi
 if ! printf '%s' "$message" | grep -Fq 'delegate as the first and only tool call in this turn, exactly once' ||
 	! printf '%s' "$message" | grep -Fq 'Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool.' ||
 	! printf '%s' "$message" | grep -Fq 'Only the delegated browser agent may use tool_search_tool_bm25 to discover first-party browser tool schemas when needed.' ||
+	! printf '%s' "$message" | grep -Fq 'Set delegate.task to only the text between BEGIN_BROWSER_TASK and END_BROWSER_TASK below.' ||
 	! printf '%s' "$message" | grep -Fq 'acceptance output_kind=records, min_items=1' ||
 	! printf '%s' "$message" | grep -Fq 'using string true or false values only'; then
 	echo "browser smoke prompt did not require synchronous delegation" >&2
@@ -194,10 +195,20 @@ if printf '%s' "$message" | grep -Fq 'exact target cloud' &&
 	evidence_target=cloud
 	evidence_profile=personal
 fi
-python3 - "$record" "$is_cleanup" "$stage" "$evidence_target" "$evidence_profile" <<'PY'
+python3 - "$record" "$is_cleanup" "$stage" "$evidence_target" "$evidence_profile" "$message" <<'PY'
 import json
 import os
 import sys
+message = sys.argv[6]
+assert message.count("\nBEGIN_BROWSER_TASK\n") == 1
+assert message.count("\nEND_BROWSER_TASK\n") == 1
+task = message.split("\nBEGIN_BROWSER_TASK\n", 1)[1].split("\nEND_BROWSER_TASK\n", 1)[0]
+assert "Call the tool named delegate" not in task
+assert "When calling delegate" not in task
+assert "Do not call tool_search_tool_bm25" not in task
+assert "exact target " + sys.argv[4] in task
+assert "exact profile " + sys.argv[5] in task
+assert "using string true or false values only" in task
 record = json.loads(sys.argv[1])
 if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_CATEGORICAL_PREDICATE") == "1":
     record["target_ready"] = "ready"
