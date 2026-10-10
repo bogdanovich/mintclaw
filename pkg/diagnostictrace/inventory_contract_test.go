@@ -2,6 +2,7 @@ package diagnostictrace_test
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"regexp"
@@ -52,7 +53,7 @@ func TestCodingDiagnosticInventoryContract(t *testing.T) {
 	if err = decoder.Decode(&inventory); err != nil {
 		t.Fatalf("decode coding diagnostic inventory: %v", err)
 	}
-	if err = decoder.Decode(&struct{}{}); err != io.EOF {
+	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		t.Fatalf("coding diagnostic inventory has trailing JSON: %v", err)
 	}
 	if inventory.SchemaVersion != codingInventorySchemaV1 {
