@@ -389,15 +389,15 @@ steel-handoff)
 esac
 
 stage_action_guidance='For every navigate call, use an action object containing only "kind":"navigate" and "url": the exact fixture URL; do not include "target" or any unrelated action field. For every browser_act call, copy authority fields only from the latest successful browser_observe or browser_contexts result. Never invent an ID, generation, reference, token, or placeholder value. If browser_observe omits context_catalog_id and context_generation, omit both fields unless a fresh browser_contexts list result supplies both.'
-stage_execution_guidance='Do not use search, raw MCP, browser code execution, or any other target/profile.'
+stage_execution_guidance='Do not use web search, raw MCP, browser code execution, or any other target/profile.'
 if [ "$suite" = provider-lifecycle ]; then
 	stage_action_guidance='Do not call browser_act or navigate in this stage. Do not use or invent a fixture URL. The lifecycle probe must remain on about:blank. Never invent an ID, generation, reference, token, or placeholder value.'
 fi
 if [ "$suite" = privileged-execute ]; then
-	stage_execution_guidance='Do not use search, raw MCP, or any code-execution mechanism other than the three exact browser_execute calls required by this stage. Do not alter, combine, retry, or add source.'
+	stage_execution_guidance='Do not use web search, raw MCP, or any code-execution mechanism other than the three exact browser_execute calls required by this stage. Do not alter, combine, retry, or add source.'
 fi
 if [ "$suite" = steel-handoff ]; then
-	stage_execution_guidance='Do not use search, raw MCP, browser_execute, or any target/profile other than the selected cloud identity. Perform exactly one handoff and one resume. The handoff prompt must contain MINTCLAW_STEEL_HANDOFF_SMOKE exactly.'
+	stage_execution_guidance='Do not use web search, raw MCP, browser_execute, or any target/profile other than the selected cloud identity. Perform exactly one handoff and one resume. The handoff prompt must contain MINTCLAW_STEEL_HANDOFF_SMOKE exactly.'
 fi
 
 make_stage_prompt() {
@@ -406,6 +406,8 @@ make_stage_prompt() {
 	stage_checks=$3
 	cat <<EOF
 Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
+
+Only the delegated browser agent may use tool_search_tool_bm25 to discover first-party browser tool schemas when needed. Tool discovery does not replace any required browser operation.
 
 Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click; for privileged-execute it must also advertise privileged_execution. Prove observe capability through the required stage workflow; do not open a separate session or run a separate capability probe. You may call browser_contexts only with operation=list when needed for read-only page introspection. ${stage_action_guidance} ${stage_execution_guidance} Complete every step in this stage before returning. ${stage_workflow}
 
@@ -421,6 +423,8 @@ fi
 
 cleanup_prompt=$(cat <<EOF
 Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
+
+Only the delegated browser agent may use tool_search_tool_bm25 to discover first-party browser tool schemas when needed. Tool discovery does not replace any required browser operation.
 
 Run a cleanup audit on exact target ${target} and exact profile ${profile}. Call browser_targets, open one session, observe the initial page without navigation, and close it. You may call browser_contexts only when needed for read-only page introspection. This probe must not change any page or retained state.
 

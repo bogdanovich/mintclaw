@@ -518,6 +518,7 @@ def verify_execution_evidence(
             "browser_act",
             "browser_capture",
             "browser_execute",
+            "tool_search_tool_bm25",
         }
     ):
         raise ValueError("invalid_execution_evidence")

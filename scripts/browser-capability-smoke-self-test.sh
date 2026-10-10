@@ -33,6 +33,7 @@ if printf '%s' "$message" | grep -Fq 'cleanup audit'; then
 fi
 if ! printf '%s' "$message" | grep -Fq 'delegate as the first and only tool call in this turn, exactly once' ||
 	! printf '%s' "$message" | grep -Fq 'Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool.' ||
+	! printf '%s' "$message" | grep -Fq 'Only the delegated browser agent may use tool_search_tool_bm25 to discover first-party browser tool schemas when needed.' ||
 	! printf '%s' "$message" | grep -Fq 'acceptance output_kind=records, min_items=1' ||
 	! printf '%s' "$message" | grep -Fq 'using string true or false values only'; then
 	echo "browser smoke prompt did not require synchronous delegation" >&2
@@ -252,6 +253,15 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
     if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NONTERMINAL_STATUS") == "1":
         sessions[1]["state"] = "ready"
     failures = {"browser_execute": 1} if stage == "privileged-execute" and not cleanup else {}
+    discovery_mode = os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_DISCOVERY")
+    if discovery_mode:
+        calls["tool_search_tool_bm25"] = 1
+        if discovery_mode == "failed":
+            failures["tool_search_tool_bm25"] = 1
+        elif discovery_mode == "unrelated":
+            calls["exec"] = 1
+        elif discovery_mode == "missing_observe":
+            calls.pop("browser_observe")
     failure_mode = os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_TOOL_FAILURE")
     if not cleanup:
         if failure_mode == "missing":
@@ -416,6 +426,38 @@ if MINTCLAW_BROWSER_SMOKE_FAKE_MUTATING_CONTEXTS=1 \
 	exit 1
 fi
 grep -Fq '"code": "invalid_execution_evidence"' "$mutating_contexts_output"
+
+for suite in core privileged-execute; do
+	discovery_output="$test_root/discovery-$suite.json"
+	MINTCLAW_BROWSER_SMOKE_FAKE_DISCOVERY=success \
+		MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+		"$repo_root/scripts/browser-capability-smoke.sh" \
+		--target gateway --profile managed --suite "$suite" --json-output "$discovery_output"
+	python3 - "$discovery_output" <<'PY'
+import json
+import pathlib
+import sys
+report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert report["safe_error"] is None
+assert report["execution_audit"]["primary"]["tool_calls"]["tool_search_tool_bm25"] == 1
+assert report["execution_audit"]["cleanup"]["tool_calls"]["tool_search_tool_bm25"] == 1
+assert report["execution_audit"]["primary"]["tool_calls"]["browser_observe"] == 3
+if report["suite"] == "privileged-execute":
+    assert report["execution_audit"]["primary"]["tool_calls"]["browser_execute"] == 3
+PY
+done
+
+for discovery_mode in failed unrelated missing_observe; do
+	discovery_output="$test_root/discovery-$discovery_mode.json"
+	if MINTCLAW_BROWSER_SMOKE_FAKE_DISCOVERY="$discovery_mode" \
+		MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+		"$repo_root/scripts/browser-capability-smoke.sh" \
+		--target gateway --profile managed --suite privileged-execute --json-output "$discovery_output"; then
+		echo "browser smoke self-test: $discovery_mode discovery evidence unexpectedly passed" >&2
+		exit 1
+	fi
+	grep -Fq '"code": "invalid_execution_evidence"' "$discovery_output"
+done
 
 external_output="$test_root/external.json"
 MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
