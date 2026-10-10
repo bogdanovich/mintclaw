@@ -819,10 +819,21 @@ func TestSlashModelFailureKeepsPickerOpen(t *testing.T) {
 	if command == nil {
 		t.Fatal("model selection did not return a command")
 	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("preserve this draft")})
 	model = updateModel(t, model, command())
 	if model.commandPanel != commandPanelModel || model.err == nil ||
 		!strings.Contains(model.err.Error(), "credentials expired") {
 		t.Fatalf("failed model selection panel=%v err=%v", model.commandPanel, model.err)
+	}
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil || model.commandPanel != commandPanelNone || model.composer.Value() != "preserve this draft" {
+		t.Fatalf(
+			"model retry command=%v panel=%v composer=%q",
+			command,
+			model.commandPanel,
+			model.composer.Value(),
+		)
 	}
 }
 
