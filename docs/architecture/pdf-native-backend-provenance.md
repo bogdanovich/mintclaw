@@ -45,6 +45,13 @@ backend as supported.
 
 ## Qualification
 
+PR integration CI runs on Ubuntu 24.04 and installs the exact admitted package
+bundle from the Ubuntu archive snapshot `20261004T000000Z`. Signed APT metadata
+and explicit package revisions make preparation reproducible when the live
+archive advances. This is test-host preparation, not admission of a new native
+backend or a production package rollback. The snapshot service is documented
+at [Ubuntu Snapshot Service](https://snapshot.ubuntu.com/).
+
 Run qualification from the exact MintClaw source revision on the prepared
 Ubuntu host:
 
