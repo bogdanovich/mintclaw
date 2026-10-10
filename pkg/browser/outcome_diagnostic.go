@@ -19,7 +19,19 @@ const (
 	OutcomeFailureStale              OutcomeFailureClass = "stale"
 	OutcomeFailureInvalidResult      OutcomeFailureClass = "invalid_result"
 	OutcomeFailureUnknown            OutcomeFailureClass = "unknown"
+	OutcomeFailureClickNotDispatched OutcomeFailureClass = "click_not_dispatched"
 )
+
+// ClickNotDispatched requires a trusted driver/companion preflight result, not
+// an exception message or a model-declared effect. Conflicting transport,
+// deadline, policy, or worker failures must retain unknown-outcome handling.
+func ClickNotDispatched(err error) bool {
+	return errors.Is(err, ErrClickNotDispatched) &&
+		!errors.Is(err, ErrWorkerUnavailable) && !errors.Is(err, ErrDriverIncompatible) &&
+		!errors.Is(err, ErrDriverRejected) && !errors.Is(err, ErrDenied) &&
+		!errors.Is(err, ErrExecutionTimeout) && !errors.Is(err, ErrCleanupRequired) &&
+		!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
 
 type InvocationDiagnostic struct {
 	FailureClass OutcomeFailureClass
@@ -58,6 +70,11 @@ func classifyAcceptedOutcomeFailure(executeErr, executionContextErr error) Outco
 // when the process that observed the original failure is no longer available.
 // The projection remains ephemeral and cannot authorize a retry.
 func diagnoseRecoveredOutcome(invocation Invocation) Invocation {
+	if invocation.State == InvocationFailed && invocation.SafeFailure == "click_not_dispatched" &&
+		invocation.Diagnostic == nil {
+		invocation.Diagnostic = &InvocationDiagnostic{FailureClass: OutcomeFailureClickNotDispatched}
+		return invocation
+	}
 	if invocation.State == InvocationFailed && invocation.Execution != nil && invocation.Diagnostic == nil {
 		switch invocation.SafeFailure {
 		case "execution_timeout":

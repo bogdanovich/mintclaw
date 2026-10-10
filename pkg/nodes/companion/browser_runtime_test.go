@@ -1158,8 +1158,25 @@ func TestRuntimeMarksAmbiguousOrInvalidBrowserActionUnknownWithoutReplay(t *test
 }
 
 func TestRuntimeRecordsVerifiedBrowserNavigationFailureWithoutReplay(t *testing.T) {
+	testRuntimeRecordsBrowserFailureWithoutReplay(
+		t,
+		nodes.ErrBrowserHostNavigationFailed,
+		nodes.InvocationDispatchBrowserNavigationFailed,
+	)
+}
+
+func TestRuntimeRecordsBrowserClickNotDispatchedWithoutReplay(t *testing.T) {
+	testRuntimeRecordsBrowserFailureWithoutReplay(
+		t,
+		nodes.ErrBrowserHostClickNotDispatched,
+		nodes.InvocationDispatchBrowserClickNotDispatched,
+	)
+}
+
+func testRuntimeRecordsBrowserFailureWithoutReplay(t *testing.T, hostErr error, code string) {
+	t.Helper()
 	host := browserRuntimeHostFixture()
-	host.navigateError = nodes.ErrBrowserHostNavigationFailed
+	host.navigateError = hostErr
 	runtime := newBrowserRuntimeFixture(t, host)
 	input, err := json.Marshal(nodes.BrowserActInput{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
@@ -1173,19 +1190,19 @@ func TestRuntimeRecordsVerifiedBrowserNavigationFailureWithoutReplay(t *testing.
 		t.Fatal(err)
 	}
 	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, input)
-	if _, err = runtime.Invoke(t.Context(), plan); !errors.Is(err, nodes.ErrBrowserHostNavigationFailed) {
+	if _, err = runtime.Invoke(t.Context(), plan); !errors.Is(err, hostErr) {
 		t.Fatalf("Invoke() error = %v, want verified navigation failure", err)
 	}
 	record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
 	if !found || record.State != nodes.InvocationFailed || record.Failure == nil ||
-		record.Failure.Code != nodes.InvocationDispatchBrowserNavigationFailed || host.navigated != 1 {
+		record.Failure.Code != code || host.navigated != 1 {
 		t.Fatalf("record = %#v, found %v, navigate calls %d", record, found, host.navigated)
 	}
 	if _, err = runtime.Invoke(t.Context(), plan); err == nil || host.navigated != 1 {
 		t.Fatalf("replay error = %v, navigate calls = %d", err, host.navigated)
 	}
 	failure, ok := boundedInvocationFailure(err)
-	if !ok || failure.Code != nodes.InvocationDispatchBrowserNavigationFailed {
+	if !ok || failure.Code != code {
 		t.Fatalf("replayed failure = %#v, classified = %v", failure, ok)
 	}
 }
