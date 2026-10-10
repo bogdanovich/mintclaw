@@ -15,6 +15,19 @@ fatigue, repeated accepted facts, or production rules tailored to one form.
 
 This document is the implementation contract, not an exit report. Merging it does not complete PDFI4.
 
+### Operator-Approved Output Scope
+
+On 2026-10-10 the operator explicitly chose to finish free-text intake and filling first, and defer editable I-134
+output to a later backend milestone. This decision supersedes the original requirement to qualify an editable partial
+I-134 in PDFI4. The current Linux hybrid backend deliberately emits flattened, print-ready derivatives; see
+[the form backend contract](../guides/document-forms.md#hybrid-acroformxfa-print-ready-output).
+
+PDFI4 must still qualify complete applicable filling of the official I-134 with synthetic data, and complete plus
+editable partial transactions on unrelated ordinary AcroForms. It must truthfully explain the hybrid output limitation,
+and must not promise an editable draft or silently flatten a request to finish remaining fields manually. Defer a
+generic editable-hybrid derivative capability, not an I-134-specific special case. No XFA/backend expansion is added
+to this milestone. All other privacy, recovery, channel, validation, and completion criteria remain mandatory.
+
 ## Verified Motivating Incident
 
 The live main gateway on revision `63804ea1f2652338861e224fbbe0b391504514c9` received a form-completion request on
@@ -57,8 +70,10 @@ operator contract for its admitted intake mode, not merely add a prompt telling 
    fact unless the operator asks to correct it or a specific validation conflict is explained.
 6. Support clarification, correction, back, pause/resume, and cancel in understandable language and with existing
    channel controls. A message mixing facts and a clarification must not be written wholesale into one PDF field.
-7. On an explicit partial-finish request, leave deferred fields unchanged and produce a clearly identified editable
-   draft. Do not manufacture blank/not-applicable answers or claim the form is complete or submission-ready.
+7. On an explicit partial-finish request for an ordinary AcroForm, leave deferred fields unchanged and produce a
+   clearly identified editable draft. For a hybrid backend that only supports flattened output, explain the limitation
+   and preserve the job instead of fulfilling the request with a non-editable copy. Do not manufacture blank/
+   not-applicable answers or claim the form is complete or submission-ready.
 8. Before either complete or partial output, show the appropriate review and wait for a separate finish request and
    existing commit confirmation. Verify the artifact, preserve the source, and deliver exactly one logical PDF.
    Signatures, certifications, and external submission are never inferred or performed by this milestone.
@@ -161,14 +176,17 @@ boundary requires an explicit checkpoint before implementation, not a silent sco
 | Usable channel | Real Telegram ingress handles both reply and standalone text, several messages, typed controls, and cancellation; an agent-only mock is insufficient |
 
 The large public fixture must include the motivating I-134 with synthetic people, addresses, and finances, subject to
-its actual supported PDF classification. Also qualify an unrelated form with different roles/labels; fixture-specific
+its actual supported PDF classification and the operator-approved output scope above. Qualify its complete applicable
+transaction; editable hybrid output is explicitly deferred. Also qualify an unrelated ordinary AcroForm with different
+roles/labels in both complete and editable partial modes; fixture-specific
 field oracles are permitted in tests, not in production. Record fixture provenance, edition/hash, applicable sections,
 and backend classification. If the official fixture is unsupported, report the hard gate and revise admission with the
 operator instead of substituting a synthetic look-alike and claiming that scenario passed.
 
-Qualification must exercise both a complete applicable transaction and a user-requested partial draft, not merely
-generate a summary or ask the first question. Use no real personal data. Include independently inspected output values,
-visible page verification, unchanged source hash, exactly one logical delivery, protected-store terminal cleanup,
+Qualification must exercise both a complete applicable transaction and a user-requested editable partial draft on the
+ordinary AcroForm lane, not merely generate a summary or ask the first question. Use no real personal data. Include
+independently inspected output values, visible page verification, unchanged source hash, exactly one logical delivery,
+protected-store terminal cleanup,
 and bounded failure/retry tests. Distinguish actual Telegram transport evidence from headless `/answer` qualification.
 
 ## Definition Of Done
