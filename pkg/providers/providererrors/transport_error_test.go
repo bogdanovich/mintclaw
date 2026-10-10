@@ -3,9 +3,12 @@ package providererrors
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"testing"
+
+	"golang.org/x/net/http2"
 )
 
 func TestFromTransportError(t *testing.T) {
@@ -27,6 +30,23 @@ func TestFromTransportError(t *testing.T) {
 			err:  &net.DNSError{Err: "temporary resolver failure", Name: "api.example.com"},
 			kind: KindNetwork,
 		},
+		{
+			name: "peer HTTP/2 internal stream failure",
+			err: fmt.Errorf("read response stream: %w", http2.StreamError{
+				StreamID: 21,
+				Code:     http2.ErrCodeInternal,
+				Cause:    errors.New("received from peer"),
+			}),
+			kind: KindNetwork,
+		},
+		{
+			name: "peer refused HTTP/2 stream",
+			err: fmt.Errorf("read response stream: %w", http2.StreamError{
+				StreamID: 23,
+				Code:     http2.ErrCodeRefusedStream,
+			}),
+			kind: KindNetwork,
+		},
 	}
 
 	for _, test := range tests {
@@ -45,5 +65,9 @@ func TestFromTransportError(t *testing.T) {
 func TestFromTransportErrorRejectsUnknown(t *testing.T) {
 	if got, ok := FromTransportError(errors.New("provider-specific failure")); ok || got != nil {
 		t.Fatalf("FromTransportError() = (%#v, %v), want no normalization", got, ok)
+	}
+	protocolFailure := http2.StreamError{StreamID: 29, Code: http2.ErrCodeProtocol}
+	if got, ok := FromTransportError(protocolFailure); ok || got != nil {
+		t.Fatalf("protocol stream error = (%#v, %v), want adapter classification", got, ok)
 	}
 }
