@@ -95,6 +95,19 @@ The trace carries only enough identity and status to select the right owner.
 H1c may export bounded metadata summaries from those owners, but collection is
 read-only and privacy-safe by default.
 
+## Production qualification finding
+
+A harmless stateless deployment canary completed successfully and retained
+both a `turn.end` record with status `completed` and a completed envelope
+outcome. The same trace was nevertheless marked incomplete with
+`runtime_closed_before_terminal_outcome`. The content and runtime outcome were
+not lost, but the truncation claim conflicts with the retained terminal facts.
+
+The machine-readable inventory now preserves this as the
+`terminal_consistency` lifecycle gap. H1b must make terminal projection and
+writer close agree; consumers must continue treating the current incomplete
+marker as authoritative until that fix is merged and qualified.
+
 ## Evidence map
 
 | Path | Authoritative evidence | Passive evidence | H1b/H1c action |
@@ -109,7 +122,7 @@ read-only and privacy-safe by default.
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Retain invocation ID and safe policy/target aliases |
 | Repository/worktree | Git/filesystem, worktree owner | Context snapshot only | Add commit/worktree/snapshot digests and counts; no paths or diffs |
 | TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c exports bounded current-view/version facts, not cell history |
-| Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1c summarizes disabled/drop/expiry/corruption truth |
+| Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c summarizes disabled/drop/expiry/corruption truth |
 
 ## H1a exit assessment
 

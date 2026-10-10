@@ -220,6 +220,8 @@ needed for local coding plus P7.4/P7.5/P7.7 paths.
   terminal, or uncertainty fact.
 - Preserve bounded queues, best-effort writing, content modes, stable
   truncation markers, and one-way runtime-to-diagnostics dependencies.
+- Make trace terminal projection and writer close agree so a retained terminal
+  record cannot also be labelled `runtime_closed_before_terminal_outcome`.
 - Update the trace-debug skill whenever a field remains intentionally absent.
 
 Done when healthy, failed, canceled, timed-out, disconnected, truncated, and

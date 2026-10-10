@@ -23,17 +23,18 @@ type codingDiagnosticInventory struct {
 }
 
 type codingDiagnosticPath struct {
-	ID                string                `json:"id"`
-	Support           string                `json:"support"`
-	Authorities       []string              `json:"authorities"`
-	RuntimeEvents     []string              `json:"runtime_events"`
-	TraceRecords      []string              `json:"trace_records"`
-	RequiredIDs       []string              `json:"required_ids"`
-	AvailableIDs      []string              `json:"available_ids"`
-	MissingTraceJoins []codingDiagnosticGap `json:"missing_trace_joins"`
-	TerminalFacts     []string              `json:"terminal_facts"`
-	RetentionOwner    string                `json:"retention_owner"`
-	ExportClass       string                `json:"export_class"`
+	ID                 string                `json:"id"`
+	Support            string                `json:"support"`
+	Authorities        []string              `json:"authorities"`
+	RuntimeEvents      []string              `json:"runtime_events"`
+	TraceRecords       []string              `json:"trace_records"`
+	RequiredIDs        []string              `json:"required_ids"`
+	AvailableIDs       []string              `json:"available_ids"`
+	MissingTraceJoins  []codingDiagnosticGap `json:"missing_trace_joins"`
+	KnownLifecycleGaps []codingDiagnosticGap `json:"known_lifecycle_gaps"`
+	TerminalFacts      []string              `json:"terminal_facts"`
+	RetentionOwner     string                `json:"retention_owner"`
+	ExportClass        string                `json:"export_class"`
 }
 
 type codingDiagnosticGap struct {
@@ -139,6 +140,24 @@ func validateCodingDiagnosticPath(
 	for identity := range gaps {
 		if !slices.Contains(path.RequiredIDs, identity) {
 			t.Fatalf("path %q documents non-required gap %q", path.ID, identity)
+		}
+	}
+
+	lifecycleGaps := make(map[string]struct{}, len(path.KnownLifecycleGaps))
+	for _, gap := range path.KnownLifecycleGaps {
+		if gap.ID == "" || gap.Observation == "" ||
+			(gap.Disposition != "close_h1b" && gap.Disposition != "close_h1c" &&
+				gap.Disposition != "external_when_unavailable") {
+			t.Fatalf("path %q has invalid lifecycle gap %#v", path.ID, gap)
+		}
+		if _, duplicate := lifecycleGaps[gap.ID]; duplicate {
+			t.Fatalf("path %q repeats lifecycle gap %q", path.ID, gap.ID)
+		}
+		lifecycleGaps[gap.ID] = struct{}{}
+	}
+	if path.ID == "diagnostic_pipeline_health" {
+		if _, documented := lifecycleGaps["terminal_consistency"]; !documented {
+			t.Fatalf("path %q does not preserve the production terminal-consistency gap", path.ID)
 		}
 	}
 }
