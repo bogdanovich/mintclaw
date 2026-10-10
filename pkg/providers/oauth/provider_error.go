@@ -28,8 +28,18 @@ func normalizeCodexError(err error) error {
 	if normalized, ok := providererrors.FromTransportError(err); ok {
 		return normalized
 	}
-	// Streaming protocol and local parse errors have no typed SDK metadata.
-	// Preserve the original cause for the shared error classifier.
+	// This boundary receives SDK response decoding failures, not model-generated
+	// tool argument errors. A malformed wire response can use the existing
+	// bounded request retry/fallback path without replaying any completed tools.
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return &providererrors.ProviderError{
+			Kind:        providererrors.KindTransient,
+			SafeMessage: "Codex returned a malformed response",
+			Cause:       err,
+		}
+	}
+	// Preserve unrelated local failures for the shared error classifier.
 	return fmt.Errorf("codex API call: %w", err)
 }
 

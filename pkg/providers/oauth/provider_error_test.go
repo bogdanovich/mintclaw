@@ -2,11 +2,13 @@ package oauthprovider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +16,62 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
+
+func TestCodexMalformedStreamIsTransientAndDoesNotReturnPartialToolCalls(t *testing.T) {
+	for _, malformed := range []string{`{"type":"response.completed","response":`, `{"type":invalid}`} {
+		t.Run(malformed, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				if calls.Add(1) == 1 {
+					_, _ = fmt.Fprint(w, "event: response.output_item.done\n"+
+						`data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"renew","arguments":"{}"}}`+"\n\n")
+					_, _ = fmt.Fprint(w, "event: response.completed\ndata: "+malformed+"\n\n")
+					return
+				}
+				_, _ = fmt.Fprint(w, "event: response.completed\n"+
+					`data: {"type":"response.completed","sequence_number":1,"response":{"id":"resp-ok","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"verified result","annotations":[]}]}]}}`+"\n\n")
+			}))
+			defer server.Close()
+			provider := NewCodexProvider("test-token", "acc-123")
+			provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+			messages := []Message{{Role: "user", Content: "Report the already-completed action."}}
+			response, err := provider.Chat(t.Context(), messages, nil, "gpt-5.3-codex", nil)
+			var providerErr *providererrors.ProviderError
+			var syntaxErr *json.SyntaxError
+			if response != nil || !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindTransient ||
+				!errors.As(err, &syntaxErr) {
+				t.Fatalf("malformed stream = %#v, %T %v", response, err, err)
+			}
+			if strings.Contains(err.Error(), malformed) || strings.Contains(err.Error(), "call_1") {
+				t.Fatal("safe provider error exposed response contents")
+			}
+			response, err = provider.Chat(t.Context(), messages, nil, "gpt-5.3-codex", nil)
+			if err != nil || response == nil || response.Content != "verified result" ||
+				len(response.ToolCalls) != 0 || calls.Load() != 2 {
+				t.Fatalf("subsequent response = %#v, %v; requests=%d", response, err, calls.Load())
+			}
+		})
+	}
+}
+
+func TestCodexProtocolClassificationPreservesCancellationAndUnknownErrors(t *testing.T) {
+	parseErr := json.Unmarshal([]byte(`{"private_response":`), new(any))
+	wrapped := fmt.Errorf("SDK decode: %w", parseErr)
+	var providerErr *providererrors.ProviderError
+	if err := normalizeCodexError(wrapped); !errors.As(err, &providerErr) ||
+		providerErr.Kind != providererrors.KindTransient || !errors.Is(err, parseErr) {
+		t.Fatalf("wrapped syntax error = %v", err)
+	}
+	if err := normalizeCodexError(errors.Join(context.Canceled, parseErr)); !errors.As(err, &providerErr) ||
+		providerErr.Kind != providererrors.KindCanceled || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled parse = %v", err)
+	}
+	unknown := errors.New("unexpected end of JSON input")
+	if err := normalizeCodexError(unknown); errors.As(err, &providerErr) || !errors.Is(err, unknown) {
+		t.Fatalf("untyped local error was incorrectly made retryable: %v", err)
+	}
+}
 
 func TestCodexProviderErrorContract(t *testing.T) {
 	tests := []struct {
