@@ -1,0 +1,140 @@
+package browser
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	steelapi "github.com/steel-dev/steel-go"
+
+	"github.com/bogdanovich/mintclaw/pkg/config"
+)
+
+func trialSteelBudget() config.BrowserSteelBudgetConfig {
+	return config.BrowserSteelBudgetConfig{
+		MaxSessionsPerDay: 3, MaxBillableSecondsPerDay: 900,
+		MaxSessionCostUSD: 0.25, MaxDailyCostUSD: 0.75,
+	}
+}
+
+func privateBudgetTestPath(t *testing.T, name string) string {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(root, name)
+}
+
+func TestSteelBudgetReservationsSurviveRestartAndFailClosed(t *testing.T) {
+	path := privateBudgetTestPath(t, "usage.json")
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		if err := reserveSteelBudget(path, trialSteelBudget(), 180, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := reserveSteelBudget(path, trialSteelBudget(), 180, now); !errors.Is(err, ErrProviderQuota) {
+		t.Fatalf("fourth restart admission = %v", err)
+	}
+	if err := reserveSteelBudget(path, trialSteelBudget(), 180, now.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := reserveSteelBudget(path, trialSteelBudget(), 180, now); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("clock rollback admission = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := reserveSteelBudget(path, trialSteelBudget(), 180, now); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("corrupt allowance admission = %v", err)
+	}
+}
+
+func TestSteelBudgetSecondsAndUSDAdmission(t *testing.T) {
+	for _, kind := range []string{"seconds", "usd"} {
+		t.Run(kind, func(t *testing.T) {
+			budget := trialSteelBudget()
+			if kind == "seconds" {
+				budget.MaxBillableSecondsPerDay = 180
+			} else {
+				budget.MaxDailyCostUSD = 0.25
+			}
+			path := privateBudgetTestPath(t, "usage.json")
+			if err := reserveSteelBudget(path, budget, 180, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if err := reserveSteelBudget(path, budget, 180, time.Now()); !errors.Is(err, ErrProviderQuota) {
+				t.Fatalf("second admission = %v", err)
+			}
+		})
+	}
+}
+
+func TestSteelCreateForwardsPaidSettingsWithoutPOSTRetries(t *testing.T) {
+	var payload map[string]any
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"ambiguous create"}`))
+	}))
+	defer server.Close()
+	client := &steelSDKRuntimeClient{client: steelapi.NewClientWithBaseURL("test", server.URL)}
+	_, err := client.CreateSession(context.Background(), steelProviderSessionRequest{
+		Timeout: 180 * time.Second, Inactivity: 60 * time.Second, PersistProfile: true,
+		UseProxy: true, ProxyCountry: "US", SolveCaptcha: true,
+	})
+	if err == nil || calls != 1 || payload["solveCaptcha"] != true || payload["persistProfile"] != true ||
+		payload["timeout"] != float64(180000) {
+		t.Fatalf("create requests=%d payload=%+v err=%v", calls, payload, err)
+	}
+	proxy := payload["useProxy"].(map[string]any)
+	if proxy["geolocation"].(map[string]any)["country"] != "US" {
+		t.Fatalf("proxy = %+v", proxy)
+	}
+}
+
+func TestSteelCostUsesExactUSDAndRejectsInvalidCurrency(t *testing.T) {
+	for _, currency := range []string{"usd", "eur"} {
+		t.Run(currency, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id": "session_1", "currency": currency, "unit": "dollar", "totalCost": 0.251234,
+				})
+			}))
+			defer server.Close()
+			client := &steelSDKRuntimeClient{client: steelapi.NewClientWithBaseURL("test", server.URL)}
+			cost, err := client.SessionCost(context.Background(), "session_1")
+			if currency == "usd" && (err != nil || cost != 0.251234) {
+				t.Fatalf("cost=%v err=%v", cost, err)
+			}
+			if currency != "usd" && !errors.Is(err, ErrProviderUnavailable) {
+				t.Fatalf("invalid currency error=%v", err)
+			}
+		})
+	}
+}
+
+func TestSteelBudgetStopRetainsCleanupOwnershipAndRetriesRelease(t *testing.T) {
+	client := &fakeSteelRuntimeClient{releaseErrs: []error{ErrProviderUnavailable, nil}}
+	runtime := &steelPlaywrightRuntime{client: client, sessionID: "session_1", baselineCaptured: true}
+	if runtime.stopForBudget() || runtime.sessionReleased || runtime.closed {
+		t.Fatal("failed remote release discarded budget cleanup ownership")
+	}
+	if !runtime.stopForBudget() || !runtime.sessionReleased || runtime.closed || len(client.releaseCalls) != 2 {
+		t.Fatal("budget stop failed to retry remote release or discarded normal profile cleanup")
+	}
+}

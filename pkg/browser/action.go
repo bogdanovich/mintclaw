@@ -35,6 +35,8 @@ type Observation struct {
 	PendingDialog      *DialogObservation `json:"pending_dialog,omitempty"`
 	Truncated          bool               `json:"truncated"`
 	PageStateHash      string             `json:"page_state_hash"`
+	HTTPStatus         int                `json:"http_status,omitempty"`
+	AntiBotBlock       string             `json:"anti_bot_block,omitempty"`
 }
 
 type DialogObservation struct {
@@ -283,6 +285,10 @@ func (broker *Broker) persistDriverObservationLocked(
 	slot.uploads = nil
 	slot.navigationID = ""
 	slot.navigationID = navigationID
+	slot.navigationEvidence = navigationEvidence{
+		HTTPStatus: driverObservation.HTTPStatus, AntiBotBlock: driverObservation.AntiBotBlock,
+	}
+	slot.observedURL = driverObservation.URL
 	pendingDialog := cloneDialogObservation(driverObservation.PendingDialog)
 	if pendingDialog != nil {
 		pendingDialog.ID = stableDialogRef(snapshotID, pendingDialog.Type, pendingDialog.Message)
@@ -294,6 +300,7 @@ func (broker *Broker) persistDriverObservationLocked(
 		PendingDialog: pendingDialog,
 		Truncated:     driverObservation.Truncated,
 		PageStateHash: pageStateHash,
+		HTTPStatus:    driverObservation.HTTPStatus, AntiBotBlock: driverObservation.AntiBotBlock,
 	}
 	if session.ContextAuthority != nil {
 		observation.ContextCatalogID = session.ContextAuthority.ID

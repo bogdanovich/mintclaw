@@ -2146,6 +2146,7 @@ func browserHostObservation(
 		SessionID: sessionID, TabID: session.tabID,
 		SnapshotGeneration: session.snapshotGeneration,
 		URL:                observation.URL, Origin: observation.Origin, Title: observation.Title,
+		HTTPStatus: observation.HTTPStatus, AntiBotBlock: observation.AntiBotBlock,
 		Snapshot: snapshot, Elements: elements, PendingDialog: browserHostDialogObservation(observation.PendingDialog),
 		Truncated:  observation.Truncated,
 		DocumentID: hex.EncodeToString(session.observationDigest),

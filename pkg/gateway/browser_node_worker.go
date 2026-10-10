@@ -1413,6 +1413,7 @@ func (worker *nodeBrowserWorker) acceptObservation(
 	}
 	observation := browser.DriverObservation{
 		URL: result.URL, Origin: result.Origin, Title: result.Title,
+		HTTPStatus: result.HTTPStatus, AntiBotBlock: result.AntiBotBlock,
 		Snapshot: result.Snapshot, Elements: elements, Truncated: result.Truncated,
 	}
 	if result.PendingDialog != nil {

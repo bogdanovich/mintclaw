@@ -352,6 +352,7 @@ func (store *FileStore) UpdateSession(_ context.Context, expected uint64, next S
 		return ErrStale
 	}
 	if current.Owner != next.Owner || current.Target != next.Target || current.Profile != next.Profile ||
+		(current.RecoveryAttempted && !next.RecoveryAttempted) ||
 		current.CreatedAt != next.CreatedAt || current.DryRun != next.DryRun ||
 		current.ProfileRevision != next.ProfileRevision || current.PolicyRevision != next.PolicyRevision ||
 		!validControllerTransition(current, next) ||

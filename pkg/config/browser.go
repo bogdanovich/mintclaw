@@ -128,6 +128,7 @@ type BrowserTargetConfig struct {
 	NodeTarget       string                          `json:"node_target,omitempty"       yaml:"-"`
 	Provider         string                          `json:"provider,omitempty"          yaml:"-"`
 	Steel            BrowserSteelProviderConfig      `json:"steel,omitempty"             yaml:"-"`
+	Fallback         BrowserFallbackConfig           `json:"fallback,omitzero"           yaml:"-"`
 	Driver           string                          `json:"driver,omitempty"            yaml:"-"`
 	DriverServer     string                          `json:"driver_server,omitempty"     yaml:"-"`
 	DriverExecutable string                          `json:"driver_executable,omitempty" yaml:"-"`
@@ -136,15 +137,34 @@ type BrowserTargetConfig struct {
 	Profiles         map[string]BrowserProfileConfig `json:"profiles,omitempty"          yaml:"-"`
 }
 
+type BrowserFallbackConfig struct {
+	Target          string `json:"target,omitempty"           yaml:"-"`
+	Profile         string `json:"profile,omitempty"          yaml:"-"`
+	RememberSeconds int    `json:"remember_seconds,omitempty" yaml:"-"`
+}
+
 // BrowserSteelProviderConfig is gateway-private authority for one Steel cloud
 // target. APIKeyRef is kept as a SecureString so public configuration
 // projections, logs, and ordinary JSON serialization cannot expose it.
 type BrowserSteelProviderConfig struct {
-	APIKeyRef                SecureString `json:"api_key_ref,omitzero"                 yaml:"api_key_ref,omitempty"`
-	Concurrency              int          `json:"concurrency,omitempty"                yaml:"-"`
-	SessionTimeoutSeconds    int          `json:"session_timeout_seconds,omitempty"    yaml:"-"`
-	InactivityTimeoutSeconds int          `json:"inactivity_timeout_seconds,omitempty" yaml:"-"`
-	MaxBillableSeconds       int          `json:"max_billable_seconds,omitempty"       yaml:"-"`
+	APIKeyRef                SecureString             `json:"api_key_ref,omitzero"                 yaml:"api_key_ref,omitempty"`
+	Concurrency              int                      `json:"concurrency,omitempty"                yaml:"-"`
+	SessionTimeoutSeconds    int                      `json:"session_timeout_seconds,omitempty"    yaml:"-"`
+	InactivityTimeoutSeconds int                      `json:"inactivity_timeout_seconds,omitempty" yaml:"-"`
+	MaxBillableSeconds       int                      `json:"max_billable_seconds,omitempty"       yaml:"-"`
+	UseProxy                 bool                     `json:"use_proxy,omitempty"                  yaml:"-"`
+	ProxyCountry             string                   `json:"proxy_country,omitempty"              yaml:"-"`
+	SolveCaptcha             bool                     `json:"solve_captcha,omitempty"              yaml:"-"`
+	Budget                   BrowserSteelBudgetConfig `json:"budget,omitzero"                      yaml:"-"`
+}
+
+// Budget applies independently to each configured Steel profile. USD limits
+// stop sessions using reported provider cost; they are not provider billing caps.
+type BrowserSteelBudgetConfig struct {
+	MaxSessionsPerDay        int     `json:"max_sessions_per_day,omitempty"         yaml:"-"`
+	MaxBillableSecondsPerDay int     `json:"max_billable_seconds_per_day,omitempty" yaml:"-"`
+	MaxSessionCostUSD        float64 `json:"max_session_cost_usd,omitempty"         yaml:"-"`
+	MaxDailyCostUSD          float64 `json:"max_daily_cost_usd,omitempty"           yaml:"-"`
 }
 
 type browserSteelSecurityConfig struct {
@@ -580,6 +600,21 @@ func (cfg *Config) ValidateBrowserConfig() error {
 		if err := cfg.validateBrowserTarget(targetName, target); err != nil {
 			return err
 		}
+		fallback := target.Fallback
+		if fallback != (BrowserFallbackConfig{}) {
+			destination, exists := browser.Targets[fallback.Target]
+			profile, profileExists := destination.Profiles[fallback.Profile]
+			if !target.Enabled || target.EffectiveProvider() != BrowserProviderLocal ||
+				!exists || !destination.Enabled || destination.EffectiveProvider() != BrowserProviderSteel ||
+				!profileExists || !profile.Enabled || profile.Mode != BrowserProfileManaged || profile.DryRun ||
+				destination.Steel.Budget == (BrowserSteelBudgetConfig{}) ||
+				fallback.RememberSeconds < 0 || fallback.RememberSeconds > BrowserMaxRetentionSeconds {
+				return fmt.Errorf(
+					"browser target %q fallback requires an enabled managed Steel profile with a budget",
+					targetName,
+				)
+			}
+		}
 	}
 	if browser.DefaultTarget != "" {
 		if !browserAliasPattern.MatchString(browser.DefaultTarget) {
@@ -609,6 +644,8 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 		return fmt.Errorf("invalid tools.browser target alias %q", name)
 	}
 	provider := target.EffectiveProvider()
+	publicSteel := target.Steel
+	publicSteel.APIKeyRef = SecureString{}
 	if provider != BrowserProviderLocal && provider != BrowserProviderSteel {
 		return fmt.Errorf("browser target %q has unsupported provider %q", name, target.Provider)
 	}
@@ -616,8 +653,7 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 		if err := validateBrowserSteelProvider(name, target.Steel); err != nil {
 			return err
 		}
-	} else if target.Steel.Concurrency != 0 || target.Steel.SessionTimeoutSeconds != 0 ||
-		target.Steel.InactivityTimeoutSeconds != 0 || target.Steel.MaxBillableSeconds != 0 {
+	} else if publicSteel != (BrowserSteelProviderConfig{}) {
 		return fmt.Errorf("local browser target %q cannot configure steel", name)
 	}
 	if target.Driver != "" && target.Driver != BrowserDriverPlaywrightMCP &&
@@ -908,6 +944,24 @@ func validateBrowserSteelProvider(name string, steel BrowserSteelProviderConfig)
 			"browser target %q steel max_billable_seconds must be between %d and session_timeout_seconds",
 			name, BrowserMinCloudSessionSeconds,
 		)
+	}
+	if steel.ProxyCountry != "" && (!steel.UseProxy || len(steel.ProxyCountry) != 2 ||
+		steel.ProxyCountry[0] < 'A' || steel.ProxyCountry[0] > 'Z' ||
+		steel.ProxyCountry[1] < 'A' || steel.ProxyCountry[1] > 'Z') {
+		return fmt.Errorf("browser target %q proxy_country requires use_proxy and an uppercase ISO country code", name)
+	}
+	budget := steel.Budget
+	if steel.UseProxy || steel.SolveCaptcha || budget != (BrowserSteelBudgetConfig{}) {
+		if budget.MaxSessionsPerDay < 1 || budget.MaxSessionsPerDay > 100 ||
+			budget.MaxBillableSecondsPerDay < steel.MaxBillableSeconds ||
+			budget.MaxBillableSecondsPerDay > 86400 ||
+			!(budget.MaxSessionCostUSD >= 0.01 && budget.MaxSessionCostUSD <= 100) ||
+			!(budget.MaxDailyCostUSD >= budget.MaxSessionCostUSD && budget.MaxDailyCostUSD <= 1000) {
+			return fmt.Errorf(
+				"browser target %q steel budget requires bounded daily sessions, seconds and USD thresholds",
+				name,
+			)
+		}
 	}
 	return nil
 }

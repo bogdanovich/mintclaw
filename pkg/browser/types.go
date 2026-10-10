@@ -436,34 +436,41 @@ func (owner Owner) sameSessionScope(other Owner) bool {
 }
 
 type Session struct {
-	ID                     string          `json:"id"`
-	Owner                  Owner           `json:"owner"`
-	Target                 string          `json:"target"`
-	Profile                string          `json:"profile"`
-	State                  SessionState    `json:"state"`
-	DryRun                 bool            `json:"dry_run"`
-	ProfileRevision        string          `json:"profile_revision,omitempty"`
-	PolicyRevision         string          `json:"policy_revision"`
-	ControllerGeneration   uint64          `json:"controller_generation"`
-	Controller             ControllerState `json:"controller"`
-	ControllerExpiresAt    int64           `json:"controller_expires_at,omitempty"`
-	TabID                  string          `json:"tab_id"`
-	FrameID                string          `json:"frame_id,omitempty"`
-	ContextAuthority       *ContextCatalog `json:"context_catalog,omitempty"`
-	SnapshotID             string          `json:"snapshot_id,omitempty"`
-	SnapshotGeneration     uint64          `json:"snapshot_generation"`
-	SnapshotOrigin         string          `json:"snapshot_origin,omitempty"`
-	PageStateHash          string          `json:"page_state_hash,omitempty"`
-	ProgressSignature      string          `json:"progress_signature,omitempty"`
-	ProgressCount          uint32          `json:"progress_count,omitempty"`
-	PriorProgressSignature string          `json:"prior_progress_signature,omitempty"`
-	PriorProgressCount     uint32          `json:"prior_progress_count,omitempty"`
-	Revision               uint64          `json:"revision"`
-	CreatedAt              int64           `json:"created_at"`
-	UpdatedAt              int64           `json:"updated_at"`
-	LastActivityAt         int64           `json:"last_activity_at"`
-	ExpiresAt              int64           `json:"expires_at"`
-	SafeFailure            string          `json:"safe_failure,omitempty"`
+	ID                     string                   `json:"id"`
+	Owner                  Owner                    `json:"owner"`
+	Target                 string                   `json:"target"`
+	Profile                string                   `json:"profile"`
+	State                  SessionState             `json:"state"`
+	DryRun                 bool                     `json:"dry_run"`
+	ProfileRevision        string                   `json:"profile_revision,omitempty"`
+	PolicyRevision         string                   `json:"policy_revision"`
+	RecoveryAttempted      bool                     `json:"recovery_attempted,omitempty"`
+	SuccessfulDomains      [16]BrowserDomainSuccess `json:"successful_domains,omitzero"`
+	ControllerGeneration   uint64                   `json:"controller_generation"`
+	Controller             ControllerState          `json:"controller"`
+	ControllerExpiresAt    int64                    `json:"controller_expires_at,omitempty"`
+	TabID                  string                   `json:"tab_id"`
+	FrameID                string                   `json:"frame_id,omitempty"`
+	ContextAuthority       *ContextCatalog          `json:"context_catalog,omitempty"`
+	SnapshotID             string                   `json:"snapshot_id,omitempty"`
+	SnapshotGeneration     uint64                   `json:"snapshot_generation"`
+	SnapshotOrigin         string                   `json:"snapshot_origin,omitempty"`
+	PageStateHash          string                   `json:"page_state_hash,omitempty"`
+	ProgressSignature      string                   `json:"progress_signature,omitempty"`
+	ProgressCount          uint32                   `json:"progress_count,omitempty"`
+	PriorProgressSignature string                   `json:"prior_progress_signature,omitempty"`
+	PriorProgressCount     uint32                   `json:"prior_progress_count,omitempty"`
+	Revision               uint64                   `json:"revision"`
+	CreatedAt              int64                    `json:"created_at"`
+	UpdatedAt              int64                    `json:"updated_at"`
+	LastActivityAt         int64                    `json:"last_activity_at"`
+	ExpiresAt              int64                    `json:"expires_at"`
+	SafeFailure            string                   `json:"safe_failure,omitempty"`
+}
+
+type BrowserDomainSuccess struct {
+	Host string `json:"host"`
+	At   int64  `json:"at"`
 }
 
 // CloseResult distinguishes a close performed by this call from an
@@ -474,6 +481,16 @@ type CloseResult struct {
 }
 
 func (session Session) Validate() error {
+	for _, success := range session.SuccessfulDomains {
+		host, at := success.Host, success.At
+		if host == "" && at == 0 {
+			continue
+		}
+		if host == "" || len(host) > 253 || strings.ToLower(host) != host ||
+			strings.ContainsAny(host, "/?#@ \r\n\t") || at < session.CreatedAt || at > session.UpdatedAt {
+			return fmt.Errorf("%w: malformed remembered browser domain", ErrInvalid)
+		}
+	}
 	if !validIdentifier(session.ID) || !validIdentifier(session.Target) ||
 		!validIdentifier(session.Profile) ||
 		(session.ProfileRevision != "" && !validIdentifier(session.ProfileRevision)) ||

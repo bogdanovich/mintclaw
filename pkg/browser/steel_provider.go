@@ -45,6 +45,9 @@ type steelProviderSessionRequest struct {
 	Inactivity       time.Duration
 	PersistProfile   bool
 	InteractiveDebug bool
+	UseProxy         bool
+	ProxyCountry     string
+	SolveCaptcha     bool
 }
 
 type steelProviderSession struct {
@@ -93,14 +96,26 @@ func (client *steelSDKRuntimeClient) CreateSession(
 		PersistProfile:    steelapi.Bool(request.PersistProfile),
 		Timeout:           steelapi.Int(request.Timeout.Milliseconds()),
 		InactivityTimeout: steelapi.Int(request.Inactivity.Milliseconds()),
+		SolveCaptcha:      steelapi.Bool(request.SolveCaptcha),
+		UseProxy:          steelapi.F(steelapi.SessionCreateParamsUseProxy{OfBool: &request.UseProxy}),
 		DebugConfig: steelapi.F(steelapi.SessionCreateParamsDebugConfig{
 			Interactive: steelapi.Bool(request.InteractiveDebug),
 		}),
 	}
+	if request.UseProxy && request.ProxyCountry != "" {
+		params.UseProxy = steelapi.F(steelapi.SessionCreateParamsUseProxy{
+			OfSessionCreateParamsUseProxyGeolocation: &steelapi.SessionCreateParamsUseProxyGeolocation{
+				Geolocation: steelapi.F(steelapi.SessionCreateParamsUseProxyGeolocationGeolocation{
+					Country: steelapi.F(steelapi.CreateSessionRequestUseProxyGeolocationCountry(request.ProxyCountry)),
+				}),
+			},
+		})
+	}
 	if request.ProfileID != "" {
 		params.ProfileID = steelapi.String(request.ProfileID)
 	}
-	session, err := client.client.Sessions.Create(ctx, params)
+	// An ambiguous POST must not be retried into another billable session.
+	session, err := client.client.Sessions.Create(ctx, params, steelapi.WithRequestMaxRetries(0))
 	if err != nil {
 		return steelProviderSession{}, classifySteelAPIError(ctx, err)
 	}
@@ -204,6 +219,7 @@ type steelPlaywrightRuntime struct {
 	profileReady     bool
 	profilePersisted bool
 	closed           bool
+	cancelBudget     context.CancelFunc
 }
 
 type steelProviderState struct {
@@ -372,10 +388,21 @@ func (provider *steelPlaywrightRuntimeProvider) Provision(
 		profileBaseline = remoteProfile
 	}
 	maximum := min(provider.provider.SessionTimeoutSeconds, provider.provider.MaxBillableSeconds)
+	if err = reserveSteelBudget(provider.factory.profileConfig.Runtime.ProviderStateFile+".usage.json",
+		provider.provider.Budget, maximum, time.Now().UTC()); err != nil {
+		return nil, errors.Join(err, ErrWorkerUnavailable)
+	}
+	if provider.provider.Budget.MaxSessionCostUSD > 0 {
+		if _, ok := provider.client.(steelCostClient); !ok {
+			return nil, errors.Join(ErrProviderUnavailable, ErrWorkerUnavailable)
+		}
+	}
 	created, err := provider.client.CreateSession(ctx, steelProviderSessionRequest{
 		ProfileID: profileID, Timeout: time.Duration(maximum) * time.Second,
 		Inactivity:     time.Duration(provider.provider.InactivityTimeoutSeconds) * time.Second,
 		PersistProfile: true, InteractiveDebug: true,
+		UseProxy: provider.provider.UseProxy, ProxyCountry: provider.provider.ProxyCountry,
+		SolveCaptcha: provider.provider.SolveCaptcha,
 	})
 	if err != nil {
 		return nil, errors.Join(err, ErrWorkerUnavailable)
@@ -420,6 +447,7 @@ func (provider *steelPlaywrightRuntimeProvider) Provision(
 	}
 	releaseLease = false
 	releaseSlot = false
+	runtimeHandle.startBudgetMonitor(provider.provider.Budget.MaxSessionCostUSD)
 	return runtimeHandle, nil
 }
 
@@ -625,6 +653,9 @@ func (runtimeHandle *steelPlaywrightRuntime) Release(driverStopped bool) error {
 			return errors.Join(err, ErrWorkerUnavailable, ErrCleanupRequired)
 		}
 		runtimeHandle.sessionReleased = true
+		if runtimeHandle.cancelBudget != nil {
+			runtimeHandle.cancelBudget()
+		}
 		runtimeHandle.cdpURL = ""
 		runtimeHandle.debugURL = ""
 	}

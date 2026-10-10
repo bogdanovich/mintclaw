@@ -76,6 +76,10 @@ type BrowserExecutionToolSource interface {
 	) (browser.Invocation, error)
 }
 
+type BrowserNavigationRecoverySource interface {
+	RecoverNavigation(context.Context, browser.Owner, string, string) (browser.NavigationRecovery, error)
+}
+
 type browserTurnCleanupSource interface {
 	CloseOwner(context.Context, browser.Owner) ([]browser.Session, error)
 }
@@ -1784,6 +1788,8 @@ type browserObservationView struct {
 	Replayed           bool                        `json:"replayed,omitempty"`
 	StaleRecovered     bool                        `json:"stale_recovered,omitempty"`
 	PageStateHash      string                      `json:"page_state_hash,omitempty"`
+	HTTPStatus         int                         `json:"http_status,omitempty"`
+	AntiBotBlock       string                      `json:"anti_bot_block,omitempty"`
 }
 
 type browserObservationLimits struct {
@@ -1802,6 +1808,7 @@ func (runtime *browserToolRuntime) observationResult(observation browser.Observa
 		URL: observation.URL, Origin: observation.Origin, Title: observation.Title,
 		Snapshot: observation.Snapshot, PendingDialog: observation.PendingDialog,
 		PageStateHash: observation.PageStateHash,
+		HTTPStatus:    observation.HTTPStatus, AntiBotBlock: observation.AntiBotBlock,
 		Tabs: []browserTabView{{
 			TabID: observation.TabID, SnapshotID: observation.SnapshotID,
 			SnapshotGeneration: observation.SnapshotGeneration,
@@ -2361,6 +2368,8 @@ func (*BrowserActTool) Description() string {
 		"sending, deleting, or replying; use navigation for ordinary page/tab/form-step transitions. " +
 		"For top-level navigate, copy the session, tab, snapshot, and snapshot generation from one fresh " +
 		"browser_observe result and omit frame_id, context_catalog_id, and context_generation even when returned. " +
+		"Use navigate for initial site access so configured anti-bot recovery can switch to Steel automatically. " +
+		"After recovery, use the new browser_session_id and references in the returned observation; the source session is closed. " +
 		"For every other action, copy the session, tab, frame, context catalog, context generation, snapshot, and " +
 		"snapshot generation from one fresh result. When that result contains context_catalog_id and " +
 		"context_generation, copy both together; missing or incomplete required context authority fails closed. " +
@@ -2655,6 +2664,7 @@ type browserActionResult struct {
 	Observation   *browserObservationView     `json:"observation,omitempty"`
 	Artifact      *browser.DownloadArtifact   `json:"artifact,omitempty"`
 	ArtifactState string                      `json:"artifact_state,omitempty"`
+	Recovery      *browser.NavigationRecovery `json:"recovery,omitempty"`
 }
 
 func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
@@ -2742,8 +2752,26 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 			)
 		}
 		if observeErr == nil {
-			view := tool.runtime.observationResult(observation)
-			result.Observation = &view
+			if source, ok := tool.runtime.source.(BrowserNavigationRecoverySource); ok &&
+				preparation.Action.Action.Kind == browser.ActionNavigate {
+				recovery, recoverErr := source.RecoverNavigation(ctx, owner, invocation.ID, observation.SnapshotID)
+				if recovery.Status != "" {
+					result.Recovery = &recovery
+				}
+				if recoverErr != nil {
+					recovery.Status, recovery.Reason = "unavailable", "state_unavailable"
+					result.Recovery = &recovery
+				} else if recovery.Observation != nil {
+					observation = *recovery.Observation
+				}
+				if recoverErr != nil || (recovery.FromSessionID != "" && recovery.Observation == nil) {
+					observeErr = browser.ErrStale
+				}
+			}
+			if observeErr == nil {
+				view := tool.runtime.observationResult(observation)
+				result.Observation = &view
+			}
 		}
 	}
 	toolResult := tool.runtime.result(result)

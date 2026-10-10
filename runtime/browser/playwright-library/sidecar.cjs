@@ -353,6 +353,7 @@ class Driver {
     this.executionQuarantined = false;
     this.executionNetworkGuards = new Set();
     this.remoteDNSCache = new Map();
+    this.navigationResponses = new WeakMap();
   }
 
   async start() {
@@ -435,6 +436,14 @@ class Driver {
   watchPage(page) {
     if (page.__mintclawSidecarWatched) return;
     Object.defineProperty(page, '__mintclawSidecarWatched', { value: true });
+    page.on('response', response => {
+      const request = response.request();
+      if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) return;
+      this.navigationResponses.set(page, {
+        url: response.url(), http_status: response.status(),
+        cloudflareChallenge: response.headers()['cf-mitigated'] === 'challenge',
+      });
+    });
     page.on('dialog', dialog => {
       if (!this.pendingDialog) {
         this.pendingDialog = { handle: dialog, type: dialog.type(), message: dialog.message() };
@@ -584,7 +593,26 @@ class Driver {
       }
     }
     const title = quoteName(await page.title());
-    return `- Page URL: ${page.url()}\n- Page Title: ${title}\n### Snapshot\n\`\`\`yaml\n${lines.join('\n')}\n\`\`\``;
+    const response = this.navigationResponses.get(page);
+    const sameDocument = response && response.url.split('#')[0] === page.url().split('#')[0];
+    const evidence = { http_status: sameDocument ? response.http_status : 0, anti_bot_block: '' };
+    if (sameDocument && response.cloudflareChallenge) {
+      evidence.anti_bot_block = 'cloudflare';
+    } else {
+      evidence.anti_bot_block = await page.evaluate(() => {
+        const title = document.title.toLowerCase();
+        if (/just a moment|attention required/.test(title) &&
+            document.querySelector('#challenge-form, #cf-challenge-running, .cf-error-details')) return 'cloudflare';
+        if (/captcha|verify|access denied/.test(title) &&
+            document.querySelector('iframe[src*="captcha-delivery.com"]')) return 'datadome';
+        if (/access to this page has been denied|verify|press.*hold/.test(title) &&
+            document.querySelector('#px-captcha')) return 'perimeterx';
+        if (/access denied|pardon our interruption/.test(title) &&
+            document.querySelector('iframe[src*="_Incapsula_Resource"]')) return 'imperva';
+        return '';
+      });
+    }
+    return `- Page URL: ${page.url()}\n- Page Title: ${title}\n- Navigation evidence: ${JSON.stringify(evidence)}\n### Snapshot\n\`\`\`yaml\n${lines.join('\n')}\n\`\`\``;
   }
 
   async call(tool, args) {
