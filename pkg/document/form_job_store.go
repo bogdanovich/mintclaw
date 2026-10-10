@@ -43,20 +43,21 @@ type formJobSourceSecret struct {
 }
 
 type formJobValuePayload struct {
-	EventID           string              `json:"event_id"`
-	FieldID           string              `json:"field_id"`
-	Revision          int64               `json:"revision"`
-	Value             FormProtectedValue  `json:"value"`
-	State             FormValueState      `json:"state"`
-	Source            FormValueSource     `json:"source"`
-	Confidence        FormValueConfidence `json:"confidence,omitempty"`
-	Validation        FormValueValidation `json:"validation,omitempty"`
-	BlankReason       FormBlankReason     `json:"blank_reason,omitempty"`
-	ValidationCode    string              `json:"validation_code,omitempty"`
-	SupersedesEventID string              `json:"supersedes_event_id,omitempty"`
-	IdempotencyDigest string              `json:"idempotency_digest"`
-	PreviousDigest    string              `json:"previous_digest"`
-	CreatedAt         int64               `json:"created_at"`
+	EventID           string                     `json:"event_id"`
+	FieldID           string                     `json:"field_id"`
+	Revision          int64                      `json:"revision"`
+	Value             FormProtectedValue         `json:"value"`
+	State             FormValueState             `json:"state"`
+	Source            FormValueSource            `json:"source"`
+	Confidence        FormValueConfidence        `json:"confidence,omitempty"`
+	Validation        FormValueValidation        `json:"validation,omitempty"`
+	BlankReason       FormBlankReason            `json:"blank_reason,omitempty"`
+	ValidationCode    string                     `json:"validation_code,omitempty"`
+	SupersedesEventID string                     `json:"supersedes_event_id,omitempty"`
+	IdempotencyDigest string                     `json:"idempotency_digest"`
+	PreviousDigest    string                     `json:"previous_digest"`
+	CreatedAt         int64                      `json:"created_at"`
+	Composite         *formCompositeValueBinding `json:"composite,omitempty"`
 }
 
 type formJobStoredRecord struct {
@@ -454,12 +455,10 @@ func (store *FormJobStore) AppendValue(
 		} else if currentIndex >= 0 {
 			return false, ErrFormJobConflict
 		}
-		previousDigest := record.Public.LedgerDigest
-		nextRevision := record.Public.Revision + 1
 		payload := formJobValuePayload{
 			EventID:           eventID,
 			FieldID:           request.FieldID,
-			Revision:          nextRevision,
+			Revision:          record.Public.Revision + 1,
 			Value:             cloneProtectedValue(request.Value),
 			State:             request.State,
 			Source:            request.Source,
@@ -469,52 +468,11 @@ func (store *FormJobStore) AppendValue(
 			ValidationCode:    strings.TrimSpace(request.ValidationCode),
 			SupersedesEventID: strings.TrimSpace(request.SupersedesEventID),
 			IdempotencyDigest: idempotencyDigest,
-			PreviousDigest:    previousDigest,
+			PreviousDigest:    record.Public.LedgerDigest,
 			CreatedAt:         now.UnixMilli(),
 		}
-		envelope, err := sealFormJobEnvelope(jobKey, formJobEnvelope{
-			Kind:          "value",
-			JobID:         record.Public.JobID,
-			FieldID:       request.FieldID,
-			EventID:       eventID,
-			Revision:      nextRevision,
-			BindingDigest: bindingDigest,
-		}, payload, store.random)
-		if err != nil {
-			return false, fmt.Errorf("seal document form value: %w", err)
-		}
-		record.Events = append(record.Events, envelope)
-		record.Public.State = FormJobCollecting
-		clearFormJobReviewProjection(&record.Public)
-		clearFormJobCommitProjection(&record.Public)
-		record.Public.Revision = nextRevision
-		record.Public.LedgerRevision++
-		record.Public.LedgerDigest, err = formJobJSONDigest(envelope)
-		if err != nil {
+		if err := store.appendValueToRecord(&record, jobKey, payload, bindingDigest); err != nil {
 			return false, err
-		}
-		record.Public.UpdatedAt = now.UnixMilli()
-		fieldState := FormJobFieldState{
-			FieldID:           request.FieldID,
-			EventID:           eventID,
-			Revision:          nextRevision,
-			ValueKind:         request.Value.Kind,
-			State:             request.State,
-			Source:            request.Source,
-			Confidence:        request.Confidence,
-			Validation:        request.Validation,
-			BlankReason:       request.BlankReason,
-			ValidationCode:    strings.TrimSpace(request.ValidationCode),
-			SupersedesEventID: strings.TrimSpace(request.SupersedesEventID),
-			UpdatedAt:         now.UnixMilli(),
-		}
-		if currentIndex >= 0 {
-			record.Public.Fields[currentIndex] = fieldState
-		} else {
-			record.Public.Fields = append(record.Public.Fields, fieldState)
-			slices.SortFunc(record.Public.Fields, func(a, b FormJobFieldState) int {
-				return cmp.Compare(a.FieldID, b.FieldID)
-			})
 		}
 		document.Records[record.Public.JobID] = record
 		result = cloneFormJobRecord(record.Public)
@@ -522,6 +480,55 @@ func (store *FormJobStore) AppendValue(
 		return true, nil
 	})
 	return result, eventResult, err
+}
+
+// appendValueToRecord mutates only the caller's private record. The caller owns
+// authority, conflicts and publication; a composite can build its entire ledger
+// chain before assigning this record to the snapshot.
+func (store *FormJobStore) appendValueToRecord(
+	record *formJobStoredRecord,
+	jobKey []byte,
+	payload formJobValuePayload,
+	bindingDigest string,
+) error {
+	envelope, err := sealFormJobEnvelope(jobKey, formJobEnvelope{
+		Kind: "value", JobID: record.Public.JobID, FieldID: payload.FieldID,
+		EventID: payload.EventID, Revision: payload.Revision, BindingDigest: bindingDigest,
+	}, payload, store.random)
+	if err != nil {
+		return fmt.Errorf("seal document form value: %w", err)
+	}
+	ledgerDigest, err := formJobJSONDigest(envelope)
+	if err != nil {
+		return err
+	}
+	record.Events = append(record.Events, envelope)
+	record.Public.State = FormJobCollecting
+	clearFormJobReviewProjection(&record.Public)
+	clearFormJobCommitProjection(&record.Public)
+	record.Public.Revision = payload.Revision
+	record.Public.LedgerRevision++
+	record.Public.LedgerDigest = ledgerDigest
+	record.Public.UpdatedAt = payload.CreatedAt
+	fieldState := FormJobFieldState{
+		FieldID: payload.FieldID, EventID: payload.EventID, Revision: payload.Revision,
+		ValueKind: payload.Value.Kind, State: payload.State, Source: payload.Source,
+		Confidence: payload.Confidence, Validation: payload.Validation,
+		BlankReason: payload.BlankReason, ValidationCode: payload.ValidationCode,
+		SupersedesEventID: payload.SupersedesEventID, UpdatedAt: payload.CreatedAt,
+	}
+	currentIndex := slices.IndexFunc(record.Public.Fields, func(field FormJobFieldState) bool {
+		return field.FieldID == payload.FieldID
+	})
+	if currentIndex >= 0 {
+		record.Public.Fields[currentIndex] = fieldState
+	} else {
+		record.Public.Fields = append(record.Public.Fields, fieldState)
+		slices.SortFunc(record.Public.Fields, func(a, b FormJobFieldState) int {
+			return cmp.Compare(a.FieldID, b.FieldID)
+		})
+	}
+	return nil
 }
 
 func (store *FormJobStore) ReadValues(
@@ -924,6 +931,9 @@ func (store *FormJobStore) validateProtectedRecord(record formJobStoredRecord, j
 			payload.FieldID != envelope.FieldID || payload.Revision != envelope.Revision {
 			return ErrFormJobRecordCorrupt
 		}
+		if payload.Composite != nil && payload.Composite.Digest != envelope.BindingDigest {
+			return ErrFormJobRecordCorrupt
+		}
 		if _, duplicate := events[payload.EventID]; duplicate {
 			return ErrFormJobRecordCorrupt
 		}
@@ -962,6 +972,9 @@ func (store *FormJobStore) validateProtectedRecord(record formJobStoredRecord, j
 		if !found || previous.FieldID != payload.FieldID || previous.Revision >= payload.Revision {
 			return ErrFormJobRecordCorrupt
 		}
+	}
+	if err := validateFormCompositeEvents(events); err != nil {
+		return err
 	}
 	if record.Public.LedgerDigest != previousDigest || len(record.Public.Fields) != len(latest) {
 		return ErrFormJobRecordCorrupt
@@ -1091,6 +1104,9 @@ func openFormJobValuePayload(jobKey []byte, envelope formJobEnvelope) (formJobVa
 		payload.BlankReason,
 		payload.ValidationCode,
 	) != nil || validateFormValueMappingClassification(payload.State, payload.Confidence, payload.Validation) != nil {
+		return formJobValuePayload{}, ErrFormJobRecordCorrupt
+	}
+	if payload.Composite != nil && !validFormCompositeValueBinding(*payload.Composite, payload.Revision) {
 		return formJobValuePayload{}, ErrFormJobRecordCorrupt
 	}
 	return payload, nil

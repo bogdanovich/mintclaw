@@ -349,6 +349,9 @@ jobs:
           -run '^(TestFormWriteServiceFillsAndVerifiesDurableExpectation|TestFormWriteCoordinatorPersistsAndReplaysOneVerifiedGeneration|TestFormWriteCoordinatorRecoversEveryPredeliveryState|TestFormCommitApprovalMaterializationAndRestart|TestFormDeliveryAdmissionAndSettlement)$'
           ./pkg/document
 
+      - name: Run portable composite form ledger contract
+        run: go test -count=1 -run '^TestFormComposite' ./pkg/document
+
       - name: Run portable real-process document contract
         run: >-
           go test -count=1
