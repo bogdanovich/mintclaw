@@ -2464,6 +2464,139 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	}
 }
 
+func TestExpiredTaskApprovalFinalUsesVerifiedObjectiveOutcome(t *testing.T) {
+	for _, delivery := range []struct {
+		mode    toolshared.AsyncDeliveryMode
+		channel string
+		status  taskregistry.DeliveryStatus
+	}{
+		{toolshared.AsyncDeliveryUserOnly, "telegram", taskregistry.DeliveryDelivered},
+		{toolshared.AsyncDeliveryParentOnly, "discord", taskregistry.DeliverySessionQueued},
+	} {
+		for _, result := range []struct {
+			name    string
+			outcome *taskresult.Outcome
+			status  taskregistry.Status
+		}{
+			{
+				name: "verified success", status: taskregistry.StatusSucceeded,
+				outcome: &taskresult.Outcome{
+					Status:      taskresult.OutcomeSucceeded,
+					UserSummary: "The later action succeeded and was verified.",
+					CompletedItems: []taskresult.Item{{
+						Item: "Complete the requested action", Kind: taskresult.ObjectiveKindExternalAction,
+						Receipts: []taskresult.Receipt{{
+							ID: "later-success", Kind: taskresult.ObjectiveKindExternalAction,
+							Target: "fixture:item", Action: "update", Tool: "fixture_action",
+						}},
+					}},
+				},
+			},
+			{
+				name: "partial result", status: taskregistry.StatusTimedOut,
+				outcome: &taskresult.Outcome{
+					Status: taskresult.OutcomePartial, MissingItems: []string{"Complete the requested action"},
+					Explanation: "Approval expired before the action could run.",
+				},
+			},
+			{name: "no verified result", status: taskregistry.StatusTimedOut},
+		} {
+			t.Run(string(delivery.mode)+"/"+result.name, func(t *testing.T) {
+				al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+				defer cleanup()
+				manager := newInteractionChannelManager()
+				coordinator := installInteractionChannelManager(t, al, manager)
+				tool := &approvalCountingTool{}
+				agent.Tools.Register(tool)
+				tasks := al.taskRegistryForWorkspace(agent.Workspace)
+				const taskID = "expired-approval-task"
+				if err := tasks.Upsert(taskregistry.Record{
+					TaskID: taskID, Runtime: taskregistry.RuntimeDelegate, TaskKind: "delegate",
+					Task: "Complete the requested action", Status: taskregistry.StatusRunning,
+					DeliveryStatus: taskregistry.DeliveryPending, DeliveryMode: string(delivery.mode),
+					Channel: delivery.channel, ChatID: "chat-1", RequesterSessionKey: "owner-session",
+				}); err != nil {
+					t.Fatal(err)
+				}
+				registry := al.interactionRegistryForWorkspace(agent.Workspace)
+				expiresAt := time.Now().Add(time.Minute)
+				record, err := registry.Create(interactions.CreateRequest{
+					ID: "expired-task-approval", Kind: interactions.KindApproval,
+					Route: interactions.Route{
+						AgentID: agent.ID, SessionKey: "owner-session", RouteSessionKey: "route-owner",
+						Channel: delivery.channel, ChatID: "chat-1", SenderID: "user-1",
+					},
+					Origin: interactions.Origin{
+						TurnID: "turn-task", ToolCallID: "expired-call", ToolName: tool.Name(),
+						TaskID: taskID, ContinuationSessionKey: "task-session", ArgumentHash: strings.Repeat("a", 64),
+						ExecutionContext: &bus.InboundContext{
+							Channel: delivery.channel, ChatID: "chat-1", SenderID: "user-1",
+						},
+					},
+					PromptSummary: "Confirm fixture action", ApprovalAction: "Run fixture action", ExpiresAt: expiresAt,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				record = markTestInteractionWaiting(t, registry, record)
+				claimed, err := registry.ClaimOverdue(expiresAt.Add(time.Second))
+				if err != nil || len(claimed) != 1 {
+					t.Fatalf("ClaimOverdue() = (%#v, %v)", claimed, err)
+				}
+				record, err = registry.MarkResuming(record.ID, claimed[0].Revision)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The finalization boundary receives an already runtime-verified
+				// outcome. A later success is not a grant for the expired call.
+				deliverable := &taskresult.Deliverable{
+					Text: "Canonical resumed result", ObjectiveOutcome: taskresult.CloneOutcome(result.outcome),
+				}
+				if err = al.deliverTaskInteractionFinal(
+					t.Context(), registry, agent.Workspace, record,
+					bus.InboundContext{Channel: delivery.channel, ChatID: "chat-1", SenderID: "user-1"},
+					deliverable.Text, deliverable, nil,
+				); err != nil {
+					t.Fatal(err)
+				}
+				task, _ := tasks.Get(taskID)
+				if task.Status != result.status || task.DeliveryStatus != delivery.status ||
+					task.Deliverable == nil || !reflect.DeepEqual(task.Deliverable.ObjectiveOutcome, result.outcome) {
+					t.Fatalf("task final = %#v", task)
+				}
+				if result.status == taskregistry.StatusSucceeded && task.Error != "" {
+					t.Fatalf("verified success retained an error: %q", task.Error)
+				}
+				resolved, _ := registry.Get(record.ID)
+				if resolved.Status != interactions.StatusResolved || resolved.Outcome != interactions.OutcomeTimedOut ||
+					resolved.ApprovalConsumedAt != 0 || len(resolved.FinalDeliveryIDs) != 1 || tool.executions != 0 {
+					t.Fatalf("expired approval final = %#v, executions=%d", resolved, tool.executions)
+				}
+				intent, err := coordinator.Get(resolved.FinalDeliveryIDs[0])
+				if err != nil || intent.Status != outbox.StatusDelivered {
+					t.Fatalf("final delivery = (%#v, %v)", intent, err)
+				}
+				select {
+				case final := <-manager.sent:
+					if final.Metadata.OutboundKind != bus.OutboundKindFinal || strings.TrimSpace(final.Content) == "" {
+						t.Fatalf("channel final = %#v", final)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("final was not delivered")
+				}
+				if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 0 {
+					t.Fatalf("resolved interaction recovered %d times", recovered)
+				}
+				select {
+				case extra := <-manager.sent:
+					t.Fatalf("duplicate final = %#v", extra)
+				default:
+				}
+			})
+		}
+	}
+}
+
 func TestTimedOutParentOnlyBrowserHandoffSettlesOnceAndAllowsFreshRetry(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
