@@ -78,6 +78,8 @@ if [ "$is_cleanup" = false ] && [ "$is_privileged_execute" = true ] && {
 	! printf '%s' "$message" | grep -Fq 'exclude both delimiter lines' ||
 	! printf '%s' "$message" | grep -Fq 'Do not retry it' ||
 	! printf '%s' "$message" | grep -Fq 'Observe fresh state in this exact same session' ||
+	! printf '%s' "$message" | grep -Fq 'Immediately call browser_observe again to observe the fixture before any browser_execute call' ||
+	! printf '%s' "$message" | grep -Fq 'make the third mandatory browser_observe call now' ||
 	! printf '%s' "$message" | grep -Fq 'A lost session fails this probe.' ||
 	! printf '%s' "$message" | grep -Fq 'other than the three exact browser_execute calls';
 }; then

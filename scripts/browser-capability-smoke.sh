@@ -335,7 +335,7 @@ privileged-execute)
 	stage_one=privileged-execute
 	stage_one_checks='initial_blank, navigated_fixture, structured_extraction, reversible_dom_restored, artifact_retained, sandbox_denial, runtime_timeout, cleanup_after_timeout'
 	stage_one_workflow=$(cat <<EOF
-Open one session and observe about:blank. Navigate with browser_act to ${fixture_origin}/browser-smoke/ and observe the fixture. Then make exactly three browser_execute calls, always copying authority only from the latest fresh result.
+Open one session and call browser_observe to observe about:blank. Navigate with browser_act to ${fixture_origin}/browser-smoke/. Immediately call browser_observe again to observe the fixture before any browser_execute call, even if navigation already returns page state. These two observations are mandatory. Then make exactly three browser_execute calls, always copying authority only from the latest fresh result.
 
 First run JavaScript with effect=external_commit. Copy only the text between the source delimiters into the source argument; exclude both delimiter lines:
 BEGIN_BROWSER_EXECUTE_SOURCE_1
@@ -353,7 +353,7 @@ Third run JavaScript with effect=read. Copy only the text between the source del
 BEGIN_BROWSER_EXECUTE_SOURCE_3
 async () => await new Promise(() => {})
 END_BROWSER_EXECUTE_SOURCE_3
-Require this call to return state=failed with reason=execution_timeout and recovery_action=observe_same_session_and_correct_source; this intentional tool error is expected. Do not retry it. Observe fresh state in this exact same session and require the fixture title to remain MintClaw browser smoke fixture. Then close the session exactly once. Set cleanup_after_timeout and session_closed to true only when that fresh observation succeeded and close is confirmed. A lost session fails this probe. The independent follow-up audit will also prove immediate reuse.
+Require this call to return state=failed with reason=execution_timeout and recovery_action=observe_same_session_and_correct_source; this intentional tool error is expected. Do not retry it. Observe fresh state in this exact same session: make the third mandatory browser_observe call now and require the fixture title to remain MintClaw browser smoke fixture. Then close the session exactly once. Set cleanup_after_timeout and session_closed to true only when that fresh observation succeeded and close is confirmed. A lost session fails this probe. The independent follow-up audit will also prove immediate reuse.
 EOF
 	)
 	stage_two=""
