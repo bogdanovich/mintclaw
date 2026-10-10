@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -168,12 +170,47 @@ func runResourceHelper(t *testing.T) resourceEvidence {
 
 func maximumResidentBytes(t *testing.T) int64 {
 	t.Helper()
+	if runtime.GOOS == "linux" {
+		status, err := os.ReadFile("/proc/self/status")
+		if err != nil {
+			t.Fatalf("read process memory high-water mark: %v", err)
+		}
+		peak, err := peakResidentBytesFromStatus(status)
+		if err != nil {
+			t.Fatalf("parse process memory high-water mark: %v", err)
+		}
+		return peak
+	}
 	var usage syscall.Rusage
 	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
 		t.Fatalf("get process resource usage: %v", err)
 	}
-	if runtime.GOOS == "darwin" {
-		return usage.Maxrss
+	return usage.Maxrss
+}
+
+// Linux getrusage can retain the launcher's peak across fork/exec. VmHWM is
+// attached to this executable's address space, not its predecessor's usage.
+func peakResidentBytesFromStatus(status []byte) (int64, error) {
+	if len(status) > 64*1024 {
+		return 0, fmt.Errorf("process status exceeds bound")
 	}
-	return usage.Maxrss * 1024
+	var peak int64
+	for _, line := range strings.Split(string(status), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != "VmHWM:" {
+			continue
+		}
+		if peak != 0 || len(fields) != 3 || fields[2] != "kB" {
+			return 0, fmt.Errorf("invalid process memory high-water mark")
+		}
+		value, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil || value <= 0 || value > math.MaxInt64/1024 {
+			return 0, fmt.Errorf("invalid process memory high-water mark")
+		}
+		peak = value * 1024
+	}
+	if peak == 0 {
+		return 0, fmt.Errorf("missing process memory high-water mark")
+	}
+	return peak, nil
 }

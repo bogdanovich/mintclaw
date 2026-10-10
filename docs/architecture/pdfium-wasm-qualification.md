@@ -148,8 +148,12 @@ this backend, and portable hybrid flattening remains unadmitted.
 5. verify module identity, embedded digest, imports, filesystem denial,
    fixtures, limits, cleanup, and cancellation;
 6. run cold/repeated work in two fresh child processes with the production
-   worker's 320 MiB Go runtime soft limit, measure peak RSS with `getrusage`,
-   and wait for both processes to exit as the reclamation proof.
+   worker's 320 MiB Go runtime soft limit, measure the executable's peak RSS
+   with Linux `/proc/self/status` `VmHWM` or macOS `getrusage`, and wait for both
+   processes to exit as the reclamation proof. Linux `getrusage` may retain the
+   launcher's high-water mark across fork/exec; a small-child/large-launcher
+   regression prevents measuring that predecessor instead. The 512 MiB RSS
+   ceiling is unchanged, and missing or malformed measurement fails closed.
 
 No qualification step downloads code or PDF data during a document operation.
 Go modules are resolved before execution, and every runtime fixture is either
