@@ -154,16 +154,29 @@ Standalone text in the admitted protected intake must not silently become ordina
 the current schema window. Accepted facts must not be requested again without an explicit correction or explained
 validation conflict. Protected values remain outside ordinary model history, summaries, logs, and trace previews.
 
-An explicit request to finish the remainder manually produces a reviewed, verified, editable partial draft with
-truthful deferred/missing-field status, not manufactured not-applicable answers or a false completeness claim.
+For ordinary AcroForms, an explicit request to finish the remainder manually produces a reviewed, verified, editable
+partial draft with truthful deferred/missing-field status, not manufactured not-applicable answers or a false
+completeness claim. The operator-approved 2026-10-10 scope defers editable hybrid derivatives: the current hybrid
+backend emits print-ready flattened output, which must never be passed off as an editable partial draft.
 
 Qualify the combined workflow on deterministic synthetic small, medium, and large AcroForms plus at least one licensed
 or official public large-form fixture. Prove clarification, back, free text, composite and single-value collection,
 pause/resume, restart, compaction, conditional and optional-section skipping, bounded model context, correction,
 approval, source immutability, visible verification, one delivery, privacy scans, cleanup, and rollback. No
 form-specific rules may enter production prompts or code.
-Include the motivating I-134 with synthetic data and an unrelated form, complete and partial transactions, and actual
-Telegram reply/standalone ingress. An admission document, prompt-only change, or first-question smoke is not completion.
+Include complete applicable filling of the motivating I-134 with synthetic data, complete and editable partial
+transactions on an unrelated ordinary AcroForm, and actual Telegram reply/standalone ingress. An admission document,
+prompt-only change, or first-question smoke is not completion.
+
+### Deferred Follow-Up: Editable Hybrid Derivatives
+
+**Status:** Deferred by the operator on 2026-10-10; not a PDFI4 completion gate.
+
+Separately admit and qualify a generic editable derivative for the supported fixed-page hybrid AcroForm/XFA subset,
+including I-134 with synthetic data. Preserve source immutability and permissions, remove unsupported active content
+without executing it, report lost signatures/usage rights truthfully, and verify both accepted values and still-editable
+deferred fields with independent structural/visible oracles. Never specialize production behavior to one agency or form.
+Until that backend exists, explain the limitation rather than silently returning a flattened partial form.
 
 ### PDFI5: Conditional protected-input extraction
 
