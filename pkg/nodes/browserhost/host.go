@@ -866,18 +866,9 @@ func (host *BrowserHost) Execute(
 	}
 	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
 	defer cancelAction()
-	runtimeNow := host.now().UTC()
-	// Source time is enforced by the sidecar. Give it a bounded cleanup window
-	// to stop the worker and return settlement evidence before losing transport.
-	runtimeDeadline := runtimeNow.Add(
-		time.Duration(input.Limits.RuntimeSeconds)*time.Second + browserworker.ExecutionSettlementGrace,
-	)
-	if runtimeDeadline.Before(actionDeadline) {
-		var cancelRuntime context.CancelFunc
-		actionCtx, cancelRuntime = context.WithTimeout(actionCtx, max(runtimeDeadline.Sub(runtimeNow), 0))
-		defer cancelRuntime()
-		actionDeadline = runtimeDeadline
-	}
+	// The sidecar owns the source runtime budget. Keep preflight, source-worker
+	// settlement, and artifact publication under the separate action deadline,
+	// rather than starting another source-sized timer before preflight.
 	current, navigationIdentity, observeErr := observeBrowserHostNavigation(actionCtx, session)
 	currentDigest := browserHostObservationDigest(session, current, navigationIdentity)
 	if observeErr != nil || actionCtx.Err() != nil || current.Origin != input.CurrentOrigin ||

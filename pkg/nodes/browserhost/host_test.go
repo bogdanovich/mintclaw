@@ -215,6 +215,7 @@ type fakeBrowserHostWorker struct {
 	executionRequests       []browserworker.DriverExecutionRequest
 	executionResult         browserworker.DriverExecutionResult
 	executionErr            error
+	executionFunc           func(context.Context, browserworker.DriverExecutionRequest) (browserworker.DriverExecutionResult, error)
 }
 
 func (worker *fakeBrowserHostWorker) Diagnostics(
@@ -349,7 +350,7 @@ func (worker *fakeBrowserHostWorker) ExecuteAfterNavigationCheck(
 }
 
 func (worker *fakeBrowserHostWorker) ExecutePrivilegedAfterNavigationCheck(
-	_ context.Context,
+	ctx context.Context,
 	expectedNavigationID string,
 	request browserworker.DriverExecutionRequest,
 ) (browserworker.DriverExecutionResult, error) {
@@ -357,6 +358,9 @@ func (worker *fakeBrowserHostWorker) ExecutePrivilegedAfterNavigationCheck(
 		return browserworker.DriverExecutionResult{}, browserworker.ErrStale
 	}
 	worker.executionRequests = append(worker.executionRequests, request)
+	if worker.executionFunc != nil {
+		return worker.executionFunc(ctx, request)
+	}
 	return worker.executionResult, worker.executionErr
 }
 
@@ -596,6 +600,17 @@ func TestBrowserHostExecutesBoundPrivilegedSourceOnceAndRegistersArtifacts(t *te
 	request := nodes.BrowserHostExecuteRequest{
 		BrowserExecuteInput: input, RoutedSessionID: open.RoutedSessionID,
 		AgentID: open.AgentID, ActorID: open.ActorID, Source: source,
+	}
+	worker.executionFunc = func(ctx context.Context, request browserworker.DriverExecutionRequest) (browserworker.DriverExecutionResult, error) {
+		deadline, ok := ctx.Deadline()
+		remaining := time.Until(deadline)
+		if !ok || remaining < time.Duration(profile.Limits.ActionSeconds-1)*time.Second {
+			t.Fatalf("driver lost the configured action budget: remaining=%s, limits=%+v", remaining, profile.Limits)
+		}
+		if request.Limits.RuntimeSeconds != execution.RuntimeSeconds {
+			t.Fatalf("source runtime budget changed: %+v", request.Limits)
+		}
+		return worker.executionResult, worker.executionErr
 	}
 	tampered := request
 	tampered.AllowedOrigins = []string{"https://blocked.example"}

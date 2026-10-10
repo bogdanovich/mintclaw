@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -28,6 +29,95 @@ func executionTestConfig() *config.Config {
 	target.Profiles["managed"] = profile
 	root.Tools.Browser.Targets["gateway"] = target
 	return root
+}
+
+func TestPrivilegedExecutionSeparatesSourceAndActionBudgets(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		name := "slow_control_plane"
+		if canceled {
+			name = "caller_deadline"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := executionTestConfig()
+			root.Tools.Browser.Limits.ActionSeconds = 10
+			target := root.Tools.Browser.Targets["gateway"]
+			profile := target.Profiles["managed"]
+			profile.PrivilegedExecution.RuntimeSeconds = 1
+			target.Profiles["managed"] = profile
+			root.Tools.Browser.Targets["gateway"] = target
+			store := NewMemoryStore()
+			broker, worker, session := openActionTestBrokerWithConfig(t, root, store)
+			owner := testOwner()
+			observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := `async () => await new Promise(() => {})`
+			prepared, err := broker.PrepareExecution(t.Context(), PrepareExecutionRequest{
+				Owner: owner, RequestID: "delayed_read", SessionID: session.ID, TabID: observed.TabID,
+				SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+				Source: source, Language: ExecutionJavaScript, DeclaredEffect: EffectRead,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker.executionFunc = func(ctx context.Context, request DriverExecutionRequest) (DriverExecutionResult, error) {
+				if request.Limits.RuntimeSeconds != 1 {
+					t.Fatalf("source runtime budget changed: %+v", request.Limits)
+				}
+				// Six seconds of preflight/transport followed by one second of
+				// source execution fits the ten-second action budget, but not
+				// the old source-runtime-plus-five-second outer deadline.
+				timer := time.NewTimer(7 * time.Second)
+				defer timer.Stop()
+				select {
+				case <-ctx.Done():
+					return DriverExecutionResult{}, ctx.Err()
+				case <-timer.C:
+					return DriverExecutionResult{}, errors.Join(ErrExecutionSettled, ErrExecutionTimeout)
+				}
+			}
+			ctx := t.Context()
+			if canceled {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 50*time.Millisecond)
+				defer cancel()
+			}
+			result, executeErr := broker.ExecuteExecution(ctx, owner, prepared.Invocation.ID, source, nil, nil)
+			stored, getErr := store.GetSession(t.Context(), session.ID)
+			if getErr != nil || len(worker.executionRequests) != 1 {
+				t.Fatalf("session=%+v, %v; dispatches=%d", stored, getErr, len(worker.executionRequests))
+			}
+			if canceled {
+				if !errors.Is(ctx.Err(), context.DeadlineExceeded) || result.State != InvocationUnknown ||
+					stored.State != SessionLost {
+					t.Fatalf("caller deadline result=%+v, %v; session=%+v", result, executeErr, stored)
+				}
+				return
+			}
+			if executeErr != nil || result.State != InvocationFailed || result.SafeFailure != "execution_timeout" ||
+				stored.State != SessionReady {
+				t.Fatalf("delayed settlement result=%+v, %v; session=%+v", result, executeErr, stored)
+			}
+			if _, err = broker.Observe(t.Context(), owner, session.ID, session.TabID); err != nil {
+				t.Fatalf("same-session observation: %v", err)
+			}
+			if _, err = broker.ExecuteExecution(
+				t.Context(),
+				owner,
+				prepared.Invocation.ID,
+				source,
+				nil,
+				nil,
+			); err != nil ||
+				len(worker.executionRequests) != 1 {
+				t.Fatalf("settled source replay: %v; dispatches=%d", err, len(worker.executionRequests))
+			}
+			if _, err = broker.Close(t.Context(), owner, session.ID); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func TestPrivilegedExecutionBindsSourceBudgetsArtifactsAndNoReplay(t *testing.T) {
