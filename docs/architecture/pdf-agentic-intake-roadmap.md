@@ -16,7 +16,8 @@ rollback of its routing evidence.
 PDFI2 is complete; its implementation, deployment, and live evidence are recorded in the
 [PDFI2 exit report](pdf-agentic-intake-pdfi2-exit.md). PDFI3 is complete for its admitted bounded scope; its
 [exit report](pdf-agentic-intake-pdfi3-exit.md) records implementation, qualification, fixes, and channel limits.
-PDFI4 remains not started.
+PDFI4 is admitted under its [free-text intake implementation goal](pdf-agentic-intake-pdfi4-goal.md);
+implementation and large-form/channel qualification remain outstanding.
 PDFI5 remains conditional on a second accepted non-PDF protected-input consumer.
 
 ## Operator outcome
@@ -138,17 +139,31 @@ Completion gate:
 
 ### PDFI4: Coherent sections and large-form qualification
 
-**Status:** Not started.
+**Status:** Admitted; implementation and qualification outstanding. The
+[PDFI4 implementation goal](pdf-agentic-intake-pdfi4-goal.md) fixes the operator contract, protected extraction boundary,
+PR sequence, acceptance evidence, and completion gates.
 
 Reduce question fatigue only after agent-owned planning works. Admit a versioned composite protected answer for one
 coherent section when the channel can represent it safely, with per-field validation, atomic acceptance, deterministic
 partial-error reporting, and append-only ledger events. A single-value protected question remains the fallback.
+
+The operator outcome includes several facts in one free-text paragraph and additional messages in the same job,
+not only a structured section questionnaire. Intake understands the document, clarifies material roles/intent only
+when unknown, lists needs by person/subject, and asks only missing, ambiguous, conflicting, or invalid facts.
+Standalone text in the admitted protected intake must not silently become ordinary guidance or discard facts outside
+the current schema window. Accepted facts must not be requested again without an explicit correction or explained
+validation conflict. Protected values remain outside ordinary model history, summaries, logs, and trace previews.
+
+An explicit request to finish the remainder manually produces a reviewed, verified, editable partial draft with
+truthful deferred/missing-field status, not manufactured not-applicable answers or a false completeness claim.
 
 Qualify the combined workflow on deterministic synthetic small, medium, and large AcroForms plus at least one licensed
 or official public large-form fixture. Prove clarification, back, free text, composite and single-value collection,
 pause/resume, restart, compaction, conditional and optional-section skipping, bounded model context, correction,
 approval, source immutability, visible verification, one delivery, privacy scans, cleanup, and rollback. No
 form-specific rules may enter production prompts or code.
+Include the motivating I-134 with synthetic data and an unrelated form, complete and partial transactions, and actual
+Telegram reply/standalone ingress. An admission document, prompt-only change, or first-question smoke is not completion.
 
 ### PDFI5: Conditional protected-input extraction
 
