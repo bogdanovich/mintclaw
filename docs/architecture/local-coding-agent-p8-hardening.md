@@ -194,6 +194,9 @@ workspace-rewind implementation is implied by the release gate.
 
 #### H1a — Evidence inventory and correlation tests
 
+Execution inventory:
+[P8 diagnostic evidence inventory](local-coding-agent-p8-diagnostic-inventory.md).
+
 - Build a machine-readable inventory of supported local, delegated, remote
   capability, remote coding task, interaction, compaction, and delivery paths.
 - For each path, record its authorities, emitted identifiers, terminal facts,
