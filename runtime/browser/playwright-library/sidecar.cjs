@@ -1097,7 +1097,7 @@ class Driver {
           new Promise(resolve => { settlementTimer = setTimeout(() => resolve(false), 1000); }),
         ]);
         clearTimeout(settlementTimer);
-        if (settled && page && !page.isClosed() && !this.closed) {
+        if (settled && !networkViolationSignaled && page && !page.isClosed() && !this.closed) {
           // This marker is private driver evidence. It is never derived from
           // page text, the submitted effect, or an exception's message.
           const code = timedOut || readTimedOut ? 'execution_timeout' : 'execution_rejected';

@@ -5741,6 +5741,83 @@ func TestRealBrowserPrivilegedExecutionRetainsDelayedNetworkBoundary(t *testing.
 		return result.Value
 	}
 
+	t.Run("violation during read settlement", func(t *testing.T) {
+		for _, networkMode := range []string{config.BrowserNetworkPublicWeb, config.BrowserNetworkAnyHTTP} {
+			t.Run(networkMode, func(t *testing.T) {
+				var hits atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+					if request.URL.Path == "/request" {
+						hits.Add(1)
+					}
+					writer.Header().Set("Content-Type", "text/html")
+					_, _ = writer.Write([]byte("<!doctype html><title>Read settlement</title>"))
+				}))
+				defer server.Close()
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				defer cancel()
+				opened, openErr := factory.Open(ctx, WorkerOpenRequest{
+					SessionID: "library_read_settlement_" + networkMode, Target: "gateway", Profile: "managed",
+					ProfileRevision: profile.Revision, DryRun: profile.DryRun, Limits: config.BrowserLimitsConfig{},
+				})
+				if openErr != nil {
+					t.Fatal(openErr)
+				}
+				worker := opened.Owner.(*playwrightWorker)
+				defer func() { _ = worker.Close(context.Background()) }()
+				seed, seedErr := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+					"code": fmt.Sprintf(`async (page) => {
+  await page.goto(%q);
+  const wait = page.waitForTimeout.bind(page);
+  page.waitForTimeout = async (milliseconds) => {
+    if (milliseconds === 800) {
+      await page.evaluate(url => setTimeout(async () => {
+        await fetch(url).catch(() => {});
+        void fetch(url).catch(() => {});
+      }, 200), %q);
+    }
+    return wait(milliseconds);
+  };
+  return true;
+}`, server.URL, server.URL+"/request"),
+				})
+				if seedErr != nil || seed == nil || seed.IsError {
+					t.Fatalf("seed pending-read network violation = %#v, %v", seed, seedErr)
+				}
+				if _, observeErr := worker.Observe(ctx); observeErr != nil {
+					t.Fatal(observeErr)
+				}
+				navigationID, navigationErr := worker.NavigationIdentity(ctx)
+				if navigationErr != nil {
+					t.Fatal(navigationErr)
+				}
+				requestLimits := limits
+				requestLimits.NetworkRequests = 1
+				source := `async ({page}) => {
+  void page.waitForTimeout(800);
+  await page.waitForTimeout(1);
+  throw new Error("source rejected while a read remains pending");
+}`
+				_, executeErr := worker.ExecutePrivilegedAfterNavigationCheck(ctx, navigationID, DriverExecutionRequest{
+					Source: source, SourceDigest: ExecutionSourceDigest(source), Language: ExecutionJavaScript,
+					Effect: EffectRead, Limits: requestLimits, NetworkMode: networkMode,
+					CapabilityMode: browserpolicy.CapabilityFullAccess,
+				})
+				if !errors.Is(executeErr, ErrDriverRejected) || errors.Is(executeErr, ErrExecutionSettled) {
+					t.Fatalf("network violation during pending-read settlement granted reuse authority: %v", executeErr)
+				}
+				maxHits := int32(0)
+				if networkMode == config.BrowserNetworkAnyHTTP {
+					maxHits = 1
+				}
+				// Other host guards can reject the first request too; none may
+				// exceed this execution's destination or request-budget boundary.
+				if got := hits.Load(); got > maxHits {
+					t.Fatalf("network requests past the execution boundary = %d, maximum %d", got, maxHits)
+				}
+			})
+		}
+	})
+
 	t.Run("authority", func(t *testing.T) {
 		var deniedHits atomic.Int32
 		var serviceWorkerScriptHits atomic.Int32
