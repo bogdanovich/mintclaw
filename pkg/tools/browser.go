@@ -1771,7 +1771,7 @@ func (*BrowserObserveTool) ProtectedDurableResult(map[string]any) bool { return 
 type browserObservationView struct {
 	BrowserSessionID   string                      `json:"browser_session_id"`
 	TabID              string                      `json:"tab_id"`
-	FrameID            string                      `json:"frame_id,omitempty"`
+	FrameID            string                      `json:"frame_id"`
 	ContextCatalogID   string                      `json:"context_catalog_id,omitempty"`
 	ContextGeneration  uint64                      `json:"context_generation,omitempty"`
 	SnapshotID         string                      `json:"snapshot_id"`
@@ -2407,8 +2407,9 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 			},
 			"frame_id": map[string]any{
 				"type": "string",
-				"description": "Omit for top-level navigate. For other actions, copy exactly when present in the fresh " +
-					"browser_observe result; otherwise omit.",
+				"description": "Copy only the top-level frame_id field of the same fresh browser_observe result. " +
+					"When it is empty or absent, omit frame_id: the main page is selected. Never use a frame from " +
+					"the context catalog without browser_context select followed by a fresh observation.",
 			},
 			"context_catalog_id": map[string]any{
 				"type":      "string",
@@ -3504,6 +3505,16 @@ func browserToolError(err error) *toolshared.ToolResult {
 }
 
 func browserActionToolError(err error) *toolshared.ToolResult {
+	if errors.Is(err, browser.ErrActionContextMismatch) {
+		return browserErrorResult(
+			"context_binding_mismatch",
+			"The action context does not match the observed selection; the action was not dispatched. "+
+				"Observe the same session and copy only that result's top-level authority fields. If its frame_id "+
+				"is empty or absent, omit frame_id. Do not copy frames from the context catalog. To act in a "+
+				"different frame, use browser_context select first, then observe. Do not reopen the session.",
+			"observe_same_session_and_copy_selected_context",
+		)
+	}
 	if errors.Is(err, errBrowserActionContextAuthority) {
 		return browserErrorResult(
 			"invalid_context_authority",

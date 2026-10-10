@@ -41,6 +41,78 @@ type proactiveStubJobExecutor struct {
 	proactiveContent string
 }
 
+type targetStubJobExecutor struct {
+	stubJobExecutor
+	target bus.InboundContext
+}
+
+func (s *targetStubJobExecutor) ProcessScheduledWithTarget(
+	ctx context.Context, content, sessionKey string, target bus.InboundContext,
+) (string, string, error) {
+	s.target = target
+	return s.ProcessScheduledWithIdentity(ctx, content, sessionKey, target.Channel, target.ChatID)
+}
+
+func TestCronOutboundTargetLegacyRecipient(t *testing.T) {
+	for _, tc := range []struct {
+		name, channel, chatID, chatType, topicID string
+		target                                   *cron.CronDeliveryTarget
+	}{
+		{name: "private", channel: "telegram", chatID: "42", chatType: "direct"},
+		{name: "group", channel: "telegram", chatID: "-10042", chatType: "group"},
+		{name: "topic", channel: "telegram", chatID: "-10042/7", chatType: "group", topicID: "7"},
+		{
+			name: "partial target", channel: "telegram", chatID: "-10042", chatType: "group",
+			target: &cron.CronDeliveryTarget{Account: "personal"},
+		},
+		{
+			name: "explicit type", channel: "telegram", chatID: "-10042", chatType: "channel",
+			target: &cron.CronDeliveryTarget{ChatType: "channel"},
+		},
+		{
+			name: "explicit topic", channel: "telegram", chatID: "-10042", chatType: "group", topicID: "9",
+			target: &cron.CronDeliveryTarget{ChatType: "group", TopicID: "9"},
+		},
+		{name: "other channel", channel: "discord", chatID: "-10042", chatType: "direct"},
+		{name: "not numeric", channel: "telegram", chatID: "-group", chatType: "direct"},
+		{name: "out of range", channel: "telegram", chatID: "-999999999999999999999", chatType: "direct"},
+		{name: "invalid topic", channel: "telegram", chatID: "-10042/not-a-topic", chatType: "direct"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := &cron.CronJob{Payload: cron.CronPayload{Channel: tc.channel, To: tc.chatID, Target: tc.target}}
+			got := cronOutboundTarget(job)
+			if got.ChatID != tc.chatID || got.ChatType != tc.chatType || got.TopicID != tc.topicID {
+				t.Fatalf("target = %#v, want chat=%q type=%q topic=%q", got, tc.chatID, tc.chatType, tc.topicID)
+			}
+			if tc.target != nil && got.Account != tc.target.Account {
+				t.Fatalf("account changed: %#v", got)
+			}
+		})
+	}
+}
+
+func TestCronToolLegacyGroupUsesSameTargetForScheduledAndLiteralDelivery(t *testing.T) {
+	for _, kind := range []cron.PayloadKind{cron.PayloadAgentTurn, cron.PayloadDeliverText} {
+		t.Run(string(kind), func(t *testing.T) {
+			executor := &targetStubJobExecutor{}
+			tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
+			job := &cron.CronJob{ID: "legacy", Payload: cron.CronPayload{
+				Kind: kind, Channel: "telegram", To: "-10042/7", Message: "reminder",
+			}}
+			if got := tool.ExecuteJob(t.Context(), job); got != "ok" {
+				t.Fatalf("ExecuteJob() = %q", got)
+			}
+			target := executor.target
+			if kind == cron.PayloadDeliverText {
+				target = (<-tool.msgBus.OutboundChan()).Context
+			}
+			if target.ChatType != "group" || target.ChatID != "-10042/7" || target.TopicID != "7" {
+				t.Fatalf("execution target = %#v", target)
+			}
+		})
+	}
+}
+
 func (s *proactiveStubJobExecutor) PublishProactiveMessage(
 	_ context.Context,
 	target bus.InboundContext,

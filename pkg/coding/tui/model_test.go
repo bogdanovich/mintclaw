@@ -264,6 +264,9 @@ func TestAdaptiveHeightCommitsCompletedTurnToNativeScrollback(t *testing.T) {
 		t.Fatalf("native history command=%v printed blocks=%d", command, len(printed))
 	}
 	plain := ansi.Strip(printed[0])
+	if trailingRows := len(plain) - len(strings.TrimRight(plain, "\n")); trailingRows != 1 {
+		t.Fatalf("native history trailing newlines = %d, want 1 spacer row: %q", trailingRows, plain)
+	}
 	for _, want := range []string{"Explain this repository", "BEGINNING OF LONG ANSWER", "END OF LONG ANSWER"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("native history omitted %q:\n%s", want, plain)
@@ -540,7 +543,8 @@ func TestAdaptiveHeightResizeReflowsCommittedNativeHistory(t *testing.T) {
 	replayed := printed[1]
 	if !strings.HasPrefix(replayed, eraseTerminalScrollback) ||
 		!strings.Contains(replayed, "agent error during llm") ||
-		!strings.Contains(replayed, "coding turn failed") {
+		!strings.Contains(replayed, "coding turn failed") ||
+		!strings.HasSuffix(replayed, "\n") || strings.HasSuffix(replayed, "\n\n") {
 		t.Fatalf("resize replay = %q", ansi.Strip(replayed))
 	}
 }

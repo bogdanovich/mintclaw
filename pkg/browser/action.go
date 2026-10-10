@@ -336,15 +336,17 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 		return Preparation{}, err
 	}
 	if session.SnapshotID != request.SnapshotID ||
-		session.SnapshotGeneration != request.SnapshotGeneration ||
-		!sessionMatchesActionContextBinding(
-			session,
-			request.FrameID,
-			request.ContextCatalogID,
-			request.ContextGeneration,
-			request.Action.Kind,
-		) {
+		session.SnapshotGeneration != request.SnapshotGeneration {
 		return Preparation{}, ErrStale
+	}
+	if !sessionMatchesActionContextBinding(
+		session,
+		request.FrameID,
+		request.ContextCatalogID,
+		request.ContextGeneration,
+		request.Action.Kind,
+	) {
+		return Preparation{}, errors.Join(ErrStale, ErrActionContextMismatch)
 	}
 	if session.ContextAuthority != nil {
 		contextWorker, ok := worker.(ContextWorker)

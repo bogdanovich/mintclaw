@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -314,6 +315,23 @@ func cronOutboundTarget(job *cron.CronJob) bus.InboundContext {
 		inbound.SenderID = target.SenderID
 		inbound.ActorID = target.ActorID
 		inbound.ClientSessionID = target.ClientSessionID
+	}
+	inbound = bus.NormalizeInboundContext(inbound)
+	// Legacy jobs only persisted channel/to. Telegram uses negative IDs for
+	// non-private chats and chat/topic addressing for forums, exactly as inbound
+	// messages do. Recover those routing dimensions before allocating history.
+	if inbound.Channel == "telegram" {
+		chat, topic, hasTopic := strings.Cut(inbound.ChatID, "/")
+		chatID, chatErr := strconv.ParseInt(chat, 10, 64)
+		topicID, topicErr := strconv.ParseInt(topic, 10, 32)
+		if chatErr == nil && chatID < 0 && (!hasTopic || (topicErr == nil && topicID > 0)) {
+			if inbound.ChatType == "" {
+				inbound.ChatType = "group"
+			}
+			if hasTopic && inbound.ChatType == "group" && inbound.TopicID == "" {
+				inbound.TopicID = strconv.FormatInt(topicID, 10)
+			}
+		}
 	}
 	if strings.TrimSpace(inbound.ChatType) == "" {
 		inbound.ChatType = "direct"

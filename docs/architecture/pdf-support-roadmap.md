@@ -20,8 +20,10 @@ PDFI1 natural-language orchestration, PDFI2 agent-owned form dialogue, and bound
 their evidence and limits are recorded in the [PDFI2 exit report](pdf-agentic-intake-pdfi2-exit.md) and
 [PDFI3 exit report](pdf-agentic-intake-pdfi3-exit.md). PDFI4 free-text, multi-fact intake and large-form qualification are
 admitted under the [PDFI4 implementation goal](pdf-agentic-intake-pdfi4-goal.md); implementation, deployment, and
-qualification are not complete. PDFI4 includes explicit partial drafts and real Telegram ingress, not just a
-section-by-section questionnaire.
+qualification are not complete. PDFI4 includes explicit editable partial drafts for ordinary AcroForms and real
+Telegram ingress, not just a section-by-section questionnaire. Editable hybrid derivatives, including I-134, are
+deferred by the operator's 2026-10-10 scope decision in that goal; current hybrid output remains print-ready and
+flattened.
 Two completed follow-up lanes kept runtime maintenance separate from platform
 expansion: the archived
 [PDF Runtime Reliability mini-roadmap](archive/pdf-runtime-reliability-roadmap.md)

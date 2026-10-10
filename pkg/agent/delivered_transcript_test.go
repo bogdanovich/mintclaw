@@ -7,10 +7,84 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/cron"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
+
+func TestLegacyCronGroupReminderSurvivesRestartInRecipientPrompt(t *testing.T) {
+	for _, target := range []bus.InboundContext{
+		{Channel: "telegram", ChatID: "-10042", ChatType: "group"},
+		{Channel: "telegram", ChatID: "-10042/7", ChatType: "group", TopicID: "7"},
+	} {
+		t.Run(target.ChatID, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.Workspace = t.TempDir()
+			cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
+			messageBus := bus.NewMessageBus()
+			al := NewAgentLoop(cfg, messageBus, &recordingProvider{})
+			al.SetChannelManager(newStartedTestChannelManagerWithConfig(
+				t, cfg, messageBus, media.NewFileMediaStore(), "telegram", &fakeChannel{id: "telegram"},
+				channels.WithDeliveredTranscriptProjector(al),
+			))
+			tool, err := tools.NewCronTool(nil, al, messageBus, cfg.WorkspacePath(), true, 0, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const reminder = "Your listing is ready to renew."
+			projection, agent, err := al.resolveOutboundTranscriptTarget(t.Context(), "", target, reminder, nil)
+			if err != nil || projection == nil || agent == nil {
+				t.Fatalf("recipient projection = %#v, %v", projection, err)
+			}
+			job := &cron.CronJob{ID: "legacy-reminder", Payload: cron.CronPayload{
+				Kind: cron.PayloadDeliverText, Channel: target.Channel, To: target.ChatID, Message: reminder,
+			}}
+			if got := tool.ExecuteJob(t.Context(), job); got != "ok" {
+				t.Fatalf("ExecuteJob() = %q", got)
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for len(agent.Sessions.GetHistory(projection.SessionKey)) == 0 && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			history := agent.Sessions.GetHistory(projection.SessionKey)
+			if len(history) != 1 || history[0].Content != reminder {
+				t.Fatalf("recipient history = %#v", history)
+			}
+			al.Stop()
+			al.Close()
+
+			provider := &recordingProvider{}
+			restarted := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+			t.Cleanup(restarted.Close)
+			target.SenderID = "telegram:user-1"
+			if _, err = restarted.processMessage(t.Context(), bus.InboundMessage{
+				Context: target, Content: "Go ahead and renew",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, message := range provider.lastMessages {
+				found = found || (message.Role == "assistant" && message.Content == reminder)
+			}
+			if !found {
+				t.Fatal("follow-up prompt omitted the delivered reminder after restart")
+			}
+			target.ChatID, target.TopicID = "-10099", ""
+			if _, err = restarted.processMessage(t.Context(), bus.InboundMessage{
+				Context: target, Content: "Hello",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for _, message := range provider.lastMessages {
+				if message.Content == reminder {
+					t.Fatal("reminder leaked into another chat")
+				}
+			}
+		})
+	}
+}
 
 func TestDeliveredProactiveTranscriptAppearsInNextTurnPrompt(t *testing.T) {
 	cfg := config.DefaultConfig()

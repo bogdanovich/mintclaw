@@ -849,7 +849,7 @@ func (m *Model) commitCompletedTurnToNativeHistory(
 	if content == "" {
 		return nil
 	}
-	return m.printNativeHistory(content)
+	return m.printNativeHistory(nativeHistoryPrintBlock(content))
 }
 
 func newNativeHistoryTurn(previous, current *frontend.LastTurnOutcome) bool {
@@ -869,6 +869,18 @@ func (m *Model) renderNativeHistoryTurn(turnID string) string {
 	}
 	context := cellRenderContext{Width: m.viewport.Width, Theme: m.theme, ColorLevel: m.colorLevel}
 	return renderSemanticCellSpecs(groupedLiveCellSpecs(cells), context)
+}
+
+// nativeHistoryPrintBlock leaves one empty terminal row between immutable
+// scrollback and the live composer. Bubble Tea's Println splits embedded
+// newlines into queued rows, so one trailing newline creates the spacer row
+// after Println terminates the final content row.
+func nativeHistoryPrintBlock(content string) string {
+	content = strings.TrimRight(content, "\n")
+	if content == "" {
+		return ""
+	}
+	return content + "\n"
 }
 
 func (m *Model) reflowNativeHistoryAfterResize() tea.Cmd {
@@ -891,7 +903,7 @@ func (m *Model) reflowNativeHistoryAfterResize() tea.Cmd {
 	}
 	return tea.Sequence(
 		tea.ClearScreen,
-		m.printNativeHistory(eraseTerminalScrollback+history),
+		m.printNativeHistory(eraseTerminalScrollback+nativeHistoryPrintBlock(history)),
 	)
 }
 
