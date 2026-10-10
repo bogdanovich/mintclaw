@@ -73,6 +73,9 @@ stops a session when the threshold is reached, and stops on missing cost
 evidence. Reporting delay, in-flight traffic, and remote release latency can
 cause overshoot. Failed release retains cleanup ownership and is retried.
 Steel's provider timeout remains an independent hard lifetime limit.
+If a budget stop cannot capture the live profile revision, billing is stopped
+but the profile remains fenced for explicit recovery; a stale READY snapshot
+cannot prove that the latest cookies were persisted.
 
 For the initial trial, use a small prepaid Steel balance and disable automatic
 top-up. On Launch, Steel requires a paid deposit to enable its managed proxies

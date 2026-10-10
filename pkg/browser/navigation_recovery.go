@@ -173,6 +173,11 @@ func (broker *Broker) prepareNavigationRecoveryLocked(
 	if host == "" || host != navigationHostname(observation.URL) {
 		return NavigationRecovery{}, OpenRequest{}, "", nil
 	}
+	// A remembered provider preference cannot turn an ordinary HTTP failure
+	// or missing response evidence into another billable navigation.
+	if observation.AntiBotBlock == "" && (observation.HTTPStatus < 200 || observation.HTTPStatus >= 400) {
+		return NavigationRecovery{}, OpenRequest{}, "", nil
+	}
 	profileRevision := broker.config.Targets[fallback.Target].Profiles[fallback.Profile].Revision
 	remembered, err := broker.rememberedNavigationLocked(ctx, owner, host, fallback, profileRevision)
 	if err != nil {

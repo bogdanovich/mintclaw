@@ -629,8 +629,14 @@ func (runtimeHandle *steelPlaywrightRuntime) Release(driverStopped bool) error {
 	// previous READY snapshot is still available. Capture that live-session
 	// revision immediately before release so the post-release wait cannot
 	// accept it as the newly persisted snapshot. A lookup failure leaves the
-	// billable session and cleanup ownership intact for a safe retry.
+	// session and cleanup ownership intact for a safe retry, unless a budget
+	// stop has already released the session to stop billing.
 	if !runtimeHandle.baselineCaptured {
+		if runtimeHandle.sessionReleased {
+			// The live revision cannot be reconstructed after release. Keep the
+			// profile fenced for explicit recovery instead of accepting stale READY.
+			return errors.Join(ErrProviderProfileNotReady, ErrWorkerUnavailable, ErrCleanupRequired)
+		}
 		baselineCtx, cancel := context.WithTimeout(context.Background(), steelProviderCloseTimeout)
 		baseline, err := runtimeHandle.client.GetProfile(baselineCtx, runtimeHandle.profileID)
 		cancel()

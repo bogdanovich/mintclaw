@@ -145,6 +145,35 @@ func TestNavigationRecoveryIgnoresOrdinaryHTTPFailures(t *testing.T) {
 	}
 }
 
+func TestNavigationRecoveryRememberedHostDoesNotRetryHTTPFailures(t *testing.T) {
+	for _, status := range []int{0, 401, 403, 404, 429, 503} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			broker, factory, _ := recoveryFixture(t, NewMemoryStore(), "cloudflare", 403)
+			recovered, _, _, _ := recoveryNavigate(t, broker)
+			if _, err := broker.Close(t.Context(), testOwner(), recovered.SessionID); err != nil {
+				t.Fatal(err)
+			}
+			factory.local.onExecute = func(action DriverAction) {
+				factory.local.observation.URL = action.URL
+				factory.local.observation.HTTPStatus = status
+				factory.local.observation.AntiBotBlock = ""
+			}
+			recovery, source, _, _ := recoveryNavigate(t, broker)
+			if recovery.Status != "" || len(factory.requests) != 3 || factory.local.closed != 1 {
+				t.Fatalf("remembered error created paid fallback: recovery=%+v requests=%d closes=%d",
+					recovery, len(factory.requests), factory.local.closed)
+			}
+			current, err := broker.store.GetSession(t.Context(), source.ID)
+			if err != nil || current.State != SessionReady || current.RecoveryAttempted {
+				t.Fatalf("ordinary response consumed source recovery: session=%+v err=%v", current, err)
+			}
+			if _, err = broker.Observe(t.Context(), testOwner(), source.ID, source.TabID); err != nil {
+				t.Fatalf("ordinary response lost source authority: %v", err)
+			}
+		})
+	}
+}
+
 func TestNavigationRecoveryHonorsActorGrantAndProviderQuota(t *testing.T) {
 	for _, kind := range []string{"actor", "quota"} {
 		t.Run(kind, func(t *testing.T) {

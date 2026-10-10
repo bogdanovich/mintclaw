@@ -110,23 +110,28 @@ func (runtimeHandle *steelPlaywrightRuntime) startBudgetMonitor(limit float64) {
 		defer cancel()
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
+		stopping := false
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				costCtx, cancelCost := context.WithTimeout(ctx, 5*time.Second)
-				cost, err := client.SessionCost(costCtx, sessionID)
-				cancelCost()
-				if ctx.Err() != nil {
-					return
-				}
-				if err == nil && cost < limit {
-					continue
+				if !stopping {
+					costCtx, cancelCost := context.WithTimeout(ctx, 5*time.Second)
+					cost, err := client.SessionCost(costCtx, sessionID)
+					cancelCost()
+					if ctx.Err() != nil {
+						return
+					}
+					if err == nil && cost < limit {
+						continue
+					}
+					stopping = true
 				}
 				// Missing cost evidence fails closed. Release remotely even while
 				// the driver remains alive; normal broker cleanup still owns the
-				// profile flush and exclusive lease.
+				// profile flush and exclusive lease. Retry the latched stop decision
+				// regardless of any later, cheaper provider cost report.
 				if runtimeHandle.stopForBudget() {
 					return
 				}
@@ -141,14 +146,19 @@ func (runtimeHandle *steelPlaywrightRuntime) stopForBudget() bool {
 	if runtimeHandle.closed || runtimeHandle.sessionReleased {
 		return true
 	}
+	if !runtimeHandle.baselineCaptured {
+		baselineCtx, cancelBaseline := context.WithTimeout(context.Background(), steelProviderCloseTimeout)
+		baseline, err := runtimeHandle.client.GetProfile(baselineCtx, runtimeHandle.profileID)
+		cancelBaseline()
+		if err == nil &&
+			(baseline.Status == string(steelapi.ProfileStatusReady) || baseline.Status == string(steelapi.ProfileStatusUploading)) {
+			runtimeHandle.profileBaseline = baseline
+			runtimeHandle.baselineCaptured = true
+		}
+	}
+	// A slow profile lookup must not exhaust the remote release deadline.
 	ctx, cancel := context.WithTimeout(context.Background(), steelProviderCloseTimeout)
 	defer cancel()
-	if !runtimeHandle.baselineCaptured {
-		if baseline, err := runtimeHandle.client.GetProfile(ctx, runtimeHandle.profileID); err == nil {
-			runtimeHandle.profileBaseline = baseline
-		}
-		runtimeHandle.baselineCaptured = true
-	}
 	if runtimeHandle.client.ReleaseSession(ctx, runtimeHandle.sessionID) == nil {
 		runtimeHandle.sessionReleased = true
 		return true

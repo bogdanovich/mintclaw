@@ -138,3 +138,102 @@ func TestSteelBudgetStopRetainsCleanupOwnershipAndRetriesRelease(t *testing.T) {
 		t.Fatal("budget stop failed to retry remote release or discarded normal profile cleanup")
 	}
 }
+
+type budgetMonitorTestClient struct {
+	*fakeSteelRuntimeClient
+	costCalls int
+	costError error
+	cost      float64
+	released  chan struct{}
+}
+
+func (client *budgetMonitorTestClient) SessionCost(context.Context, string) (float64, error) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.costCalls++
+	if client.costCalls == 1 {
+		return client.cost, client.costError
+	}
+	return 0, nil
+}
+
+func (client *budgetMonitorTestClient) ReleaseSession(ctx context.Context, sessionID string) error {
+	err := client.fakeSteelRuntimeClient.ReleaseSession(ctx, sessionID)
+	if err == nil {
+		select {
+		case client.released <- struct{}{}:
+		default:
+		}
+	}
+	return err
+}
+
+func TestSteelBudgetMonitorRetriesStopDespiteLaterCheapCost(t *testing.T) {
+	for _, reason := range []string{"missing_cost", "threshold"} {
+		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
+			client := &budgetMonitorTestClient{
+				fakeSteelRuntimeClient: &fakeSteelRuntimeClient{releaseErrs: []error{ErrProviderUnavailable, nil}},
+				cost:                   0.25, released: make(chan struct{}, 1),
+			}
+			if reason == "missing_cost" {
+				client.costError = ErrProviderUnavailable
+			}
+			runtime := &steelPlaywrightRuntime{client: client, sessionID: "session_current", baselineCaptured: true}
+			runtime.startBudgetMonitor(0.25)
+			t.Cleanup(runtime.cancelBudget)
+			select {
+			case <-client.released:
+			case <-time.After(20 * time.Second):
+				t.Fatal("budget stopping was abandoned after failed remote release")
+			}
+			client.mu.Lock()
+			defer client.mu.Unlock()
+			if client.costCalls != 1 || len(client.releaseCalls) != 2 {
+				t.Fatalf("stop decision was not latched: cost calls=%d release calls=%d",
+					client.costCalls, len(client.releaseCalls))
+			}
+		})
+	}
+}
+
+func TestSteelBudgetStopWithMissingBaselineKeepsProfileFenced(t *testing.T) {
+	for _, reason := range []string{"lookup_failure", "invalid_status"} {
+		t.Run(reason, func(t *testing.T) {
+			client := &fakeSteelRuntimeClient{
+				createResults: []steelProviderSession{fakeSteelSession("session_current", "profile_personal")},
+				profileResults: []steelProviderProfile{
+					{Status: "READY", SourceSessionID: "session_previous", UpdatedAt: time.Unix(1, 0)},
+					{Status: "INVALID", SourceSessionID: "session_previous", UpdatedAt: time.Unix(1, 0)},
+					{Status: "READY", SourceSessionID: "session_current", UpdatedAt: time.Unix(1, 0)},
+				},
+			}
+			if reason == "lookup_failure" {
+				client.profileErrs = []error{nil, ErrProviderUnavailable}
+			}
+			_, provider, stateFile := steelProviderFactoryFixture(t, client)
+			if err := writeSteelProviderState(stateFile, "profile_personal"); err != nil {
+				t.Fatal(err)
+			}
+			handle, err := provider.Provision(t.Context(), WorkerOpenRequest{SessionID: "browser_session_1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime := handle.(*steelPlaywrightRuntime)
+			t.Cleanup(func() { _ = runtime.lease.Close() })
+			if !runtime.stopForBudget() || !runtime.sessionReleased {
+				t.Fatal("missing profile evidence must not keep billing alive")
+			}
+			if err = runtime.Release(
+				true,
+			); !errors.Is(err, ErrCleanupRequired) || runtime.closed ||
+				runtime.profileReady {
+				t.Fatalf("stale persisted profile accepted: closed=%v ready=%v err=%v",
+					runtime.closed, runtime.profileReady, err)
+			}
+			if runtime.baselineCaptured || runtime.lease.Validate() != nil {
+				t.Fatal("failed baseline capture relinquished profile fencing")
+			}
+		})
+	}
+}
