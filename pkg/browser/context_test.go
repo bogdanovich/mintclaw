@@ -334,6 +334,61 @@ func TestBrokerRejectsDurableChildFramePreparationBeforeWorkerUse(t *testing.T) 
 	}
 }
 
+func TestBrokerActionContextMismatchCanRepairWithoutReplacingSession(t *testing.T) {
+	for _, mismatch := range []string{"frame", "catalog", "generation", "snapshot"} {
+		t.Run(mismatch, func(t *testing.T) {
+			store := NewMemoryStore()
+			broker, worker, session := openActionTestBroker(t, store)
+			catalog := testContextCatalog()
+			session.ContextAuthority = &catalog
+			session.Revision++
+			if err := store.UpdateSession(t.Context(), session.Revision-1, session); err != nil {
+				t.Fatal(err)
+			}
+			observation, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			valid := PrepareActionRequest{
+				Owner: testOwner(), RequestID: "repair_context", SessionID: session.ID, TabID: session.TabID,
+				SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+				ContextCatalogID: catalog.ID, ContextGeneration: catalog.Generation,
+				Action: Action{Kind: ActionFill, Ref: onlyVisibleRef(t, observation.Snapshot), Value: "value"},
+			}
+			wrong := valid
+			switch mismatch {
+			case "frame":
+				wrong.FrameID = "frame_child"
+			case "catalog":
+				wrong.ContextCatalogID = "catalog_other"
+			case "generation":
+				wrong.ContextGeneration++
+			case "snapshot":
+				wrong.SnapshotGeneration++
+			}
+			if _, err = broker.PrepareAction(t.Context(), wrong); !errors.Is(err, ErrStale) ||
+				errors.Is(err, ErrActionContextMismatch) != (mismatch != "snapshot") {
+				t.Fatalf("mismatch error = %v", err)
+			}
+			if worker.resolveCalls != 0 || len(worker.actions) != 0 || worker.closed != 0 {
+				t.Fatal("rejected context reached the worker or closed the session")
+			}
+			prepared, err := broker.PrepareAction(t.Context(), valid)
+			if err != nil {
+				t.Fatalf("corrected authority failed: %v", err)
+			}
+			invocation, err := broker.ExecuteAction(t.Context(), testOwner(), prepared.Action.ID, nil)
+			if err != nil || invocation.State != InvocationSucceeded || len(worker.actions) != 1 {
+				t.Fatalf("corrected action = %#v, %v; actions=%d", invocation, err, len(worker.actions))
+			}
+			state, err := broker.Status(t.Context(), testOwner(), session.ID)
+			if err != nil || state.ID != session.ID || state.State != SessionReady || worker.closed != 0 {
+				t.Fatalf("same-session state = %#v, %v", state, err)
+			}
+		})
+	}
+}
+
 func TestMemoryStoreContextAuthorityTransitionsAndCopies(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryStore()
