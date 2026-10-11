@@ -13,15 +13,32 @@ type FormIntakeDisposition string
 const (
 	FormIntakeIntentionallyBlank FormIntakeDisposition = "intentionally_blank"
 	FormIntakeNotApplicable      FormIntakeDisposition = "not_applicable"
+	FormIntakeDeferred           FormIntakeDisposition = "deferred"
+	FormIntakeIncluded           FormIntakeDisposition = "included"
 )
 
 func (disposition FormIntakeDisposition) valid() bool {
-	return disposition == "" || disposition == FormIntakeIntentionallyBlank || disposition == FormIntakeNotApplicable
+	return disposition == "" || disposition == FormIntakeIntentionallyBlank || disposition == FormIntakeNotApplicable ||
+		disposition == FormIntakeDeferred || disposition == FormIntakeIncluded
 }
 
 func selectFormIntakeDisposition(
 	selection *formIntakeSelection, record formJobStoredRecord, key []byte, item formIntakeResolvedProposal,
 ) error {
+	if item.Proposal.Disposition == FormIntakeDeferred || item.Proposal.Disposition == FormIntakeIncluded {
+		if item.Proposal.ReplaceExisting || item.Proposal.SupersedesEventID != "" ||
+			len(item.Proposal.CorrectionEvidence) != 0 {
+			return ErrFormJobAnswerConflict
+		}
+		if item.Proposal.Disposition == FormIntakeDeferred {
+			selection.DeferredIDs = append(selection.DeferredIDs, item.Field.ID)
+		} else {
+			selection.IncludedIDs = append(selection.IncludedIDs, item.Field.ID)
+		}
+		selection.ScopedIDs = append(selection.ScopedIDs, item.Field.ID)
+		selection.Accounted = appendFormIntakeSpans(selection.Accounted, item.Spans)
+		return nil
+	}
 	if item.Field.Required {
 		selection.Findings = append(
 			selection.Findings,

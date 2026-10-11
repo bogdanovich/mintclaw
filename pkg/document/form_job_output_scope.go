@@ -80,11 +80,7 @@ func (store *FormJobStore) SetFormOutputScope(
 		if err = requireNoStagedFormIntake(record, key); err != nil {
 			return false, err
 		}
-		record.Public.OutputScope = desired.OutputScope
-		record.Public.DeferredFieldIDs = desired.DeferredFieldIDs
-		record.Public.Revision++
-		record.Public.UpdatedAt = now.UnixMilli()
-		invalidateFormIntakeReview(&record.Public)
+		replaceFormJobOutputScope(&record, desired.OutputScope, desired.DeferredFieldIDs, now)
 		document.Records[record.Public.JobID] = record
 		result = cloneFormJobRecord(record.Public)
 		return true, nil
@@ -93,6 +89,17 @@ func (store *FormJobStore) SetFormOutputScope(
 		return FormJobRecord{}, err
 	}
 	return result, nil
+}
+
+// Both native entrypoints validate authority, capability and pending publication
+// before this shared mutation; neither mutates a reviewed projection in place.
+func replaceFormJobOutputScope(record *formJobStoredRecord, scope FormOutputScope, deferred []string, now time.Time) {
+	record.Public = cloneFormJobRecord(record.Public)
+	record.Public.OutputScope = scope
+	record.Public.DeferredFieldIDs = slices.Clone(deferred)
+	record.Public.Revision++
+	record.Public.UpdatedAt = now.UnixMilli()
+	invalidateFormIntakeReview(&record.Public)
 }
 
 func validFormJobOutputMode(mode FormOutputMode) bool {

@@ -85,11 +85,21 @@ func validateFormIntakeOutcome(record FormJobRecord, pass formIntakeStoredPass) 
 		// remain readable; new writes charge only committed field events.
 		(outcome.AppliedRevision != pass.Revision+int64(len(outcome.AcceptedIDs)) &&
 			outcome.AppliedRevision != pass.Revision+int64(len(outcome.AcceptedIDs))+1) ||
-		len(outcome.AcceptedIDs)+len(outcome.AcknowledgedIDs)+len(outcome.Findings) > len(pass.CandidateIDs) {
+		len(
+			outcome.AcceptedIDs,
+		)+len(
+			outcome.AcknowledgedIDs,
+		)+len(
+			outcome.Findings,
+		)+len(
+			outcome.ScopedIDs,
+		) > len(
+			pass.CandidateIDs,
+		) {
 		return ErrFormJobRecordCorrupt
 	}
 	seen := make(map[string]bool, len(pass.CandidateIDs))
-	for _, ids := range [][]string{outcome.AcceptedIDs, outcome.AcknowledgedIDs} {
+	for _, ids := range [][]string{outcome.AcceptedIDs, outcome.AcknowledgedIDs, outcome.ScopedIDs} {
 		if !slices.IsSorted(ids) {
 			return ErrFormJobRecordCorrupt
 		}

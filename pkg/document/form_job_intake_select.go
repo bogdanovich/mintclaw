@@ -15,6 +15,9 @@ type formIntakeSelection struct {
 	AcknowledgedIDs   []string
 	Findings          []FormFieldMappingBlocker
 	ScopedInstruction bool
+	ScopedIDs         []string
+	DeferredIDs       []string
+	IncludedIDs       []string
 }
 
 type formIntakeResolvedProposal struct {
@@ -30,10 +33,26 @@ func selectFormIntakeProposals(
 ) (formIntakeSelection, error) {
 	result := formIntakeSelection{Accounted: slices.Clone(input.Accounted)}
 	if input.Intent != interactions.ProtectedAnswerValue {
-		if len(request.Proposals) != 0 || len(request.NonData) != 0 || len(request.Findings) != 0 {
+		if len(request.Proposals) != 0 || len(request.NonData) != 0 || len(request.Findings) != 0 ||
+			request.Output != nil {
 			return result, ErrFormJobAnswerConflict
 		}
 		return result, nil
+	}
+	if request.Output != nil {
+		span, err := resolveFormIntakeLiteral(input.Text, request.Output.Literal)
+		if err != nil {
+			return result, err
+		}
+		span.ScopedInstruction = true
+		for _, prior := range input.Accounted {
+			if formIntakeSpansOverlap(span, prior) && span != prior {
+				return result, ErrFormJobAnswerConflict
+			}
+		}
+		input.Accounted = appendFormIntakeSpans(slices.Clone(input.Accounted), []formIntakeSpan{span})
+		result.Accounted = slices.Clone(input.Accounted)
+		result.ScopedInstruction = true
 	}
 	resolved, err := resolveFormIntakeProposals(request, input.Text, candidateIDs)
 	if err != nil {
@@ -145,6 +164,7 @@ func selectFormIntakeProposals(
 	)
 	slices.Sort(result.AcceptedIDs)
 	slices.Sort(result.AcknowledgedIDs)
+	slices.Sort(result.ScopedIDs)
 	return result, nil
 }
 

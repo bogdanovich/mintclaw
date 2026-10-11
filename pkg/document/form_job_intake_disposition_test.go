@@ -13,6 +13,13 @@ func dispositionIntakeFixture(
 	t *testing.T, required bool, schemaChanges ...func(*FormFieldsFacts),
 ) (*FormJobStore, FormJobStoreOptions, FormIntakeStartRequest, FormIntakeStartResult) {
 	t.Helper()
+	return outputIntakeFixture(t, required, "", schemaChanges...)
+}
+
+func outputIntakeFixture(
+	t *testing.T, required bool, outputMode FormOutputMode, schemaChanges ...func(*FormFieldsFacts),
+) (*FormJobStore, FormJobStoreOptions, FormIntakeStartRequest, FormIntakeStartResult) {
+	t.Helper()
 	store, options := newTestFormJobStore(t)
 	schema := *successfulTestFormFields()
 	template := schema.Fields[0]
@@ -28,6 +35,7 @@ func dispositionIntakeFixture(
 		change(&schema)
 	}
 	create := testFormJobCreateRequest(testFormJobOwner())
+	create.OutputMode = outputMode
 	var err error
 	create.SourceDigest = schema.SourceSHA256
 	create.FieldSchemaDigest, err = FormFieldSchemaDigest(schema)
