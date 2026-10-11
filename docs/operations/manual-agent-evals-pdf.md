@@ -5,8 +5,9 @@
 The repository contains six PDF scenarios and four deterministic synthetic AcroForms, with exact SHA-256 checked
 by offline corpus validation. The dialogue packet lets `eval run` attempt PDF conversations on a narrowly admitted
 isolated profile, using protected facts and owned fixtures. The write-intent packet adds native review-bound separate
-confirmation and exact fixture-scoped approval. Authenticated artifact collection, operation/outbox settlement,
-and complete private-surface evidence remain pending.
+confirmation and exact fixture-scoped approval. Read-only native receipts bind consumed approval to a completed
+form job, delivered write operation, and recovered outbox intent. Authenticated artifact collection, delivery
+uniqueness, and complete private-surface evidence remain pending.
 Required PDF checks therefore remain inconclusive; a first question, caption, or oracle control is not qualification.
 
 The cases cover loan filling, correction/Back, own-request conditional intent, empty required values, cancel/no-write,
@@ -80,6 +81,24 @@ Native ingress and the document tool still authorize and consume the grant; the 
 Reports retain a value-free `write_intent` with review revision and confirmation/interaction/operation identities.
 This is not evidence of consumed approval, successful write or delivery. Without settled operation/outbox/artifact,
 privacy and cleanup witnesses, required PDF checks remain unknown and the evidence cannot be regraded as qualified.
+
+## Native Settlement Receipts
+
+The observer retains the exact `allow_once` request and waiting native record. A settlement receipt requires the
+same resolved, allowed, non-superseded answer, its consumed grant before expiry, original confirmation execution
+context, unchanged frozen review binding, and authenticated prompt delivery. An unconsumed intent is insufficient.
+
+The owner-bound completed job must name the same operation and artifact digest. The native write-journal decoder
+validates the exact bounded bytes after raw privacy scanning, without acquiring write authority, opening a second
+snapshot, or changing the journal. The operation must be delivered, verified, and bound to the same source/artifact.
+Its exact outbox intent must be delivered with recovery settled, no pending transcript projection, one platform
+message ID, and matching document recovery identities, hashed owner, route, job, operation, and artifact.
+
+`pdf.settlement` contains only identifiers, timestamps, revisions, backend generation, digest, and size. It is not
+proof that another outbox intent did not duplicate delivery, that PDF bytes match those receipts, or that all runtime
+surfaces/resources are private and closed. No required PDF check becomes passing from metadata alone. A one-shot
+observation that races unfinished native settlement remains inconclusive; it never replays input or cancels a job.
+The test controls drive the native registry/store/journal/outbox state machines but do not run a PDF worker or model.
 
 ## Optional Dependencies
 

@@ -40,6 +40,8 @@ type pdfConversation struct {
 	confirmedAt           time.Time
 	confirmationRequestID string
 	approvalPrompt        *Event
+	approvalRecord        *interactions.Record
+	approvalRequestID     string
 	operationID           string
 }
 
@@ -149,6 +151,26 @@ func (domain *pdfConversation) conclude(_ context.Context, trial *Trial) {
 	}
 	if err == nil && job.SourceDigest == trial.PDF.SourceSHA256 {
 		trial.PDF.State = string(job.State)
+	}
+	if domain.approvalPrompt != nil {
+		settlement, settledErr := domain.observeSettlement()
+		if errors.Is(settledErr, ErrPrivateEvidence) {
+			trial.Verdict, trial.Code = Fail, "private_native_evidence"
+			trial.ExecutionVerdict, trial.ExecutionCode = Fail, trial.Code
+			return
+		}
+		if settledErr == nil {
+			operation := settlement.operation
+			trial.PDF.Settlement = &PDFSettlementEvidence{
+				ApprovalInteractionID: settlement.approval.ID, ApprovalRequestID: domain.approvalRequestID,
+				ApprovalConsumedAt: settlement.approval.ApprovalConsumedAt,
+				OperationID:        operation.OperationID, OperationRevision: operation.Revision,
+				BackendGeneration: operation.BackendGeneration, OutboxDeliveryID: settlement.delivery.ID,
+				PlatformMessageIDs: settlement.delivery.PlatformMessageIDs,
+				ArtifactRef:        operation.ArtifactRef, ArtifactSHA256: operation.Artifact.SHA256,
+				ArtifactSize: operation.Artifact.Size,
+			}
+		}
 	}
 	// A native job observation is not an artifact, privacy, no-write or cleanup
 	// proof. Required domain checks remain unknown until those witnesses exist.
