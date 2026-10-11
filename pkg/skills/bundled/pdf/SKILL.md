@@ -61,6 +61,16 @@ preserved facts. A pending or capacity failure means accepted data remain intact
 explain how to clarify or split remaining input without repeating accepted facts. A correction must be explicit and
 person-specific. Do not turn mixed guidance and facts into one field value.
 
+An explicit request to finish the remaining fields manually selects an editable partial draft, not blank answers.
+The private interpreter binds that instruction to the same job and defers only its unresolved fields; preserve accepted
+and source-valued fields. Progress distinguishes requested deferred scope from effective omissions. Do not claim
+complete filling when scope is `editable_draft`, weaken required flags, or invent missing values. Returning to complete
+scope restores unresolved blockers. A `flattened_print_ready` output mode cannot satisfy an editable request: explain
+`editable_output_unavailable`, preserve the same job, and offer complete filling or cancellation. Never silently emit
+a flattened partial copy. Scope changes invalidate old review and approval; obtain a new review before output.
+Explicit instructions to leave an applicable field blank or mark a section not applicable are different from deferral;
+they need the user's instruction, not merely an optional PDF flag. Accepted values require explicit correction.
+
 Use `pause`/`resume` to preserve intake and `cancel` to terminate it. Explicit channel controls `/pause_form`,
 `/resume_form` and `/cancel_form` are available while intake owns the route. Resume the same document without asking
 for its attachment again. Paused input is not silently routed to ordinary chat. Clarify/back intent can explain or

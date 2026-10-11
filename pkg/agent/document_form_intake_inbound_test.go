@@ -45,13 +45,13 @@ func TestDocumentIntakeCoordinatorControlsTheSameNativeModeAcrossRestart(t *test
 		ChatType: msg.Context.ChatType, SenderID: msg.Context.SenderID, TopicID: msg.Context.TopicID,
 		SpaceID: msg.Context.SpaceID, SpaceType: msg.Context.SpaceType,
 	}
+	fieldsBackend := document.Capabilities().Operations["fields"].Primary
+	if fieldsBackend == nil {
+		t.Fatal("the fixture has no admitted field-schema backend")
+	}
 	schema := document.FormFieldsFacts{
 		SourceSHA256: strings.Repeat("a", 64),
-		Backend: document.BackendIdentity{
-			Name: document.PDFCPUBackendName, Version: document.PDFCPUBackendVersion,
-			Package: document.PDFCPUBackendPackage, PackageRevision: document.PDFCPUBackendVersion,
-			Role: "production", IsolationMode: document.WorkerIsolationMode,
-		},
+		Backend:      *fieldsBackend,
 		Limits: document.FormFieldLimits{
 			MaxFields: document.DefaultMaxFormFields, MaxWidgets: document.DefaultMaxFieldWidgets,
 			MaxOptions: document.DefaultMaxFieldOptions, MaxTextBytes: document.DefaultMaxFieldTextBytes,
