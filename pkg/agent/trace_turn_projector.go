@@ -241,8 +241,12 @@ func (p *turnTraceProjector) observeRuntimeEvent(event runtimeevents.Event) {
 		traceScope := traceScopes[0]
 		trace := p.turns[traceScope]
 		payload := event.Payload.(AsyncCompletionPayload)
-		if payload.WillUser {
-			trace.settlementTimer = time.AfterFunc(traceDeliverySettlementTimeout, func() {
+		if payload.WillUser || payload.WillParent {
+			settlementTimeout := traceDeliverySettlementTimeout
+			if payload.WillParent {
+				settlementTimeout += asyncCompletionSynthesisTimeout
+			}
+			trace.settlementTimer = time.AfterFunc(settlementTimeout, func() {
 				p.expireTurnSettlement(traceScope, trace)
 			})
 			p.mu.Unlock()

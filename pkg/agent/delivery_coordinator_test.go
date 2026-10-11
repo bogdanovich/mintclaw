@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -403,12 +404,14 @@ func TestDeliverAsyncToolCompletion_UserAndParentDeliversBothOnce(t *testing.T) 
 		ForUser: "user visible",
 		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserAndParent)
+	traceScope := runtimeevents.NewTraceScope(workspace, "async-completion-user-and-parent")
 	req := AsyncDeliveryRequest{
 		TurnState:    ts,
 		ToolName:     "spawn",
 		CompletionID: "same-user-and-parent-completion",
 		Result:       result,
 		Decision:     decideAsyncToolResultDelivery(result),
+		TraceScopes:  []runtimeevents.TraceScope{traceScope},
 	}
 
 	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(req)
@@ -418,9 +421,24 @@ func TestDeliverAsyncToolCompletion_UserAndParentDeliversBothOnce(t *testing.T) 
 	if metadata := userOutbound.Metadata; metadata.OutboundKind == bus.OutboundKindFinal {
 		t.Fatalf("user_and_parent outbound metadata = %+v, must not be terminal", metadata)
 	}
-	waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
-		return msg.Content == "parent synthesized"
-	})
+	if userOutbound.TraceSettlement ||
+		!slices.Equal(userOutbound.TraceScopes, []runtimeevents.TraceScope{traceScope}) {
+		t.Fatalf("intermediate trace routing = %+v, settlement=%v",
+			userOutbound.TraceScopes, userOutbound.TraceSettlement)
+	}
+	parentOutbound := waitForOutboundMessage(
+		t,
+		msgBus.OutboundChan(),
+		2*time.Second,
+		func(msg bus.OutboundMessage) bool {
+			return msg.Content == "parent synthesized"
+		},
+	)
+	if !parentOutbound.TraceSettlement ||
+		!slices.Equal(parentOutbound.TraceScopes, []runtimeevents.TraceScope{traceScope}) {
+		t.Fatalf("final trace routing = %+v, settlement=%v",
+			parentOutbound.TraceScopes, parentOutbound.TraceSettlement)
+	}
 	assertTaskDeliveryStatusForTest(t, al, workspace, taskID, taskregistry.DeliveryDelivered)
 	assertNoAsyncCompletionInbound(t, msgBus)
 

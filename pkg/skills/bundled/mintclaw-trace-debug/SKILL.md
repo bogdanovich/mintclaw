@@ -127,9 +127,11 @@ Correlate:
 - delivery attempts and outcomes by `correlation.delivery_id`; use their exact
   continuation trace scope to relate them to the retained async decision, then
   verify the current outcome in the durable outbox rather than inferring it
-  from timing; a parent-only completion may validly have one decision record
-  and no turn outcome, while a user-bound continuation must settle or report a
-  bounded delivery-settlement timeout;
+  from timing; direct user-only delivery has a 30-second settlement window,
+  while parent synthesis is bounded by its 120-second deadline plus that
+  delivery window; in user-and-parent mode the early direct delivery is
+  correlated but non-settling and only the final synthesized outbound settles
+  the continuation;
 - steering injection or interrupt with the next model/tool decision;
 - context compaction with the model behavior immediately before and after it;
 - turn start/end and the final outcome.

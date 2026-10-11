@@ -92,11 +92,14 @@ jq -r --arg turn_id 'ORIGINATING_TURN_ID' '
 ' TRACE_ROOT/*.json
 ```
 
-A parent-only completion can be a valid one-record continuation with no turn
-outcome. A user-bound continuation remains open only for the bounded delivery
-settlement window and should also contain the matching delivery attempt and
-outcome. Historical traces may omit these fields or the continuation entirely;
-never infer an exact generation or delivery from timestamps or prose.
+A completion with neither a direct-user nor parent-synthesis route can be a
+valid one-record continuation with no turn outcome. Direct user-only delivery
+has a 30-second settlement window. Parent-only and user-and-parent modes allow
+the bounded 120-second synthesis deadline plus that delivery window; any
+earlier direct user delivery is correlated but non-settling, and the final
+synthesized outbound settles the trace. Historical traces may omit these
+fields or the continuation entirely; never infer an exact generation or
+delivery from timestamps or prose.
 The bundled `mintclaw-trace-debug` skill provides the full investigation and
 reporting workflow.
 

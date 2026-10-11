@@ -194,7 +194,7 @@ func TestTraceCaptureRetainsLateAsyncCompletionAndDeliveryCorrelation(t *testing
 	}
 }
 
-func TestTraceCapturePersistsLateParentOnlyAsyncCompletionImmediately(t *testing.T) {
+func TestTraceCaptureWaitsForParentOnlySynthesisDelivery(t *testing.T) {
 	workspace := traceTestWorkspace(t)
 	eventBus := runtimeevents.NewBus()
 	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
@@ -217,15 +217,101 @@ func TestTraceCapturePersistsLateParentOnlyAsyncCompletionImmediately(t *testing
 			DeliveryMode: string(toolshared.AsyncDeliveryParentOnly), WillParent: true,
 		},
 	})
+	if matches, _ := filepath.Glob(filepath.Join(workspace, "state", "diagnostics", "traces", "*.json")); len(
+		matches,
+	) != 0 {
+		t.Fatalf("parent-only completion persisted before synthesized delivery: %v", matches)
+	}
+	channelPayload := channels.ChannelOutboundPayload{
+		DeliveryID: "delivery-parent-only", TraceScopes: []runtimeevents.TraceScope{traceScope},
+		TraceSettlement: true, ContentLen: 18,
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "parent-only-queued", Kind: runtimeevents.KindChannelMessageOutboundQueued,
+		Time: time.Now().UTC(), Payload: channelPayload,
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "parent-only-sent", Kind: runtimeevents.KindChannelMessageOutboundSent,
+		Time: time.Now().UTC(), Payload: channelPayload,
+	})
 
 	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
 	if err := diagnostictrace.Validate(trace); err != nil {
 		t.Fatalf("validate parent-only completion trace: %v", err)
 	}
 	if trace.Metadata.RootTurnID != traceScope.TurnID || trace.Metadata.ParentTurnID != "turn-parent-only" ||
-		len(trace.Records) != 1 || trace.Records[0].Kind != diagnostictrace.RecordDeliveryDecision ||
+		len(trace.Records) != 3 || trace.Records[0].Kind != diagnostictrace.RecordDeliveryDecision ||
+		trace.Records[1].Correlation.DeliveryID != "delivery-parent-only" ||
+		trace.Records[2].Correlation.DeliveryID != "delivery-parent-only" ||
 		trace.Truncation.Incomplete {
 		t.Fatalf("parent-only completion trace = %#v", trace)
+	}
+}
+
+func TestTraceCaptureKeepsUserAndParentCompletionOpenThroughFinalDelivery(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	traceScope := runtimeevents.NewTraceScope(workspace, "async-completion-user-and-parent")
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "async-user-and-parent", Kind: runtimeevents.KindAgentAsyncCompletion,
+		Time: startedAt,
+		Scope: runtimeevents.Scope{
+			TraceScope: traceScope, AgentID: "main", SessionKey: "session-user-and-parent",
+		},
+		Correlation: runtimeevents.Correlation{ParentTurnID: "turn-user-and-parent"},
+		Payload: AsyncCompletionPayload{
+			SourceTool: "spawn", TaskID: "task-user-and-parent",
+			TaskGenerationID: "task-generation-user-and-parent", CompletionID: "completion-user-and-parent",
+			DeliveryMode: string(toolshared.AsyncDeliveryUserAndParent), WillUser: true, WillParent: true,
+		},
+	})
+	interimPayload := channels.ChannelOutboundPayload{
+		DeliveryID: "delivery-interim", TraceScopes: []runtimeevents.TraceScope{traceScope},
+		ContentLen: 12,
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "interim-queued", Kind: runtimeevents.KindChannelMessageOutboundQueued,
+		Time: startedAt.Add(time.Millisecond), Payload: interimPayload,
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "interim-sent", Kind: runtimeevents.KindChannelMessageOutboundSent,
+		Time: startedAt.Add(2 * time.Millisecond), Payload: interimPayload,
+	})
+	if matches, _ := filepath.Glob(filepath.Join(workspace, "state", "diagnostics", "traces", "*.json")); len(
+		matches,
+	) != 0 {
+		t.Fatalf("completion trace settled on intermediate delivery: %v", matches)
+	}
+
+	finalPayload := channels.ChannelOutboundPayload{
+		DeliveryID: "delivery-final", TraceScopes: []runtimeevents.TraceScope{traceScope},
+		TraceSettlement: true, ContentLen: 18,
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "final-queued", Kind: runtimeevents.KindChannelMessageOutboundQueued,
+		Time: startedAt.Add(3 * time.Millisecond), Payload: finalPayload,
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "final-sent", Kind: runtimeevents.KindChannelMessageOutboundSent,
+		Time: startedAt.Add(4 * time.Millisecond), Payload: finalPayload,
+	})
+
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if err := diagnostictrace.Validate(trace); err != nil {
+		t.Fatalf("validate user-and-parent completion trace: %v", err)
+	}
+	if len(trace.Records) != 5 || trace.Records[1].Correlation.DeliveryID != "delivery-interim" ||
+		trace.Records[2].Correlation.DeliveryID != "delivery-interim" ||
+		trace.Records[3].Correlation.DeliveryID != "delivery-final" ||
+		trace.Records[4].Correlation.DeliveryID != "delivery-final" || trace.Truncation.Incomplete {
+		t.Fatalf("user-and-parent completion trace = %#v", trace)
 	}
 }
 

@@ -470,7 +470,7 @@ func (al *AgentLoop) deliverToolResultToUser(
 	result *toolshared.ToolResult,
 	toolName string,
 ) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
-	return al.deliverToolResultToUserWithScopes(ctx, ts, result, toolName, nil, bus.OutboundMetadata{})
+	return al.deliverToolResultToUserWithScopes(ctx, ts, result, toolName, nil, true, bus.OutboundMetadata{})
 }
 
 func (al *AgentLoop) deliverToolResultToUserWithScopes(
@@ -479,6 +479,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	result *toolshared.ToolResult,
 	toolName string,
 	traceScopes []runtimeevents.TraceScope,
+	settleTrace bool,
 	metadata bus.OutboundMetadata,
 ) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 	if al == nil || ts == nil || result == nil {
@@ -495,7 +496,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			runtimeevents.NewTraceScope(ts.workspace, ts.turnID),
 		}
 	}
-	traceSettlement := len(traceScopes) > 0 && !result.Delivery.IsImmediate()
+	traceSettlement := settleTrace && len(traceScopes) > 0 && !result.Delivery.IsImmediate()
 	if result.Delivery.IsImmediate() && len(traceScopes) == 0 {
 		traceScopes = []runtimeevents.TraceScope{
 			runtimeevents.NewTraceScope(ts.workspace, ts.turnID),

@@ -67,8 +67,11 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    turn trace is finalized, each completion now starts a bounded continuation
    trace. Its envelope points to the original turn through `parent_turn_id`,
    and its decision record retains the originating model attempt and exact tool
-   call/generation. A user-bound continuation waits at most 30 seconds for the
-   correlated channel outcome; a parent-only completion persists immediately.
+   call/generation. A direct user-only continuation waits at most 30 seconds
+   for its correlated channel outcome. A completion that requires parent
+   synthesis remains bounded by the 120-second synthesis deadline plus the
+   30-second delivery window; any earlier direct user message is correlated but
+   only the final synthesized outbound settles the trace.
 4. **Interactions.** Existing interaction runtime events carry interaction ID,
    revision, event, status, outcome, code, and success, but the turn projector
    currently ignores them. H1b needs bounded lifecycle records and joins, not a
@@ -226,8 +229,8 @@ continuation trace instead of retaining the parent trace indefinitely. This
 preserves passive one-way capture, bounds user-delivery settlement, and remains
 valid when a background task outlives its originating turn. Production
 requalification must prove the continuation envelope and decision record; a
-user-bound canary must additionally prove the matching delivery attempt and
-outcome before this slice is marked production-qualified.
+parent-synthesized canary must additionally prove the matching final delivery
+attempt and outcome before this slice is marked production-qualified.
 
 ## Evidence map
 

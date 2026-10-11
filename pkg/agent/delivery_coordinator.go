@@ -169,7 +169,7 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		userDelivered := false
 		userDeliveryErr := ""
 		if _, outcome, err := d.deliverToUserResult(
-			outCtx, ts, result, asyncToolName, req.TraceScopes, metadata,
+			outCtx, ts, result, asyncToolName, req.TraceScopes, !delivery.QueueParent, metadata,
 		); err != nil {
 			userDeliveryErr = err.Error()
 			logger.WarnCF("agent", "Failed to deliver async tool result to user",
@@ -183,7 +183,13 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 			userDelivered = true
 		} else if outcome == toolResultDeliveryNone && strings.TrimSpace(result.ForUser) != "" &&
 			result.Delivery.Intent != toolshared.DeliverySilent {
-			msg, err := outboundMessageForTraceSettlement(ts, result.ForUser, req.TraceScopes, metadata)
+			msg, err := outboundMessageForTrace(
+				ts,
+				result.ForUser,
+				req.TraceScopes,
+				!delivery.QueueParent,
+				metadata,
+			)
 			if err != nil {
 				userDeliveryErr = err.Error()
 			} else if err := d.publishMessage(outCtx, ts.workspace, msg); err != nil {
@@ -376,12 +382,21 @@ func (d *asyncToolCompletionDelivery) deliverToUserResult(
 	result *toolshared.ToolResult,
 	toolName string,
 	traceScopes []runtimeevents.TraceScope,
+	traceSettlement bool,
 	metadata bus.OutboundMetadata,
 ) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 	if d == nil || d.userDelivery == nil || d.userDelivery.deliverToUser == nil {
 		return nil, toolResultDeliveryNone, fmt.Errorf("tool result delivery is not initialized")
 	}
-	return d.userDelivery.deliverToUser(ctx, ts, result, toolName, traceScopes, metadata)
+	return d.userDelivery.deliverToUser(
+		ctx,
+		ts,
+		result,
+		toolName,
+		traceScopes,
+		traceSettlement,
+		metadata,
+	)
 }
 
 func outboundMessageForTraceSettlement(
@@ -390,12 +405,22 @@ func outboundMessageForTraceSettlement(
 	traceScopes []runtimeevents.TraceScope,
 	metadata bus.OutboundMetadata,
 ) (bus.OutboundMessage, error) {
+	return outboundMessageForTrace(ts, content, traceScopes, true, metadata)
+}
+
+func outboundMessageForTrace(
+	ts *turnState,
+	content string,
+	traceScopes []runtimeevents.TraceScope,
+	traceSettlement bool,
+	metadata bus.OutboundMetadata,
+) (bus.OutboundMessage, error) {
 	msg := outboundMessageForTurn(ts, content)
 	msg.Metadata = msg.Metadata.Merge(metadata)
 	if err := bus.SetOutboundTraceScopes(&msg, traceScopes); err != nil {
 		return bus.OutboundMessage{}, err
 	}
-	msg.TraceSettlement = len(msg.TraceScopes) > 0
+	msg.TraceSettlement = traceSettlement && len(msg.TraceScopes) > 0
 	return msg, nil
 }
 
