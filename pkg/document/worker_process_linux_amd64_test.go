@@ -276,8 +276,8 @@ func TestProcessFormWriterUsesRealSubprocessAndAdoptsPrivateCandidate(t *testing
 		"full_name": {Type: FormValueText, Text: &privateValue},
 	})
 	t.Setenv(workerSecretCanary, "must-not-reach-worker")
-	worker := testProcessWorker("serve")
-	worker.timeout = 10 * time.Second
+	worker := NewProcessFormWriterWorker().(*processWorker)
+	worker.args = testProcessWorker("serve").args
 	result := worker.FillCandidate(
 		t.Context(),
 		snapshot,
@@ -334,8 +334,8 @@ func TestProcessFormWriterProducesVerifiedFlattenedHybridDerivative(t *testing.T
 	fill := normalizedNamedFill(t, input, *fields.Facts, map[string]FormValue{
 		"hybrid-name": {Type: FormValueText, Text: &name},
 	})
-	worker := testProcessWorker("serve")
-	worker.timeout = 15 * time.Second
+	worker := NewProcessFormWriterWorker().(*processWorker)
+	worker.args = testProcessWorker("serve").args
 	result := worker.FillCandidate(
 		t.Context(),
 		snapshot,
