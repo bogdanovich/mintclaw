@@ -459,7 +459,7 @@ jobs:
           runtime/browser/credential-login/session-browser.test.cjs
           runtime/browser/credential-login/channel-contract.test.cjs
 
-      - name: Qualify fixed Root browser launcher, network and process forest
+      - name: Qualify private broker transport, fixed Root launcher, network and process forest
         run: bash ./scripts/qualify-credential-browser-forest.sh
 
       - name: Qualify private browser channel and enforcing TLS proxy
