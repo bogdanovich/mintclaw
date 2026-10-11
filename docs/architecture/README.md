@@ -138,6 +138,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Protected Credential Browser Runtime](credential-browser-runtime.md):
   fixed Root-owned read-only artifact inventory, pinned mount descriptors,
   integrity checks, synthetic Linux qualification, and remaining launch gates.
+- [Fixed Root Credential Browser Launcher](credential-browser-root-launcher.md):
+  immutable runtime, private namespaces, fixed role drop and pre-Node descriptor
+  cleanup, verified forest retirement, and pending broker integration.
 - [Private Credential Browser Channel](credential-browser-private-channel.md):
   bounded broker/worker commands, current lease callbacks, private provider
   consumption, verified retirement, and synthetic qualification limits.
