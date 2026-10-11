@@ -317,6 +317,9 @@ func TestDocumentFormIntakeFailureReportsAcceptedPrefixWithoutExposingIt(t *test
 		strings.Contains(result.ForLLM, "Casey Mint") || strings.Contains(result.ForLLM, "PRIVATE_PROVIDER_FAILURE") {
 		t.Fatal("partial interpretation was falsely all-failed, all-consumed or exposed")
 	}
+	if projection.Intake.Failure.Stage != "interpretation" {
+		t.Fatal("private interpretation failure lost its value-free processing stage")
+	}
 	owner, err := documentFormOwner(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -328,6 +331,82 @@ func TestDocumentFormIntakeFailureReportsAcceptedPrefixWithoutExposingIt(t *test
 	followup, err := tool.ProtectedAnswerContinuationFollowup(result)
 	if err != nil || followup == nil || !followup.ResponseOnly {
 		t.Fatal("failure did not produce a truthful progress checkpoint")
+	}
+	if !strings.Contains(followup.Instruction, "processing failure is not evidence of missing") ||
+		!strings.Contains(followup.Instruction, "Never ask the user to resend") {
+		t.Fatal("processing failure invited another answer rather than a retained-input retry")
+	}
+}
+
+func TestDocumentFormIntakeFailureStagesAreClosedAndValueFree(t *testing.T) {
+	for _, stage := range []string{"evidence", "reservation", "interpretation", "apply"} {
+		t.Run(stage, func(t *testing.T) {
+			model := &intakeWorkflowTestInterpreter{}
+			tool, ctx, schema, jobID, _ := intakeWorkflowFixture(t, model)
+			model.interpret = func(document.FormIntakeInterpretationView) (document.FormIntakeInterpretation, error) {
+				if stage == "apply" {
+					return document.FormIntakeInterpretation{
+						Intent: document.FormIntakeIntentFacts,
+						Proposals: []document.FormIntakeProposal{{
+							FieldID:  "unregistered-private-field",
+							Literals: []document.FormIntakeLiteral{{Text: "PRIVATE_INPUT_SENTINEL", Occurrence: 1}},
+						}},
+					}, nil
+				}
+				return document.FormIntakeInterpretation{}, errors.New("PRIVATE_PROVIDER_ERROR_SENTINEL")
+			}
+			if stage == "evidence" {
+				tool.formIntakeEvidence = func(
+					context.Context, ownedDocumentMediaStore, string, media.MediaOwner, []int,
+				) ([]document.FormIntakeTextEvidence, error) {
+					return nil, errors.New("PRIVATE_EVIDENCE_ERROR_SENTINEL")
+				}
+			}
+			owner, err := documentFormOwner(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			progress, err := tool.FindProtectedFormIntake(ctx)
+			if err != nil || progress == nil {
+				t.Fatal("intake unavailable")
+			}
+			ref, err := tool.AdmitProtectedFormIntake(ctx,
+				bus.InboundDocumentIntakeGuard{JobID: jobID, ModeID: progress.ModeID}, stage, "PRIVATE_INPUT_SENTINEL")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stage == "reservation" {
+				for index := 0; index < document.MaxFormIntakeExtractionPasses; index++ {
+					_, err = tool.formJobs.ReserveFormIntakePass(ctx, document.FormIntakePassRequest{
+						Reference: ref, ExpectedRevision: progress.Revision, Owner: owner, Schema: schema,
+						CandidateIDs: []string{schema.Fields[0].ID}, IdempotencyKey: fmt.Sprintf("reserved-%d", index),
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			result := tool.Execute(ctx, map[string]any{"action": "form", "form_action": "continue", "answer_ref": ref})
+			projection := decodeWorkflowResult(t, result.ForLLM)
+			if result.IsError || projection.Intake == nil || projection.Intake.Failure == nil ||
+				projection.Intake.Failure.Stage != stage || projection.Intake.AcceptedCount != 0 ||
+				projection.Intake.Progress.PendingInputs != 1 {
+				t.Fatal("processing failure lost its phase or retained input")
+			}
+			if strings.Contains(result.ForLLM, "PRIVATE_") ||
+				strings.Contains(result.ForLLM, "unregistered-private-field") {
+				t.Fatal("public failure exposed private input or error details")
+			}
+			followup, err := tool.ProtectedAnswerContinuationFollowup(result)
+			if err != nil || followup == nil || !followup.ResponseOnly ||
+				!strings.Contains(followup.Instruction, "not by the unresolved-field list") {
+				t.Fatal("processing failure invited an unsupported missing-data question")
+			}
+			record, err := tool.formJobs.Get(ctx, jobID, owner)
+			if err != nil || len(record.Fields) != 0 || record.Revision != progress.Revision {
+				t.Fatal("failed processing changed accepted field state")
+			}
+		})
 	}
 }
 
