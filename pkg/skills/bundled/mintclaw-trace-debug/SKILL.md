@@ -135,6 +135,20 @@ Correlate:
   delivery window; in user-and-parent mode the early direct delivery is
   correlated but non-settling and only the final synthesized outbound settles
   the continuation;
+- remote `coding_task` admission with its authoritative task projection by
+  `scope.task_id` plus `correlation.task_generation_id` on the parent
+  `tool.result`. Its later terminal delivery uses a bounded
+  `coding-completion-*` continuation whose decision repeats those identities
+  and adds `correlation.worker_generation_id`,
+  `correlation.remote_thread_id`, safe `scope.scope_alias` and
+  `scope.profile_alias`, and bounded `task_status`, `remote_state`, and
+  `failure_code` fields in `.data`. Join the final channel receipt by
+  `correlation.delivery_id` and the deduplication transaction by
+  `correlation.completion_id`. A recovered monitor may not retain the original
+  turn identity, so use task plus generation rather than time matching or an
+  inferred `metadata.parent_turn_id`; verify current state in the task
+  registry, companion worker ledger, and remote thread without replaying the
+  task;
 - `interaction.lifecycle` records with the authoritative interaction registry
   by `correlation.interaction_id` and exact
   `correlation.interaction_revision`; use
@@ -153,8 +167,9 @@ runtime-generated model-attempt ID. Historical traces may lack
 `scope.task_id`, `correlation.task_generation_id`,
 `correlation.completion_id`, `correlation.delivery_id`,
 `correlation.interaction_id`, `correlation.interaction_revision`,
-`correlation.interaction_event_id`, `correlation.model_attempt_id`, or
-`correlation.tool_call_generation`; for
+`correlation.interaction_event_id`, `correlation.model_attempt_id`,
+`correlation.tool_call_generation`, `correlation.worker_generation_id`, or
+`correlation.remote_thread_id`; for
 those traces, correlate records conservatively by turn and sequence and state
 the limitation. Older loop-decision records may also lack
 `correlation.tool_call_id`; use their tool and argument hash only as bounded

@@ -96,16 +96,7 @@
       "trace_records": ["interaction.lifecycle", "delivery.decision", "delivery.outcome"],
       "required_ids": ["task_id", "task_generation_id", "worker_generation_id", "remote_thread_id", "scope_alias", "profile_alias", "interaction_id", "completion_id", "delivery_id"],
       "available_ids": ["task_id", "task_generation_id", "worker_generation_id", "remote_thread_id", "scope_alias", "profile_alias", "interaction_id", "completion_id", "delivery_id"],
-      "missing_trace_joins": [
-        {"id": "task_id", "disposition": "close_h1b", "observation": "Parent trace lacks the durable remote coding task reference."},
-        {"id": "task_generation_id", "disposition": "close_h1b", "observation": "Generation identity must prevent stale or reused-task ambiguity."},
-        {"id": "worker_generation_id", "disposition": "close_h1b", "observation": "Worker restart/reconciliation needs the admitted worker generation."},
-        {"id": "remote_thread_id", "disposition": "close_h1b", "observation": "The remote transcript owner is not joinable from the parent trace."},
-        {"id": "scope_alias", "disposition": "close_h1b", "observation": "Safe configured scope placement is absent from parent passive evidence."},
-        {"id": "profile_alias", "disposition": "close_h1b", "observation": "Investigate/mutate/yolo authority is absent from parent passive evidence."},
-        {"id": "completion_id", "disposition": "close_h1b", "observation": "Final completion cannot be joined without external time matching."},
-        {"id": "delivery_id", "disposition": "close_h1b", "observation": "Final Telegram delivery is authoritative but not correlated in the trace."}
-      ],
+      "missing_trace_joins": [],
       "terminal_facts": ["task_terminal_event", "worker.stopped", "delivery.outcome", "uncertain_remote_outcome"],
       "retention_owner": "task_registry_companion_ledger_remote_thread_and_outbox",
       "export_class": "metadata_safe"

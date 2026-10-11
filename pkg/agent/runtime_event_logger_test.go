@@ -126,13 +126,18 @@ func TestRuntimeEventLogFieldsRetainAsyncCompletionCorrelation(t *testing.T) {
 	fields := runtimeEventLogFields(runtimeevents.Event{
 		Kind: runtimeevents.KindAgentAsyncCompletion,
 		Payload: AsyncCompletionPayload{
-			SourceTool: "spawn", TaskID: "task-1", TaskGenerationID: "task-generation-1",
+			SourceTool: "coding_task", TaskID: "task-1", TaskGenerationID: "task-generation-1",
 			CompletionID: "completion-1", DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
+			RemoteCoding: &RemoteCodingCompletionEvidence{
+				WorkerGenerationID: "worker-1", RemoteThreadID: "thread-1",
+				ScopeAlias: "mintclaw-dev", ProfileAlias: "project-yolo",
+				TaskStatus: "failed", RemoteState: "uncertain", FailureCode: "worker_lost",
+			},
 			ContentLen: 12, ForUserLen: 8, MediaCount: 1, WillUser: true,
 		},
 	})
 
-	if fields["source_tool"] != "spawn" || fields["task_id"] != "task-1" ||
+	if fields["source_tool"] != "coding_task" || fields["task_id"] != "task-1" ||
 		fields["task_generation_id"] != "task-generation-1" ||
 		fields["completion_id"] != "completion-1" ||
 		fields["delivery_mode"] != string(toolshared.AsyncDeliveryUserOnly) {
@@ -141,6 +146,19 @@ func TestRuntimeEventLogFieldsRetainAsyncCompletionCorrelation(t *testing.T) {
 	if fields["content_len"] != 12 || fields["for_user_len"] != 8 || fields["media_count"] != 1 ||
 		fields["will_user"] != true {
 		t.Fatalf("async completion facts = %#v", fields)
+	}
+	for field, want := range map[string]any{
+		"worker_generation_id": "worker-1",
+		"remote_thread_id":     "thread-1",
+		"scope_alias":          "mintclaw-dev",
+		"profile_alias":        "project-yolo",
+		"task_status":          "failed",
+		"remote_state":         "uncertain",
+		"failure_code":         "worker_lost",
+	} {
+		if fields[field] != want {
+			t.Fatalf("async completion %s = %#v, want %#v; fields=%#v", field, fields[field], want, fields)
+		}
 	}
 }
 

@@ -1953,6 +1953,8 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		ToolExecEndPayload{
 			ToolCallID:         toolCallID,
 			ToolCallGeneration: runner.toolCallGeneration(i),
+			TaskID:             toolResult.Control.TaskID,
+			TaskGenerationID:   toolResult.Control.TaskGenerationID,
 			Tool:               toolName,
 			Duration:           toolDuration,
 			ForLLMLen:          len(contentForLLM),

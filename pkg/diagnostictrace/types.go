@@ -95,12 +95,14 @@ type Origin struct {
 }
 
 type Scope struct {
-	AgentID     string `json:"agent_id,omitempty"`
-	SessionHash string `json:"session_hash,omitempty"`
-	TurnID      string `json:"turn_id,omitempty"`
-	TaskID      string `json:"task_id,omitempty"`
-	Channel     string `json:"channel,omitempty"`
-	TargetHash  string `json:"target_hash,omitempty"`
+	AgentID      string `json:"agent_id,omitempty"`
+	SessionHash  string `json:"session_hash,omitempty"`
+	TurnID       string `json:"turn_id,omitempty"`
+	TaskID       string `json:"task_id,omitempty"`
+	Channel      string `json:"channel,omitempty"`
+	TargetHash   string `json:"target_hash,omitempty"`
+	ScopeAlias   string `json:"scope_alias,omitempty"`
+	ProfileAlias string `json:"profile_alias,omitempty"`
 }
 
 type Correlation struct {
@@ -111,6 +113,8 @@ type Correlation struct {
 	ToolCallGeneration  string `json:"tool_call_generation,omitempty"`
 	TaskGenerationID    string `json:"task_generation_id,omitempty"`
 	CompletionID        string `json:"completion_id,omitempty"`
+	WorkerGenerationID  string `json:"worker_generation_id,omitempty"`
+	RemoteThreadID      string `json:"remote_thread_id,omitempty"`
 	InteractionID       string `json:"interaction_id,omitempty"`
 	InteractionRevision int64  `json:"interaction_revision,omitempty"`
 	InteractionEventID  string `json:"interaction_event_id,omitempty"`
