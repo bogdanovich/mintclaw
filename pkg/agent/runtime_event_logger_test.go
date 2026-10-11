@@ -15,7 +15,9 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -191,6 +193,36 @@ func TestRuntimeEventLogFieldsRetainInteractionCorrelation(t *testing.T) {
 	} {
 		if fields[field] != want {
 			t.Fatalf("interaction field %q = %#v, want %#v; fields=%#v", field, fields[field], want, fields)
+		}
+	}
+}
+
+func TestRuntimeEventLogFieldsRetainNodeInvocationCorrelation(t *testing.T) {
+	fields := runtimeEventLogFields(runtimeevents.Event{
+		Kind: runtimeevents.KindNodeInvocationObserved,
+		Payload: tools.NodeInvocationEventPayload{
+			Observation:  tools.NodeInvocationObservationUncertain,
+			InvocationID: "inv-node-1", Target: "workstation", ScopeAlias: "project",
+			ProfileAlias: "owner", PolicyRevision: "policy-v7", Command: "shell.exec.v1",
+			GatewayState: nodes.GatewayInvocationDispatched, State: string(nodes.InvocationUnknown),
+			ErrorCode: "DISPATCH_UNCERTAIN",
+		},
+	})
+
+	for field, want := range map[string]any{
+		"observation":     tools.NodeInvocationObservationUncertain,
+		"invocation_id":   "inv-node-1",
+		"target_alias":    "workstation",
+		"scope_alias":     "project",
+		"profile_alias":   "owner",
+		"policy_revision": "policy-v7",
+		"command":         "shell.exec.v1",
+		"gateway_state":   string(nodes.GatewayInvocationDispatched),
+		"state":           string(nodes.InvocationUnknown),
+		"error_code":      "DISPATCH_UNCERTAIN",
+	} {
+		if fields[field] != want {
+			t.Fatalf("node invocation %s = %#v, want %#v; fields=%#v", field, fields[field], want, fields)
 		}
 	}
 }

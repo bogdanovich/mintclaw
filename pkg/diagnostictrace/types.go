@@ -101,6 +101,7 @@ type Scope struct {
 	TaskID       string `json:"task_id,omitempty"`
 	Channel      string `json:"channel,omitempty"`
 	TargetHash   string `json:"target_hash,omitempty"`
+	TargetAlias  string `json:"target_alias,omitempty"`
 	ScopeAlias   string `json:"scope_alias,omitempty"`
 	ProfileAlias string `json:"profile_alias,omitempty"`
 }
@@ -115,6 +116,8 @@ type Correlation struct {
 	CompletionID        string `json:"completion_id,omitempty"`
 	WorkerGenerationID  string `json:"worker_generation_id,omitempty"`
 	RemoteThreadID      string `json:"remote_thread_id,omitempty"`
+	InvocationID        string `json:"invocation_id,omitempty"`
+	PolicyRevision      string `json:"policy_revision,omitempty"`
 	InteractionID       string `json:"interaction_id,omitempty"`
 	InteractionRevision int64  `json:"interaction_revision,omitempty"`
 	InteractionEventID  string `json:"interaction_event_id,omitempty"`

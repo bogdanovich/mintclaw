@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -112,18 +113,22 @@ func publishNodeInvocationEvent(
 		gatewayState = nodes.GatewayInvocationDispatched
 	}
 	payload := NodeInvocationEventPayload{
-		Observation:  observation,
-		InvocationID: record.Plan.InvocationID,
-		Target:       record.Target,
-		Command:      record.Plan.Command,
-		Risk:         record.Plan.Risk,
-		GatewayState: gatewayState,
-		State:        state,
-		ErrorCode:    errorCode,
+		Observation:    observation,
+		InvocationID:   record.Plan.InvocationID,
+		Target:         record.Target,
+		ScopeAlias:     nodeInvocationScopeAlias(record),
+		ProfileAlias:   nodeInvocationProfileAlias(record),
+		PolicyRevision: record.Plan.PolicyRevision,
+		Command:        record.Plan.Command,
+		Risk:           record.Plan.Risk,
+		GatewayState:   gatewayState,
+		State:          state,
+		ErrorCode:      errorCode,
 	}
 	if workspace, ok := ctx.Value(nodeInvocationWorkspaceContextKey{}).(nodeInvocationWorkspaceContext); ok {
 		payload.Workspace = workspace.alias
 		payload.WorkspaceRevision = workspace.revision
+		payload.ScopeAlias = workspace.alias
 	}
 	payload.Service, payload.Action, payload.LogEntries = serviceInvocationObservation(record.Plan)
 	observeJobInvocation(&payload, record.Plan, result...)
@@ -133,13 +138,20 @@ func publishNodeInvocationEvent(
 		severity = runtimeevents.SeverityWarn
 	}
 	attrs := map[string]any{
-		"observation":   payload.Observation,
-		"invocation_id": payload.InvocationID,
-		"target":        payload.Target,
-		"command":       payload.Command,
-		"risk":          payload.Risk,
-		"gateway_state": payload.GatewayState,
-		"state":         payload.State,
+		"observation":     payload.Observation,
+		"invocation_id":   payload.InvocationID,
+		"target":          payload.Target,
+		"policy_revision": payload.PolicyRevision,
+		"command":         payload.Command,
+		"risk":            payload.Risk,
+		"gateway_state":   payload.GatewayState,
+		"state":           payload.State,
+	}
+	if payload.ScopeAlias != "" {
+		attrs["scope_alias"] = payload.ScopeAlias
+	}
+	if payload.ProfileAlias != "" {
+		attrs["profile_alias"] = payload.ProfileAlias
 	}
 	if payload.Workspace != "" {
 		attrs["workspace"] = payload.Workspace
@@ -198,6 +210,75 @@ func publishNodeInvocationEvent(
 		Payload:     payload,
 		Attrs:       attrs,
 	})
+}
+
+func nodeInvocationScopeAlias(record nodes.GatewayInvocationRecord) string {
+	input, ok := nodeInvocationInputObject(record.Plan.Input)
+	if !ok {
+		return ""
+	}
+	if record.Plan.Command == nodes.CodingCommandTaskStart {
+		var start nodes.CodingTaskStartInput
+		if json.Unmarshal(record.Plan.Input, &start) == nil && start.Validate() == nil {
+			return start.ScopeAlias
+		}
+	}
+	if record.Descriptor.ModelContract == nil {
+		return ""
+	}
+	allowed := record.Descriptor.ModelContract.Constraints.WorkingScopes
+	for _, key := range []string{"working_scope", "cwd"} {
+		alias, _ := input[key].(string)
+		if slices.Contains(allowed, alias) && nodes.Alias(alias).Validate() == nil {
+			return alias
+		}
+	}
+	return ""
+}
+
+func nodeInvocationProfileAlias(record nodes.GatewayInvocationRecord) string {
+	candidates := []string{record.Plan.ServiceProfile, record.Plan.JobProfile}
+	if record.Plan.Update != nil {
+		candidates = append(candidates, record.Plan.Update.Profile)
+	}
+	if len(record.Descriptor.FileProfiles) == 1 {
+		candidates = append(candidates, record.Descriptor.FileProfiles[0].Alias)
+	}
+	if len(record.Descriptor.BrowserProfiles) == 1 {
+		candidates = append(candidates, record.Descriptor.BrowserProfiles[0].Alias)
+	}
+	for _, candidate := range candidates {
+		if nodes.Alias(candidate).Validate() == nil {
+			return candidate
+		}
+	}
+	if record.Plan.Command == nodes.CodingCommandTaskStart {
+		var start nodes.CodingTaskStartInput
+		if json.Unmarshal(record.Plan.Input, &start) == nil && start.Validate() == nil {
+			return string(start.Profile)
+		}
+	}
+	if record.Descriptor.ModelContract == nil {
+		return ""
+	}
+	input, ok := nodeInvocationInputObject(record.Plan.Input)
+	if !ok {
+		return ""
+	}
+	profile, _ := input["profile"].(string)
+	if slices.Contains(record.Descriptor.ModelContract.Constraints.ProfileAliases, profile) &&
+		nodes.Alias(profile).Validate() == nil {
+		return profile
+	}
+	return ""
+}
+
+func nodeInvocationInputObject(input json.RawMessage) (map[string]any, bool) {
+	var value map[string]any
+	if json.Unmarshal(input, &value) != nil || value == nil {
+		return nil, false
+	}
+	return value, true
 }
 
 func observeJobInvocation(

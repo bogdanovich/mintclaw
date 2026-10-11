@@ -5,8 +5,8 @@ Roadmap packet:
 
 Status: H1a baseline with the H1b terminal-truth, model-attempt, tool-call
 generation, async task/delivery, and human-interaction slices implemented and
-production-qualified. Remote-coding correlation is implemented; production
-qualification is pending.
+production-qualified. Remote-coding and companion-invocation correlation are
+implemented; production qualification is pending.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -85,9 +85,15 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    projector never holds a trace open for the human wait. Question, answer,
    approval, failure-detail, and execution-context content remain only in the
    authoritative interaction registry.
-5. **Node and companion invocations.** The runtime event contains the gateway
-   invocation ID and safe command/target facts. The current trace hashes the ID
-   into a result digest, which cannot join the authoritative invocation store.
+5. **Node and companion invocations (implemented; production qualification
+   pending).** Each passive observation now retains the exact gateway
+   invocation ID, configured target and applicable scope/profile aliases, and
+   the execution-policy revision. The trace projects those facts into bounded
+   correlation/scope fields, so an investigator can select the gateway store
+   and companion ledger record without command, input, output, path, node
+   identity, or authority-digest content. Success, failure, cancellation,
+   timeout, disconnect/uncertainty, and later status observations remain
+   distinguishable through observation, state, and safe error code.
 6. **Remote coding generations (implemented; production qualification
    pending).** A `coding_task` result now projects exact task and task-generation
    identity into the parent `tool.result`. Terminal gateway delivery creates a

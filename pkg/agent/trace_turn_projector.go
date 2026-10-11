@@ -512,8 +512,11 @@ func runtimeEventRecord(
 	completionID := ""
 	workerGenerationID := ""
 	remoteThreadID := ""
+	targetAlias := ""
 	scopeAlias := ""
 	profileAlias := ""
+	invocationID := ""
+	policyRevision := ""
 	interactionID := ""
 	interactionEventID := ""
 	interactionRevision := int64(0)
@@ -717,6 +720,11 @@ func runtimeEventRecord(
 			DecisionCode: safeCode(value.ErrorCode),
 		}
 		toolCallID = firstNonEmptyString(toolCallID, event.Correlation.RequestID)
+		targetAlias = value.Target
+		scopeAlias = firstNonEmptyString(value.ScopeAlias, value.Workspace)
+		profileAlias = value.ProfileAlias
+		invocationID = value.InvocationID
+		policyRevision = value.PolicyRevision
 	case runtimeevents.KindAgentToolExecSkipped:
 		value, ok := event.Payload.(ToolExecSkippedPayload)
 		if !ok {
@@ -933,6 +941,7 @@ func runtimeEventRecord(
 			TaskID:       taskID,
 			Channel:      event.Scope.Channel,
 			TargetHash:   safeHash(settings, targetKey(event.Scope.Channel, event.Scope.ChatID)),
+			TargetAlias:  targetAlias,
 			ScopeAlias:   scopeAlias,
 			ProfileAlias: profileAlias,
 		},
@@ -946,6 +955,8 @@ func runtimeEventRecord(
 			CompletionID:        completionID,
 			WorkerGenerationID:  workerGenerationID,
 			RemoteThreadID:      remoteThreadID,
+			InvocationID:        invocationID,
+			PolicyRevision:      policyRevision,
 			InteractionID:       interactionID,
 			InteractionRevision: interactionRevision,
 			InteractionEventID:  interactionEventID,

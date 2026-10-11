@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 const (
@@ -546,6 +547,17 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		if payload.Success != nil {
 			fields["success"] = *payload.Success
 		}
+	case tools.NodeInvocationEventPayload:
+		setStringField(fields, "observation", payload.Observation)
+		setStringField(fields, "invocation_id", payload.InvocationID)
+		setStringField(fields, "target_alias", payload.Target)
+		setStringField(fields, "scope_alias", payload.ScopeAlias)
+		setStringField(fields, "profile_alias", payload.ProfileAlias)
+		setStringField(fields, "policy_revision", payload.PolicyRevision)
+		setStringField(fields, "command", payload.Command)
+		setStringField(fields, "gateway_state", string(payload.GatewayState))
+		setStringField(fields, "state", payload.State)
+		setStringField(fields, "error_code", payload.ErrorCode)
 	case InterruptReceivedPayload:
 		fields["interrupt_kind"] = payload.Kind
 		fields["role"] = payload.Role

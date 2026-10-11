@@ -298,7 +298,8 @@ func TestNodeFileTransferEventsExposeLifecycleWithoutContentOrAuthority(t *testi
 		payload, ok := event.Payload.(NodeInvocationEventPayload)
 		if !ok || payload.Observation != want[index] ||
 			payload.Command != "file.info.v1" || payload.Target != "build" ||
-			payload.InvocationID == "" {
+			payload.InvocationID == "" || payload.ProfileAlias != "project" ||
+			payload.PolicyRevision != "project-v1" {
 			t.Fatalf("event[%d] payload = %#v", index, event.Payload)
 		}
 		if event.Source.Name != "nodes_file_info" ||
@@ -320,7 +321,6 @@ func TestNodeFileTransferEventsExposeLifecycleWithoutContentOrAuthority(t *testi
 	for _, forbidden := range []string{
 		"/srv/project/config.json",
 		strings.Repeat("a", sha256.Size*2),
-		"project-v1",
 		"private-node-id",
 		"plan_hash",
 		"artifact_ref",
