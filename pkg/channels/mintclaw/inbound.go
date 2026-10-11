@@ -173,10 +173,12 @@ func (c *MintClawChannel) handleMessageSend(pc *mintclawConn, msg MintClawMessag
 		"conn_id":  pc.id,
 	}
 
+	// Protected intake is classified after channel ingress. Never log an input
+	// body here, even at debug level; it may contain a protected standalone answer.
 	logger.DebugCF("mintclaw", "Received message", map[string]any{
-		"session_id": sessionID,
-		"preview":    truncate(content, 50),
-		"media":      len(media),
+		"session_id":    sessionID,
+		"content_bytes": len(content),
+		"media":         len(media),
 	})
 
 	sender := bus.SenderInfo{
