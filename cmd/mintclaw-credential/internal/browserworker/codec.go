@@ -3,6 +3,7 @@
 package browserworker
 
 import (
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -72,14 +73,18 @@ func encodeConfiguration(config launchConfig, flow credentialbroker.LoginFlow, o
 	if remaining == 0 || remaining > 20*60*60*1000 || len(origins) == 0 || len(origins) > 16 {
 		return nil, errUnavailable
 	}
+	pin, err := base64.StdEncoding.DecodeString(config.proxyPin)
+	if err != nil || len(pin) != 32 || base64.StdEncoding.EncodeToString(pin) != config.proxyPin {
+		return nil, errUnavailable
+	}
 	buffer := binary.BigEndian.AppendUint32(nil, remaining)
-	var err error
 	for _, field := range []struct {
 		value string
 		limit int
 	}{
 		{config.executablePath, 4096},
 		{config.proxyServer, 256},
+		{config.proxyPin, 44},
 		{flow.NavigationURL, 2048},
 		{flow.EntryOrigin, 2048},
 		{flow.FormID, 2048},

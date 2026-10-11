@@ -453,13 +453,14 @@ jobs:
           runtime/browser/credential-login/session-browser.test.cjs
           runtime/browser/credential-login/channel-contract.test.cjs
 
-      - name: Qualify private Go browser channel with synthetic credentials
+      - name: Qualify private browser channel and enforcing TLS proxy
         env:
           MINTCLAW_SYNTHETIC_CREDENTIAL_BROWSER_FIXTURE: "1"
         run: >-
           env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
           go test -race -tags goolm,stdjson -count=1 -timeout=10m
           ./cmd/mintclaw-credential/internal/browserworker
+          ./cmd/mintclaw-credential/internal/egress
 
       - name: Run real companion vertical tests
         run: bash ./scripts/run-go-integration-tests.sh

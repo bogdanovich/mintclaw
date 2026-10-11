@@ -138,6 +138,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Private Credential Browser Channel](credential-browser-private-channel.md):
   bounded broker/worker commands, current lease callbacks, private provider
   consumption, verified retirement, and synthetic qualification limits.
+- [Private Credential Browser Enforcing Proxy](credential-browser-enforcing-proxy.md):
+  private browser TLS termination and lease-bound preparation, injection,
+  submission and outcome HTTP admission.
 - [Private Credential HTTPS Transport](credential-https-transport.md): public
   DNS answer validation, pinned TLS connections, grant-driven socket retirement,
   fixed errors, and pending browser-proxy and deployed-host qualification.
