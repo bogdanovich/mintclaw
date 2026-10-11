@@ -112,6 +112,22 @@ func ValidateSnapshot(storePath string) error {
 	return r.load()
 }
 
+// InspectSnapshot validates bounded snapshot bytes using the registry's load
+// contract, without opening a store, locking, pruning, or writing. It does not
+// establish freshness or authorize an answer; callers must verify the current
+// route, status, expiry and prompt binding. Returned records are sensitive local
+// evidence, not a model or transport projection, and may contain opaque bindings.
+func InspectSnapshot(data []byte) (Snapshot, error) {
+	if len(data) > DefaultMaxBytes {
+		return Snapshot{}, ErrSnapshotOverBudget
+	}
+	r := &Registry{records: make(map[string]Record)}
+	if err := r.loadData(data); err != nil {
+		return Snapshot{}, err
+	}
+	return r.snapshotLocked(), nil
+}
+
 func (r *Registry) LastLoadError() error {
 	if r == nil {
 		return nil
