@@ -40,6 +40,38 @@ use that discovery only when it is actually present in the current tool catalog.
 
 ## Protected conversational form workflow (only when `form` is admitted)
 
+### Grouped ordinary-message intake (when `candidate_field_ids` is advertised)
+
+Prefer this branch over the legacy one-field dialogue below. Inspect and read bounded evidence, discover the exact
+schema, and prepare the same job as described in steps 1-2. Explain the document, relevant roles and desired outcome;
+ask about intent only if unknown. Present meaningful needs grouped by person and subject. Do not assume schema order
+is question order or that a technically optional PDF field is semantically irrelevant.
+
+Call `collect` with the exact `job_id`, one to eight unresolved `candidate_field_ids`, a concise human `question`, and
+value-free `role_context` when needed. On the first collect include `form_summary` and `collection_plan`. Invite one
+natural paragraph or several ordinary messages; never demand labels, delimiters, field IDs or `/answer`. Explain once
+that these ordinary-looking answers are captured securely for this form. Facts outside the selected window are still
+eligible for bounded private interpretation. The trusted collect result gives a response-only checkpoint: render
+its grouped question once and wait, rather than creating another single-field interaction.
+
+The runtime supplies each opaque intake receipt. Follow its exact `continue` call; do not invent or replace the
+receipt. The ordinary context receives counts, field states, uncertainty and advisory intent, never accepted personal
+values. Keep the same job, request only missing/ambiguous/invalid/conflicting data, and never re-ask confirmed or
+preserved facts. A pending or capacity failure means accepted data remain intact, not that the whole answer failed;
+explain how to clarify or split remaining input without repeating accepted facts. A correction must be explicit and
+person-specific. Do not turn mixed guidance and facts into one field value.
+
+Use `pause`/`resume` to preserve intake and `cancel` to terminate it. Explicit channel controls `/pause_form`,
+`/resume_form` and `/cancel_form` are available while intake owns the route. Resume the same document without asking
+for its attachment again. Paused input is not silently routed to ordinary chat. Clarify/back intent can explain or
+revisit the chosen section; it is not a replacement value. Review, separate finish request, final confirmation and
+verified single delivery remain the boundaries in step 5. An interpreter's finish/draft intent never approves output.
+
+### Legacy single-field fallback
+
+Use the single-field collection and navigation portions of steps 2-4 only when the active schema does not advertise
+`candidate_field_ids`. Do not mix the two input contracts within an active intake.
+
 1. Read evidence before planning: call `extract` on at most two explicit pages with `max_characters: 4000`. If text
    cannot establish the relevant labels/layout, render one page with `dpi: 72` and `max_dimension: 1024`, without retention.
    Further evidence is another explicit bounded request, not a larger inventory. Source text/images exist for the next model

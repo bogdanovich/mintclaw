@@ -29,7 +29,7 @@ func selectFormIntakeProposals(
 ) (formIntakeSelection, error) {
 	result := formIntakeSelection{Accounted: slices.Clone(input.Accounted)}
 	if input.Intent != interactions.ProtectedAnswerValue {
-		if len(request.Proposals) != 0 || len(request.NonData) != 0 {
+		if len(request.Proposals) != 0 || len(request.NonData) != 0 || len(request.Findings) != 0 {
 			return result, ErrFormJobAnswerConflict
 		}
 		return result, nil
@@ -37,6 +37,21 @@ func selectFormIntakeProposals(
 	resolved, err := resolveFormIntakeProposals(request, input.Text, candidateIDs)
 	if err != nil {
 		return result, err
+	}
+	seen := make(map[string]bool, len(candidateIDs))
+	for _, proposal := range request.Proposals {
+		seen[proposal.FieldID] = true
+	}
+	for _, finding := range request.Findings {
+		if seen[finding.FieldID] || !slices.Contains(candidateIDs, finding.FieldID) ||
+			!slices.Contains(
+				[]string{"field_ambiguous", "field_conflicting", "field_confirmation_required"},
+				finding.Code,
+			) {
+			return result, ErrFormJobAnswerConflict
+		}
+		seen[finding.FieldID] = true
+		result.Findings = append(result.Findings, finding)
 	}
 	nonData, err := resolveFormIntakeRefs(input.Text, request.NonData, "")
 	if err != nil {
@@ -107,7 +122,12 @@ func selectFormIntakeProposals(
 		result.Accounted = appendFormIntakeSpans(result.Accounted, item.Spans)
 		result.Accounted = appendFormIntakeSpans(result.Accounted, item.Correction)
 	}
-	result.Accounted = appendFormIntakeSpans(result.Accounted, nonData)
+	// An uncertainty finding has no trustworthy literal attribution. Retain
+	// prose too until clarification rather than making an ambiguous fact
+	// permanently unrecoverable through a conflicting non-data classification.
+	if len(request.Findings) == 0 {
+		result.Accounted = appendFormIntakeSpans(result.Accounted, nonData)
+	}
 	// The shared composite chain remains canonical regardless of model order.
 	slices.SortFunc(
 		result.Payloads,

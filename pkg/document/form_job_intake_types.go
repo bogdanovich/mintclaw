@@ -45,13 +45,14 @@ type FormIntakeStartRequest struct {
 // FormIntakeProgress never includes raw input, interpreted facts, or hashes of
 // personal values. Receipts identify authenticated transport inputs only.
 type FormIntakeProgress struct {
-	JobID         string          `json:"job_id"`
-	ModeID        string          `json:"mode_id"`
-	Revision      int64           `json:"revision"`
-	State         FormIntakeState `json:"state"`
-	PendingInputs int             `json:"pending_inputs"`
-	RetainedBytes int             `json:"retained_bytes"`
-	InputCount    int             `json:"input_count"`
+	JobID         string            `json:"job_id"`
+	ModeID        string            `json:"mode_id"`
+	Revision      int64             `json:"revision"`
+	State         FormIntakeState   `json:"state"`
+	PendingInputs int               `json:"pending_inputs"`
+	RetainedBytes int               `json:"retained_bytes"`
+	InputCount    int               `json:"input_count"`
+	Context       FormIntakeContext `json:"-"`
 }
 
 type FormIntakeStartResult struct {
@@ -93,6 +94,7 @@ type FormIntakeInput struct {
 	Text      string                             `json:"-"`
 	Context   FormIntakeContext                  `json:"-"`
 	Accounted []FormIntakeAccountedLiteral       `json:"-"`
+	Findings  []FormFieldMappingBlocker          `json:"-"`
 }
 
 type FormIntakePassRequest struct {
@@ -102,17 +104,21 @@ type FormIntakePassRequest struct {
 	Schema           FormFieldsFacts
 	CandidateIDs     []string
 	IdempotencyKey   string
+	// RetryStale binds retries to their revision without resetting the durable
+	// reservation budget. Only the private interpreter bridge uses this option.
+	RetryStale bool
 }
 
 // FormIntakePass binds one bounded candidate view to the current job revision.
 // Packet 2 must validate this exact reservation before accepting any proposal.
 type FormIntakePass struct {
-	Input        FormIntakeInput `json:"-"`
-	Fields       []FormField     `json:"-"`
-	ID           string          `json:"pass_id"`
-	Revision     int64           `json:"revision"`
-	CandidateIDs []string        `json:"candidate_field_ids"`
-	Reused       bool            `json:"reused"`
+	Input        FormIntakeInput        `json:"-"`
+	Fields       []FormField            `json:"-"`
+	ID           string                 `json:"pass_id"`
+	Revision     int64                  `json:"revision"`
+	CandidateIDs []string               `json:"candidate_field_ids"`
+	Reused       bool                   `json:"reused"`
+	Outcome      *FormIntakeApplyResult `json:"-"`
 }
 
 type formIntakeBindingPayload struct {
@@ -165,6 +171,7 @@ type formIntakeStoredInput struct {
 type formIntakeStoredPass struct {
 	ID           string                   `json:"id"`
 	KeyDigest    string                   `json:"key_digest"`
+	GroupDigest  string                   `json:"group_digest,omitempty"`
 	Revision     int64                    `json:"revision"`
 	CandidateIDs []string                 `json:"candidate_field_ids"`
 	Outcome      *formIntakeStoredOutcome `json:"outcome,omitempty"`

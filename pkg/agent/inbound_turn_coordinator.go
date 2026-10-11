@@ -43,6 +43,9 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 		al.turns.inbound.release(ctx, msg, fmt.Errorf("admit inbound media: %w", err))
 		return
 	}
+	if !msg.Context.DocumentIntake.IsZero() && c.handleDocumentIntakeInbound(ctx, msg, target) {
+		return
+	}
 	if c.handleScopedInspectionCommand(ctx, msg, target) {
 		return
 	}
@@ -84,6 +87,9 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 	}
 	if c.routeProjectedInteractionAnswer(ctx, msg, target) ||
 		c.routeExplicitInteractionAnswer(ctx, msg, target) {
+		return
+	}
+	if c.handleDocumentIntakeInbound(ctx, msg, target) {
 		return
 	}
 	if al.shouldHandleInteractionInbound(msg, target) {
@@ -182,11 +188,12 @@ func (c *inboundTurnCoordinator) enqueueDeferredInteractionInbound(
 		target.Agent.ID,
 		msg.Context.SenderID,
 		providers.Message{
-			Role:           "user",
-			Content:        msg.Content,
-			CreatedAt:      inboundReceivedAt(msg),
-			Media:          append([]string(nil), msg.Media...),
-			InboundSpoolID: msg.SpoolID,
+			Role:                    "user",
+			Content:                 msg.Content,
+			CreatedAt:               inboundReceivedAt(msg),
+			Media:                   append([]string(nil), msg.Media...),
+			InboundSpoolID:          msg.SpoolID,
+			DocumentIntakeReference: msg.Context.DocumentIntake.Reference,
 		},
 	)
 }
@@ -227,11 +234,12 @@ func (c *inboundTurnCoordinator) handleBusySession(
 		target.Agent.ID,
 		msg.Context.SenderID,
 		providers.Message{
-			Role:           "user",
-			Content:        msg.Content,
-			CreatedAt:      inboundReceivedAt(msg),
-			Media:          append([]string(nil), msg.Media...),
-			InboundSpoolID: msg.SpoolID,
+			Role:                    "user",
+			Content:                 msg.Content,
+			CreatedAt:               inboundReceivedAt(msg),
+			Media:                   append([]string(nil), msg.Media...),
+			InboundSpoolID:          msg.SpoolID,
+			DocumentIntakeReference: msg.Context.DocumentIntake.Reference,
 		},
 	); err != nil {
 		logger.WarnCF("agent", "Failed to enqueue steering message",

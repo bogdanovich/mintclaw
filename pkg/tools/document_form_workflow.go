@@ -150,6 +150,7 @@ type safeDocumentFormResult struct {
 	Commit            *safeDocumentFormCommit  `json:"commit,omitempty"`
 	Failure           *safeDocumentFormFailure `json:"failure,omitempty"`
 	Evidence          *safeDocumentReport      `json:"evidence,omitempty"`
+	Intake            *safeDocumentFormIntake  `json:"intake,omitempty"`
 }
 
 type safeDocumentFormCommit struct {
@@ -188,6 +189,8 @@ func (tool *DocumentTool) formWorkflow(
 		return tool.collectFormWorkflow(ctx, store, mediaOwner, owner, args, "collect")
 	case "continue":
 		return tool.continueFormWorkflow(ctx, store, mediaOwner, owner, args)
+	case "pause", "resume":
+		return tool.setFormIntakeWorkflowState(ctx, store, mediaOwner, owner, args, formAction)
 	case "clarify", "back":
 		return tool.navigateFormWorkflow(ctx, store, mediaOwner, owner, args, formAction)
 	case "status":
@@ -721,6 +724,12 @@ func (tool *DocumentTool) continueFormWorkflow(
 ) *toolshared.ToolResult {
 	jobID := strings.TrimSpace(stringDocumentArg(args, "job_id"))
 	receiptReference := strings.TrimSpace(stringDocumentArg(args, "answer_ref"))
+	if receiptJobID, _, err := document.ParseFormIntakeReference(receiptReference); err == nil {
+		if jobID != "" && jobID != receiptJobID {
+			return documentFormToolFailure("form_job_conflict", "the protected intake receipt belongs to another job")
+		}
+		return tool.continueFormIntake(ctx, store, mediaOwner, owner, receiptReference)
+	}
 	if receiptReference == "" {
 		// event_id was advertised by PDFI1. Accept it only for persisted calls and
 		// rolling-upgrade recovery; new model schemas expose answer_ref alone.
@@ -957,6 +966,9 @@ func (tool *DocumentTool) collectFormWorkflow(
 	}
 	formSummary := strings.TrimSpace(stringDocumentArg(args, "form_summary"))
 	collectionPlan := strings.TrimSpace(stringDocumentArg(args, "collection_plan"))
+	if _, composite := args["candidate_field_ids"]; composite {
+		return tool.collectFormIntake(ctx, owner, schema, record, args, formSummary, collectionPlan)
+	}
 	firstQuestion := len(record.Fields) == 0
 	if firstQuestion && (formSummary == "" || collectionPlan == "") {
 		return documentFormToolFailure(

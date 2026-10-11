@@ -18,15 +18,28 @@ const (
 	FormIntakeIntentDraft   FormIntakeDialogIntent = "draft"
 )
 
+func (intent FormIntakeDialogIntent) Valid() bool {
+	switch intent {
+	case FormIntakeIntentFacts, FormIntakeIntentClarify, FormIntakeIntentBack,
+		FormIntakeIntentPause, FormIntakeIntentResume, FormIntakeIntentCancel,
+		FormIntakeIntentReview, FormIntakeIntentFinish, FormIntakeIntentDraft:
+		return true
+	default:
+		return false
+	}
+}
+
 type FormIntakeTextEvidence struct {
 	Page int    `json:"-"`
 	Text string `json:"-"`
 }
 
 type FormIntakeInterpretationView struct {
-	Pass        FormIntakePass           `json:"-"`
-	FieldStates []FormJobFieldState      `json:"-"`
-	Evidence    []FormIntakeTextEvidence `json:"-"`
+	Pass                 FormIntakePass           `json:"-"`
+	FieldStates          []FormJobFieldState      `json:"-"`
+	Evidence             []FormIntakeTextEvidence `json:"-"`
+	RelatedInputs        []FormIntakeInput        `json:"-"`
+	RelatedInputsPartial bool                     `json:"-"`
 }
 
 type FormIntakeInterpretation struct {

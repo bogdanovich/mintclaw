@@ -2,8 +2,32 @@ package document
 
 import (
 	"slices"
+	"strings"
 	"unicode/utf8"
 )
+
+func formIntakeCurrentFindings(input formIntakeStoredInput) []FormFieldMappingBlocker {
+	current := make(map[string]string, MaxFormIntakeCandidates)
+	for _, pass := range input.Reservations {
+		if pass.Outcome == nil {
+			continue
+		}
+		for _, ids := range [][]string{pass.Outcome.AcceptedIDs, pass.Outcome.AcknowledgedIDs} {
+			for _, id := range ids {
+				delete(current, id)
+			}
+		}
+		for _, finding := range pass.Outcome.Findings {
+			current[finding.FieldID] = finding.Code
+		}
+	}
+	findings := make([]FormFieldMappingBlocker, 0, len(current))
+	for fieldID, code := range current {
+		findings = append(findings, FormFieldMappingBlocker{FieldID: fieldID, Code: code})
+	}
+	slices.SortFunc(findings, func(a, b FormFieldMappingBlocker) int { return strings.Compare(a.FieldID, b.FieldID) })
+	return findings
+}
 
 func formIntakeAccountedLiterals(input formIntakeStoredInput) []FormIntakeAccountedLiteral {
 	if input.State == formIntakeInputConsumed {
@@ -52,7 +76,8 @@ func validateFormIntakeOutcome(record FormJobRecord, pass formIntakeStoredPass) 
 	if outcome == nil {
 		return nil
 	}
-	if !validDocumentDigest(outcome.Digest) || outcome.AppliedRevision <= pass.Revision ||
+	if outcome.Intent != "" && !outcome.Intent.Valid() ||
+		!validDocumentDigest(outcome.Digest) || outcome.AppliedRevision <= pass.Revision ||
 		outcome.AppliedRevision > record.Revision ||
 		outcome.AppliedRevision != pass.Revision+int64(len(outcome.AcceptedIDs))+1 ||
 		len(outcome.AcceptedIDs)+len(outcome.AcknowledgedIDs)+len(outcome.Findings) > len(pass.CandidateIDs) {
@@ -75,7 +100,12 @@ func validateFormIntakeOutcome(record FormJobRecord, pass formIntakeStoredPass) 
 			return ErrFormJobRecordCorrupt
 		}
 		switch finding.Code {
-		case "field_ambiguous", "field_conflicting", "field_invalid", "field_unsupported", "field_unresolved":
+		case "field_ambiguous",
+			"field_conflicting",
+			"field_confirmation_required",
+			"field_invalid",
+			"field_unsupported",
+			"field_unresolved":
 		default:
 			return ErrFormJobRecordCorrupt
 		}

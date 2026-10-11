@@ -61,6 +61,11 @@ func (p *Pipeline) injectPendingTurnInputs(
 		}
 
 		exec.messages = append(exec.messages, providerMessage)
+		if message.DocumentIntakeReference != "" {
+			exec.protectedAnswerContinuation = newDocumentIntakeContinuationState(
+				message.DocumentIntakeReference, ts.agent.Tools,
+			)
+		}
 		if input.kind == turnPendingSteering && exec.shouldTrackTurnOwnedSteering(message) {
 			ts.recordAcceptedSteeringMessage(message)
 		}
