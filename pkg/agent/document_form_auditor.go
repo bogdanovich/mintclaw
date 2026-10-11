@@ -13,6 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
 const maxDocumentFormAuditRequestBytes = 256 * 1024
@@ -133,15 +134,17 @@ func (auditor *documentFormAuditor) AuditForm(
 		return document.FormAuditProposal{}, document.ErrFormAuditUnavailable
 	}
 	defer clear(payload)
+	options := map[string]any{"temperature": 0, "native_search": false}
+	protocoltypes.DisablePromptCache(options)
 	response, err := resolved.provider.Chat(
-		ctx,
+		protocoltypes.WithSensitiveRequest(ctx),
 		[]providers.Message{
 			{Role: "system", Content: documentFormAuditSystemPrompt},
 			{Role: "user", Content: string(payload)},
 		},
 		nil,
 		resolved.model,
-		map[string]any{"temperature": 0},
+		options,
 	)
 	if err != nil || response == nil || len(response.ToolCalls) != 0 {
 		return document.FormAuditProposal{}, document.ErrFormAuditUnavailable

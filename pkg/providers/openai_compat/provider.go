@@ -837,10 +837,12 @@ func parseStreamResponse(
 		raw := acc.argsJSON.String()
 		if raw != "" {
 			if err := json.Unmarshal([]byte(raw), &args); err != nil {
-				logger.WarnCF("openai_compat", "stream: failed to decode tool call arguments", map[string]any{
-					"tool":  acc.name,
-					"error": err.Error(),
-				})
+				fields := map[string]any{}
+				if !protocoltypes.IsSensitiveRequest(ctx) {
+					fields["tool"] = acc.name
+					fields["error"] = err.Error()
+				}
+				logger.WarnCF("openai_compat", "stream: failed to decode tool call arguments", fields)
 				args["raw"] = raw
 			}
 		}

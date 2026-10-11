@@ -10,6 +10,7 @@ import (
 	copilot "github.com/github/copilot-sdk/go"
 
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
 type GitHubCopilotProvider struct {
@@ -69,6 +70,9 @@ func (p *GitHubCopilotProvider) Chat(
 	model string,
 	options map[string]any,
 ) (*LLMResponse, error) {
+	if protocoltypes.IsSensitiveRequest(ctx) {
+		return nil, protocoltypes.ErrSensitiveRequestUnsupported
+	}
 	p.chatMu.Lock()
 	defer p.chatMu.Unlock()
 

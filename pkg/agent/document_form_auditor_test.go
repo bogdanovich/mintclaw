@@ -9,20 +9,22 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
 type documentAuditTestProvider struct {
-	response *providers.LLMResponse
-	err      error
-	calls    int
-	messages []providers.Message
-	model    string
-	tools    []providers.ToolDefinition
-	options  map[string]any
+	response  *providers.LLMResponse
+	err       error
+	calls     int
+	messages  []providers.Message
+	model     string
+	tools     []providers.ToolDefinition
+	options   map[string]any
+	sensitive bool
 }
 
 func (provider *documentAuditTestProvider) Chat(
-	_ context.Context,
+	ctx context.Context,
 	messages []providers.Message,
 	tools []providers.ToolDefinition,
 	model string,
@@ -33,6 +35,7 @@ func (provider *documentAuditTestProvider) Chat(
 	provider.tools = append([]providers.ToolDefinition(nil), tools...)
 	provider.model = model
 	provider.options = options
+	provider.sensitive = protocoltypes.IsSensitiveRequest(ctx)
 	return provider.response, provider.err
 }
 
@@ -67,11 +70,17 @@ func TestDocumentFormAuditorUsesEphemeralStrictTypedCall(t *testing.T) {
 		t.Fatalf("proposal = %#v, err=%v", proposal, err)
 	}
 	if provider.calls != 1 || provider.model != "gpt-audit" || len(provider.tools) != 0 ||
-		provider.options["temperature"] != 0 || len(provider.messages) != 2 ||
+		provider.options["temperature"] != 0 || provider.options["native_search"] != false ||
+		!provider.sensitive || !protocoltypes.PromptCachePlanOptionPresent(provider.options) ||
+		len(provider.messages) != 2 ||
 		provider.messages[0].Role != "system" || provider.messages[1].Role != "user" ||
 		strings.Contains(provider.messages[0].Content, privateValue) ||
 		!strings.Contains(provider.messages[1].Content, privateValue) {
 		t.Fatalf("audit call = %#v", provider)
+	}
+	if _, valid := protocoltypes.PromptCachePlanFromOptions(provider.options); valid ||
+		protocoltypes.IsSensitiveRequest(t.Context()) {
+		t.Fatal("private audit enabled ordinary cache intent or mutated parent context")
 	}
 	if strings.Contains(provider.messages[1].Content, "/") {
 		t.Fatalf("audit request unexpectedly contains a host-path-like separator: %s", provider.messages[1].Content)
@@ -100,6 +109,14 @@ func TestDocumentFormAuditorFailsClosedOnAliasProviderAndShape(t *testing.T) {
 		t.Context(), "declared", document.FormAuditView{},
 	); !errors.Is(err, document.ErrFormAuditUnavailable) || provider.calls != 2 {
 		t.Fatalf("unknown response field error = %v calls=%d", err, provider.calls)
+	}
+	provider.response = &providers.LLMResponse{
+		Content: `{"decision":"pass"}`, ToolCalls: []providers.ToolCall{{Name: "unexpected"}},
+	}
+	if _, err := auditor.AuditForm(t.Context(), "declared", document.FormAuditView{}); !errors.Is(
+		err, document.ErrFormAuditUnavailable,
+	) || provider.calls != 3 {
+		t.Fatalf("unexpected private tool call error = %v calls=%d", err, provider.calls)
 	}
 	provider.err = errors.New("private provider body")
 	provider.response = nil
