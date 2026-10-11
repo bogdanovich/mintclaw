@@ -143,3 +143,30 @@ Sources:
 Phone approval and credential-browser execution retain their CA3/CA4
 admissions. A transport with no qualified consumer returns unavailable rather
 than exporting a secret to make a partial implementation appear functional.
+
+## CA2a adapter implementation
+
+The first independent CA2 slice lives under
+`cmd/mintclaw-credential/internal/vault`. Go's internal-package rule prevents
+the gateway and model tools from importing its credential retrieval API.
+It depends on the pinned SDK, not the CA1 policy package. No public listener,
+service executable, token loading, model tool, or live credential access is
+introduced by this slice. Wiring it to a consumer still requires CA1 and the
+remaining service/phone/browser gates.
+
+The adapter validates exact returned vault/item IDs and the Login category,
+built-in username/password field IDs and types, duplicates, value bounds, and
+single-line UTF-8 input. Extra item fields are never exposed to the consumer.
+Retrieval is serialized with cancellation while queued and a bounded request
+deadline. Errors and panics are projected without their original text.
+
+A private login container supports one synchronous consumption, safe generic
+formatting and serialization, explicit destruction, and clearing its owned
+byte buffers on success, error, or panic. Consumers must not retain borrowed
+buffers. This cannot guarantee erasure of copies held by the SDK, Go strings,
+or the browser, or cancel an injection already in flight.
+
+Validation uses fake item APIs and synthetic canaries; provider authentication
+and a real isolated deployment remain pending. The SDK also builds against
+MintClaw's resolved Wazero `v1.12.0` and `x/sys v0.48.0` for the four recorded
+targets in the separate qualification checkout.
