@@ -85,6 +85,7 @@ jq -r '
     (.scope.target_hash // "-"),
     (.correlation.model_attempt_id // "-"),
     (.correlation.tool_call_id // "-"),
+    (.correlation.tool_call_generation // "-"),
     (.correlation.event_id // "-")
   ] | @tsv
 ' TRACE.json
@@ -109,8 +110,10 @@ Correlate:
   `correlation.model_attempt_id`; one ID covers candidate-level fallbacks and
   the retry decision for one logical attempt, while each outer retry gets a
   new ID;
-- `tool.call`, `tool.result`, and skipped calls by `tool_call_id`;
-- tool-loop decisions by turn, sequence, `data.tool`, and `data.args_hash`;
+- `tool.call`, `tool.result`, skipped calls, and `tool.loop_decision` by the
+  pair `correlation.tool_call_id` and
+  `correlation.tool_call_generation`; the generation disambiguates a provider
+  call ID reused by a later model attempt;
 - steering injection or interrupt with the next model/tool decision;
 - delivery decision, attempt, and outcome by turn, sequence, target hash,
   status, and event ID;
@@ -122,9 +125,11 @@ Current runtime-produced turn traces do not populate `scope.task_id` or
 task-registry evidence and cite that source explicitly; do not infer them from
 an empty trace field. Provider-controlled request IDs remain optional and
 separate from the runtime-generated model-attempt ID. Historical traces may
-lack `correlation.model_attempt_id`; for those traces, correlate model records
-conservatively by turn and sequence and state the limitation. Loop-decision
-records do not populate `correlation.tool_call_id`.
+lack `correlation.model_attempt_id` or
+`correlation.tool_call_generation`; for those traces, correlate model or tool
+records conservatively by turn and sequence and state the limitation. Older
+loop-decision records may also lack `correlation.tool_call_id`; use their tool
+and argument hash only as bounded supporting evidence, not as an exact join.
 
 In rich mode, inspect only the relevant normalized preview fields in `.data`,
 including `input_preview`, `final_preview`, `messages_preview`,

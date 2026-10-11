@@ -413,7 +413,8 @@ func runtimeEventRecord(
 	var kind diagnostictrace.RecordKind
 	var payload any
 	critical := false
-	toolCallID := ""
+	toolCallID := event.Correlation.ToolCallID
+	toolCallGeneration := event.Correlation.ToolCallGeneration
 	switch event.Kind {
 	case runtimeevents.KindAgentTurnStart:
 		value, ok := event.Payload.(TurnStartPayload)
@@ -568,7 +569,8 @@ func runtimeEventRecord(
 			Action:           diagnosticToolAction(value.Tool, value.Arguments),
 			ArgumentsPreview: argumentsPreview,
 		}
-		toolCallID = value.ToolCallID
+		toolCallID = firstNonEmptyString(toolCallID, value.ToolCallID)
+		toolCallGeneration = firstNonEmptyString(toolCallGeneration, value.ToolCallGeneration)
 	case runtimeevents.KindAgentToolExecEnd:
 		value, ok := event.Payload.(ToolExecEndPayload)
 		if !ok {
@@ -589,7 +591,8 @@ func runtimeEventRecord(
 			IsError:       value.IsError,
 			ResultPreview: resultPreview,
 		}
-		toolCallID = value.ToolCallID
+		toolCallID = firstNonEmptyString(toolCallID, value.ToolCallID)
+		toolCallGeneration = firstNonEmptyString(toolCallGeneration, value.ToolCallGeneration)
 	case runtimeevents.KindNodeInvocationObserved:
 		value, ok := event.Payload.(tools.NodeInvocationEventPayload)
 		if !ok {
@@ -608,7 +611,7 @@ func runtimeEventRecord(
 			Action:       safeCode(value.Observation),
 			DecisionCode: safeCode(value.ErrorCode),
 		}
-		toolCallID = event.Correlation.RequestID
+		toolCallID = firstNonEmptyString(toolCallID, event.Correlation.RequestID)
 	case runtimeevents.KindAgentToolExecSkipped:
 		value, ok := event.Payload.(ToolExecSkippedPayload)
 		if !ok {
@@ -621,7 +624,8 @@ func runtimeEventRecord(
 			Executed:     false,
 			DecisionCode: safeCode(value.Reason),
 		}
-		toolCallID = value.ToolCallID
+		toolCallID = firstNonEmptyString(toolCallID, value.ToolCallID)
+		toolCallGeneration = firstNonEmptyString(toolCallGeneration, value.ToolCallGeneration)
 	case runtimeevents.KindAgentToolLoopDecision:
 		value, ok := event.Payload.(ToolLoopDecisionPayload)
 		if !ok {
@@ -636,6 +640,8 @@ func runtimeEventRecord(
 			Count:        value.Count,
 			Threshold:    value.Threshold,
 		}
+		toolCallID = firstNonEmptyString(toolCallID, value.ToolCallID)
+		toolCallGeneration = firstNonEmptyString(toolCallGeneration, value.ToolCallGeneration)
 	case runtimeevents.KindAgentSteeringInjected:
 		value, ok := event.Payload.(SteeringInjectedPayload)
 		if !ok {
@@ -784,11 +790,12 @@ func runtimeEventRecord(
 			TargetHash:  safeHash(settings, targetKey(event.Scope.Channel, event.Scope.ChatID)),
 		},
 		Correlation: diagnostictrace.Correlation{
-			ParentTurnID:   event.Correlation.ParentTurnID,
-			ModelAttemptID: event.Correlation.ModelAttemptID,
-			RequestID:      event.Correlation.RequestID,
-			ToolCallID:     toolCallID,
-			EventID:        event.ID,
+			ParentTurnID:       event.Correlation.ParentTurnID,
+			ModelAttemptID:     event.Correlation.ModelAttemptID,
+			RequestID:          event.Correlation.RequestID,
+			ToolCallID:         toolCallID,
+			ToolCallGeneration: toolCallGeneration,
+			EventID:            event.ID,
 		},
 		Data: data,
 	}, critical, true

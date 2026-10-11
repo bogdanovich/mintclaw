@@ -169,6 +169,14 @@ func validateCodingDiagnosticPath(
 			t.Fatalf("path %q reintroduced the resolved model-attempt gap", path.ID)
 		}
 	}
+	if path.ID == "tool_and_process_lifecycle" {
+		if !slices.Contains(path.AvailableIDs, "tool_call_generation") {
+			t.Fatalf("path %q lost tool_call_generation evidence", path.ID)
+		}
+		if _, unresolved := gaps["tool_call_generation"]; unresolved {
+			t.Fatalf("path %q reintroduced the resolved tool-call generation gap", path.ID)
+		}
+	}
 
 	lifecycleGaps := make(map[string]struct{}, len(path.KnownLifecycleGaps))
 	for _, gap := range path.KnownLifecycleGaps {

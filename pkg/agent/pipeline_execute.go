@@ -510,12 +510,15 @@ func mergeArtifactHints(target *taskresult.Artifact, source taskresult.Artifact)
 }
 
 type toolLoopRunner struct {
-	p         *Pipeline
-	turnCtx   context.Context
-	ts        *turnState
-	exec      *turnExecution
-	llm       *LLMIterationState
-	toolCalls []providers.ToolCall
+	p                   *Pipeline
+	turnCtx             context.Context
+	ts                  *turnState
+	exec                *turnExecution
+	llm                 *LLMIterationState
+	toolCalls           []providers.ToolCall
+	toolCallGenerations []string
+	modelAttemptID      string
+	iteration           int
 
 	messages                    []providers.Message
 	handledAttachments          []providers.Attachment
@@ -523,6 +526,29 @@ type toolLoopRunner struct {
 	suspendedInteractionID      string
 	journalErr                  error
 	journalOwnershipTransferred bool
+}
+
+func newToolCallGeneration() string {
+	return "tool-call-generation-" + uuid.NewString()
+}
+
+func (runner *toolLoopRunner) toolCallGeneration(index int) string {
+	if runner == nil || index < 0 || index >= len(runner.toolCallGenerations) {
+		return ""
+	}
+	return runner.toolCallGenerations[index]
+}
+
+func (runner *toolLoopRunner) toolCallEventMeta(
+	index int,
+	toolCallID string,
+	source string,
+	tracePath string,
+) HookMeta {
+	meta := runner.ts.eventMeta(source, tracePath)
+	meta.Iteration = runner.iteration
+	meta = meta.withModelAttemptID(runner.modelAttemptID)
+	return meta.withToolCallCorrelation(toolCallID, runner.toolCallGeneration(index))
 }
 
 func (runner *toolLoopRunner) takeLiveToolContextText(result *toolshared.ToolResult) string {
@@ -724,14 +750,21 @@ func (p *Pipeline) ExecuteTools(
 	llm *LLMIterationState,
 ) (outcome ToolLoopOutcome) {
 	normalizedToolCalls := llm.normalizedToolCalls
+	toolCallGenerations := make([]string, len(normalizedToolCalls))
+	for i := range toolCallGenerations {
+		toolCallGenerations[i] = newToolCallGeneration()
+	}
 	runner := &toolLoopRunner{
-		p:         p,
-		turnCtx:   turnCtx,
-		ts:        ts,
-		exec:      exec,
-		llm:       llm,
-		toolCalls: normalizedToolCalls,
-		messages:  exec.messages,
+		p:                   p,
+		turnCtx:             turnCtx,
+		ts:                  ts,
+		exec:                exec,
+		llm:                 llm,
+		toolCalls:           normalizedToolCalls,
+		toolCallGenerations: toolCallGenerations,
+		modelAttemptID:      llm.modelAttemptID,
+		iteration:           llm.iteration,
+		messages:            exec.messages,
 	}
 	if llm.assistantToolCallsWriteErr != nil {
 		return ToolLoopOutcome{
@@ -906,7 +939,7 @@ func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageRe
 
 	toolName := call.name
 	toolArgs := call.arguments
-	if p.Interaction.Hooks == nil && runner.skipPendingToolForGracefulInterrupt(tc, toolName) {
+	if p.Interaction.Hooks == nil && runner.skipPendingToolForGracefulInterrupt(i, tc, toolName) {
 		return skipToolCall()
 	}
 	denyByTurnProfile := func() bool {
@@ -917,8 +950,10 @@ func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageRe
 		denyContent := fmt.Sprintf("Tool %q is not allowed by the active turn profile.", toolName)
 		p.emitEvent(
 			runtimeevents.KindAgentToolExecSkipped,
-			ts.eventMeta("runTurn", "turn.tool.skipped"),
-			codingToolSkippedPayload(ts, ts.agent.Tools, tc.ID, toolName, toolArgs, denyContent),
+			runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.skipped"),
+			codingToolSkippedPayload(
+				ts, ts.agent.Tools, tc.ID, runner.toolCallGeneration(i), toolName, toolArgs, denyContent,
+			),
 		)
 		deniedMsg := providers.Message{
 			Role:       "tool",
@@ -941,8 +976,10 @@ func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageRe
 			content := "Tool execution denied by the objective-recovery capability: " + err.Error()
 			p.emitEvent(
 				runtimeevents.KindAgentToolExecSkipped,
-				ts.eventMeta("runTurn", "turn.tool.skipped"),
-				codingToolSkippedPayload(ts, ts.agent.Tools, tc.ID, toolName, toolArgs, content),
+				runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.skipped"),
+				codingToolSkippedPayload(
+					ts, ts.agent.Tools, tc.ID, runner.toolCallGeneration(i), toolName, toolArgs, content,
+				),
 			)
 			_ = runner.appendToolMessage(providers.Message{
 				Role: "tool", Content: content, ToolCallID: tc.ID,
@@ -962,7 +999,7 @@ func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageRe
 	}
 	if p.Interaction.Hooks != nil {
 		toolReq, decision := p.Interaction.Hooks.BeforeTool(turnCtx, &ToolCallHookRequest{
-			Meta:      ts.eventMeta("runTurn", "turn.tool.before"),
+			Meta:      runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.before"),
 			Context:   cloneTurnContext(ts.turnCtx),
 			Tool:      toolName,
 			Arguments: toolArgs,
@@ -990,8 +1027,10 @@ func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageRe
 			denyContent := hookDeniedToolContent("Tool execution denied by hook", decision.Reason)
 			p.emitEvent(
 				runtimeevents.KindAgentToolExecSkipped,
-				ts.eventMeta("runTurn", "turn.tool.skipped"),
-				codingToolSkippedPayload(ts, ts.agent.Tools, tc.ID, toolName, toolArgs, denyContent),
+				runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.skipped"),
+				codingToolSkippedPayload(
+					ts, ts.agent.Tools, tc.ID, runner.toolCallGeneration(i), toolName, toolArgs, denyContent,
+				),
 			)
 			deniedMsg := providers.Message{
 				Role:       "tool",
@@ -1007,7 +1046,7 @@ func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageRe
 			return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
 		}
 	}
-	if p.Interaction.Hooks != nil && runner.skipPendingToolForGracefulInterrupt(tc, toolName) {
+	if p.Interaction.Hooks != nil && runner.skipPendingToolForGracefulInterrupt(i, tc, toolName) {
 		return skipToolCall()
 	}
 	if denyByTurnProfile() {
@@ -1023,13 +1062,24 @@ func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageRe
 
 	loopDecision, toolSemantics := p.beforeToolLoopDecision(ts, exec, toolName, loopArguments)
 	if !loopDecision.AllowsExecution() {
-		p.emitToolLoopDecision(ts, loopDecision)
+		p.emitToolLoopDecision(
+			runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.loop_decision"),
+			loopDecision,
+		)
 		blockedResult := blockedToolLoopResult(loopDecision)
 		blockedContent := p.filterToolContentForLLM(blockedResult.ContentForLLM())
 		p.emitEvent(
 			runtimeevents.KindAgentToolExecSkipped,
-			ts.eventMeta("runTurn", "turn.tool.skipped"),
-			codingToolSkippedPayload(ts, ts.agent.Tools, tc.ID, toolName, toolArgs, loopDecision.Code),
+			runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.skipped"),
+			codingToolSkippedPayload(
+				ts,
+				ts.agent.Tools,
+				tc.ID,
+				runner.toolCallGeneration(i),
+				toolName,
+				toolArgs,
+				loopDecision.Code,
+			),
 		)
 		_ = runner.appendToolMessage(providers.Message{
 			Role: "tool", Content: blockedContent, ToolCallID: tc.ID,
@@ -1079,11 +1129,12 @@ func (runner *toolLoopRunner) prepareHookToolCallResult(
 	})
 	p.emitEvent(
 		runtimeevents.KindAgentToolExecStart,
-		ts.eventMeta("runTurn", "turn.tool.start"),
+		runner.toolCallEventMeta(call.index, call.request.ID, "runTurn", "turn.tool.start"),
 		ToolExecStartPayload{
-			ToolCallID: call.request.ID,
-			Tool:       toolName,
-			Arguments:  cloneEventArguments(auditArgs),
+			ToolCallID:         call.request.ID,
+			ToolCallGeneration: runner.toolCallGeneration(call.index),
+			Tool:               toolName,
+			Arguments:          cloneEventArguments(auditArgs),
 		},
 	)
 	p.publishToolFeedbackForCall(
@@ -1128,8 +1179,10 @@ func (runner *toolLoopRunner) approveToolCall(
 		)
 		p.emitEvent(
 			runtimeevents.KindAgentToolExecSkipped,
-			ts.eventMeta("runTurn", "turn.tool.skipped"),
-			codingToolSkippedPayload(ts, toolRegistry, tc.ID, toolName, toolArgs, denyContent),
+			runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.skipped"),
+			codingToolSkippedPayload(
+				ts, toolRegistry, tc.ID, runner.toolCallGeneration(i), toolName, toolArgs, denyContent,
+			),
 		)
 		_ = runner.appendToolMessage(providers.Message{
 			Role: "tool", Content: denyContent, ToolCallID: tc.ID,
@@ -1157,7 +1210,7 @@ func (runner *toolLoopRunner) approveToolCall(
 		approval := ApprovalDecision{Approved: true}
 		if !approvalBypass && p.Interaction.Hooks != nil {
 			approval = p.Interaction.Hooks.ApproveTool(turnCtx, &ToolApprovalRequest{
-				Meta:      ts.eventMeta("runTurn", "turn.tool.approve"),
+				Meta:      runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.approve"),
 				Context:   cloneTurnContext(ts.turnCtx),
 				Tool:      toolName,
 				Arguments: toolArgs,
@@ -1199,8 +1252,10 @@ func (runner *toolLoopRunner) approveToolCall(
 			denyContent := denial.ContentForLLM()
 			p.emitEvent(
 				runtimeevents.KindAgentToolExecSkipped,
-				ts.eventMeta("runTurn", "turn.tool.skipped"),
-				codingToolSkippedPayload(ts, toolRegistry, tc.ID, toolName, toolArgs, denyContent),
+				runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.skipped"),
+				codingToolSkippedPayload(
+					ts, toolRegistry, tc.ID, runner.toolCallGeneration(i), toolName, toolArgs, denyContent,
+				),
 			)
 			_ = runner.appendToolMessage(providers.Message{
 				Role: "tool", Content: denyContent, ToolCallID: tc.ID,
@@ -1311,8 +1366,10 @@ func (runner *toolLoopRunner) approveToolCall(
 			)
 			p.emitEvent(
 				runtimeevents.KindAgentToolExecSkipped,
-				ts.eventMeta("runTurn", "turn.tool.skipped"),
-				codingToolSkippedPayload(ts, toolRegistry, tc.ID, toolName, toolArgs, denyContent),
+				runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.skipped"),
+				codingToolSkippedPayload(
+					ts, toolRegistry, tc.ID, runner.toolCallGeneration(i), toolName, toolArgs, denyContent,
+				),
 			)
 			_ = runner.appendToolMessage(providers.Message{
 				Role: "tool", Content: denyContent, ToolCallID: tc.ID,
@@ -1324,8 +1381,10 @@ func (runner *toolLoopRunner) approveToolCall(
 			denyContent := hookDeniedToolContent("Tool execution denied by approval hook", approval.Reason)
 			p.emitEvent(
 				runtimeevents.KindAgentToolExecSkipped,
-				ts.eventMeta("runTurn", "turn.tool.skipped"),
-				codingToolSkippedPayload(ts, toolRegistry, tc.ID, toolName, toolArgs, denyContent),
+				runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.skipped"),
+				codingToolSkippedPayload(
+					ts, toolRegistry, tc.ID, runner.toolCallGeneration(i), toolName, toolArgs, denyContent,
+				),
 			)
 			deniedMsg := providers.Message{
 				Role:       "tool",
@@ -1366,8 +1425,10 @@ func (runner *toolLoopRunner) invokeToolCall(
 		)
 		p.emitEvent(
 			runtimeevents.KindAgentToolExecSkipped,
-			ts.eventMeta("runTurn", "turn.tool.skipped"),
-			codingToolSkippedPayload(ts, toolRegistry, tc.ID, toolName, toolArgs, denyContent),
+			runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.skipped"),
+			codingToolSkippedPayload(
+				ts, toolRegistry, tc.ID, runner.toolCallGeneration(i), toolName, toolArgs, denyContent,
+			),
 		)
 		_ = runner.appendToolMessage(providers.Message{
 			Role: "tool", Content: denyContent, ToolCallID: tc.ID,
@@ -1380,8 +1441,10 @@ func (runner *toolLoopRunner) invokeToolCall(
 			"reviewed first. Retry this tool call after reviewing the preceding instruction result."
 		p.emitEvent(
 			runtimeevents.KindAgentToolExecSkipped,
-			ts.eventMeta("runTurn", "turn.tool.skipped"),
-			codingToolSkippedPayload(ts, toolRegistry, tc.ID, toolName, toolArgs, content),
+			runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.skipped"),
+			codingToolSkippedPayload(
+				ts, toolRegistry, tc.ID, runner.toolCallGeneration(i), toolName, toolArgs, content,
+			),
 		)
 		_ = runner.appendToolMessage(providers.Message{
 			Role: "tool", Content: content, ToolCallID: tc.ID,
@@ -1394,11 +1457,12 @@ func (runner *toolLoopRunner) invokeToolCall(
 		content := p.filterToolContentForLLM(renderCodingInstructionBundle(instructions, true))
 		p.emitEvent(
 			runtimeevents.KindAgentToolExecSkipped,
-			ts.eventMeta("runTurn", "turn.tool.skipped"),
+			runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.skipped"),
 			codingToolSkippedPayload(
 				ts,
 				toolRegistry,
 				tc.ID,
+				runner.toolCallGeneration(i),
 				toolName,
 				toolArgs,
 				"new scoped project instructions must be reviewed before tool execution",
@@ -1421,12 +1485,13 @@ func (runner *toolLoopRunner) invokeToolCall(
 		})
 	p.emitEvent(
 		runtimeevents.KindAgentToolExecStart,
-		ts.eventMeta("runTurn", "turn.tool.start"),
+		runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.start"),
 		ToolExecStartPayload{
-			ToolCallID:  tc.ID,
-			Tool:        toolName,
-			Arguments:   cloneEventArguments(auditArgs),
-			Observation: codingToolStartObservation(ts, toolRegistry, toolName, toolArgs),
+			ToolCallID:         tc.ID,
+			ToolCallGeneration: runner.toolCallGeneration(i),
+			Tool:               toolName,
+			Arguments:          cloneEventArguments(auditArgs),
+			Observation:        codingToolStartObservation(ts, toolRegistry, toolName, toolArgs),
 		},
 	)
 
@@ -1450,7 +1515,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 		delivery := decideAsyncToolResultDelivery(result)
 		p.emitEvent(
 			runtimeevents.KindAgentAsyncCompletion,
-			ts.scope.meta(iteration, "runTurn", "turn.async.completion"),
+			runner.toolCallEventMeta(i, toolCallID, "runTurn", "turn.async.completion"),
 			AsyncCompletionPayload{
 				SourceTool:   asyncToolName,
 				CompletionID: completionID,
@@ -1494,15 +1559,16 @@ func (runner *toolLoopRunner) invokeToolCall(
 		}
 	}
 	if strings.TrimSpace(ts.opts.CodingContext.SessionKey) != "" {
-		progressMeta := ts.eventMeta("runTurn", "turn.tool.progress")
+		progressMeta := runner.toolCallEventMeta(i, tc.ID, "runTurn", "turn.tool.progress")
 		execCtx = toolshared.WithCommandObservationSink(execCtx, func(observation toolshared.CommandObservation) {
 			p.emitEvent(
 				runtimeevents.KindAgentToolExecProgress,
 				progressMeta,
 				ToolExecProgressPayload{
-					ToolCallID:  tc.ID,
-					Tool:        toolName,
-					Observation: &toolshared.ToolObservation{Command: &observation},
+					ToolCallID:         tc.ID,
+					ToolCallGeneration: runner.toolCallGeneration(i),
+					Tool:               toolName,
+					Observation:        &toolshared.ToolObservation{Command: &observation},
 				},
 			)
 		})
@@ -1765,7 +1831,13 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		)
 		contentForLLM = toolResultMsg.Content
 		loopDecision = p.afterToolLoopDecision(
-			ts, exec, toolName, loopArguments, toolResult, contentForLLM, toolSemantics,
+			runner.toolCallEventMeta(i, toolCallID, "runTurn", "turn.tool.loop_decision"),
+			exec,
+			toolName,
+			loopArguments,
+			toolResult,
+			contentForLLM,
+			toolSemantics,
 		)
 		contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
 
@@ -1862,17 +1934,18 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	}
 	p.emitEvent(
 		runtimeevents.KindAgentToolExecEnd,
-		ts.eventMeta("runTurn", "turn.tool.end"),
+		runner.toolCallEventMeta(i, toolCallID, "runTurn", "turn.tool.end"),
 		ToolExecEndPayload{
-			ToolCallID: toolCallID,
-			Tool:       toolName,
-			Duration:   toolDuration,
-			ForLLMLen:  len(contentForLLM),
-			ForUserLen: len(toolResult.ForUser),
-			IsError:    toolResult.IsError,
-			Async:      toolResult.Control.Async,
-			Suspended:  toolResult.Control.TaskSuspended,
-			ResultHash: diagnosticSafeHash(p.Cfg, durableContent),
+			ToolCallID:         toolCallID,
+			ToolCallGeneration: runner.toolCallGeneration(i),
+			Tool:               toolName,
+			Duration:           toolDuration,
+			ForLLMLen:          len(contentForLLM),
+			ForUserLen:         len(toolResult.ForUser),
+			IsError:            toolResult.IsError,
+			Async:              toolResult.Control.Async,
+			Suspended:          toolResult.Control.TaskSuspended,
+			ResultHash:         diagnosticSafeHash(p.Cfg, durableContent),
 			DiagnosticResult: diagnosticTextPreview(
 				p.Cfg, durableContent, diagnosticToolResultBytes,
 			),
@@ -2041,15 +2114,17 @@ func codingToolSkippedPayload(
 	ts *turnState,
 	registry *tools.ToolRegistry,
 	toolCallID string,
+	toolCallGeneration string,
 	toolName string,
 	arguments map[string]any,
 	reason string,
 ) ToolExecSkippedPayload {
 	return ToolExecSkippedPayload{
-		ToolCallID:  toolCallID,
-		Tool:        toolName,
-		Reason:      reason,
-		Observation: codingToolStartObservation(ts, registry, toolName, arguments),
+		ToolCallID:         toolCallID,
+		ToolCallGeneration: toolCallGeneration,
+		Tool:               toolName,
+		Reason:             reason,
+		Observation:        codingToolStartObservation(ts, registry, toolName, arguments),
 	}
 }
 
@@ -2462,7 +2537,7 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 	}
 	content := r.p.filterToolContentForLLM(settledResult.ContentForLLM())
 	decision := r.p.afterToolLoopDecision(
-		r.ts,
+		r.toolCallEventMeta(toolCallIndex, toolCallID, "runTurn", "turn.tool.loop_decision"),
 		r.exec,
 		toolName,
 		loopArguments,
@@ -2579,11 +2654,12 @@ func (r *toolLoopRunner) commitPendingToolBatch(
 		toolCall := r.toolCalls[i]
 		r.p.emitEvent(
 			runtimeevents.KindAgentToolExecSkipped,
-			r.ts.eventMeta("runTurn", "turn.tool.skipped"),
+			r.toolCallEventMeta(i, toolCall.ID, "runTurn", "turn.tool.skipped"),
 			codingToolSkippedPayload(
 				r.ts,
 				r.ts.agent.Tools,
 				toolCall.ID,
+				r.toolCallGeneration(i),
 				toolCall.Name,
 				toolCall.Arguments,
 				"final-handled outbound terminal boundary",
@@ -2650,11 +2726,12 @@ func (r *toolLoopRunner) commitDelegatedTaskSuspensionBatch(
 		toolCall := r.toolCalls[i]
 		r.p.emitEvent(
 			runtimeevents.KindAgentToolExecSkipped,
-			r.ts.eventMeta("runTurn", "turn.tool.skipped"),
+			r.toolCallEventMeta(i, toolCall.ID, "runTurn", "turn.tool.skipped"),
 			codingToolSkippedPayload(
 				r.ts,
 				r.ts.agent.Tools,
 				toolCall.ID,
+				r.toolCallGeneration(i),
 				toolCall.Name,
 				toolCall.Arguments,
 				"tool batch suspended by delegated task",
@@ -2948,6 +3025,7 @@ func (r *toolLoopRunner) captureSteering(markAdditional bool) {
 }
 
 func (r *toolLoopRunner) skipPendingToolForGracefulInterrupt(
+	index int,
 	tc providers.ToolCall,
 	toolName string,
 ) bool {
@@ -2958,6 +3036,7 @@ func (r *toolLoopRunner) skipPendingToolForGracefulInterrupt(
 	skippedTC := tc
 	skippedTC.Name = toolName
 	r.appendSkippedToolMessage(
+		index,
 		skippedTC,
 		"graceful interrupt requested",
 		"Skipped due to graceful interrupt.",
@@ -2994,7 +3073,7 @@ func (r *toolLoopRunner) appendInjectedTurnMessage(msg providers.Message) {
 
 func (r *toolLoopRunner) appendSkippedToolMessages(start int, reason string, content string) {
 	for i := start; i < len(r.toolCalls); i++ {
-		r.appendSkippedToolMessage(r.toolCalls[i], reason, content)
+		r.appendSkippedToolMessage(i, r.toolCalls[i], reason, content)
 	}
 }
 
@@ -3172,13 +3251,14 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	r.suspendedInteractionID = disposition.InteractionID
 	r.p.emitEvent(
 		runtimeevents.KindAgentToolExecEnd,
-		r.ts.eventMeta("runTurn", "turn.tool.suspended"),
+		r.toolCallEventMeta(callIndex, toolCall.ID, "runTurn", "turn.tool.suspended"),
 		ToolExecEndPayload{
-			ToolCallID:    toolCall.ID,
-			Tool:          toolName,
-			Duration:      duration,
-			Suspended:     true,
-			InteractionID: disposition.InteractionID,
+			ToolCallID:         toolCall.ID,
+			ToolCallGeneration: r.toolCallGeneration(callIndex),
+			Tool:               toolName,
+			Duration:           duration,
+			Suspended:          true,
+			InteractionID:      disposition.InteractionID,
 		},
 	)
 	return turnStepSuspend, true, nil
@@ -3357,17 +3437,19 @@ func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Con
 }
 
 func (r *toolLoopRunner) appendSkippedToolMessage(
+	index int,
 	skippedTC providers.ToolCall,
 	reason string,
 	content string,
 ) {
 	r.p.emitEvent(
 		runtimeevents.KindAgentToolExecSkipped,
-		r.ts.eventMeta("runTurn", "turn.tool.skipped"),
+		r.toolCallEventMeta(index, skippedTC.ID, "runTurn", "turn.tool.skipped"),
 		codingToolSkippedPayload(
 			r.ts,
 			r.ts.agent.Tools,
 			skippedTC.ID,
+			r.toolCallGeneration(index),
 			skippedTC.Name,
 			skippedTC.Arguments,
 			reason,

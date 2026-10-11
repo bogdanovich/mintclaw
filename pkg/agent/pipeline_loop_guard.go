@@ -26,7 +26,7 @@ func (p *Pipeline) beforeToolLoopDecision(
 }
 
 func (p *Pipeline) afterToolLoopDecision(
-	ts *turnState,
+	meta HookMeta,
 	exec *turnExecution,
 	tool string,
 	args map[string]any,
@@ -42,19 +42,20 @@ func (p *Pipeline) afterToolLoopDecision(
 		Failed: result.IsError, Semantics: semantics,
 	})
 	if decision.Action != loopguard.ActionAllow {
-		p.emitToolLoopDecision(ts, decision)
+		p.emitToolLoopDecision(meta, decision)
 	}
 	return decision
 }
 
-func (p *Pipeline) emitToolLoopDecision(ts *turnState, decision loopguard.Decision) {
-	if p == nil || ts == nil || decision.Action == loopguard.ActionAllow {
+func (p *Pipeline) emitToolLoopDecision(meta HookMeta, decision loopguard.Decision) {
+	if p == nil || decision.Action == loopguard.ActionAllow {
 		return
 	}
 	p.emitEvent(
 		runtimeevents.KindAgentToolLoopDecision,
-		ts.eventMeta("runTurn", "turn.tool.loop_decision"),
+		meta,
 		ToolLoopDecisionPayload{
+			ToolCallID: meta.ToolCallID, ToolCallGeneration: meta.ToolCallGeneration,
 			Tool: decision.Tool, ArgsHash: decision.ArgsHash,
 			Action: string(decision.Action), Code: decision.Code,
 			Count: decision.Count, Threshold: decision.Threshold,

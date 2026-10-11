@@ -357,6 +357,21 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	if secondAttemptID == firstAttemptID {
 		t.Fatalf("separate model iterations reused attempt ID %q", firstAttemptID)
 	}
+	toolStartCorrelation := events[3].Correlation
+	toolEndCorrelation := events[4].Correlation
+	if toolStartCorrelation.ModelAttemptID != firstAttemptID ||
+		toolEndCorrelation.ModelAttemptID != firstAttemptID ||
+		toolStartCorrelation.ToolCallID != "call-1" ||
+		toolEndCorrelation.ToolCallID != "call-1" ||
+		toolStartCorrelation.ToolCallGeneration == "" ||
+		toolEndCorrelation.ToolCallGeneration != toolStartCorrelation.ToolCallGeneration {
+		t.Fatalf(
+			"tool lifecycle correlation = start %+v end %+v, model attempt %q",
+			toolStartCorrelation,
+			toolEndCorrelation,
+			firstAttemptID,
+		)
+	}
 
 	turnID := events[0].Scope.TurnID
 	if turnID == "" {
