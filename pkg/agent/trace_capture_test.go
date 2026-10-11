@@ -239,6 +239,67 @@ func TestToolResultTraceRetainsDurableTaskIdentity(t *testing.T) {
 	}
 }
 
+func TestRemoteCodingTraceExcludesTaskContentPreviews(t *testing.T) {
+	const (
+		argumentCanary = "private-remote-objective-6f4e90"
+		resultCanary   = "private-remote-summary-4102ad"
+	)
+	settings := traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted}
+	started := time.Now()
+	trace := &activeTraceCapture{startedAt: started, turnID: "turn-coding-task"}
+
+	call, _, ok := runtimeEventRecord(
+		settings,
+		trace,
+		runtimeevents.Event{
+			ID: "event-coding-task-call", Kind: runtimeevents.KindAgentToolExecStart,
+			Time: started.Add(time.Millisecond),
+			Payload: ToolExecStartPayload{
+				ToolCallID: "tool-call-1", ToolCallGeneration: "tool-generation-1",
+				Tool: "coding_task", Arguments: map[string]any{
+					"action": "start", "objective": argumentCanary,
+				},
+			},
+		},
+	)
+	if !ok || call.Kind != diagnostictrace.RecordToolCall || bytes.Contains(call.Data, []byte(argumentCanary)) {
+		t.Fatalf("coding task call retained protected content: ok=%v record=%#v", ok, call)
+	}
+	var callPayload diagnostictrace.ToolPayload
+	if err := json.Unmarshal(call.Data, &callPayload); err != nil {
+		t.Fatal(err)
+	}
+	if callPayload.ArgumentsPreview != "" || callPayload.ArgsHash == "" {
+		t.Fatalf("coding task call projection = %#v", callPayload)
+	}
+
+	result, _, ok := runtimeEventRecord(
+		settings,
+		trace,
+		runtimeevents.Event{
+			ID: "event-coding-task-result", Kind: runtimeevents.KindAgentToolExecEnd,
+			Time: started.Add(2 * time.Millisecond),
+			Payload: ToolExecEndPayload{
+				ToolCallID: "tool-call-1", ToolCallGeneration: "tool-generation-1",
+				TaskID: "coding-task-1", TaskGenerationID: "task-generation-1",
+				Tool: "coding_task", DiagnosticResult: resultCanary, ResultHash: "result-hash",
+			},
+		},
+	)
+	if !ok || result.Kind != diagnostictrace.RecordToolResult || bytes.Contains(result.Data, []byte(resultCanary)) {
+		t.Fatalf("coding task result retained protected content: ok=%v record=%#v", ok, result)
+	}
+	var resultPayload diagnostictrace.ToolPayload
+	if err := json.Unmarshal(result.Data, &resultPayload); err != nil {
+		t.Fatal(err)
+	}
+	if resultPayload.ResultPreview != "" || resultPayload.ResultHash != "result-hash" ||
+		result.Scope.TaskID != "coding-task-1" ||
+		result.Correlation.TaskGenerationID != "task-generation-1" {
+		t.Fatalf("coding task result projection = payload %#v record %#v", resultPayload, result)
+	}
+}
+
 func TestRemoteCodingCompletionTraceDistinguishesTerminalStates(t *testing.T) {
 	tests := []struct {
 		name        string
