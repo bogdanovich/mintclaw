@@ -23,6 +23,7 @@ type safeDocumentFormIntake struct {
 	Plan              string                             `json:"collection_plan,omitempty"`
 	AcceptedCount     int                                `json:"accepted_count"`
 	AcknowledgedCount int                                `json:"acknowledged_count"`
+	ScopedCount       int                                `json:"scoped_count,omitempty"`
 	Findings          []document.FormFieldMappingBlocker `json:"findings,omitempty"`
 	FindingFields     []safeDocumentFormField            `json:"finding_fields,omitempty"`
 	Intent            document.FormIntakeDialogIntent    `json:"intent,omitempty"`
@@ -310,6 +311,7 @@ func (tool *DocumentTool) continueFormIntake(
 		result, processErr := tool.processFormIntakeInput(ctx, owner, schema, *progress, pending, reference)
 		intake.AcceptedCount += result.accepted
 		intake.AcknowledgedCount += result.acknowledged
+		intake.ScopedCount += result.scoped
 		if pending == reference {
 			intake.Intent = result.intent
 		}
@@ -319,7 +321,14 @@ func (tool *DocumentTool) continueFormIntake(
 				Code:    "intake_pending",
 				Message: "Some protected input remains pending. Accepted fields are preserved; retry or clarify without repeating them.",
 			}
-			break
+			if errors.Is(processErr, document.ErrFormEditableOutputUnavailable) {
+				intake.Failure = &safeDocumentFormFailure{
+					Code:    "editable_output_unavailable",
+					Message: "Verified editable output is unavailable for this job. Protected input and accepted fields are preserved; continue complete filling or cancel. No draft was produced.",
+				}
+			}
+			// A retained older error must not suppress a later admitted control or
+			// clarification. Pending input still fences review and output authority.
 		}
 	}
 	progress, err = tool.formJobs.FindFormIntake(ctx, owner)
@@ -341,6 +350,7 @@ func (tool *DocumentTool) continueFormIntake(
 type formIntakeProcessedInput struct {
 	accepted     int
 	acknowledged int
+	scoped       int
 	findings     []document.FormFieldMappingBlocker
 	intent       document.FormIntakeDialogIntent
 }
@@ -434,6 +444,12 @@ func (tool *DocumentTool) processFormIntakeInput(
 			if err != nil {
 				return result, err
 			}
+			view.OutputMode, view.OutputScope = record.OutputMode, record.OutputScope
+			for _, id := range record.DeferredFieldIDs {
+				if slices.Contains(ids, id) {
+					view.DeferredFieldIDs = append(view.DeferredFieldIDs, id)
+				}
+			}
 			for _, state := range record.Fields {
 				if slices.Contains(ids, state.FieldID) {
 					view.FieldStates = append(view.FieldStates, state)
@@ -453,6 +469,7 @@ func (tool *DocumentTool) processFormIntakeInput(
 				NonData:          proposal.NonData,
 				Findings:         proposal.Findings,
 				Intent:           proposal.Intent,
+				Output:           proposal.Output,
 			})
 			if errors.Is(err, document.ErrFormJobConflict) && attempt == 0 {
 				continue
@@ -462,6 +479,7 @@ func (tool *DocumentTool) processFormIntakeInput(
 			}
 			result.accepted += len(applied.AcceptedFieldIDs)
 			result.acknowledged += len(applied.AcknowledgedIDs)
+			result.scoped += len(applied.ScopedFieldIDs)
 			result.intent = proposal.Intent
 			break
 		}

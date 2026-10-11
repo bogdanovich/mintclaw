@@ -40,13 +40,17 @@ type FormIntakeInterpretationView struct {
 	Evidence             []FormIntakeTextEvidence `json:"-"`
 	RelatedInputs        []FormIntakeInput        `json:"-"`
 	RelatedInputsPartial bool                     `json:"-"`
+	OutputMode           FormOutputMode           `json:"-"`
+	OutputScope          FormOutputScope          `json:"-"`
+	DeferredFieldIDs     []string                 `json:"-"`
 }
 
 type FormIntakeInterpretation struct {
-	Intent    FormIntakeDialogIntent    `json:"-"`
-	Proposals []FormIntakeProposal      `json:"-"`
-	NonData   []FormIntakeLiteral       `json:"-"`
-	Findings  []FormFieldMappingBlocker `json:"-"`
+	Intent    FormIntakeDialogIntent       `json:"-"`
+	Proposals []FormIntakeProposal         `json:"-"`
+	NonData   []FormIntakeLiteral          `json:"-"`
+	Findings  []FormFieldMappingBlocker    `json:"-"`
+	Output    *FormIntakeOutputInstruction `json:"-"`
 }
 
 type FormIntakeInterpreter interface {

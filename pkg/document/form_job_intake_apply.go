@@ -27,11 +27,12 @@ type FormIntakeApplyRequest struct {
 	PassID           string
 	ExpectedRevision int64
 	Owner            FormJobOwner
-	Schema           FormFieldsFacts           `json:"-"`
-	Proposals        []FormIntakeProposal      `json:"-"`
-	NonData          []FormIntakeLiteral       `json:"-"`
-	Findings         []FormFieldMappingBlocker `json:"-"`
-	Intent           FormIntakeDialogIntent    `json:"-"`
+	Schema           FormFieldsFacts              `json:"-"`
+	Proposals        []FormIntakeProposal         `json:"-"`
+	NonData          []FormIntakeLiteral          `json:"-"`
+	Findings         []FormFieldMappingBlocker    `json:"-"`
+	Intent           FormIntakeDialogIntent       `json:"-"`
+	Output           *FormIntakeOutputInstruction `json:"-"`
 }
 
 // FormIntakeAccountedLiteral is an ephemeral private view for the next pass.
@@ -48,6 +49,7 @@ type FormIntakeApplyResult struct {
 	AppliedRevision  int64                     `json:"applied_revision"`
 	AcceptedFieldIDs []string                  `json:"accepted_field_ids,omitempty"`
 	AcknowledgedIDs  []string                  `json:"acknowledged_field_ids,omitempty"`
+	ScopedFieldIDs   []string                  `json:"scoped_field_ids,omitempty"`
 	Findings         []FormFieldMappingBlocker `json:"findings,omitempty"`
 	// Consumed is this original pass's outcome; Job/Progress are current on replay.
 	Consumed bool                   `json:"consumed"`
@@ -64,6 +66,7 @@ type formIntakeStoredOutcome struct {
 	Consumed          bool                      `json:"consumed"`
 	Intent            FormIntakeDialogIntent    `json:"intent,omitempty"`
 	ScopedInstruction bool                      `json:"scoped_instruction,omitempty"`
+	ScopedIDs         []string                  `json:"scoped_ids,omitempty"`
 }
 
 // ApplyFormIntakePass publishes accepted ledger events, raw-input accounting
@@ -138,6 +141,9 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		); appendErr != nil {
 			return false, appendErr
 		}
+		if scopeErr := applyFormIntakeOutputScope(&record, request.Output, selection, now); scopeErr != nil {
+			return false, scopeErr
+		}
 		// Bookkeeping does not change reviewed assignments. Pending input still
 		// fences all final gates; actual composite events invalidate authority.
 		// Detach Public so a failed sealing/write cannot leak changes via pruning.
@@ -147,6 +153,7 @@ func (store *FormJobStore) ApplyFormIntakePass(
 			Digest: digest, AppliedRevision: record.Public.Revision, AcceptedIDs: selection.AcceptedIDs,
 			AcknowledgedIDs: selection.AcknowledgedIDs, Findings: selection.Findings, Intent: request.Intent,
 			ScopedInstruction: selection.ScopedInstruction,
+			ScopedIDs:         selection.ScopedIDs,
 		}
 		consumed := len(formIntakeCurrentFindings(*input)) == 0 && (input.Intent != interactions.ProtectedAnswerValue ||
 			formIntakeTextAccounted(input.Text, input.Accounted))
@@ -185,6 +192,10 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		ReplaceExisting   bool
 		Correction        []literal
 	}
+	type output struct {
+		Mode    FormIntakeOutputMode
+		Literal literal
+	}
 	count, bytes, valid := 0, 0, true
 	convert := func(refs []FormIntakeLiteral) []literal {
 		result := make([]literal, len(refs))
@@ -222,6 +233,14 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		}
 	}
 	nonData := convert(request.NonData)
+	var outputInstruction *output
+	if request.Output != nil {
+		if !request.Output.Mode.valid() {
+			return "", ErrFormJobAnswerConflict
+		}
+		refs := convert([]FormIntakeLiteral{request.Output.Literal})
+		outputInstruction = &output{Mode: request.Output.Mode, Literal: refs[0]}
+	}
 	if !valid {
 		return "", ErrFormJobAnswerConflict
 	}
@@ -237,7 +256,11 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		NonData   []literal
 		Findings  []FormFieldMappingBlocker `json:"Findings,omitempty"`
 		Intent    FormIntakeDialogIntent    `json:"Intent,omitempty"`
-	}{request.Reference, request.PassID, request.ExpectedRevision, request.Schema, proposals, nonData, request.Findings, request.Intent})
+		Output    *output                   `json:"Output,omitempty"`
+	}{
+		request.Reference, request.PassID, request.ExpectedRevision, request.Schema, proposals, nonData,
+		request.Findings, request.Intent, outputInstruction,
+	})
 }
 
 func formIntakeApplyResult(
@@ -251,6 +274,7 @@ func formIntakeApplyResult(
 		AppliedRevision:  outcome.AppliedRevision,
 		AcceptedFieldIDs: slices.Clone(outcome.AcceptedIDs),
 		AcknowledgedIDs:  slices.Clone(outcome.AcknowledgedIDs),
+		ScopedFieldIDs:   slices.Clone(outcome.ScopedIDs),
 		Findings:         slices.Clone(outcome.Findings),
 		Consumed:         outcome.Consumed,
 		Reused:           reused,

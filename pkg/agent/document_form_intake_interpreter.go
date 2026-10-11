@@ -48,17 +48,27 @@ func (auditor *documentFormAuditor) InterpretFormIntake(
 const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance against only the supplied fields. ` +
 	`Return exactly one JSON object, no markdown: {"intent":"facts|clarify|back|pause|resume|cancel|review|finish|draft",` +
 	`"proposals":[{"field_id":"supplied id","literals":[{"text":"exact utterance fragment","occurrence":1}],` +
-	`"disposition":"intentionally_blank|not_applicable (omit for positive facts)",` +
+	`"disposition":"intentionally_blank|not_applicable|deferred|included (omit for positive facts)",` +
 	`"supersedes_event_id":"current event id when correcting","replace_existing":false,` +
 	`"correction_evidence":[{"text":"exact explicit correction instruction","occurrence":1}]}],` +
 	`"non_data":[{"text":"exact prose fragment containing no supplied fact","occurrence":1}],` +
-	`"findings":[{"field_id":"supplied id","code":"field_ambiguous|field_conflicting|field_confirmation_required"}]}. ` +
+	`"findings":[{"field_id":"supplied id","code":"field_ambiguous|field_conflicting|field_confirmation_required"}],` +
+	`"output":{"mode":"complete|editable_draft","literal":{"text":"exact output instruction","occurrence":1}}}. ` +
+	`Omit output unless the utterance explicitly requests complete filling or an editable partial draft. ` +
+	`A clear request to finish remaining fields manually is a draft request even without that exact terminology; ` +
+	`a question about the available options is clarification, not a scope change. ` +
 	`Arrays may be empty. Occurrences count exact token-aligned non-overlapping matches, starting at 1. ` +
 	`Use only literal text from the utterance, never generate, rephrase, infer or case-fold a value. ` +
 	`For explicit operator instructions to leave a field blank or mark a section inapplicable, use disposition with ` +
 	`one exact instruction literal, not a generated blank or N/A string. Do not mark missing fields inapplicable by default. ` +
 	`A section instruction can target several supplied fields using the same exact literal. Scoped instruction evidence ` +
 	`may be reused only for explicit dispositions, never as another person's data value. ` +
+	`For an explicit manual-finish/draft request, propose deferred for each remaining supplied field within its scope, ` +
+	`with exact instruction evidence. Do not defer accepted or source-valued data, manufacture blanks, infer N/A or ` +
+	`change required flags. Use included to return an explicitly selected deferred field to the filling scope. ` +
+	`The same exact scoped instruction can prove both output mode and per-field deferral. ` +
+	`A complete output instruction clears draft omissions, but never authorizes finish/approval or missing values. ` +
+	`Output capability is metadata, not an instruction to silently flatten an editable request. ` +
 	`Associate facts with the explicitly intended person/role. If unclear, emit a finding, not an assignment. ` +
 	`Accounted evidence must not be copied to a different field. Facts outside this field view must NOT be non_data. ` +
 	`Do not overlap non_data, proposed facts or correction evidence. Correct or replace existing data only when the ` +
@@ -89,6 +99,12 @@ type documentIntakeResponseWire struct {
 	Proposals []documentIntakeProposalWire       `json:"proposals"`
 	NonData   []documentIntakeLiteralWire        `json:"non_data"`
 	Findings  []document.FormFieldMappingBlocker `json:"findings"`
+	Output    *documentIntakeOutputWire          `json:"output,omitempty"`
+}
+
+type documentIntakeOutputWire struct {
+	Mode    document.FormIntakeOutputMode `json:"mode"`
+	Literal documentIntakeLiteralWire     `json:"literal"`
 }
 
 type documentIntakeFieldWire struct {
@@ -102,8 +118,25 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 		len(pass.Input.Text) > document.MaxFormIntakeInputBytes || len(pass.Fields) == 0 ||
 		len(pass.Fields) > document.MaxFormIntakeCandidates || len(pass.Fields) != len(pass.CandidateIDs) ||
 		len(view.FieldStates) > len(pass.Fields) || len(view.Evidence) > 2 ||
-		len(pass.Input.Accounted) > document.MaxFormIntakeAccountedSpans {
+		len(pass.Input.Accounted) > document.MaxFormIntakeAccountedSpans ||
+		len(view.DeferredFieldIDs) > len(pass.Fields) {
 		return nil, errDocumentIntakeInterpretationUnavailable
+	}
+	if !slices.Contains([]document.FormOutputMode{
+		"", document.FormOutputEditableAcroForm, document.FormOutputFlattenedPrint,
+	}, view.OutputMode) || !slices.Contains([]document.FormOutputScope{"", document.FormOutputEditableDraft}, view.OutputScope) {
+		return nil, errDocumentIntakeInterpretationUnavailable
+	}
+	if view.OutputScope == document.FormOutputEditableDraft && view.OutputMode != document.FormOutputEditableAcroForm {
+		return nil, errDocumentIntakeInterpretationUnavailable
+	}
+	seenDeferred := make(map[string]bool, len(view.DeferredFieldIDs))
+	for _, id := range view.DeferredFieldIDs {
+		if view.OutputScope != document.FormOutputEditableDraft || !slices.Contains(pass.CandidateIDs, id) ||
+			seenDeferred[id] {
+			return nil, errDocumentIntakeInterpretationUnavailable
+		}
+		seenDeferred[id] = true
 	}
 	if len(view.RelatedInputs) >= document.MaxFormIntakePendingInputs {
 		return nil, errDocumentIntakeInterpretationUnavailable
@@ -145,6 +178,7 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 			Required: field.Required, MultiSelect: field.MultiSelect, Editable: field.Editable,
 			DateFormat: field.DateFormat, Options: field.Options, Existing: field.HasValue,
 			State: state.State, Source: state.Source, Confidence: state.Confidence, Validation: state.Validation,
+			Deferred: seenDeferred[field.ID] && state.EventID == "" && !field.HasValue,
 		}, EventID: state.EventID}
 	}
 	type evidenceWire struct {
@@ -184,9 +218,12 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 		Evidence       []evidenceWire            `json:"evidence,omitempty"`
 		Related        []string                  `json:"related_inputs,omitempty"`
 		RelatedPartial bool                      `json:"related_inputs_partial,omitempty"`
+		OutputMode     document.FormOutputMode   `json:"output_mode,omitempty"`
+		OutputScope    document.FormOutputScope  `json:"output_scope,omitempty"`
 	}{
 		"mintclaw.document_intake_interpretation.v1", pass.Input.Text, pass.Input.Context.RoleContext,
 		pass.Input.Context.Question, fields, accounted, evidence, related, view.RelatedInputsPartial,
+		view.OutputMode, view.OutputScope,
 	})
 	if err != nil || len(payload) > maxDocumentIntakeWireBytes {
 		clear(payload)
@@ -241,6 +278,7 @@ func decodeDocumentIntakeInterpretation(
 			len(proposal.Literals) == 0 || len(proposal.CorrectionEvidence) > document.MaxFormIntakeCandidates ||
 			!slices.Contains([]document.FormIntakeDisposition{
 				"", document.FormIntakeIntentionallyBlank, document.FormIntakeNotApplicable,
+				document.FormIntakeDeferred, document.FormIntakeIncluded,
 			}, proposal.Disposition) || (proposal.Disposition != "" && len(proposal.Literals) != 1) {
 			return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
 		}
@@ -273,6 +311,18 @@ func decodeDocumentIntakeInterpretation(
 	result.NonData, ok = convert(wire.NonData)
 	if !ok {
 		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+	}
+	if wire.Output != nil {
+		if !slices.Contains([]document.FormIntakeOutputMode{
+			document.FormIntakeOutputComplete, document.FormIntakeOutputDraft,
+		}, wire.Output.Mode) {
+			return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+		}
+		literal, valid := convert([]documentIntakeLiteralWire{wire.Output.Literal})
+		if !valid {
+			return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+		}
+		result.Output = &document.FormIntakeOutputInstruction{Mode: wire.Output.Mode, Literal: literal[0]}
 	}
 	return result, nil
 }
