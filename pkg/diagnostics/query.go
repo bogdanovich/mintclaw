@@ -172,10 +172,15 @@ func Query(options QueryOptions) (QueryResult, error) {
 	}
 	matches := make([]LocatedTrace, 0)
 	seenRoots := make(map[string]struct{}, len(options.Stores))
+	seenStoreIDs := make(map[string]struct{}, len(options.Stores))
 	for _, spec := range options.Stores {
 		if err := validateStoreSpec(spec); err != nil {
 			return QueryResult{}, err
 		}
+		if _, duplicate := seenStoreIDs[spec.ID]; duplicate {
+			return QueryResult{}, fmt.Errorf("diagnostics query: duplicate store ID %s", spec.ID)
+		}
+		seenStoreIDs[spec.ID] = struct{}{}
 		root, err := filepath.Abs(spec.Root)
 		if err != nil {
 			return QueryResult{}, fmt.Errorf("diagnostics query: resolve store %s: %w", spec.ID, err)
@@ -242,6 +247,11 @@ func Query(options QueryOptions) (QueryResult, error) {
 			if problem.Code == "corrupt_trace" {
 				health.CorruptTraces++
 			}
+			// A corrupt file cannot prove which session owns it. Preserve only
+			// anonymous store-health totals across a session boundary.
+			if spec.RequiredSessionHash != "" {
+				continue
+			}
 			result.Problems = append(result.Problems, Problem{
 				StoreID: spec.ID, TraceID: problem.TraceID, NameHash: problem.NameHash,
 				Code: problem.Code, SizeBytes: problem.SizeBytes, ModifiedAt: problem.ModifiedAt,
@@ -251,7 +261,10 @@ func Query(options QueryOptions) (QueryResult, error) {
 			if trace.Truncation.Incomplete {
 				health.IncompleteTraces++
 			}
-			health.DroppedRecords += trace.Truncation.DroppedRecords
+			health.DroppedRecords = addNonNegativeSaturating(
+				health.DroppedRecords,
+				trace.Truncation.DroppedRecords,
+			)
 			if spec.Retention > 0 && now.Sub(trace.CreatedAt) > spec.Retention {
 				health.ExpiredTraces++
 			}
@@ -278,6 +291,17 @@ func Query(options QueryOptions) (QueryResult, error) {
 	}
 	result.Matches = matches
 	return result, nil
+}
+
+func addNonNegativeSaturating(total, value int) int {
+	if value <= 0 {
+		return total
+	}
+	maximum := int(^uint(0) >> 1)
+	if total > maximum-value {
+		return maximum
+	}
+	return total + value
 }
 
 func validateSelector(selector Selector) error {

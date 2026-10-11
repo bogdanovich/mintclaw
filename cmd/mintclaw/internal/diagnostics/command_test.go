@@ -99,7 +99,7 @@ func TestDiagnosticsListShowAndCorrelateStayMetadataOnlyAndReadOnly(t *testing.T
 	if !json.Valid([]byte(exportReceipt)) || !strings.Contains(exportReceipt, "metadata_only") {
 		t.Fatalf("export receipt = %s", exportReceipt)
 	}
-	bundledTrace, err := os.ReadFile(filepath.Join(bundleOutput, "traces", trace.TraceID+".json"))
+	bundledTrace, err := os.ReadFile(filepath.Join(bundleOutput, "traces", "explicit-1", trace.TraceID+".json"))
 	if err != nil {
 		t.Fatalf("ReadFile(bundle trace): %v", err)
 	}

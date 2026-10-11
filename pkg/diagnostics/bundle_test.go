@@ -77,7 +77,11 @@ func TestWriteBundleCreatesPrivateMetadataOnlyDirectoryWithVerifiedManifest(t *t
 		if mode := fileMode(t, output).Perm(); mode != 0o700 {
 			t.Fatalf("output mode = %o", mode)
 		}
-		for _, path := range []string{"manifest.json", "health.json", filepath.Join("traces", "trace-bundle.json")} {
+		for _, path := range []string{
+			"manifest.json",
+			"health.json",
+			filepath.Join("traces", "store-safe", "trace-bundle.json"),
+		} {
 			if mode := fileMode(t, filepath.Join(output, path)).Perm(); mode != 0o600 {
 				t.Fatalf("%s mode = %o", path, mode)
 			}
@@ -87,7 +91,7 @@ func TestWriteBundleCreatesPrivateMetadataOnlyDirectoryWithVerifiedManifest(t *t
 	for _, path := range []string{
 		filepath.Join(output, "manifest.json"),
 		filepath.Join(output, "health.json"),
-		filepath.Join(output, "traces", "trace-bundle.json"),
+		filepath.Join(output, "traces", "store-safe", "trace-bundle.json"),
 	} {
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
@@ -101,6 +105,40 @@ func TestWriteBundleCreatesPrivateMetadataOnlyDirectoryWithVerifiedManifest(t *t
 			if forbidden != "" && strings.Contains(string(data), forbidden) {
 				t.Fatalf("metadata bundle leaked %q in %s", forbidden, path)
 			}
+		}
+	}
+}
+
+func TestWriteBundleNamespacesDuplicateTraceIDsByStore(t *testing.T) {
+	created := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	stores := make([]StoreSpec, 0, 2)
+	for _, storeID := range []string{"store-a", "store-b"} {
+		root := filepath.Join(t.TempDir(), storeID)
+		writeQueryTrace(t, root, queryTrace("trace-shared", created, "turn", ""))
+		stores = append(stores, StoreSpec{ID: storeID, Kind: "profile", Root: root})
+	}
+	query, err := Query(QueryOptions{
+		Stores: stores, Selector: Selector{TraceIDs: []string{"trace-shared"}},
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	output := filepath.Join(t.TempDir(), "bundle")
+	receipt, err := WriteBundle(BundleOptions{
+		OutputDir: output,
+		Query:     query,
+		Source:    DefaultBundleSource("v0.1.0-test", ""),
+	})
+	if err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+	if receipt.Traces != 2 || receipt.Files != 3 {
+		t.Fatalf("receipt = %#v", receipt)
+	}
+	for _, storeID := range []string{"store-a", "store-b"} {
+		path := filepath.Join(output, "traces", storeID, "trace-shared.json")
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("Stat(%s): %v", path, err)
 		}
 	}
 }
@@ -173,6 +211,18 @@ func TestWriteBundleRefusesExistingOutputAndUnsafeSource(t *testing.T) {
 	}
 	if _, err := os.Stat(unsafe); !os.IsNotExist(err) {
 		t.Fatalf("unsafe source created output: %v", err)
+	}
+	unsafeStore := filepath.Join(t.TempDir(), "unsafe-store")
+	fixture.Matches[0].StoreID = "../store"
+	if _, err := WriteBundle(BundleOptions{
+		OutputDir: unsafeStore,
+		Query:     fixture,
+		Source:    DefaultBundleSource("v0.1.0-test", ""),
+	}); err == nil || !strings.Contains(err.Error(), "invalid trace store ID") {
+		t.Fatalf("unsafe store error = %v", err)
+	}
+	if _, err := os.Stat(unsafeStore); !os.IsNotExist(err) {
+		t.Fatalf("unsafe store created output: %v", err)
 	}
 }
 

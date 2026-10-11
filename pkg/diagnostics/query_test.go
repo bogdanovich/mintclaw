@@ -124,6 +124,9 @@ func TestQueryEnforcesStoreSessionBoundary(t *testing.T) {
 	unrelated := queryTrace("trace-unrelated", created.Add(time.Minute), "turn-unrelated", "")
 	unrelated.Metadata.SessionHash = strings.Repeat("b", 64)
 	writeQueryTrace(t, root, unrelated)
+	if err := os.WriteFile(filepath.Join(root, "trace-unrelated-corrupt.json"), []byte("{private"), 0o600); err != nil {
+		t.Fatalf("WriteFile(corrupt): %v", err)
+	}
 
 	result, err := Query(QueryOptions{Stores: []StoreSpec{{
 		ID: "coding-thread", Kind: "coding_thread", Alias: "thread-safe", Root: root,
@@ -134,6 +137,29 @@ func TestQueryEnforcesStoreSessionBoundary(t *testing.T) {
 	}
 	if result.TotalMatches != 1 || result.Matches[0].Trace.TraceID != "trace-selected" {
 		t.Fatalf("session-bounded matches = %#v", result.Matches)
+	}
+	if len(result.Problems) != 0 || result.Stores[0].ProblemFiles != 1 || result.Stores[0].CorruptTraces != 1 {
+		t.Fatalf("session-bounded problems = %#v, health = %#v", result.Problems, result.Stores[0])
+	}
+}
+
+func TestQuerySanitizesAndSaturatesDroppedRecordTotals(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "traces")
+	created := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	for index, dropped := range []int{-4, int(^uint(0) >> 1), 1} {
+		trace := queryTrace(fmt.Sprintf("trace-%d", index), created.Add(time.Duration(index)*time.Minute), "turn", "")
+		trace.Truncation.DroppedRecords = dropped
+		writeQueryTrace(t, root, trace)
+	}
+
+	result, err := Query(QueryOptions{
+		Stores: []StoreSpec{{ID: "profile-main", Kind: "profile", Root: root}},
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if got, want := result.Stores[0].DroppedRecords, int(^uint(0)>>1); got != want {
+		t.Fatalf("DroppedRecords = %d, want %d", got, want)
 	}
 }
 
@@ -169,6 +195,9 @@ func TestQueryRejectsUnsafeSelectorsAndStoreMetadata(t *testing.T) {
 		"task":    {Stores: []StoreSpec{validStore}, Selector: Selector{TaskID: "/private/task"}},
 		"session": {Stores: []StoreSpec{validStore}, Selector: Selector{SessionHash: "short"}},
 		"store":   {Stores: []StoreSpec{{ID: "bad/store", Kind: "profile", Root: t.TempDir()}}},
+		"duplicate store": {
+			Stores: []StoreSpec{validStore, {ID: validStore.ID, Kind: "profile", Root: t.TempDir()}},
+		},
 		"trace count": {
 			Stores:   []StoreSpec{validStore},
 			Selector: Selector{TraceIDs: tooManyTraces},

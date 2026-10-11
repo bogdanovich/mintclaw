@@ -131,6 +131,9 @@ func WriteBundle(options BundleOptions) (BundleReceipt, error) {
 			)
 		}
 	}
+	if err := validateBundleMatches(options.Query.Matches); err != nil {
+		return BundleReceipt{}, err
+	}
 	if err := validateBundleSource(options.Source); err != nil {
 		return BundleReceipt{}, err
 	}
@@ -173,7 +176,7 @@ func WriteBundle(options BundleOptions) (BundleReceipt, error) {
 		if summaryErr != nil {
 			return BundleReceipt{}, summaryErr
 		}
-		relative := filepath.ToSlash(filepath.Join("traces", summary.TraceID+".json"))
+		relative := filepath.ToSlash(filepath.Join("traces", match.StoreID, summary.TraceID+".json"))
 		data, marshalErr := marshalBundleJSON(summary)
 		if marshalErr != nil {
 			return BundleReceipt{}, marshalErr
@@ -188,7 +191,9 @@ func WriteBundle(options BundleOptions) (BundleReceipt, error) {
 			Projection: summary.Projection, RecordCount: len(summary.Records), MetadataFile: relative,
 		}
 		if options.IncludeRedactedContent {
-			privateRelative := filepath.ToSlash(filepath.Join("private", "traces", summary.TraceID+".json"))
+			privateRelative := filepath.ToSlash(
+				filepath.Join("private", "traces", match.StoreID, summary.TraceID+".json"),
+			)
 			privateData, marshalErr := marshalBundleJSON(match.Trace)
 			if marshalErr != nil {
 				return BundleReceipt{}, marshalErr
@@ -200,7 +205,12 @@ func WriteBundle(options BundleOptions) (BundleReceipt, error) {
 		}
 		traces = append(traces, entry)
 	}
-	slices.SortFunc(traces, func(a, b BundleTrace) int { return strings.Compare(a.TraceID, b.TraceID) })
+	slices.SortFunc(traces, func(a, b BundleTrace) int {
+		if compared := strings.Compare(a.TraceID, b.TraceID); compared != 0 {
+			return compared
+		}
+		return strings.Compare(a.StoreID, b.StoreID)
+	})
 	slices.SortFunc(files, func(a, b BundleFile) int { return strings.Compare(a.Path, b.Path) })
 
 	privacyMode := "metadata_only"
@@ -247,6 +257,21 @@ func WriteBundle(options BundleOptions) (BundleReceipt, error) {
 		OutputDir: output, ManifestPath: manifestPath, ManifestSHA256: bytesSHA256(manifestData),
 		Files: len(files), Traces: len(traces), PrivacyMode: privacyMode,
 	}, nil
+}
+
+func validateBundleMatches(matches []LocatedTrace) error {
+	seen := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		if !safeSelectorPattern.MatchString(match.StoreID) {
+			return fmt.Errorf("diagnostic support bundle: invalid trace store ID")
+		}
+		key := match.StoreID + "\x00" + match.Trace.TraceID
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("diagnostic support bundle: duplicate trace in store")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
 }
 
 func DefaultBundleSource(version, commit string) BundleSource {
