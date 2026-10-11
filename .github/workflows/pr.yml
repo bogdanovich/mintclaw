@@ -247,6 +247,9 @@ jobs:
       - name: Collect read-only credential VM host facts
         run: bash ./scripts/credential-mac-vm-preflight.sh
 
+      - name: Qualify credential VM package and input denial
+        run: bash ./scripts/qualify-credential-mac-vm-inputs.sh
+
       - name: Run platform-sensitive tests
         run: >-
           go test -count=1 -p=4 -tags goolm,stdjson
