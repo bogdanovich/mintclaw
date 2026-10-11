@@ -396,6 +396,9 @@ jobs:
       - name: Qualify private credential loader with synthetic ACL and mount fixtures
         run: bash ./scripts/qualify-credential-loader.sh
 
+      - name: Qualify private passkey approval and protected owner storage
+        run: bash ./scripts/qualify-credential-approval.sh
+
       - name: Install pinned document runtime
         run: |
           snapshot=20261004T000000Z
