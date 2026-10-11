@@ -132,6 +132,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Credential Browser Login Admission](credential-browser-login-admission.md):
   configured private login flow, sandbox and process requirements, lease
   retirement, fixed outputs, and actual-host qualification gates.
+- [Private Credential Browser Channel](credential-browser-private-channel.md):
+  bounded broker/worker commands, current lease callbacks, private provider
+  consumption, verified retirement, and synthetic qualification limits.
 - [Reliable PDF Support Roadmap](pdf-support-roadmap.md): ordered document
   identity, inspection, read/render, AcroForm, durable form, XFA, transformation,
   companion, and production-verification milestones.

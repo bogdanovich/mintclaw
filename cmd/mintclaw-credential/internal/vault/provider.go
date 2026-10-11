@@ -88,6 +88,23 @@ func newProvider(items itemGetter) Provider {
 	return Provider{items: items, slot: make(chan struct{}, 1)}
 }
 
+// UseLogin retrieves and consumes one login entirely inside the private service.
+// The consumer must recheck current authorization and live browser readiness
+// after retrieval, before injecting, and quarantine any uncertain result.
+func (provider Provider) UseLogin(ctx context.Context, binding Binding,
+	consumer func(username, password []byte) error,
+) error {
+	if ctx == nil || ctx.Err() != nil || consumer == nil {
+		return ErrUnavailable
+	}
+	login, err := provider.GetLogin(ctx, binding)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer login.Destroy()
+	return login.Consume(consumer)
+}
+
 // GetLogin retrieves only a login's built-in username and password. It accepts
 // no secret URI, field name, destination, arbitrary SDK call, or model input.
 // The service must check its grant before this call and again before injection.
