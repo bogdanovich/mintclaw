@@ -218,11 +218,12 @@ with a read-only mount when ACLs are unavailable. Check the actual descriptor,
 ACL/ownership authority, mount protection, and bounded input together; an
 owner/mode check alone is insufficient for the loader admission.
 
-An attempted disposable systemd activation exited before starting a service.
-It supplied no credential and qualifies no activation path. Actual systemd
-credential delivery, mount isolation, browser-child filesystem isolation, and
-provider-readiness-before-retrieval remain open gates. Keep them explicit in
-the next CA2 merge unit and keep runtime credential access disabled.
+An attempted disposable container systemd activation exited before starting a
+service. It supplied no credential and qualifies no activation path. The later
+actual-host plaintext delivery probe below qualifies a narrower mechanism.
+Encrypted activation, complete isolation, browser-child filesystem isolation,
+and provider-readiness-before-retrieval remain open gates. Keep them explicit
+in the next CA2 merge unit and keep runtime credential access disabled.
 
 Sources:
 
@@ -271,3 +272,37 @@ no model tool. `ready` requires a qualified service handler and consumer;
 the existence of a transport is insufficient. Linux fixtures use synthetic
 inputs and unprivileged identities. They do not qualify systemd activation,
 host confinement, Android approval, or credential-browser execution.
+
+## Actual-host plaintext delivery probe
+
+On `server@oc`, 2026-10-11 at 08:06 UTC, a disposable transient systemd unit
+received one synthetic value through `LoadCredential=`. It used `DynamicUser`,
+private mounts and temporary files, strict filesystem/home protection,
+restricted process visibility, no capabilities, no privilege escalation, and
+disabled core dumps. A fixed Python fixture inspected only the synthetic
+credential's metadata and returned bounded boolean/metadata results.
+
+- The service ran under temporary UID/GID `65125` and read the expected value.
+- The credential file was root-owned, mode `0440`; its directory was
+  root-owned, mode `0550`. Their ACLs granted the named service UID read and
+  read/traverse access respectively, with no group or other access. The group
+  mode bits represented the ACL mask, not permission for an arbitrary group.
+- The credential descriptor's mount was read-only. The service was denied
+  reads of the root-only input source and root supervisor's environment and
+  memory, and denied process-control permission on that supervisor.
+- The transient unit and its generated files were removed. All ten deployed
+  MintClaw services remained active, with zero failed units and zero error
+  journal entries in the checked ten-minute window. Core SHA before/after
+  this probe was `f753c03dd55c1eb5cdc202e38172d2342ff6e5cc`.
+
+This exercised plaintext credential delivery and actual ACL/mount protection,
+not `LoadCredentialEncrypted=` activation. No host encryption key existed at
+the checked systemd host-key path; this probe created none. No real token,
+provider, account, browser, or agent credential operation was involved.
+
+The probe does not prove that an agent cannot obtain root or impersonate the
+service, establish the gateway's trusted process role, or isolate a browser
+child. The observed host remains unqualified for real token provisioning.
+Require those independent gates and encrypted activation in the next startup
+admission; do not treat these successful file-delivery checks as full CA2
+completion.

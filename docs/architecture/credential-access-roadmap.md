@@ -220,12 +220,15 @@ entire personal vault.
   [operator setup](../security/credential-broker-setup.md) records the boundary
   and remaining gates. [PR #1526](https://github.com/bogdanovich/mintclaw/pull/1526)
   records the observed host boundary and why that host is not yet qualified.
-  The private intent transport implements bounded, process-pinned local IPC
-  with kernel peer and per-message identity checks. Linux normal/race fixtures
-  exercise identity substitution, descriptor handoff, cancellation, capacity,
-  and fixed response projection. It creates no listener or model tool by
-  itself. Isolated startup, trusted process-role admission, and service wiring
-  remain pending. Provisioning and transport alone enable no agent access.
+  The private intent transport is merged in
+  [PR #1530](https://github.com/bogdanovich/mintclaw/pull/1530). Linux normal/race
+  fixtures exercise identity substitution, descriptor handoff, cancellation,
+  capacity, fixed response projection, and actual CA1 grant IDs. All 16 GitHub
+  checks passed and review found no must-fix issues. It creates no listener or
+  model tool by itself. The qualification record includes a disposable
+  actual-host plaintext credential-delivery probe; encrypted activation,
+  isolated startup, trusted process-role admission, and service wiring remain
+  pending. Provisioning and transport alone enable no agent access.
 - CA3: [verifier candidate qualification](credential-phone-approval-qualification.md)
   records build and upstream fixture evidence; control-plane and Android
   end-to-end implementation remain pending.
