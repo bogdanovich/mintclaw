@@ -113,7 +113,7 @@ func TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts(t *testing.T)
 		result := worker.Extract(t.Context(), snapshot, input, defaultInspectionLimits(), read)
 		if result.State != StateSucceeded || result.Extraction == nil || len(result.Artifacts) != 1 ||
 			result.Extraction.Backend != pdfiumWASMIdentity() {
-			t.Fatalf("extraction result = %#v", result)
+			t.Fatalf("extraction result = %#v failure=%+v", result, result.Failure)
 		}
 		artifact, err := snapshot.OpenArtifact(result.Artifacts[0].Artifact.Ref)
 		if err != nil {
@@ -139,7 +139,7 @@ func TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts(t *testing.T)
 		if result.State != StateSucceeded || result.Rendering == nil || len(result.Artifacts) != 1 ||
 			result.Rendering.Backend != pdfiumWASMIdentity() ||
 			result.Artifacts[0].Artifact.ContentType != "image/png" {
-			t.Fatalf("render result = %#v", result)
+			t.Fatalf("render result = %#v failure=%+v", result, result.Failure)
 		}
 		artifact, err := snapshot.OpenArtifact(result.Artifacts[0].Artifact.Ref)
 		if err != nil {
