@@ -254,12 +254,18 @@ entire personal vault.
   Synthetic Linux and actual browser WebAuthn fixtures qualify the software
   boundary. Protected service/listener startup, authorized notifications, and
   physical Android end-to-end qualification remain pending.
-- CA4: the consumer lease foundation now binds a private login binding to one
+- CA4: the consumer lease foundation, merged in
+  [PR #1549](https://github.com/bogdanovich/mintclaw/pull/1549), binds a private login binding to one
   live grant generation. Consumers share the original expiry signal; revocation,
   effective policy change, controller failure and shutdown retire the lease.
   Every use still checks live origin and current authority. This supplies no
-  browser worker, vault retrieval or model tool. Browser/host startup admission,
-  injection, output restrictions and session quarantine remain pending.
+  browser worker, vault retrieval or model tool. The private browser session
+  implementation adds revision-bound single-page login configuration, immutable
+  lease flow snapshots, guarded DOM injection/submission, fixed outcomes and
+  context retirement. Its routed synthetic fixtures exercise browser behavior;
+  they do not qualify TLS, DNS, redirect transport or complete process/host
+  isolation. Protected service wiring, actual startup/network/host qualification,
+  remote human handoff and the personal pilot remain pending.
 - CA5–CA6: pending their dependencies and admission/qualification gates.
   Runtime credential access remains disabled and no real token is provisioned.
 

@@ -48,6 +48,7 @@ type AccountRule struct {
 	ItemID     string      `json:"item_id"`
 	Origins    []string    `json:"origins"`
 	Principals []Principal `json:"principals"`
+	Login      *LoginFlow  `json:"login,omitempty"`
 }
 
 // Request describes one credential use or authenticated browser operation.
@@ -69,6 +70,7 @@ type Policy struct {
 type accountPolicy struct {
 	origins    []string
 	principals map[Principal]struct{}
+	login      *LoginFlow
 }
 
 // NewPolicy constructs a defensively copied, default-deny policy. Empty policy
@@ -112,8 +114,15 @@ func NewPolicy(rules []AccountRule) (*Policy, error) {
 		canonical.Origins = origins
 		canonical.Principals = slices.Clone(rule.Principals)
 		slices.SortFunc(canonical.Principals, comparePrincipal)
+		if rule.Login != nil {
+			flow, flowErr := NormalizeLoginFlow(*rule.Login, origins)
+			if flowErr != nil {
+				return nil, ErrInvalidPolicy
+			}
+			canonical.Login = &flow
+		}
 		normalized = append(normalized, canonical)
-		policy.accounts[rule.Alias] = accountPolicy{origins: origins, principals: principals}
+		policy.accounts[rule.Alias] = accountPolicy{origins: origins, principals: principals, login: canonical.Login}
 	}
 	slices.SortFunc(normalized, func(left, right AccountRule) int { return cmp.Compare(left.Alias, right.Alias) })
 	encoded, err := json.Marshal(normalized)

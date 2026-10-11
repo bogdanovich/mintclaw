@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/credentialbroker"
 )
 
@@ -15,6 +16,7 @@ import (
 type LoginLease struct {
 	grant   credentialbroker.GrantLease
 	binding LoginBinding
+	flow    *credentialbroker.LoginFlow
 }
 
 func (controller *Controller) LeaseLogin(ctx context.Context, grantID string,
@@ -33,7 +35,14 @@ func (controller *Controller) LeaseLogin(ctx context.Context, grantID string,
 		return LoginLease{}, ErrDenied
 	}
 	account := controller.bindings[request.Account]
-	return LoginLease{grant, LoginBinding{account.vaultID, account.itemID, controller.policy.Revision()}}, nil
+	lease := LoginLease{
+		grant:   grant,
+		binding: LoginBinding{account.vaultID, account.itemID, controller.policy.Revision()},
+	}
+	if flow, flowErr := controller.policy.LoginFlow(request); flowErr == nil {
+		lease.flow = &flow
+	}
+	return lease, nil
 }
 
 func (lease LoginLease) Binding(ctx context.Context, request credentialbroker.Request) (LoginBinding, error) {
@@ -44,6 +53,23 @@ func (lease LoginLease) Binding(ctx context.Context, request credentialbroker.Re
 }
 
 func (lease LoginLease) Done() <-chan struct{} { return lease.grant.Done() }
+
+// Flow returns the immutable configured browser flow only at its current entry
+// origin. Legacy/connector bindings remain valid leases but have no browser flow.
+// This metadata check is not proof of live document or element authority.
+func (lease LoginLease) Flow(
+	ctx context.Context,
+	request credentialbroker.Request,
+) (credentialbroker.LoginFlow, error) {
+	if lease.grant.Check(ctx, request) != nil || lease.flow == nil {
+		return credentialbroker.LoginFlow{}, ErrDenied
+	}
+	origin, err := browserpolicy.NormalizePublicOrigin(request.Origin)
+	if err != nil || origin != lease.flow.EntryOrigin {
+		return credentialbroker.LoginFlow{}, ErrDenied
+	}
+	return *lease.flow, nil
+}
 
 func (LoginLease) Format(state fmt.State, _ rune) {
 	_, _ = io.WriteString(state, "[private login lease]")
