@@ -266,6 +266,30 @@ func TestPDFNativeSurfaceScannerCannotHidePrivateDuplicateJSONValue(t *testing.T
 	}
 }
 
+func TestPDFPrivateRequestScansOtherJobsInAuthenticatedSnapshot(t *testing.T) {
+	trial := newPDFTrialFixture(t)
+	defer func() { _ = trial.release(true) }()
+	record, prompt, store := nativePDFPromptFixture(t, trial)
+	job, owner, err := trial.observeProtectedJob(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Create(t.Context(), document.FormJobCreateRequest{
+		Owner: owner, StartIdempotencyKey: "another-job-with-public-leak", SourceRef: "media://eval-source",
+		SourceDigest: trial.item.Case.Fixtures[0].SHA256, FieldSchemaDigest: strings.Repeat("c", 64),
+		BackendRevision: trial.item.Case.Driver.Facts["contact-reference"], AuditPolicyRevision: "eval-control-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = document.InspectFormJob(trial.formStoreOptions(), job.JobID, owner); err != nil {
+		t.Fatal("control is not a valid native snapshot", err)
+	}
+	if _, err = trial.protectedRequest(prompt, "contact-reference"); !errors.Is(err, ErrPrivateEvidence) {
+		t.Fatal("private value in another public job escaped whole-snapshot admission", err)
+	}
+}
+
 func TestPDFOpaqueLocatorRejectsDuplicateAndInvalidIdentityWithoutOpeningPayload(t *testing.T) {
 	for _, header := range []string{
 		`{}`, `{"job_id":"a","job_id":"b"}`, `{"job_id":"../escape"}`,

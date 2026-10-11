@@ -152,12 +152,12 @@ func (trial *pdfTrial) observeProtectedJob(
 	if err != nil {
 		return document.FormJobRecord{}, document.FormJobOwner{}, err
 	}
+	defer clear(data)
 	err = trial.scanNativeSurface(data)
-	clear(data)
 	if err != nil {
 		return document.FormJobRecord{}, document.FormJobOwner{}, err
 	}
-	job, err := document.InspectFormJob(trial.formStoreOptions(), jobID, owner)
+	job, err := document.InspectFormJobSnapshot(trial.formStoreOptions(), data, jobID, owner)
 	now := time.Now().UnixMilli()
 	if err != nil || job.SourceDigest != trial.item.Case.Fixtures[0].SHA256 ||
 		job.CreatedAt < trial.started.UnixMilli() || job.CreatedAt > now || job.ExpiresAt <= now ||
