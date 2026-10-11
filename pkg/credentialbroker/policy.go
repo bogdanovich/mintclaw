@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -150,6 +151,14 @@ func (policy *Policy) permits(request Request) bool {
 func credentialOrigin(raw string) (string, error) {
 	origin, err := browserpolicy.NormalizePublicOrigin(raw)
 	if err != nil || !strings.HasPrefix(origin, "https://") {
+		return "", ErrDenied
+	}
+	// Browser origin identity retains a DNS hostname's trailing dot. The
+	// shared public-network normalizer strips it, which would widen a grant
+	// and collapse distinct authority revisions. Inspect the original host
+	// after bounded syntax validation, before accepting the normalized origin.
+	parsed, parseErr := url.Parse(raw)
+	if parseErr != nil || strings.HasSuffix(parsed.Hostname(), ".") {
 		return "", ErrDenied
 	}
 	return origin, nil

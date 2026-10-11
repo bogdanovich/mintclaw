@@ -56,6 +56,8 @@ func TestPolicyExactHTTPSOrigins(t *testing.T) {
 		{origin: "https://signin.ebay.com:444"},
 		{origin: "https://signin.ebay.com.attacker.example"},
 		{origin: "https://other.ebay.com"},
+		{origin: "https://signin.ebay.com."},
+		{origin: "https://SIGNIN.EBAY.COM.:443/"},
 		{origin: "https://ebay.com"},
 		{origin: "https://signin.ebay.com/login"},
 		{origin: "https://signin.ebay.com?password=test"},
@@ -81,6 +83,23 @@ func TestPolicyExactHTTPSOrigins(t *testing.T) {
 				t.Fatalf("origin permitted = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestTrailingDotConfigurationCannotShareAnApprovedRevision(t *testing.T) {
+	policy := mustPolicy(t, testRules())
+	for _, origin := range []string{"https://signin.ebay.com.", "https://SIGNIN.EBAY.COM.:443/"} {
+		rules := testRules()
+		rules[0].Origins = []string{origin}
+		aliasPolicy, err := NewPolicy(rules)
+		if !errors.Is(err, ErrInvalidPolicy) || aliasPolicy != nil {
+			t.Fatal("distinct trailing-dot origin was admitted as a policy")
+		}
+		request := testRequest(policy)
+		request.Origin = origin
+		if policy.permits(request) {
+			t.Fatal("distinct trailing-dot origin shared configured authority")
+		}
 	}
 }
 

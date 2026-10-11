@@ -55,6 +55,11 @@ func TestGrantScopeAndDefensiveCopies(t *testing.T) {
 	if err := fixture.authority.Authorize(grant.ID, request); err != nil {
 		t.Fatal(err)
 	}
+	trailingDot := request
+	trailingDot.Origin = "https://signin.ebay.com."
+	if err := fixture.authority.Authorize(grant.ID, trailingDot); !errors.Is(err, ErrDenied) {
+		t.Fatal("grant authorized a distinct trailing-dot browser origin")
+	}
 	approval.Accounts[0] = "craigslist"
 	grant.Accounts[0] = "craigslist"
 	if err := fixture.authority.Authorize(grant.ID, request); err != nil {
