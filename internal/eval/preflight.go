@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/internal/gatewayclient"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/health"
+	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/pid"
 )
 
@@ -100,6 +101,10 @@ func validateConversationProfile(cfg *config.Config, preset Preset, workspace st
 		if channel != nil && channel.Enabled && channel.Type != config.ChannelMintClaw {
 			return ErrUnsafeTarget
 		}
+	}
+	plan, err := netbind.BuildPlan(cfg.Gateway.Host, netbind.DefaultLoopback)
+	if err != nil || !plan.IsLoopbackOnly() {
+		return ErrUnsafeTarget
 	}
 	if _, err := gatewayclient.ChannelSettings(cfg); err != nil {
 		return ErrUnsafeTarget

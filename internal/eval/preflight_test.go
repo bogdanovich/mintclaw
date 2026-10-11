@@ -192,6 +192,34 @@ func TestPreparedAdmissionChecksActiveIdentity(t *testing.T) {
 	}
 }
 
+func TestPreparedAdmissionRefusesNonLoopbackListenersBeforeProbe(t *testing.T) {
+	for _, host := range []string{
+		"*", "0.0.0.0", "::", "localhost,0.0.0.0", "127.0.0.1,::", "127.0.0.1,192.0.2.1",
+	} {
+		t.Run(host, func(t *testing.T) {
+			fixture := newAdmissionFixture(t)
+			fixture.cfg.Gateway.Host = host
+			fixture.writeConfig(t)
+			_, err := admitPreparedTarget(t.Context(), fixture.preset, fixture.home)
+			if !errors.Is(err, ErrUnsafeTarget) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+				t.Fatal("non-loopback listener reached target observation or task ingress", err)
+			}
+		})
+	}
+}
+
+func TestPreparedProfileAcceptsNativeLoopbackListenerForms(t *testing.T) {
+	fixture := newAdmissionFixture(t)
+	for _, host := range []string{"localhost", "127.0.0.1", "[::1]", "localhost,127.0.0.1,::1"} {
+		t.Run(host, func(t *testing.T) {
+			fixture.cfg.Gateway.Host = host
+			if err := validateConversationProfile(fixture.cfg, fixture.preset, fixture.workspace); err != nil {
+				t.Fatal("native loopback-only plan was refused", err)
+			}
+		})
+	}
+}
+
 func TestPreparedAdmissionRefusesUnsafeProfileBeforeTask(t *testing.T) {
 	for name, mutate := range map[string]func(*admissionFixture){
 		"hooks":     func(f *admissionFixture) { f.cfg.Hooks.Enabled = true },
