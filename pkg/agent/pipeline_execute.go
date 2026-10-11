@@ -685,27 +685,28 @@ const (
 )
 
 type toolCallState struct {
-	index                   int
-	request                 providers.ToolCall
-	name                    string
-	arguments               map[string]any
-	executionContext        context.Context
-	trustedExecution        *tools.TrustedToolExecution
-	result                  *toolshared.ToolResult
-	duration                time.Duration
-	loopSemantics           loopguard.Semantics
-	loopArguments           map[string]any
-	mcpServerName           string
-	toolRegistry            *tools.ToolRegistry
-	protectedResult         bool
-	taskSuspended           bool
-	resultSource            toolResultSource
-	invocationOK            bool
-	invocationSuspendOK     bool
-	continuationFollowup    *toolshared.ToolOnlyFollowup
-	continuationFollowupErr error
-	toolResultFollowup      *toolshared.ToolOnlyFollowup
-	toolResultFollowupErr   error
+	index                       int
+	request                     providers.ToolCall
+	name                        string
+	arguments                   map[string]any
+	executionContext            context.Context
+	trustedExecution            *tools.TrustedToolExecution
+	result                      *toolshared.ToolResult
+	duration                    time.Duration
+	loopSemantics               loopguard.Semantics
+	loopArguments               map[string]any
+	mcpServerName               string
+	toolRegistry                *tools.ToolRegistry
+	protectedResult             bool
+	taskSuspended               bool
+	resultSource                toolResultSource
+	invocationOK                bool
+	invocationSuspendOK         bool
+	resourceDispositionVerified bool
+	continuationFollowup        *toolshared.ToolOnlyFollowup
+	continuationFollowupErr     error
+	toolResultFollowup          *toolshared.ToolOnlyFollowup
+	toolResultFollowupErr       error
 }
 
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
@@ -1551,6 +1552,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 		!toolResult.Control.Async && toolResult.Control.Suspension == nil && !call.taskSuspended
 	call.invocationSuspendOK = toolResult != nil && !toolResult.IsError &&
 		!toolResult.Control.Async && toolResult.Control.Suspension != nil && !call.taskSuspended
+	call.resourceDispositionVerified = call.invocationOK && toolResult.Control.ResourceDispositionVerified
 	if toolResult != nil && toolResult.Control.Async && asyncAckDelivery.ParentHandled {
 		toolResult.Delivery.Intent = toolshared.DeliveryFinalHandled
 	}
@@ -1833,11 +1835,11 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	if !protectedResult && toolResult.Deliverable != nil {
 		recordDeliverable(exec, toolResult.Deliverable)
 	}
-	if successfulResourceDispositionClose(exec, toolName, toolArgs, toolResult) {
+	if successfulResourceDisposition(exec, toolResult, call.resourceDispositionVerified) {
 		// Keep the restricted recovery kind active for every sibling call in
 		// this batch. The complete-batch boundary re-inspects the exact owner
 		// before it can reserve a model-only synthesis pass.
-		exec.resourceDispositionCloseVerified = true
+		exec.resourceDispositionVerified = true
 	}
 
 	if !toolResult.Delivery.IsFinalHandled() {
@@ -1964,24 +1966,15 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	return toolCallStageResult{}
 }
 
-func successfulResourceDispositionClose(
+func successfulResourceDisposition(
 	exec *turnExecution,
-	toolName string,
-	args map[string]any,
 	result *toolshared.ToolResult,
+	verifiedInvocation bool,
 ) bool {
-	if exec == nil || result == nil || result.IsError ||
-		exec.objectiveRepairToolKind != taskresult.ObjectiveKindResourceDisposition ||
-		toolName != "browser_session" || args["operation"] != "close" || result.Deliverable == nil {
-		return false
-	}
-	for _, receipt := range result.Deliverable.LifecycleReceipts {
-		if receipt.Kind == taskresult.ReceiptKindResourceCleanup && receipt.Tool == "browser_session" &&
-			receipt.Action == "close" {
-			return true
-		}
-	}
-	return false
+	return exec != nil && result != nil && !result.IsError && result.Err == nil &&
+		!result.Control.Async && result.Control.Suspension == nil && !result.Control.TaskSuspended &&
+		exec.objectiveRepairToolKind == taskresult.ObjectiveKindResourceDisposition &&
+		verifiedInvocation
 }
 
 func (runner *toolLoopRunner) stopForDelegatedTaskSuspension(
@@ -2172,19 +2165,19 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 
 func (runner *toolLoopRunner) completeResourceDispositionBatch() (ToolLoopOutcome, bool) {
 	exec := runner.exec
-	if exec == nil || !exec.resourceDispositionCloseVerified ||
+	if exec == nil || !exec.resourceDispositionVerified ||
 		exec.objectiveRepairToolKind != taskresult.ObjectiveKindResourceDisposition {
 		return ToolLoopOutcome{}, false
 	}
-	exec.resourceDispositionCloseVerified = false
+	exec.resourceDispositionVerified = false
 	_, required, err := runner.ts.agent.Tools.TurnFinalizationRequirement(
 		toolExecutionContextForTurn(runner.turnCtx, runner.ts),
 	)
 	if err != nil || required {
 		return ToolLoopOutcome{
 			Control: turnStepFinalize,
-			FinalContent: "Browser session disposition could not be verified for every live session. " +
-				"Runtime cleanup will close any remaining session.",
+			FinalContent: "Resource disposition could not be verified for every live resource. " +
+				"Runtime cleanup will attempt to release any remaining automation-owned resources.",
 			TerminalMode: terminalRenderExact,
 		}, true
 	}
@@ -2195,8 +2188,10 @@ func (runner *toolLoopRunner) completeResourceDispositionBatch() (ToolLoopOutcom
 	exec.objectiveRepairToolKind = ""
 	instruction := providers.Message{
 		Role: "user",
-		Content: "Every browser session owned by this turn reached a verified terminal state. Return the one " +
-			"truthful final result now. Do not call tools or claim that a session remains open.",
+		Content: "Every resource owned by this turn reached its verified disposition. Return the one truthful " +
+			"final result now. Do not call tools. Describe release, closure, or retention only as supported by " +
+			"the lifecycle receipts; releasing automation does not prove that a user's application was closed " +
+			"or remains open.",
 	}
 	runner.messages = append(runner.messages, instruction)
 	exec.objectiveRepairMessages = append(exec.objectiveRepairMessages, instruction)

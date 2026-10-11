@@ -211,8 +211,8 @@ func (tool *BrowserSessionTool) TurnFinalizationRequirement(
 	return TurnFinalizationRequirement{
 		RecoveryKind: taskresult.ObjectiveKindResourceDisposition,
 		Instruction: fmt.Sprintf(
-			"%d browser session(s) owned by this turn are still live. Before returning a final answer, use only "+
-				"browser_session to choose an explicit disposition for every live session: close it, or hand one "+
+			"%d browser session(s) owned by this turn are still live. Before returning a final answer, use "+
+				"browser_session to choose an explicit disposition for every live browser session: close it, or hand one "+
 				"session to the user when manual authentication or another human browser step is required. Use the "+
 				"existing sessions from the transcript and one tool call per session. Do not open a replacement session, "+
 				"perform unrelated actions, claim that a session will remain open, or expose a raw identifier in "+
@@ -221,6 +221,37 @@ func (tool *BrowserSessionTool) TurnFinalizationRequirement(
 			liveCount,
 		),
 	}, true, nil
+}
+
+func (tool *BrowserSessionTool) VerifyResourceDisposition(
+	ctx context.Context,
+	args map[string]any,
+	result *toolshared.ToolResult,
+) bool {
+	if args["operation"] != "close" || len(args) != 2 || result == nil || result.Deliverable == nil {
+		return false
+	}
+	if _, err := browserOwnerFromContext(ctx); err != nil {
+		return false
+	}
+	sessionID, ok := args["browser_session_id"].(string)
+	if !ok || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	// Execute creates this receipt only after the owner-bound close returns a
+	// typed terminal session. Rebind that evidence to this exact call without
+	// probing a worker or changing the already-closed resource.
+	for _, receipt := range result.Deliverable.LifecycleReceipts {
+		expected, err := browserCleanupReceipt(browser.Session{
+			ID: sessionID, State: browser.SessionState(receipt.Metadata["state"]),
+			Target: receipt.Metadata["target"], Profile: receipt.Metadata["profile"],
+		})
+		if err == nil && receipt.ID == expected.ID && receipt.Kind == expected.Kind &&
+			receipt.Tool == tool.Name() && receipt.Action == expected.Action && receipt.Target == expected.Target {
+			return true
+		}
+	}
+	return false
 }
 
 func browserCleanupReceipt(session browser.Session) (taskresult.Receipt, error) {
