@@ -35,6 +35,13 @@ the downloaded `Packages.xz` matches that signed release's SHA-256, and the pack
 The extracted utilities match the installed target bytes exactly. This establishes origin, not functional acceptance;
 the qualification command and unchanged visual oracle remain mandatory before merging a manifest refresh.
 
+Qualification also exercises form appearance generation with host PDF configuration disabled. When an AcroForm has
+no form-font resource dictionary, the writer prepares only its selected widgets using the existing complete-font
+policy before filling. ASCII uses the PDF core Helvetica font, retaining the default appearance's size and color;
+Unicode still requires admitted glyph support. Existing form-font resources are not replaced by this fallback.
+This avoids pdfcpu's implicit external Roboto lookup without loading host configuration, changing source fixtures,
+or removing visual verification.
+
 ## Diagnostics
 
 `mintclaw document capabilities --json` reports the expected and observed
