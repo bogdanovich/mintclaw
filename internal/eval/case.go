@@ -28,19 +28,20 @@ var (
 )
 
 type Case struct {
-	Version     int         `json:"version"`
-	ID          string      `json:"id"`
-	Suite       string      `json:"suite"`
-	Tags        []string    `json:"tags"`
-	Description string      `json:"description"`
-	Task        string      `json:"task"`
-	Requires    []string    `json:"requires"`
-	Fixtures    []Fixture   `json:"fixtures"`
-	Driver      Driver      `json:"driver"`
-	Limits      Limits      `json:"limits"`
-	Checks      []Check     `json:"checks"`
-	Rubric      []Criterion `json:"rubric"`
-	PDF         *PDFCase    `json:"pdf,omitempty"`
+	Version     int          `json:"version"`
+	ID          string       `json:"id"`
+	Suite       string       `json:"suite"`
+	Tags        []string     `json:"tags"`
+	Description string       `json:"description"`
+	Task        string       `json:"task"`
+	Requires    []string     `json:"requires"`
+	Fixtures    []Fixture    `json:"fixtures"`
+	Driver      Driver       `json:"driver"`
+	Limits      Limits       `json:"limits"`
+	Checks      []Check      `json:"checks"`
+	Rubric      []Criterion  `json:"rubric"`
+	PDF         *PDFCase     `json:"pdf,omitempty"`
+	Browser     *BrowserCase `json:"browser,omitempty"`
 }
 
 type Fixture struct {
@@ -116,6 +117,9 @@ func (c Case) Validate() error {
 		len(c.Checks) == 0 || len(c.Checks) > 32 || len(c.Rubric) > 16 {
 		return ErrInvalidCase
 	}
+	if (c.Suite == "browser" || slices.Contains(c.Requires, "browser")) && c.Browser == nil {
+		return ErrInvalidCase
+	}
 	fixtureIDs := make(map[string]bool)
 	for _, fixture := range c.Fixtures {
 		if !validID(fixture.ID) || fixtureIDs[fixture.ID] || !safeRelativePath(fixture.Path) ||
@@ -154,8 +158,21 @@ func (c Case) Validate() error {
 			if check.Expected != "" {
 				return ErrInvalidCase
 			}
-		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write", "private_surfaces":
+		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write":
 			if c.PDF == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
+		case "browser_state",
+			"browser_authority",
+			"browser_context",
+			"browser_artifact",
+			"browser_no_write",
+			"browser_cleanup":
+			if c.Browser == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
+		case "private_surfaces":
+			if c.PDF == nil && c.Browser == nil || check.Expected != "" {
 				return ErrInvalidCase
 			}
 		default:
@@ -171,6 +188,9 @@ func (c Case) Validate() error {
 		criterionIDs[criterion.ID] = true
 	}
 	if c.PDF != nil && c.PDF.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if c.Browser != nil && c.Browser.validate(c) != nil {
 		return ErrInvalidCase
 	}
 	return nil

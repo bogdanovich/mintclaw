@@ -28,6 +28,12 @@ browser integration, owned provisioning and baseline comparison remain later pac
 scenario qualification.
 The two general cases now require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
+The initial corpus has 14 cases: two general, six PDF and six browser. Browser contracts can be listed and
+validated offline, but live integration is still unavailable: `run` retains explicit non-passing
+`browser_evidence_unavailable` coverage without sending their tasks. Their [fixture/corpus guide](../docs/operations/manual-agent-evals-browser.md)
+defines independent expectations and unresolved authority/privacy/cleanup admission. Corpus presence or a valid
+manifest is not domain qualification.
+
 Preset paths resolve relative to the preset file, not the shell's working directory. The included preset is a
 template, not a configured or safe running gateway. Runtime preflight must separately verify actual policy,
 route/workspace, capability, and isolation. Do not point it at a production profile as a substitute for setup.

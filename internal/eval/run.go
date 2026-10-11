@@ -94,6 +94,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		item := cases[ordinal/options.Repeat]
 		trial := newUnattemptedTrial(item, preset.ExpectedAgent)
 		switch {
+		case item.Case.Browser != nil:
+			trial.Verdict, trial.Code = Skipped, "browser_evidence_unavailable"
 		case !containsAll(preset.Capabilities, item.Case.Requires):
 			trial.Verdict, trial.Code = Skipped, "capability_unavailable"
 		case item.Case.Driver.Mode == "llm_user" && roles.user == nil:
