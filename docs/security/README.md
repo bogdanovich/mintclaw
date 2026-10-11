@@ -7,4 +7,6 @@ Security-focused docs covering configuration, secrets handling, and provider aut
 - [Credential Encryption](credential_encryption.md): encrypting stored API keys and credentials.
 - [Credential Broker Setup](credential-broker-setup.md): protected Linux provisioning for the isolated 1Password broker;
   runtime access remains disabled until the credential roadmap's rollout gates pass.
+- [Credential Host on an Existing Mac](credential-mac-vm-host-plan.md): proposed
+  protected Linux VM, operator-only administration, setup evidence, and rollback.
 - [Antigravity Authentication & Integration Guide](ANTIGRAVITY_AUTH.md): auth flow and integration notes for the Antigravity provider.

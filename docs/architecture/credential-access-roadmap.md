@@ -61,6 +61,14 @@ to agent shell, file, debugging, and process-control capabilities. Merely
 moving retrieval into a tool in the same unrestricted process is insufficient.
 The gateway routes authenticated, typed requests; it receives no raw secrets.
 
+The operator has proposed reusing `ab@ab-ts`. The
+[Mac-host plan](../security/credential-mac-vm-host-plan.md) records a candidate
+protected Linux VM under a separate macOS service identity, including both
+broker and private browser. Host identity, complete agent administration
+reach, VM launcher, protected console, and actual isolation remain unqualified.
+No host/account/access change or real-token provisioning is authorized by
+this planning choice alone.
+
 The first credential browser runs locally on an explicitly trusted gateway
 host or companion host, under that isolation boundary. Disable credential
 login for cloud browser providers, attached user profiles, generic JavaScript,
