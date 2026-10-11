@@ -144,6 +144,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Fixed Root Credential Browser Launcher](credential-browser-root-launcher.md):
   immutable runtime, private namespaces, fixed role drop and pre-Node descriptor
   cleanup, verified forest retirement, and pending broker integration.
+- [Supervised Credential Browser Consumer](credential-supervised-consumer.md): owned Root allocation,
+  actual approval lease, enforcing proxy and private channel composition.
 - [Private Browser Resource Service](credential-browser-resource-service.md): fixed authenticated Root/broker
   allocation transport, pinned process lifetimes, endpoint ownership and verified retirement.
 - [Private Credential Browser Channel](credential-browser-private-channel.md):
