@@ -274,15 +274,18 @@ func TestNativeQualification(t *testing.T) {
 			})
 		})
 		t.Run("UnicodeReplacement", func(t *testing.T) {
+			// Distinct from insertion and initial fixture values: a queued snapshot
+			// cannot qualify a replacement that returns success without an effect.
+			const replacement = "Обновлено MintClaw 世界 naïve 🌿"
 			field, _ := tokens(t)
 			if _, replaceErr := writer.call(ctx, "set_value", map[string]any{
 				"pid": ready.PID, "window_id": ready.Windows[0], "element_token": field,
-				"value": sample, "delivery_mode": "background",
+				"value": replacement, "delivery_mode": "background",
 			}); replaceErr != nil {
 				t.Fatal("fixture Unicode replacement:", replaceErr)
 			}
 			waitEvent(t, func(e fixtureEvent) bool {
-				return len(e.Values) == 2 && e.Values[0] == sample && e.Values[1] == "GUARD_UNCHANGED"
+				return len(e.Values) == 2 && e.Values[0] == replacement && e.Values[1] == "GUARD_UNCHANGED"
 			})
 		})
 		t.Run("ButtonClick", func(t *testing.T) {
