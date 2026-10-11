@@ -687,7 +687,7 @@ func (c *inboundTurnCoordinator) runInteractionWorker(
 	}
 	defer releaseCapacity()
 	ctx = admittedCtx
-	defer claim.releaseIfOwned()
+	defer c.finishWorkerClaim(ctx, msg, target, claim)
 	defer c.recoverWorkerPanic(claim.scope.sessionKey, msg)
 	if c.al.channelManager != nil {
 		defer c.al.channelManager.InvokeTypingStop(msg.Context.Channel, msg.Context.ChatID)

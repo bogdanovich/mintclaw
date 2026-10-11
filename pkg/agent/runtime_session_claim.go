@@ -6,6 +6,7 @@ type runtimeSessionClaim struct {
 	runtime     *turnRuntime
 	scope       runtimeSessionScope
 	routeScope  runtimeRouteScope
+	routeTarget *inboundDispatchTarget
 	placeholder *turnState
 }
 
@@ -13,24 +14,36 @@ func (r *turnRuntime) claimRuntimeRouteSession(
 	target *inboundDispatchTarget,
 	turnID string,
 ) (*runtimeSessionClaim, *inboundDispatchTarget, bool) {
+	r.routeAdmissionMu.Lock()
+	defer r.routeAdmissionMu.Unlock()
+	return r.claimRuntimeRouteSessionLocked(target, turnID)
+}
+
+func (r *turnRuntime) claimRuntimeRouteSessionLocked(
+	target *inboundDispatchTarget,
+	turnID string,
+) (*runtimeSessionClaim, *inboundDispatchTarget, bool) {
 	routeScope := target.runtimeRouteScope()
 	if routeScope.workspace == "" || routeScope.claimKey == "" {
 		return nil, target, false
 	}
-	if existing, loaded := r.activeRouteSessions.LoadOrStore(routeScope, target); loaded {
-		activeTarget, ok := existing.(*inboundDispatchTarget)
-		if !ok {
+	if existing, loaded := r.activeRouteSessions.Load(routeScope); loaded {
+		owner, ok := existing.(*runtimeSessionClaim)
+		if !ok || owner.routeTarget == nil {
 			r.activeRouteSessions.CompareAndDelete(routeScope, existing)
 			return nil, target, false
 		}
-		return nil, activeTarget, false
+		return nil, owner.routeTarget, false
 	}
 	claim, claimed := r.claimRuntimeSession(target.runtimeSessionScope(), turnID)
 	if !claimed {
-		r.activeRouteSessions.CompareAndDelete(routeScope, target)
 		return nil, target, false
 	}
 	claim.routeScope = routeScope
+	claim.routeTarget = target
+	// Publish the fully initialized claim, retaining the original pinned target
+	// while giving every owner a distinct retirement identity.
+	r.activeRouteSessions.Store(routeScope, claim)
 	return claim, target, true
 }
 
@@ -58,14 +71,15 @@ func (claim *runtimeSessionClaim) releaseIfOwned() {
 	if claim == nil || claim.placeholder == nil || claim.runtime == nil {
 		return
 	}
+	claim.runtime.routeAdmissionMu.Lock()
+	defer claim.runtime.routeAdmissionMu.Unlock()
+	claim.releaseIfOwnedLocked()
+}
+
+func (claim *runtimeSessionClaim) releaseIfOwnedLocked() {
 	claim.releaseSessionIfOwned()
-	if claim.routeScope.claimKey != "" {
-		if target, ok := claim.runtime.activeRouteSessions.Load(claim.routeScope); ok {
-			activeTarget, targetOK := target.(*inboundDispatchTarget)
-			if targetOK && activeTarget.runtimeSessionScope() == claim.scope {
-				claim.runtime.activeRouteSessions.CompareAndDelete(claim.routeScope, target)
-			}
-		}
+	if claim.routeTarget != nil {
+		claim.runtime.activeRouteSessions.CompareAndDelete(claim.routeScope, claim)
 	}
 }
 

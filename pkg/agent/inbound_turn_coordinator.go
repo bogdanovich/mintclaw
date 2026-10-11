@@ -11,6 +11,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/commands"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
@@ -183,19 +184,7 @@ func (c *inboundTurnCoordinator) enqueueDeferredInteractionInbound(
 	if err != nil {
 		return err
 	}
-	return c.al.enqueueSteeringMessageWithSender(
-		target.runtimeSessionScope(),
-		target.Agent.ID,
-		msg.Context.SenderID,
-		providers.Message{
-			Role:                    "user",
-			Content:                 msg.Content,
-			CreatedAt:               inboundReceivedAt(msg),
-			Media:                   append([]string(nil), msg.Media...),
-			InboundSpoolID:          msg.SpoolID,
-			DocumentIntakeReference: msg.Context.DocumentIntake.Reference,
-		},
-	)
+	return c.admitPreparedInbound(ctx, msg, target)
 }
 
 func (c *inboundTurnCoordinator) claimSession(
@@ -229,8 +218,41 @@ func (c *inboundTurnCoordinator) handleBusySession(
 		al.turns.inbound.release(ctx, msg, err)
 		return
 	}
-	if err := al.enqueueSteeringMessageWithSender(
-		scope,
+	if err := c.admitPreparedInbound(ctx, msg, target); err != nil {
+		logger.WarnCF("agent", "Failed to enqueue steering message",
+			map[string]any{
+				"error":       err.Error(),
+				"channel":     msg.Context.Channel,
+				"chat_id":     msg.Context.ChatID,
+				"session_key": scope.sessionKey,
+			})
+		al.turns.inbound.release(ctx, msg, err)
+	}
+}
+
+// Preparation can outlive either ordinary or interaction worker retirement.
+// Recheck the interaction gate and claim-or-queue under the same lock used by
+// retirement; a fresh worker must start only after unlocking.
+func (c *inboundTurnCoordinator) admitPreparedInbound(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+) error {
+	al := c.al
+	al.turns.routeAdmissionMu.Lock()
+	if !al.hasNonterminalInteraction(target.Agent.Workspace, target.SessionKey) {
+		claim, activeTarget, claimed := al.turns.claimRuntimeRouteSessionLocked(
+			targetWithInboundRelationRoot(target, msg),
+			makePendingTurnID(target.SessionKey, al.turns.nextSequence()),
+		)
+		if claimed {
+			al.turns.routeAdmissionMu.Unlock()
+			c.startWorker(ctx, msg, activeTarget, claim)
+			return nil
+		}
+	}
+	err := al.enqueueSteeringMessageWithSender(
+		target.runtimeSessionScope(),
 		target.Agent.ID,
 		msg.Context.SenderID,
 		providers.Message{
@@ -241,16 +263,9 @@ func (c *inboundTurnCoordinator) handleBusySession(
 			InboundSpoolID:          msg.SpoolID,
 			DocumentIntakeReference: msg.Context.DocumentIntake.Reference,
 		},
-	); err != nil {
-		logger.WarnCF("agent", "Failed to enqueue steering message",
-			map[string]any{
-				"error":       err.Error(),
-				"channel":     msg.Context.Channel,
-				"chat_id":     msg.Context.ChatID,
-				"session_key": scope.sessionKey,
-			})
-		al.turns.inbound.release(ctx, msg, err)
-	}
+	)
+	al.turns.routeAdmissionMu.Unlock()
+	return err
 }
 
 func inboundReceivedAt(msg bus.InboundMessage) *time.Time {
@@ -325,7 +340,7 @@ func (c *inboundTurnCoordinator) runWorker(
 		target = &refreshed
 	}
 
-	defer claim.releaseIfOwned()
+	defer c.finishWorkerClaim(ctx, msg, target, claim)
 	defer c.recoverWorkerPanic(claim.scope.sessionKey, msg)
 
 	if al.channelManager != nil {
@@ -344,6 +359,43 @@ func (c *inboundTurnCoordinator) runWorker(
 	}
 	admission := al.runInboundTurnWithSteering(ctx, turn)
 	_ = al.settleInboundAdmission(ctx, msg, admission)
+}
+
+// finishWorkerClaim closes the last-drain/route-release gap. Queue admission
+// either precedes this empty check and is drained by this owner, or observes
+// the retired route and acquires a new claim. No follow-up needs another
+// inbound message to wake it, and no old claim can retire a replacement.
+func (c *inboundTurnCoordinator) finishWorkerClaim(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+	claim *runtimeSessionClaim,
+) {
+	al := c.al
+	for {
+		al.turns.routeAdmissionMu.Lock()
+		owner, owned := al.turns.activeRouteSessions.Load(claim.routeScope)
+		if !owned || owner != claim ||
+			al.hasNonterminalInteraction(claim.scope.workspace, claim.scope.sessionKey) ||
+			al.pendingSteeringCountForScope(claim.scope) == 0 {
+			claim.releaseIfOwnedLocked()
+			al.turns.routeAdmissionMu.Unlock()
+			return
+		}
+		claim.releaseSessionIfOwned()
+		al.turns.routeAdmissionMu.Unlock()
+		if err := al.drainDeferredInteractionIngress(ctx, target.Agent.Workspace, interactions.Route{
+			AgentID: target.Agent.ID, SessionKey: target.SessionKey,
+			Channel: msg.Context.Channel, ChatID: msg.Context.ChatID,
+		}, msg.Context); err != nil {
+			claim.releaseIfOwned()
+			logger.WarnCF("agent", "Failed to drain input admitted during worker retirement", map[string]any{
+				"session_key": target.SessionKey,
+				"error":       err.Error(),
+			})
+			return
+		}
+	}
 }
 
 func (c *inboundTurnCoordinator) acquireTurnCapacity(
