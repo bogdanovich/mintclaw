@@ -19,11 +19,13 @@ not resolve from either the workspace or the gateway.
 A later gateway probe reached the online Mac at its current Tailnet DNS name
 (`ab-2`) as `ab`, UID 501, with admin-group membership. That machine reported
 the same architecture, OS version and memory, and the tested noninteractive
-sudo command also required a password. This confirms that the gateway can use
-the Mac's normal account. It does not establish every administration path,
-qualify a separate service identity, or prove the unresolved alias names that
-same machine. Passwordless sudo denial alone does not prove that all agent
-administration paths are absent. These probes changed no host configuration.
+sudo command also required a password. Comparing platform-identity hashes
+subsequently confirmed that this reachable machine is the workspace Mac;
+the hardware identifier itself was not printed. The gateway can use its
+normal account. The original alias remains unresolved. Complete administration
+reach and a separate service identity remain unqualified: passwordless sudo
+denial alone does not establish that all agent administration paths are absent.
+These probes changed no host configuration.
 
 The existing VPN VPS is currently unsuitable because MintClaw has admin
 access. Reusing it would require a separate reviewed migration that removes
