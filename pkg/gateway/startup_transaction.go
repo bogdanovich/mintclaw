@@ -80,9 +80,8 @@ func (tx *gatewayStartupTransaction) ownMessageBus(msgBus *bus.MessageBus) {
 }
 
 func (tx *gatewayStartupTransaction) ownAgent(agentLoop *agent.AgentLoop) {
-	tx.add("agent", func(context.Context) error {
-		agentLoop.Close()
-		return nil
+	tx.add("agent", func(cleanupCtx context.Context) error {
+		return agentLoop.CloseContext(cleanupCtx)
 	})
 }
 
