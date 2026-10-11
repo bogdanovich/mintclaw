@@ -841,12 +841,13 @@ func (e stringError) Error() string {
 }
 
 type asyncFollowUpTool struct {
-	name          string
-	followUpText  string
-	forUserText   string
-	completionSig chan struct{}
-	deliveryMode  toolshared.AsyncDeliveryMode
-	taskID        string
+	name             string
+	followUpText     string
+	forUserText      string
+	completionSig    chan struct{}
+	deliveryMode     toolshared.AsyncDeliveryMode
+	taskID           string
+	taskGenerationID string
 }
 
 func (t *asyncFollowUpTool) Name() string {
@@ -880,7 +881,7 @@ func (t *asyncFollowUpTool) ExecuteAsync(
 			res.WithAsyncDelivery(t.deliveryMode)
 		}
 		if t.taskID != "" {
-			res.WithTaskID(t.taskID)
+			res.WithTaskIdentity(t.taskID, t.taskGenerationID)
 		}
 		cb(ctx, res)
 		if t.completionSig != nil {
@@ -1128,13 +1129,24 @@ func TestAgentLoop_EmitsAsyncCompletionEvent(t *testing.T) {
 
 	msgBus := bus.NewMessageBus()
 	al := NewAgentLoop(cfg, msgBus, provider)
+	taskRegistry := al.taskRegistryForWorkspace(tmpDir)
+	if err := taskRegistry.Create(taskregistry.Record{
+		TaskID: "subagent-42", Runtime: taskregistry.RuntimeSubagent, Status: taskregistry.StatusRunning,
+	}); err != nil {
+		t.Fatalf("create async task: %v", err)
+	}
+	taskRecord, found := taskRegistry.Get("subagent-42")
+	if !found || taskRecord.GenerationID == "" {
+		t.Fatalf("async task record = %#v, found=%v", taskRecord, found)
+	}
 	doneCh := make(chan struct{})
 	al.RegisterTool(&asyncFollowUpTool{
-		name:          "async_completion_event",
-		followUpText:  "background result",
-		completionSig: doneCh,
-		deliveryMode:  toolshared.AsyncDeliveryUserOnly,
-		taskID:        "subagent-42",
+		name:             "async_completion_event",
+		followUpText:     "background result",
+		completionSig:    doneCh,
+		deliveryMode:     toolshared.AsyncDeliveryUserOnly,
+		taskID:           "subagent-42",
+		taskGenerationID: taskRecord.GenerationID,
 	})
 	defaultAgent := al.registry.GetDefaultAgent()
 	if defaultAgent == nil {
@@ -1199,6 +1211,9 @@ func TestAgentLoop_EmitsAsyncCompletionEvent(t *testing.T) {
 	}
 	if payload.TaskID != "subagent-42" {
 		t.Fatalf("TaskID = %q, want subagent-42", payload.TaskID)
+	}
+	if payload.TaskGenerationID != taskRecord.GenerationID {
+		t.Fatalf("TaskGenerationID = %q, want %q", payload.TaskGenerationID, taskRecord.GenerationID)
 	}
 }
 

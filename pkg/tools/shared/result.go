@@ -103,6 +103,11 @@ type ToolControl struct {
 	// TaskID links an asynchronous completion to its durable task record.
 	TaskID string `json:"task_id,omitempty"`
 
+	// TaskGenerationID identifies the exact durable task generation. Task IDs
+	// can be reused after a terminal generation, so asynchronous completion
+	// correlation must never infer this value from the task ID alone.
+	TaskGenerationID string `json:"task_generation_id,omitempty"`
+
 	// TaskSuspended prevents a caller from publishing completion while durable
 	// continuation ownership remains with a descendant task.
 	TaskSuspended bool `json:"-"`
@@ -661,6 +666,14 @@ func (tr *ToolResult) WithAsyncDelivery(mode AsyncDeliveryMode) *ToolResult {
 // WithTaskID links this result to a durable task registry record.
 func (tr *ToolResult) WithTaskID(taskID string) *ToolResult {
 	tr.Control.TaskID = strings.TrimSpace(taskID)
+	tr.Control.TaskGenerationID = ""
+	return tr
+}
+
+// WithTaskIdentity links this result to one exact durable task generation.
+func (tr *ToolResult) WithTaskIdentity(taskID, generationID string) *ToolResult {
+	tr.Control.TaskID = strings.TrimSpace(taskID)
+	tr.Control.TaskGenerationID = strings.TrimSpace(generationID)
 	return tr
 }
 

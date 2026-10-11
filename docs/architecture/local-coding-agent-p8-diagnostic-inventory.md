@@ -3,8 +3,8 @@
 Roadmap packet:
 [H1a — Evidence inventory and correlation tests](local-coding-agent-p8-hardening.md#h1a--evidence-inventory-and-correlation-tests).
 
-Status: H1a baseline with the H1b terminal-truth, model-attempt, and tool-call
-generation slices implemented.
+Status: H1a baseline with the H1b terminal-truth, model-attempt, tool-call
+generation, and async task/delivery slices implemented.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -60,9 +60,10 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    loop-decision events retain that generation together with the provider call
    ID and originating model-attempt ID. Reuse of a provider call ID therefore
    cannot join records from separate attempts, and no argument text is needed.
-3. **Async task and delivery.** `AsyncCompletionPayload` already owns task and
-   completion IDs, and `ChannelOutboundPayload` already owns a delivery ID;
-   passive projection must retain their bounded correlation.
+3. **Async task and delivery (resolved).** `AsyncCompletionPayload` retains the
+   task ID, runtime-owned task generation, and completion ID, while
+   `ChannelOutboundPayload` retains the durable delivery ID. Passive delivery
+   decision, attempt, and outcome records now preserve those bounded joins.
 4. **Interactions.** Existing interaction runtime events carry interaction ID,
    revision, event, status, outcome, code, and success, but the turn projector
    currently ignores them. H1b needs bounded lifecycle records and joins, not a
@@ -214,7 +215,7 @@ claiming that the source-commit gap is resolved.
 | Tool/process lifecycle | Tool record, process owner | Tool call/result/skip/loop records | Call/generation join complete; keep PID/process details external |
 | Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Add attempt/status and bounded repository re-anchor identity |
 | Human interaction | Interaction registry/events | No interaction trace records today | Project bounded lifecycle and interaction/revision correlation |
-| Channel/async delivery | Task registry, outbox, channel receipt | Delivery decision/attempt/outcome | Retain task, completion, and delivery IDs safely |
+| Channel/async delivery | Task registry, outbox, channel receipt | Delivery decision/attempt/outcome | Task/generation, completion, and delivery joins complete |
 | Remote coding task | Task registry, worker ledger/thread | Parent async/delivery evidence | Add task/generation/worker/thread references and terminal uncertainty |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Retain invocation ID and safe policy/target aliases |
 | Repository/worktree | Git/filesystem, worktree owner | Context snapshot only | Add commit/worktree/snapshot digests and counts; no paths or diffs |

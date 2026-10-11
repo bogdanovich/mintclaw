@@ -1711,7 +1711,7 @@ func (runtime *remoteCodingRuntime) deliverTerminal(
 	result := (&toolshared.ToolResult{
 		ForLLM: record.Deliverable.Text, ForUser: record.Deliverable.Text,
 		Deliverable: taskresult.CloneDeliverable(record.Deliverable),
-	}).WithTaskID(record.TaskID).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
+	}).WithTaskIdentity(record.TaskID, record.GenerationID).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 	result.WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	agent, found := runtime.loop.GetRegistry().GetAgent(record.AgentID)
 	runner := runtime.loop.turns.currentRunner()

@@ -369,6 +369,11 @@ func TestSpawnTool_ExecuteAsync_MarksCallbackResultUserOnly(t *testing.T) {
 		if !strings.HasPrefix(cbResult.Control.TaskID, "subagent-") {
 			t.Fatalf("AsyncTaskID = %q, want subagent-*", cbResult.Control.TaskID)
 		}
+		record, found := manager.taskRegistry.Get(cbResult.Control.TaskID)
+		if !found || cbResult.Control.TaskGenerationID == "" ||
+			cbResult.Control.TaskGenerationID != record.GenerationID {
+			t.Fatalf("callback task identity = %#v, durable record = %#v", cbResult.Control, record)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for spawn callback result")
 	}

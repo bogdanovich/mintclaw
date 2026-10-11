@@ -415,6 +415,10 @@ func runtimeEventRecord(
 	critical := false
 	toolCallID := event.Correlation.ToolCallID
 	toolCallGeneration := event.Correlation.ToolCallGeneration
+	taskID := ""
+	taskGenerationID := ""
+	completionID := ""
+	deliveryID := ""
 	switch event.Kind {
 	case runtimeevents.KindAgentTurnStart:
 		value, ok := event.Payload.(TurnStartPayload)
@@ -728,6 +732,7 @@ func runtimeEventRecord(
 		if !ok {
 			return diagnostictrace.Record{}, false, false
 		}
+		deliveryID = strings.TrimSpace(value.DeliveryID)
 		kind = diagnostictrace.RecordDeliveryAttempt
 		status := "queued"
 		switch event.Kind {
@@ -751,6 +756,9 @@ func runtimeEventRecord(
 		if !ok {
 			return diagnostictrace.Record{}, false, false
 		}
+		taskID = strings.TrimSpace(value.TaskID)
+		taskGenerationID = strings.TrimSpace(value.TaskGenerationID)
+		completionID = strings.TrimSpace(value.CompletionID)
 		kind = diagnostictrace.RecordDeliveryDecision
 		payload = diagnostictrace.DeliveryPayload{
 			Mode:       value.DeliveryMode,
@@ -786,6 +794,7 @@ func runtimeEventRecord(
 			AgentID:     event.Scope.AgentID,
 			SessionHash: safeHash(settings, event.Scope.SessionKey),
 			TurnID:      firstNonEmptyString(event.Scope.TurnID, trace.turnID),
+			TaskID:      taskID,
 			Channel:     event.Scope.Channel,
 			TargetHash:  safeHash(settings, targetKey(event.Scope.Channel, event.Scope.ChatID)),
 		},
@@ -795,6 +804,9 @@ func runtimeEventRecord(
 			RequestID:          event.Correlation.RequestID,
 			ToolCallID:         toolCallID,
 			ToolCallGeneration: toolCallGeneration,
+			TaskGenerationID:   taskGenerationID,
+			CompletionID:       completionID,
+			DeliveryID:         deliveryID,
 			EventID:            event.ID,
 		},
 		Data: data,

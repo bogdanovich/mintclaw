@@ -86,6 +86,10 @@ jq -r '
     (.correlation.model_attempt_id // "-"),
     (.correlation.tool_call_id // "-"),
     (.correlation.tool_call_generation // "-"),
+    (.scope.task_id // "-"),
+    (.correlation.task_generation_id // "-"),
+    (.correlation.completion_id // "-"),
+    (.correlation.delivery_id // "-"),
     (.correlation.event_id // "-")
   ] | @tsv
 ' TRACE.json
@@ -114,22 +118,27 @@ Correlate:
   pair `correlation.tool_call_id` and
   `correlation.tool_call_generation`; the generation disambiguates a provider
   call ID reused by a later model attempt;
+- async delivery decisions with the authoritative task registry by
+  `scope.task_id` plus `correlation.task_generation_id`, and completion
+  deduplication by `correlation.completion_id`;
+- delivery attempts and outcomes by `correlation.delivery_id`; use their exact
+  turn trace scope to relate them to a retained async decision, then verify the
+  current outcome in the durable outbox rather than inferring it from timing;
 - steering injection or interrupt with the next model/tool decision;
-- delivery decision, attempt, and outcome by turn, sequence, target hash,
-  status, and event ID;
 - context compaction with the model behavior immediately before and after it;
 - turn start/end and the final outcome.
 
-Current runtime-produced turn traces do not populate `scope.task_id` or
-`correlation.completion_id`. Treat those identifiers as external log or durable
-task-registry evidence and cite that source explicitly; do not infer them from
-an empty trace field. Provider-controlled request IDs remain optional and
-separate from the runtime-generated model-attempt ID. Historical traces may
-lack `correlation.model_attempt_id` or
-`correlation.tool_call_generation`; for those traces, correlate model or tool
-records conservatively by turn and sequence and state the limitation. Older
-loop-decision records may also lack `correlation.tool_call_id`; use their tool
-and argument hash only as bounded supporting evidence, not as an exact join.
+Provider-controlled request IDs remain optional and separate from the
+runtime-generated model-attempt ID. Historical traces may lack
+`scope.task_id`, `correlation.task_generation_id`,
+`correlation.completion_id`, `correlation.delivery_id`,
+`correlation.model_attempt_id`, or `correlation.tool_call_generation`; for
+those traces, correlate records conservatively by turn and sequence and state
+the limitation. Older loop-decision records may also lack
+`correlation.tool_call_id`; use their tool and argument hash only as bounded
+supporting evidence, not as an exact join. An empty task generation on a new
+trace means the completion producer did not carry an exact durable generation;
+do not substitute the task ID alone when task reuse is possible.
 
 In rich mode, inspect only the relevant normalized preview fields in `.data`,
 including `input_preview`, `final_preview`, `messages_preview`,

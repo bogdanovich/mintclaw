@@ -108,7 +108,9 @@ type Correlation struct {
 	RequestID          string `json:"request_id,omitempty"`
 	ToolCallID         string `json:"tool_call_id,omitempty"`
 	ToolCallGeneration string `json:"tool_call_generation,omitempty"`
+	TaskGenerationID   string `json:"task_generation_id,omitempty"`
 	CompletionID       string `json:"completion_id,omitempty"`
+	DeliveryID         string `json:"delivery_id,omitempty"`
 	EventID            string `json:"event_id,omitempty"`
 }
 
