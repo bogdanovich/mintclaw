@@ -5,6 +5,7 @@ const path = require('node:path');
 const { chromium } = require('../playwright-library/node_modules/playwright');
 const { createSession } = require('./session.cjs');
 const { qualifySandbox } = require('./sandbox.cjs');
+const { privateArguments } = require('./launch-arguments.cjs');
 
 async function protectedExecutable(filename) {
   if (typeof filename !== 'string' || filename.length > 4096 || !path.isAbsolute(filename) ||
@@ -53,7 +54,8 @@ async function launch(config) {
   }
   try {
     if (!config || Object.getPrototypeOf(config) !== Object.prototype ||
-        Object.keys(config).sort().join(',') !== 'executablePath,proxyServer') throw new Error();
+        Object.keys(config).sort().join(',') !== 'executablePath,proxyPin,proxyServer') throw new Error();
+    const args = privateArguments(config.proxyPin);
     await protectedProcess();
     await protectedExecutable(config.executablePath);
     const proxy = new URL(config.proxyServer);
@@ -63,7 +65,7 @@ async function launch(config) {
     browser = await chromium.launch({ executablePath: config.executablePath, channel: 'chromium', chromiumSandbox: true, headless: true,
       timeout: 15000, env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', TZ: 'UTC' },
       proxy: { server: config.proxyServer, bypass: '<-loopback>' },
-      args: ['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] });
+      args });
     const witness = await browser.newContext({ acceptDownloads: false, serviceWorkers: 'block' });
     try {
       const page = await witness.newPage();

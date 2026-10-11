@@ -141,6 +141,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Credential Browser Process Forest](credential-browser-process-forest.md):
   private Root cgroup-v2 ownership, atomic worker attachment, whole-forest
   retirement evidence, quarantine, and remaining launch/isolation gates.
+- [Private Credential Browser Enforcing Proxy](credential-browser-enforcing-proxy.md):
+  private browser TLS termination and lease-bound preparation, injection,
+  submission and outcome HTTP admission.
 - [Private Credential HTTPS Transport](credential-https-transport.md): public
   DNS answer validation, pinned TLS connections, grant-driven socket retirement,
   fixed errors, and pending browser-proxy and deployed-host qualification.

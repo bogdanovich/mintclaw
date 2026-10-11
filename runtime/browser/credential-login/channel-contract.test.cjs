@@ -6,7 +6,7 @@ const { PassThrough, Duplex } = require('node:stream');
 const { startChannel } = require('./channel.cjs');
 const origin = 'https://login.example.org';
 function configuration() {
-  const fields = ['/synthetic/normal', 'http://127.0.0.1:18080', `${origin}/login`, origin,
+  const fields = ['/synthetic/normal', 'http://127.0.0.1:18080', Buffer.alloc(32).toString('base64'), `${origin}/login`, origin,
     'login', 'username', 'password', 'email', `${origin}/session`, `${origin}/home`, 'authenticated', '', ''];
   const parts = [Buffer.from([0, 0, 0xea, 0x60])];
   for (const value of fields) {

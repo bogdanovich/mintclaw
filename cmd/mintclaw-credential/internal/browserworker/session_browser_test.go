@@ -75,6 +75,47 @@ type syntheticSource struct {
 	before func(context.Context) error
 }
 
+// Only the private test helper permits this synthetic network boundary. The
+// public Connect function requires the actual enforcing proxy and signed lease.
+type syntheticNetwork struct {
+	lease     credentialbroker.GrantLease
+	done      chan struct{}
+	once      sync.Once
+	locked    atomic.Bool
+	submitted atomic.Bool
+	lockErr   error
+}
+
+func (network *syntheticNetwork) Match(ctx context.Context, request credentialbroker.Request) error {
+	return network.lease.Check(ctx, request)
+}
+
+func (network *syntheticNetwork) Endpoint(context.Context) (string, string, error) {
+	return "http://127.0.0.1:18080", base64.StdEncoding.EncodeToString(make([]byte, 32)), nil
+}
+
+func (network *syntheticNetwork) LockForInjection(context.Context) error {
+	if network.lockErr != nil {
+		return network.lockErr
+	}
+	if !network.locked.CompareAndSwap(false, true) {
+		return errUnavailable
+	}
+	return nil
+}
+
+func (network *syntheticNetwork) PermitSubmit(context.Context) error {
+	if !network.locked.Load() || !network.submitted.CompareAndSwap(false, true) {
+		return errUnavailable
+	}
+	return nil
+}
+func (network *syntheticNetwork) Done() <-chan struct{} { return network.done }
+func (network *syntheticNetwork) Close() error {
+	network.once.Do(func() { close(network.done) })
+	return nil
+}
+
 func (source *syntheticSource) UseLogin(
 	ctx context.Context,
 	binding vault.Binding,
@@ -205,7 +246,7 @@ func browserFixture(t *testing.T, mode string, lifetime time.Duration) (*Session
 	session, err := connect(
 		ctx,
 		connection,
-		Config{ExecutablePath: "/synthetic/" + mode, ProxyServer: "http://127.0.0.1:18080"},
+		Config{ExecutablePath: "/synthetic/" + mode},
 		syntheticLease{
 			lease,
 			flow,
@@ -218,6 +259,7 @@ func browserFixture(t *testing.T, mode string, lifetime time.Duration) (*Session
 			}
 			return nil
 		},
+		&syntheticNetwork{lease: lease, done: make(chan struct{})},
 		stop,
 	)
 	if err != nil {
@@ -254,6 +296,9 @@ func TestBrowserChannelLogin(t *testing.T) {
 			if provider.calls.Load() != expectedCalls {
 				t.Fatal("retrieval occurred outside admitted readiness")
 			}
+			if session.network.(*syntheticNetwork).submitted.Load() != (mode == "normal" || mode == "mfa") {
+				t.Fatal("network submission permission escaped the trusted effect gate")
+			}
 			projection, err := json.Marshal(session)
 			if err != nil {
 				t.Fatal("safe session projection unavailable")
@@ -271,6 +316,49 @@ func TestBrowserChannelLogin(t *testing.T) {
 				t.Fatal("private login was replayed")
 			}
 		})
+	}
+}
+
+func TestBrowserChannelLockFailurePreventsRetrieval(t *testing.T) {
+	session, _, _, stops, _ := browserFixture(t, "normal", time.Minute)
+	session.network.(*syntheticNetwork).lockErr = errUnavailable
+	provider := &syntheticSource{}
+	if session.login(context.Background(), provider) != intent.Denied || provider.calls.Load() != 0 {
+		t.Fatal("provider retrieval occurred without a sealed preparation network")
+	}
+	closing, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if session.Close(closing) != nil || stops.Load() != 1 {
+		t.Fatal("failed injection lock retained an unverified worker")
+	}
+}
+
+func TestBrowserChannelNetworkRetiresBlockedRetrieval(t *testing.T) {
+	session, _, _, stops, _ := browserFixture(t, "normal", time.Minute)
+	started := make(chan struct{})
+	provider := &syntheticSource{
+		before: func(ctx context.Context) error { close(started); <-ctx.Done(); return errUnavailable },
+	}
+	result := make(chan intent.Code, 1)
+	go func() { result <- session.login(context.Background(), provider) }()
+	select {
+	case <-started:
+	case <-time.After(15 * time.Second):
+		t.Fatal("retrieval did not start")
+	}
+	_ = session.network.Close()
+	select {
+	case code := <-result:
+		if code != intent.OutcomeUnknown {
+			t.Fatal("retired network retained login authority")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("network failure did not cancel provider retrieval")
+	}
+	closing, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if session.Close(closing) != nil || stops.Load() != 1 {
+		t.Fatal("network failure retained an unverified worker")
 	}
 }
 
