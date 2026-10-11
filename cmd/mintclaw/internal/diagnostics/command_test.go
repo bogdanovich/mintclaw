@@ -93,6 +93,10 @@ func TestDiagnosticsListShowAndCorrelateStayMetadataOnlyAndReadOnly(t *testing.T
 			t.Fatalf("safe evidence lacks %q\nshow=%s\ncorrelate=%s", expected, show, correlate)
 		}
 	}
+	if !strings.Contains(correlate, `"availability": "unavailable_by_design"`) ||
+		!strings.Contains(correlate, `"mode": "trace_only"`) {
+		t.Fatalf("explicit-root correlation did not report trace-only owner state: %s", correlate)
+	}
 	if strings.Contains(list, "call-safe") {
 		t.Fatalf("list unexpectedly included record content: %s", list)
 	}
@@ -107,6 +111,14 @@ func TestDiagnosticsListShowAndCorrelateStayMetadataOnlyAndReadOnly(t *testing.T
 		if strings.Contains(string(bundledTrace), forbidden) {
 			t.Fatalf("support bundle leaked %q: %s", forbidden, bundledTrace)
 		}
+	}
+	ownersData, err := os.ReadFile(filepath.Join(bundleOutput, "owners.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(bundle owners): %v", err)
+	}
+	if !strings.Contains(string(ownersData), `"availability": "unavailable_by_design"`) ||
+		strings.Contains(string(ownersData), root) {
+		t.Fatalf("bundle owner availability = %s", ownersData)
 	}
 
 	after, err := os.ReadFile(path)

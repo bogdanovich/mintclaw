@@ -1214,6 +1214,18 @@ func TestStreamingAndNonStreamingTurnsConvergeWithoutDuplicateFinalContent(t *te
 	streamedMessages := streamed.Messages()
 	streamedItems := streamed.Items
 	nonStreamedItems := nonStreamed.Items
+	if streamed.PresentationRevision <= nonStreamed.PresentationRevision {
+		t.Fatalf(
+			"streaming revision = %d, want greater than non-streaming revision %d",
+			streamed.PresentationRevision,
+			nonStreamed.PresentationRevision,
+		)
+	}
+	// A revision records projection mutations rather than semantic content.
+	// Streaming therefore advances it more often even when both paths converge
+	// to the same final presentation.
+	streamed.PresentationRevision = 0
+	nonStreamed.PresentationRevision = 0
 	streamed.Items = nil
 	nonStreamed.Items = nil
 	if !reflect.DeepEqual(streamed, nonStreamed) {
