@@ -92,6 +92,23 @@ type GatewayInvocationStoreReport struct {
 	RetentionSeconds int64 `json:"retention_seconds"`
 }
 
+// GatewayInvocationInspection is a content-free, exact-ID diagnostic view of
+// one durable gateway invocation. It intentionally omits principals, plans,
+// command descriptors, arguments, hashes, and other execution authority.
+type GatewayInvocationInspection struct {
+	InvocationID          string                 `json:"invocation_id"`
+	Target                string                 `json:"target"`
+	ToolCallID            string                 `json:"tool_call_id"`
+	State                 GatewayInvocationState `json:"state"`
+	CreatedAt             int64                  `json:"created_at"`
+	UpdatedAt             int64                  `json:"updated_at"`
+	DispatchedAt          int64                  `json:"dispatched_at,omitempty"`
+	PlanExpiresAt         int64                  `json:"plan_expires_at"`
+	HasExecutionScope     bool                   `json:"has_execution_scope"`
+	CancellationRequested bool                   `json:"cancellation_requested"`
+	CancellationAt        int64                  `json:"cancellation_at,omitempty"`
+}
+
 // GatewayInvocationStore persists prepared plan ownership in SQLite.
 type GatewayInvocationStore struct {
 	backend *gatewayInvocationSQLiteStore

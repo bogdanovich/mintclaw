@@ -556,8 +556,8 @@ coding canary is intended to use a deployed profile's authenticated provider.
 | Remote coding task | Task registry, worker ledger/thread | Parent tool result plus bounded terminal completion/delivery continuation | Task/generation/worker/thread, safe scope/profile, terminal uncertainty, completion, and delivery joins implemented; production qualification pending |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Invocation ID and safe policy/target aliases implemented and production-qualified |
 | Repository/worktree | Git/filesystem, worktree owner | Bounded repository context snapshot | Commit/snapshot projection, privacy-safe project hash, and trace-store corrections are production-qualified without paths or diffs |
-| TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c exports bounded current-view/version facts, not cell history |
-| Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c bounded query/export summarizes disabled/drop/expiry/corruption truth and awaits production qualification |
+| TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c persists a common-controller, content-free presentation revision/count checkpoint; missing checkpoints remain explicitly unavailable and cell history is never copied |
+| Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c bounded query/export summarizes disabled/drop/expiry/corruption truth plus exact authoritative-owner state and awaits production qualification |
 
 ## H1a exit assessment
 

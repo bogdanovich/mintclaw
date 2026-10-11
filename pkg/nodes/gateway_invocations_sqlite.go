@@ -623,6 +623,66 @@ coalesce(min(updated_at), 0) FROM gateway_invocations`).Scan(
 	return report, nil
 }
 
+// InspectGatewayInvocation validates and reads one exact invocation from an
+// existing database without running retention or any other mutation. The
+// returned projection contains correlation and lifecycle metadata only.
+func InspectGatewayInvocation(
+	path string,
+	invocationID string,
+) (GatewayInvocationInspection, bool, error) {
+	invocationID = strings.TrimSpace(invocationID)
+	if !validInvocationIdentifier(invocationID) {
+		return GatewayInvocationInspection{}, false, fmt.Errorf(
+			"inspect gateway node invocation: %w",
+			ErrInvalidInvocation,
+		)
+	}
+	store, err := openGatewayInvocationSQLiteReadOnly(path)
+	if err != nil {
+		return GatewayInvocationInspection{}, false, err
+	}
+	defer func() {
+		_ = store.db.Close()
+		_ = store.identity.Close()
+	}()
+	ctx := context.Background()
+	if err = store.verifySchema(ctx); err != nil {
+		return GatewayInvocationInspection{}, false, err
+	}
+	if err = store.verifyIntegrity(ctx); err != nil {
+		return GatewayInvocationInspection{}, false, err
+	}
+	record, found, err := lookupGatewayInvocationRow(ctx, store.db, invocationID)
+	if err != nil {
+		return GatewayInvocationInspection{}, false, fmt.Errorf(
+			"inspect gateway node invocation record: %w",
+			err,
+		)
+	}
+	if !found {
+		return GatewayInvocationInspection{}, false, nil
+	}
+	if err = verifyGatewayInvocationSQLiteIdentity(path, store.identity); err != nil {
+		return GatewayInvocationInspection{}, false, err
+	}
+	inspection := GatewayInvocationInspection{
+		InvocationID:      record.Plan.InvocationID,
+		Target:            record.Target,
+		ToolCallID:        record.ToolCallID,
+		State:             record.State,
+		CreatedAt:         record.CreatedAt,
+		UpdatedAt:         record.UpdatedAt,
+		DispatchedAt:      record.DispatchedAt,
+		PlanExpiresAt:     record.Plan.ExpiresAt,
+		HasExecutionScope: record.WorkspaceID != "" && record.ExecutionID != "",
+	}
+	if record.Cancellation != nil {
+		inspection.CancellationRequested = true
+		inspection.CancellationAt = record.Cancellation.RequestedAt
+	}
+	return inspection, true, nil
+}
+
 func openGatewayInvocationSQLiteReadOnly(path string) (*gatewayInvocationSQLiteStore, error) {
 	path = filepath.Clean(path)
 	if filepath.Ext(path) != ".db" || path == string(filepath.Separator) {

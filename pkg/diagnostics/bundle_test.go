@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
+	"github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
 func TestWriteBundleCreatesPrivateMetadataOnlyDirectoryWithVerifiedManifest(t *testing.T) {
@@ -182,6 +183,63 @@ func TestWriteBundleRichModeRequiresAndLabelsOneExactTrace(t *testing.T) {
 	}
 	if !strings.Contains(string(privateData), "private result") {
 		t.Fatalf("private trace lacks retained redacted preview: %s", privateData)
+	}
+}
+
+func TestWriteBundleIncludesChecksummedOwnerSnapshot(t *testing.T) {
+	fixture := bundleQueryFixture(t, Selector{TaskID: "task-safe"})
+	owners := OwnerReport{
+		SchemaVersion: OwnerReportSchemaV1,
+		GeneratedAt:   fixture.GeneratedAt,
+		Mode:          "exact_identity",
+		Availability:  "available",
+		Tasks: []TaskInspection{{
+			StoreID: "profile-main", TaskID: "task-safe", GenerationID: "generation-safe",
+			Runtime: tasks.RuntimeTool, Status: tasks.StatusSucceeded,
+			DeliveryStatus: tasks.DeliveryDelivered, NotifyPolicy: tasks.NotifyDoneOnly,
+		}},
+	}
+	output := filepath.Join(t.TempDir(), "owners")
+	receipt, err := WriteBundle(BundleOptions{
+		OutputDir: output, Query: fixture, Owners: &owners,
+		Source: DefaultBundleSource("v0.1.0-test", ""),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Files != 3 {
+		t.Fatalf("bundle files = %d, want 3", receipt.Files)
+	}
+	manifestData, err := os.ReadFile(filepath.Join(output, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest BundleManifest
+	if err = json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.OwnersFile != "owners.json" {
+		t.Fatalf("owners file = %q", manifest.OwnersFile)
+	}
+	ownersData, err := os.ReadFile(filepath.Join(output, manifest.OwnersFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded OwnerReport
+	if err = json.Unmarshal(ownersData, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Tasks) != 1 || decoded.Tasks[0].TaskID != "task-safe" {
+		t.Fatalf("owners payload = %#v", decoded)
+	}
+	found := false
+	for _, file := range manifest.Files {
+		if file.Path == manifest.OwnersFile && file.SHA256 == bytesSHA256(ownersData) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("manifest lacks the owners.json checksum receipt")
 	}
 }
 

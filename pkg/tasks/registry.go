@@ -24,6 +24,8 @@ const (
 
 var ErrTaskAlreadyExists = errors.New("task already exists")
 
+var ErrInvalidInspection = errors.New("task registry: invalid bounded snapshot observation")
+
 type Status string
 
 const (
@@ -234,6 +236,21 @@ func ValidateSnapshot(storePath string) error {
 		events:  make([]TaskEvent, 0),
 	}
 	return r.load()
+}
+
+// InspectSnapshot validates bounded caller-admitted bytes using the registry's
+// native load contract without opening a store, pruning retained state, or
+// writing anything. Returned records are sensitive local evidence; callers
+// must project an explicit metadata-only allowlist before export.
+func InspectSnapshot(data []byte) (Snapshot, error) {
+	if len(data) == 0 || len(data) > DefaultMaxSnapshotBytes {
+		return Snapshot{}, ErrInvalidInspection
+	}
+	snapshot, err := decodeSnapshot(data)
+	if err != nil {
+		return Snapshot{}, ErrInvalidInspection
+	}
+	return snapshot, nil
 }
 
 func (r *Registry) LastLoadError() error {

@@ -1482,6 +1482,9 @@ func (p *Projector) mutate(apply func(*ThreadSnapshot)) {
 
 func (p *Projector) mutateLocked(apply func(*ThreadSnapshot)) {
 	apply(&p.state)
+	if p.state.PresentationRevision < ^uint64(0) {
+		p.state.PresentationRevision++
+	}
 	current := p.publicSnapshotLocked()
 	for _, subscriber := range p.subscribers {
 		select {

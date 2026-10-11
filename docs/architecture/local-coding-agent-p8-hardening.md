@@ -233,8 +233,10 @@ effect replay.
 Implementation status: metadata-only `list`, `show`, `correlate`, and support
 directory export are implemented with bounded store scans, corruption truth,
 exact selectors, allowlisted record facts, checksum manifests, and an exact
-single-trace private-rich gate. Production qualification and the remaining
-authoritative-owner/presentation summary are pending.
+single-trace private-rich gate. The dependent owner-snapshot slice adds
+read-only task, interaction, outbox, gateway-invocation, coding-history, and
+content-free presentation checkpoints. Production qualification remains
+pending for the combined surface.
 
 - Add bounded list/show/correlate/export behavior using safe metadata filters;
   do not scan rich content by default.
