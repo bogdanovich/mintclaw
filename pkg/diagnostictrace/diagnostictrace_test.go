@@ -79,6 +79,10 @@ func TestValidateRejectsSchemaOrderingDuplicateAndTampering(t *testing.T) {
 		{"tampered data", func(v *Trace) { v.Records[0].Data = json.RawMessage(`{"status":"changed"}`) }},
 		{"array data", func(v *Trace) { v.Records[0].Data = json.RawMessage(`[]`) }},
 		{"duplicate origin", func(v *Trace) { v.Records = append(v.Records, v.Records[0]); v.Records[1].Sequence = 2 }},
+		{"untrimmed version", func(v *Trace) { v.Source.MintClawVersion = " dev " }},
+		{"invalid commit", func(v *Trace) { v.Source.Commit = "not-a-commit" }},
+		{"uppercase project hash", func(v *Trace) { v.Metadata.ProjectHash = strings.Repeat("A", 64) }},
+		{"short project hash", func(v *Trace) { v.Metadata.ProjectHash = strings.Repeat("a", 63) }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -614,11 +614,12 @@ func (m *seahorseContextManager) compactEventMeta(req *CompactRequest, tracePath
 		scope = runtimeevents.NewTraceScope(workspace, scope.TurnID)
 	}
 	return HookMeta{
-		TraceScope: scope,
-		SessionKey: req.SessionKey,
-		AgentID:    agentID,
-		Source:     "seahorse",
-		TracePath:  tracePath,
+		TraceScope:  scope,
+		SessionKey:  req.SessionKey,
+		AgentID:     agentID,
+		ProjectHash: codingProjectHash(req.Agent),
+		Source:      "seahorse",
+		TracePath:   tracePath,
 	}
 }
 

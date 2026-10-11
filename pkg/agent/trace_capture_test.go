@@ -89,9 +89,10 @@ func TestTraceCapturePersistsOutOfTurnCompactionLifecycle(t *testing.T) {
 
 	startedAt := time.Now().UTC()
 	scope := runtimeevents.Scope{
-		TraceScope: runtimeevents.NewTraceScope(workspace, ""),
-		AgentID:    "coding",
-		SessionKey: "coding:thread-private-canary",
+		TraceScope:  runtimeevents.NewTraceScope(workspace, ""),
+		AgentID:     "coding",
+		SessionKey:  "coding:thread-private-canary",
+		ProjectHash: strings.Repeat("a", 64),
 	}
 	base := ContextCompressLifecyclePayload{
 		AttemptID:          "compaction-attempt-1",
@@ -144,6 +145,7 @@ func TestTraceCapturePersistsOutOfTurnCompactionLifecycle(t *testing.T) {
 	if !strings.HasPrefix(trace.Metadata.RootTurnID, "compaction-") ||
 		trace.Metadata.ParentTurnID != "" || trace.Outcome == nil ||
 		trace.Outcome.Status != string(ContextCompressLifecycleCompleted) ||
+		trace.Metadata.ProjectHash != scope.ProjectHash ||
 		trace.Truncation.Incomplete || len(trace.Records) != len(events) {
 		t.Fatalf("compaction continuation envelope = %#v", trace)
 	}
@@ -168,6 +170,43 @@ func TestTraceCapturePersistsOutOfTurnCompactionLifecycle(t *testing.T) {
 	}
 	if bytes.Contains(encoded, []byte(base.ThreadID)) || bytes.Contains(encoded, []byte(scope.SessionKey)) {
 		t.Fatalf("compaction trace retained private thread/session identity: %s", encoded)
+	}
+}
+
+func TestTraceEnvelopeCarriesBoundedBuildAndProjectAttribution(t *testing.T) {
+	settings := traceCaptureSettings{
+		contentMode: diagnostictrace.ContentMetadataOnly,
+		source: diagnostictrace.Source{
+			MintClawVersion: "v1.2.3",
+			Commit:          "0123456789abcdef0123456789abcdef01234567",
+		},
+	}
+	projector := newTurnTraceProjector(settings, nil, nil)
+	scope := runtimeevents.NewTraceScope("/private/project", "turn-attribution")
+	event := runtimeevents.Event{
+		Time: time.Now().UTC(),
+		Scope: runtimeevents.Scope{
+			TraceScope:  scope,
+			SessionKey:  "coding:private-thread",
+			ProjectHash: strings.Repeat("b", 64),
+		},
+	}
+	if !projector.startTraceLocked(settings, scope, event, "turn") {
+		t.Fatal("startTraceLocked() rejected complete scope")
+	}
+	trace, err := projector.turns[scope].builder.Finalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trace.Source != settings.source || trace.Metadata.ProjectHash != event.Scope.ProjectHash {
+		t.Fatalf("trace attribution = source %#v metadata %#v", trace.Source, trace.Metadata)
+	}
+	encoded, err := json.Marshal(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(scope.Workspace)) || bytes.Contains(encoded, []byte(event.Scope.SessionKey)) {
+		t.Fatalf("trace attribution leaked raw ownership: %s", encoded)
 	}
 }
 

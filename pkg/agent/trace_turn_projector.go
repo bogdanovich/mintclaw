@@ -34,6 +34,7 @@ type traceCaptureSettings struct {
 	enabled     bool
 	contentMode diagnostictrace.ContentMode
 	stateDir    string
+	source      diagnostictrace.Source
 	limits      diagnostictrace.AppliedLimits
 	retention   time.Duration
 	maxTraces   int
@@ -120,10 +121,15 @@ func traceCaptureSettingsFromConfig(cfg *config.Config) traceCaptureSettings {
 		return traceCaptureSettings{}
 	}
 	capture := cfg.Diagnostics.TraceCapture
+	version, commit := config.RuntimeBuildIdentity()
 	return traceCaptureSettings{
 		enabled:     capture.Enabled,
 		contentMode: diagnostictrace.ContentMode(capture.EffectiveContentMode()),
 		stateDir:    strings.TrimSpace(capture.StateDir),
+		source: diagnostictrace.Source{
+			MintClawVersion: version,
+			Commit:          commit,
+		},
 		limits: diagnostictrace.NormalizeLimits(diagnostictrace.AppliedLimits{
 			MaxTraceBytes: capture.MaxTraceBytes, MaxRecords: capture.MaxRecords,
 			MaxRecordBytes: capture.MaxRecordBytes,
@@ -497,6 +503,7 @@ func (p *turnTraceProjector) startTraceLocked(
 				traceKind, traceScope.Workspace+"\x00"+traceScope.TurnID, event.Time,
 			),
 			CreatedAt: event.Time.UTC(),
+			Source:    settings.source,
 			Policy: diagnostictrace.CapturePolicy{
 				ContentMode: settings.contentMode,
 				Redactor:    captureRedactorVersion(settings.contentMode),
@@ -507,6 +514,7 @@ func (p *turnTraceProjector) startTraceLocked(
 				ChildTurnID: event.Correlation.ChildTurnID,
 				SessionHash: safeHash(settings, event.Scope.SessionKey),
 				AgentID:     event.Scope.AgentID, RuntimeID: event.Scope.RuntimeID,
+				ProjectHash: safeProjectHash(event.Scope.ProjectHash),
 			},
 			Records: make([]diagnostictrace.Record, 0, 32),
 		}),
@@ -1172,6 +1180,17 @@ func safeCode(value string) string {
 	}, value)
 	if len(value) > 64 {
 		value = value[:64]
+	}
+	return value
+}
+
+func safeProjectHash(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) != sha256.Size*2 || strings.ToLower(value) != value {
+		return ""
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return ""
 	}
 	return value
 }

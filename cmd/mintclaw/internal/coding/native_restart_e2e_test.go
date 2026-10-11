@@ -1,6 +1,7 @@
 package coding
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -492,7 +493,6 @@ func TestNativeCodingCommandEditsAndResumesAcrossProcessBoundary(t *testing.T) {
 func TestNativeCodingExecDrainsDiagnosticTraceBeforeRuntimeClose(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
-	traceState := t.TempDir()
 	now := time.Date(2026, time.October, 3, 20, 0, 0, 0, time.UTC)
 	threadID := uuid.NewString()
 	provider := llmscenario.NewScriptedProvider(
@@ -505,7 +505,6 @@ func TestNativeCodingExecDrainsDiagnosticTraceBeforeRuntimeClose(t *testing.T) {
 	cfg := nativeCodingFixtureConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true
 	cfg.Diagnostics.TraceCapture.ContentMode = "metadata_only"
-	cfg.Diagnostics.TraceCapture.StateDir = traceState
 	runner := nativeCodingTurnRunner{
 		loadConfig: func() (*config.Config, error) { return cfg, nil },
 		createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
@@ -523,6 +522,7 @@ func TestNativeCodingExecDrainsDiagnosticTraceBeforeRuntimeClose(t *testing.T) {
 	if err := provider.AssertExhausted(); err != nil {
 		t.Fatal(err)
 	}
+	traceState := filepath.Join(home, "coding", "threads", threadID, "diagnostics")
 	matches, err := filepath.Glob(filepath.Join(traceState, "traces", "*.json"))
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("diagnostic traces = %v, %v; want exactly one", matches, err)
@@ -534,6 +534,27 @@ func TestNativeCodingExecDrainsDiagnosticTraceBeforeRuntimeClose(t *testing.T) {
 	var trace diagnostictrace.Trace
 	if err := json.Unmarshal(data, &trace); err != nil {
 		t.Fatalf("decode diagnostic trace: %v", err)
+	}
+	identity, err := thread.ResolveProject(t.Context(), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trace.Metadata.ProjectHash != thread.ProjectHash(identity.ProjectKey) {
+		t.Fatalf("diagnostic project hash = %q", trace.Metadata.ProjectHash)
+	}
+	if trace.Source.MintClawVersion == "" {
+		t.Fatal("diagnostic trace omitted MintClaw version")
+	}
+	encoded, err := json.Marshal(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(identity.ProjectKey)) || bytes.Contains(encoded, []byte(identity.ProjectRoot)) {
+		t.Fatalf("diagnostic trace leaked project identity: %s", encoded)
+	}
+	checkoutMatches, err := filepath.Glob(filepath.Join(project, "state", "diagnostics", "traces", "*.json"))
+	if err != nil || len(checkoutMatches) != 0 {
+		t.Fatalf("checkout-owned diagnostic traces = %v, %v", checkoutMatches, err)
 	}
 	kinds := make(map[diagnostictrace.RecordKind]bool, len(trace.Records))
 	for _, record := range trace.Records {

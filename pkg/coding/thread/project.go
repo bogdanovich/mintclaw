@@ -59,6 +59,12 @@ func projectKey(kind ProjectKind, root string) string {
 	return project.ProjectKey(kind, root)
 }
 
+// ProjectHash returns the privacy-safe diagnostic correlation value for a
+// canonical project key.
+func ProjectHash(projectKey string) string {
+	return project.ProjectHash(projectKey)
+}
+
 func sanitizeGitRemote(remote string) string {
 	return project.SanitizeGitRemote(remote)
 }

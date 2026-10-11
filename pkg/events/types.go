@@ -54,15 +54,17 @@ func (s TraceScope) Complete() bool {
 
 // Scope identifies the runtime ownership of an event.
 //
-// Scope is intentionally limited to agent, session, turn, channel, chat,
-// message, and sender identity. Tool, provider, model, and MCP details belong
-// in Source, Payload, or Attrs.
+// Scope is intentionally limited to privacy-safe runtime ownership and
+// transport identity. Tool, provider, model, and MCP details belong in Source,
+// Payload, or Attrs. ProjectHash is irreversible and must never contain a path
+// or canonical project key.
 type Scope struct {
 	RuntimeID string `json:"runtime_id,omitempty"`
 	TraceScope
 
-	AgentID    string `json:"agent_id,omitempty"`
-	SessionKey string `json:"session_key,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
+	SessionKey  string `json:"session_key,omitempty"`
+	ProjectHash string `json:"project_hash,omitempty"`
 
 	Channel string `json:"channel,omitempty"`
 	Account string `json:"account,omitempty"`
