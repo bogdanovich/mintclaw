@@ -9,11 +9,10 @@
       "runtime_events": ["agent.turn.start", "agent.llm.request", "agent.llm.response", "agent.tool.exec_start", "agent.tool.exec_end", "agent.context.snapshot", "agent.turn.end", "agent.error"],
       "trace_records": ["turn.start", "model.request", "model.response", "tool.call", "tool.result", "context.snapshot", "turn.end", "runtime.error"],
       "required_ids": ["deployment_commit", "project_hash", "thread_id", "session_hash", "turn_id", "model_attempt_id", "tool_call_id", "event_id", "repository_commit"],
-      "available_ids": ["thread_id", "session_hash", "turn_id", "tool_call_id", "event_id", "repository_commit"],
+      "available_ids": ["thread_id", "session_hash", "turn_id", "model_attempt_id", "tool_call_id", "event_id", "repository_commit"],
       "missing_trace_joins": [
         {"id": "deployment_commit", "disposition": "close_h1b", "observation": "Trace source commit is optional and not proven for every coding runtime."},
-        {"id": "project_hash", "disposition": "close_h1b", "observation": "Project identity is authoritative in coding metadata but absent from the trace envelope."},
-        {"id": "model_attempt_id", "disposition": "close_h1b", "observation": "Request and response records do not share a runtime-generated model-attempt identity."}
+        {"id": "project_hash", "disposition": "close_h1b", "observation": "Project identity is authoritative in coding metadata but absent from the trace envelope."}
       ],
       "terminal_facts": ["agent.turn.end", "trace.outcome"],
       "retention_owner": "coding_thread_and_diagnostic_store",
@@ -26,9 +25,8 @@
       "runtime_events": ["agent.llm.request", "agent.llm.response", "agent.llm.retry", "agent.llm.fallback_attempt"],
       "trace_records": ["model.request", "model.response", "model.retry", "model.fallback_attempt"],
       "required_ids": ["turn_id", "model_attempt_id", "provider_request_id", "event_id"],
-      "available_ids": ["turn_id", "event_id"],
+      "available_ids": ["turn_id", "model_attempt_id", "event_id"],
       "missing_trace_joins": [
-        {"id": "model_attempt_id", "disposition": "close_h1b", "observation": "Sequence alone cannot reliably join concurrent or retried model attempts."},
         {"id": "provider_request_id", "disposition": "external_when_unavailable", "observation": "Some providers do not expose a request ID; retain it only when safely available."}
       ],
       "terminal_facts": ["model.response", "model.retry", "model.fallback_attempt", "agent.turn.end"],

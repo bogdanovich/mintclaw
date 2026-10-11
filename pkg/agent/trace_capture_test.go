@@ -52,6 +52,7 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 		Channel:    "telegram",
 		ChatID:     "chat-1",
 	}
+	modelCorrelation := runtimeevents.Correlation{ModelAttemptID: "model-attempt-1"}
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
 		ID: "evt-start", Kind: runtimeevents.KindAgentTurnStart, Time: start,
 		Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
@@ -63,6 +64,7 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
 		ID: "evt-model-request", Kind: runtimeevents.KindAgentLLMRequest,
 		Time: start.Add(time.Millisecond), Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+		Correlation: modelCorrelation,
 		Payload: LLMRequestPayload{
 			Provider: "openai", Model: "gpt-test", MessagesCount: 1, PromptCacheMode: "enabled",
 			PromptCache: PromptCacheFingerprint{
@@ -106,6 +108,7 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
 		ID: "evt-retry", Kind: runtimeevents.KindAgentLLMRetry, Time: start.Add(3 * time.Millisecond),
 		Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+		Correlation: modelCorrelation,
 		Payload: LLMRetryPayload{
 			Attempt: 1, Reason: "provider_error", Error: "Bearer " + secret,
 		},
@@ -113,6 +116,7 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
 		ID: "evt-model-response", Kind: runtimeevents.KindAgentLLMResponse,
 		Time: start.Add(4 * time.Millisecond), Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+		Correlation: modelCorrelation,
 		Payload: LLMResponsePayload{
 			Provider: "openai", Model: "gpt-test", ContentLen: len("diagnosis complete"),
 			CacheReadKnown: true, CacheReadInputTokens: 64,
@@ -133,6 +137,7 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
 		ID: "evt-fallback", Kind: runtimeevents.KindAgentLLMFallbackAttempt, Time: start.Add(6 * time.Millisecond),
 		Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+		Correlation: modelCorrelation,
 		Payload: LLMFallbackAttemptPayload{
 			Provider:             "openai",
 			Model:                "fallback",
@@ -198,6 +203,15 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	if trace.Metadata.ParentTurnID != "parent-turn" || trace.Metadata.ChildTurnID != "subturn-1" {
 		t.Fatalf("trace metadata = %#v", trace.Metadata)
 	}
+	assertModelAttemptCorrelation(
+		t,
+		trace,
+		"model-attempt-1",
+		diagnostictrace.RecordModelRequest,
+		diagnostictrace.RecordModelRetry,
+		diagnostictrace.RecordModelResponse,
+		diagnostictrace.RecordModelFallbackAttempt,
+	)
 	requestPayload := findModelPayload(t, trace, diagnostictrace.RecordModelRequest)
 	if requestPayload.PromptCacheMode != "enabled" ||
 		requestPayload.StablePrefixVersion != "v1" ||
@@ -936,6 +950,35 @@ func findModelPayload(
 	}
 	t.Fatalf("trace lacks %s record", kind)
 	return diagnostictrace.ModelPayload{}
+}
+
+func assertModelAttemptCorrelation(
+	t *testing.T,
+	trace diagnostictrace.Trace,
+	want string,
+	kinds ...diagnostictrace.RecordKind,
+) {
+	t.Helper()
+	for _, kind := range kinds {
+		found := false
+		for _, record := range trace.Records {
+			if record.Kind != kind {
+				continue
+			}
+			found = true
+			if record.Correlation.ModelAttemptID != want {
+				t.Fatalf(
+					"%s model attempt = %q, want %q",
+					kind,
+					record.Correlation.ModelAttemptID,
+					want,
+				)
+			}
+		}
+		if !found {
+			t.Fatalf("trace lacks %s record", kind)
+		}
+	}
 }
 
 func assertCapturedTools(t *testing.T, trace diagnostictrace.Trace, want ...string) {

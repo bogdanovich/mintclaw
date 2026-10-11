@@ -61,6 +61,37 @@ func TestNewLLMIterationStateDoesNotRetainPriorCallState(t *testing.T) {
 	}
 }
 
+func TestLLMIterationStateReplaceCanonicalAttemptMessagesRefreshesTailBoundary(t *testing.T) {
+	state := newLLMIterationState(1)
+	initial := []providers.Message{
+		{Role: "system", Content: "system"},
+		{Role: "user", Content: "historical question"},
+		{Role: "assistant", Content: "historical answer"},
+		{Role: "user", Content: "current question", PromptLayer: string(PromptLayerTurn)},
+	}
+	state.setCanonicalAttemptMessages(initial, promptCacheTailBoundary{Start: 3, Found: true})
+
+	rebuilt := []providers.Message{
+		{Role: "system", Content: "system"},
+		{Role: "user", Content: "current question", PromptLayer: string(PromptLayerTurn)},
+	}
+	state.replaceCanonicalAttemptMessages(rebuilt)
+	fingerprint := fingerprintPromptCacheRequest(
+		traceCaptureSettings{},
+		state.callMessages,
+		nil,
+		promptCacheTailBoundary{
+			Start: state.promptCacheTailStart,
+			Found: state.promptCacheTailBoundaryFound,
+		},
+	)
+
+	if !fingerprint.TailBoundaryFound || fingerprint.HistoryMessages != 0 ||
+		fingerprint.DynamicTailMessages != 1 {
+		t.Fatalf("rebuilt retry fingerprint = %#v", fingerprint)
+	}
+}
+
 func TestMatchingTurnMessageTail_IgnoresInternalRuntimeFields(t *testing.T) {
 	history := []providers.Message{
 		{Role: "user", Content: "question"},

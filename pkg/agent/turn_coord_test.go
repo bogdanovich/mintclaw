@@ -967,6 +967,15 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackIdentityAlias(t *testing.T) {
 	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), nil)
 
 	pipeline := newTestPipeline(al)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		8,
+		runtimeevents.KindAgentLLMRequest,
+		runtimeevents.KindAgentLLMFallbackAttempt,
+		runtimeevents.KindAgentLLMResponse,
+	)
+	defer closeRuntimeEvents()
 	ts := newTurnState(agent, makeTestTurnSpec("test-session"), turnEventScope{
 		turnID:  "turn-1",
 		context: newTurnContext(nil, nil, nil),
@@ -987,6 +996,25 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackIdentityAlias(t *testing.T) {
 	}
 	if exec.model.llmModelName != "secondary" {
 		t.Fatalf("exec.model.llmModelName = %q, want %q", exec.model.llmModelName, "secondary")
+	}
+	events := collectRuntimeEventStream(runtimeCh)
+	if len(events) != 4 {
+		t.Fatalf("model attempt events = %d, want 4: %#v", len(events), events)
+	}
+	wantKinds := []runtimeevents.Kind{
+		runtimeevents.KindAgentLLMRequest,
+		runtimeevents.KindAgentLLMFallbackAttempt,
+		runtimeevents.KindAgentLLMFallbackAttempt,
+		runtimeevents.KindAgentLLMResponse,
+	}
+	for i, event := range events {
+		if event.Kind != wantKinds[i] {
+			t.Fatalf("model attempt event %d kind = %s, want %s", i, event.Kind, wantKinds[i])
+		}
+		if event.Correlation.ModelAttemptID == "" ||
+			event.Correlation.ModelAttemptID != events[0].Correlation.ModelAttemptID {
+			t.Fatalf("model attempt event %d correlation = %#v", i, event.Correlation)
+		}
 	}
 }
 
@@ -1386,16 +1414,20 @@ func TestPipeline_CallLLM_UsesNativeSearchWithoutClientWebSearchTool(t *testing.
 }
 
 func TestPipeline_CallLLM_TimeoutRetry(t *testing.T) {
+	const envelopeMarker = "retry-diagnostic-envelope-marker-must-stay-private"
 	errorPrv := &errorProvider{errType: "timeout"}
 	al, agent, cleanup := newTurnCoordTestLoop(t, errorPrv)
 	defer cleanup()
+	al.cfg.Diagnostics.TraceCapture.Enabled = true
+	al.cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
 
 	pipeline := newTestPipeline(al)
 	sleeper := useRecordingRetrySleeper(pipeline)
 	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
 		t,
 		al,
-		4,
+		8,
+		runtimeevents.KindAgentLLMRequest,
 		runtimeevents.KindAgentLLMRetry,
 	)
 	defer closeRuntimeEvents()
@@ -1407,6 +1439,16 @@ func TestPipeline_CallLLM_TimeoutRetry(t *testing.T) {
 	exec, err := pipeline.SetupTurn(context.Background(), ts)
 	if err != nil {
 		t.Fatalf("SetupTurn failed: %v", err)
+	}
+	if len(exec.messages) == 0 {
+		t.Fatal("SetupTurn returned no messages")
+	}
+	exec.messages[len(exec.messages)-1].TurnEnvelope = &providers.TurnEnvelope{
+		Version: providers.TurnEnvelopeVersion1,
+		Parts: []providers.TurnEnvelopePart{{
+			ID:      "context.runtime",
+			Content: envelopeMarker,
+		}},
 	}
 
 	// Should retry and eventually fail after max retries
@@ -1420,11 +1462,49 @@ func TestPipeline_CallLLM_TimeoutRetry(t *testing.T) {
 	if !reflect.DeepEqual(sleeper.delays, []time.Duration{2 * time.Second, 4 * time.Second}) {
 		t.Fatalf("retry delays = %v, want [2s 4s]", sleeper.delays)
 	}
-	events := filterRuntimeEvents(collectRuntimeEventStream(runtimeCh), runtimeevents.KindAgentLLMRetry)
-	if len(events) != 2 {
-		t.Fatalf("retry events = %d, want 2", len(events))
+	events := collectRuntimeEventStream(runtimeCh)
+	wantKinds := []runtimeevents.Kind{
+		runtimeevents.KindAgentLLMRequest,
+		runtimeevents.KindAgentLLMRetry,
+		runtimeevents.KindAgentLLMRequest,
+		runtimeevents.KindAgentLLMRetry,
+		runtimeevents.KindAgentLLMRequest,
 	}
-	for i, event := range events {
+	if len(events) != len(wantKinds) {
+		t.Fatalf("model retry events = %d, want %d: %#v", len(events), len(wantKinds), events)
+	}
+	for i, wantKind := range wantKinds {
+		if events[i].Kind != wantKind {
+			t.Fatalf("model retry event %d kind = %s, want %s", i, events[i].Kind, wantKind)
+		}
+	}
+	requestEvents := filterRuntimeEvents(events, runtimeevents.KindAgentLLMRequest)
+	if len(requestEvents) != 3 {
+		t.Fatalf("request events = %d, want 3", len(requestEvents))
+	}
+	seenAttemptIDs := make(map[string]struct{}, len(requestEvents))
+	for i, event := range requestEvents {
+		attemptID := event.Correlation.ModelAttemptID
+		if attemptID == "" {
+			t.Fatalf("request event %d lacks model attempt ID", i)
+		}
+		if _, duplicate := seenAttemptIDs[attemptID]; duplicate {
+			t.Fatalf("request event %d reused model attempt ID %q", i, attemptID)
+		}
+		seenAttemptIDs[attemptID] = struct{}{}
+		payload, ok := event.Payload.(LLMRequestPayload)
+		if !ok {
+			t.Fatalf("request event %d payload = %T, want LLMRequestPayload", i, event.Payload)
+		}
+		if strings.Contains(payload.DiagnosticMessages, envelopeMarker) {
+			t.Fatalf("request event %d leaked frozen envelope into diagnostic preview", i)
+		}
+	}
+	retryEvents := filterRuntimeEvents(events, runtimeevents.KindAgentLLMRetry)
+	if len(retryEvents) != 2 {
+		t.Fatalf("retry events = %d, want 2", len(retryEvents))
+	}
+	for i, event := range retryEvents {
 		payload, ok := event.Payload.(LLMRetryPayload)
 		if !ok {
 			t.Fatalf("retry event %d payload = %T, want LLMRetryPayload", i, event.Payload)
@@ -1436,6 +1516,14 @@ func TestPipeline_CallLLM_TimeoutRetry(t *testing.T) {
 				payload.Reason,
 				payload.Backoff,
 				sleeper.delays[i],
+			)
+		}
+		if event.Correlation.ModelAttemptID != requestEvents[i].Correlation.ModelAttemptID {
+			t.Fatalf(
+				"retry event %d attempt = %q, want failed request %q",
+				i,
+				event.Correlation.ModelAttemptID,
+				requestEvents[i].Correlation.ModelAttemptID,
 			)
 		}
 	}

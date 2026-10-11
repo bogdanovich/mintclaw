@@ -84,7 +84,11 @@ func (p *Pipeline) invokeLLMWithRetry(
 	iteration := llm.iteration
 
 	// LLM call closure with fallback support
-	callLLM := func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
+	callLLM := func(
+		messagesForCall []providers.Message,
+		toolDefsForCall []providers.ToolDefinition,
+		attemptID string,
+	) (*providers.LLMResponse, error) {
 		providerCtx, providerCancel := context.WithCancel(turnCtx)
 		ts.setProviderCancel(providerCancel)
 		defer func() {
@@ -171,7 +175,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 					reason := string(attempt.Reason)
 					p.emitEvent(
 						runtimeevents.KindAgentLLMFallbackAttempt,
-						ts.eventMeta("runTurn", "turn.llm.fallback_attempt"),
+						ts.eventMeta("runTurn", "turn.llm.fallback_attempt").withModelAttemptID(attemptID),
 						LLMFallbackAttemptPayload{
 							Provider: attempt.Provider, Model: attempt.Model,
 							IdentityKey: attempt.IdentityKey, Attempt: fallbackAttempt,
@@ -297,7 +301,22 @@ func (p *Pipeline) invokeLLMWithRetry(
 			llm.llmModel,
 			primaryCandidateProvider(exec.model.activeCandidates),
 		)
-		llm.response, err = callLLM(llm.callMessages, llm.providerToolDefs)
+		llm.diagnosticMessages = codingMessagesForCandidate(
+			ts,
+			llm.diagnosticMessages,
+			exec.model.activeCandidates,
+			llm.llmModel,
+			primaryCandidateProvider(exec.model.activeCandidates),
+		)
+		if retry > 0 {
+			llm.modelAttemptID = p.emitLLMRequestAttempt(
+				ts,
+				exec,
+				llm,
+				llm.diagnosticMessagesForAttempt(),
+			)
+		}
+		llm.response, err = callLLM(llm.callMessages, llm.providerToolDefs, llm.modelAttemptID)
 		recoverableProviderExit = false
 		if err == nil {
 			break
@@ -318,7 +337,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			!turnIntroducedMedia(ts) {
 			p.emitEvent(
 				runtimeevents.KindAgentLLMRetry,
-				ts.eventMeta("runTurn", "turn.llm.retry"),
+				ts.eventMeta("runTurn", "turn.llm.retry").withModelAttemptID(llm.modelAttemptID),
 				LLMRetryPayload{
 					Attempt:    retry + 1,
 					MaxRetries: maxRetries,
@@ -332,6 +351,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 				"retry": retry,
 			})
 			strippedCallMessages := stripMessageMedia(llm.callMessages)
+			llm.diagnosticMessages = stripMessageMedia(llm.diagnosticMessages)
 			if !ts.opts.NoHistory {
 				canonicalHistory, readErr := ts.agent.Sessions.ReadTurnHistory(turnCtx, ts.sessionKey)
 				if readErr != nil {
@@ -378,7 +398,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			backoff := time.Duration(retry+1) * time.Duration(backoffSecs) * time.Second
 			p.emitEvent(
 				runtimeevents.KindAgentLLMRetry,
-				ts.eventMeta("runTurn", "turn.llm.retry"),
+				ts.eventMeta("runTurn", "turn.llm.retry").withModelAttemptID(llm.modelAttemptID),
 				LLMRetryPayload{
 					Attempt:    retry + 1,
 					MaxRetries: maxRetries,
@@ -408,7 +428,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 		if isContextError && retry < maxRetries && !ts.opts.NoHistory {
 			p.emitEvent(
 				runtimeevents.KindAgentLLMRetry,
-				ts.eventMeta("runTurn", "turn.llm.retry"),
+				ts.eventMeta("runTurn", "turn.llm.retry").withModelAttemptID(llm.modelAttemptID),
 				LLMRetryPayload{
 					Attempt:    retry + 1,
 					MaxRetries: maxRetries,
@@ -544,14 +564,12 @@ func (p *Pipeline) invokeLLMWithRetry(
 				llm.providerToolDefs,
 				ts.agent.MaxTokens,
 			)
-			llm.callMessages = projectTurnEnvelopesForProvider(callMessages)
+			llm.replaceCanonicalAttemptMessages(callMessages)
 			exec.history = append(trimmedStableHistory, protectedTurnTail...)
 			exec.messages = buildMessages(trimmedStableHistory)
 			if llm.gracefulTerminal {
 				msgs := append([]providers.Message(nil), exec.messages...)
-				llm.callMessages = projectTurnEnvelopesForProvider(
-					append(msgs, ts.interruptHintMessage()),
-				)
+				llm.replaceCanonicalAttemptMessages(append(msgs, ts.interruptHintMessage()))
 			}
 			if dropped := originalHistoryCount - len(exec.history); dropped > 0 {
 				logger.WarnCF(
@@ -714,7 +732,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	cacheWrite, cacheWriteKnown := usageCacheWriteInputTokens(llm.response.Usage)
 	p.emitEvent(
 		runtimeevents.KindAgentLLMResponse,
-		ts.eventMeta("runTurn", "turn.llm.response"),
+		ts.eventMeta("runTurn", "turn.llm.response").withModelAttemptID(llm.modelAttemptID),
 		LLMResponsePayload{
 			Provider:              llm.responseProvider,
 			Model:                 llm.responseModel,

@@ -84,11 +84,12 @@ func (s Scope) TurnTraceScope() TraceScope {
 
 // Correlation carries cross-event tracing fields.
 type Correlation struct {
-	TraceID      string `json:"trace_id,omitempty"`
-	ParentTurnID string `json:"parent_turn_id,omitempty"`
-	ChildTurnID  string `json:"child_turn_id,omitempty"`
-	RequestID    string `json:"request_id,omitempty"`
-	ReplyToID    string `json:"reply_to_id,omitempty"`
+	TraceID        string `json:"trace_id,omitempty"`
+	ParentTurnID   string `json:"parent_turn_id,omitempty"`
+	ChildTurnID    string `json:"child_turn_id,omitempty"`
+	ModelAttemptID string `json:"model_attempt_id,omitempty"`
+	RequestID      string `json:"request_id,omitempty"`
+	ReplyToID      string `json:"reply_to_id,omitempty"`
 }
 
 // Severity describes the operational severity of an event.
