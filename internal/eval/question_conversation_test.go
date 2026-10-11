@@ -133,6 +133,14 @@ func runOrdinaryQuestion(t *testing.T, mode string) (Trial, *fakeConversationTra
 		if mode == "missing-controls" {
 			delete(response.Payload, protocol.PayloadKeyControls)
 		}
+		switch mode {
+		case "missing-reply-id":
+			delete(response.Payload, protocol.PayloadKeyMessageID)
+		case "oversized-reply-id":
+			response.Payload[protocol.PayloadKeyMessageID] = strings.Repeat("r", 129)
+		case "whitespace-reply-id":
+			response.Payload[protocol.PayloadKeyMessageID] = "reply with spaces"
+		}
 		if mode == "private-registry" {
 			path := interactions.WorkspaceStorePath(workspace)
 			data, err := os.ReadFile(path)
@@ -178,6 +186,7 @@ func TestOrdinaryQuestionCancellationRequiresNativeTerminalEvidence(t *testing.T
 	for _, mode := range []string{
 		"complete", "stale-ack", "waiting-only", "missing-controls", "foreign-owner",
 		"private-registry", "private-outbox", "unsupported-action",
+		"missing-reply-id", "oversized-reply-id", "whitespace-reply-id",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			trial, transport, _ := runOrdinaryQuestion(t, mode)

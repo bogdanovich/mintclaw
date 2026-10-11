@@ -121,6 +121,7 @@ func (domain *questionConversation) matchesPrompt(record interactions.Record, pr
 func (domain *questionConversation) observeCancellation(_ context.Context, prompt, reply Event) error {
 	if domain.cancelAt.IsZero() || domain.cancellation != nil || prompt.MessageID != domain.prompt.MessageID ||
 		prompt.InteractionID != domain.waiting.ID || prompt.InteractionShortID != domain.waiting.ShortID ||
+		!boundedIdentity(reply.MessageID, 128) ||
 		reply.AgentID != domain.agent || reply.SessionKey != domain.waiting.Route.SessionKey ||
 		reply.Controls != bus.OutboundInteractionControlsRemove || reply.InteractionKind != "question" {
 		return errQuestionEvidence
