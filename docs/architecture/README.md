@@ -2,6 +2,9 @@
 
 Internal architecture notes for major runtime mechanisms and subsystem design.
 
+- [Configured Credential Login Scope](credential-configured-login-scope.md): private derivation of the
+  explicit entry origin and current revision while borrowing the actual caller/account grant generation.
+
 - [Steering](steering.md): injecting messages into a running agent loop between tool calls.
 - [Codex-Style Steering Roadmap](codex-style-steering-roadmap.md): incompatible replacement of pending-tool classification with same-turn post-batch user-input steering.
 - [Code Health Architecture State](code-health.md): current ownership,

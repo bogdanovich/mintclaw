@@ -33,6 +33,51 @@ func (controller *Controller) LeaseLogin(ctx context.Context, grantID string,
 	if !controller.ready(ctx) {
 		return LoginLease{}, ErrUnavailable
 	}
+	return controller.leaseLoginLocked(ctx, grantID, request)
+}
+
+// LeaseConfiguredLogin derives the browser's initial origin and policy revision
+// from protected configuration. The principal must come from qualified caller
+// authentication. An intent supplies only an account alias and grant locator;
+// neither lets it select a URL, revision, provider binding or another principal.
+// The returned scope is private consumer metadata, not live document authority.
+func (controller *Controller) LeaseConfiguredLogin(ctx context.Context, grantID string,
+	principal credentialbroker.Principal, account string,
+) (LoginLease, credentialbroker.Request, error) {
+	if controller == nil {
+		return LoginLease{}, credentialbroker.Request{}, ErrUnavailable
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if !controller.ready(ctx) {
+		return LoginLease{}, credentialbroker.Request{}, ErrUnavailable
+	}
+	request := credentialbroker.Request{
+		Principal: principal, Account: account, PolicyRevision: controller.policy.Revision(),
+	}
+	// Only the immutable policy's explicitly configured entry origin succeeds.
+	// The bounded approved-origin list carries no caller-controlled destination.
+	for _, origin := range controller.bindings[account].origins {
+		request.Origin = origin
+		flow, err := controller.policy.LoginFlow(request)
+		if err != nil {
+			continue
+		}
+		request.Origin = flow.EntryOrigin
+		lease, leaseErr := controller.leaseLoginLocked(ctx, grantID, request)
+		if leaseErr != nil {
+			return LoginLease{}, credentialbroker.Request{}, leaseErr
+		}
+		return lease, request, nil
+	}
+	return LoginLease{}, credentialbroker.Request{}, ErrDenied
+}
+
+// Caller holds controller.mu and has checked readiness. This keeps the binding,
+// flow, policy revision and actual grant generation in one snapshot.
+func (controller *Controller) leaseLoginLocked(ctx context.Context, grantID string,
+	request credentialbroker.Request,
+) (LoginLease, error) {
 	grant, err := controller.authority.Lease(ctx, grantID, request)
 	if err != nil {
 		return LoginLease{}, ErrDenied
