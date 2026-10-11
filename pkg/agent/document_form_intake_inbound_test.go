@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,6 +132,45 @@ func TestDocumentIntakeCoordinatorControlsTheSameNativeModeAcrossRestart(t *test
 	acked, released, _ := trackingBus.ownership()
 	if len(acked) != 2 || len(released) != 0 {
 		t.Fatal("control messages did not settle transport")
+	}
+	// A retry must bypass input admission even when the native pending queue is
+	// full. Hold the route so we can inspect its existing steering boundary
+	// without invoking a model or replacing the fixture's immutable source.
+	var first string
+	for index := 0; index < document.MaxFormIntakePendingInputs; index++ {
+		admitted, admitErr := store.AdmitFormIntakeMessage(t.Context(), document.FormIntakeMessageRequest{
+			JobID: job.JobID, ModeID: progress.ModeID, ExpectedRevision: progress.Revision,
+			Owner: owner, Schema: schema, MessageIdentity: fmt.Sprintf("pending-retry-%d", index),
+			Text: "PRIVATE_RETRY_SENTINEL",
+		})
+		if admitErr != nil {
+			t.Fatal(admitErr)
+		}
+		if index == 0 {
+			first = admitted.Receipt
+		}
+	}
+	claim, _, claimed := coordinator.claimSession(target)
+	if !claimed {
+		t.Fatal("test route could not be held")
+	}
+	defer claim.releaseIfOwned()
+	msg.SpoolID, msg.Content = "intake-retry", "/retry_form"
+	coordinator.handleInbound(t.Context(), msg)
+	coordinator.wait()
+	progress, err = store.FindFormIntake(t.Context(), owner)
+	if err != nil || progress == nil || progress.PendingInputs != document.MaxFormIntakePendingInputs ||
+		progress.InputCount != document.MaxFormIntakePendingInputs || progress.ModeID != mode.Progress.ModeID {
+		t.Fatal("retry admitted a new message or changed the same native mode")
+	}
+	if loop.pendingSteeringCountForScope(target.runtimeSessionScope()) != 1 || provider.calls != 0 {
+		t.Fatal("typed retry did not enter the existing protected steering boundary")
+	}
+	queued := loop.dequeueSteeringMessagesForScope(target.runtimeSessionScope())
+	if len(queued) != 1 || queued[0].DocumentIntakeReference != first ||
+		queued[0].InboundSpoolID != msg.SpoolID || queued[0].Content == "/retry_form" ||
+		strings.Contains(queued[0].Content, "PRIVATE_") {
+		t.Fatal("typed retry lost its bound receipt or exposed command/private input")
 	}
 }
 

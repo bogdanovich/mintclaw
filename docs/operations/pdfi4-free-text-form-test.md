@@ -126,6 +126,9 @@ Use fresh jobs as necessary; do not corrupt the baseline transaction while tryin
 5. Use `/pause_form`, then `/resume_form`; the same job/source and accepted receipts must survive. Natural pause
    intent may also be interpreted during active intake. While paused, use the explicit resume control: new fact
    messages are refused rather than replayed into ordinary chat.
+   If processing fails, use `/retry_form` to retry retained inputs in the same active form. This control does not
+   ask for the facts again, add another protected message, reset extraction limits or approve output. Resume a paused
+   form first; an empty, mismatched or closed intake cannot be retried.
 6. Use Cancel or `/stop` while collection is active. Expect acknowledgement, cleared controls, no output and terminal
    protected-state cleanup. Do not keep supplying facts after cancellation.
 7. With an operator, test an actual gateway restart and actual compaction mid-intake. Confirm same identity and no

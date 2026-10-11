@@ -115,6 +115,36 @@ func (tool *DocumentTool) FindProtectedFormIntake(ctx context.Context) (*documen
 	return tool.formJobs.FindFormIntake(ctx, owner)
 }
 
+// RetryProtectedFormIntake resolves an existing receipt for a typed same-route
+// recovery control. It never admits input or resets the extraction budget.
+func (tool *DocumentTool) RetryProtectedFormIntake(
+	ctx context.Context, guard bus.InboundDocumentIntakeGuard,
+) (string, error) {
+	if !guard.Valid() || tool == nil || tool.readOnly || tool.formJobs == nil {
+		return "", document.ErrFormJobConflict
+	}
+	owner, err := documentFormOwner(ctx)
+	if err != nil {
+		return "", document.ErrFormJobUnauthorized
+	}
+	progress, err := tool.formJobs.FindFormIntake(ctx, owner)
+	if err != nil || progress == nil || progress.State != document.FormIntakeActive ||
+		progress.JobID != guard.JobID || progress.ModeID != guard.ModeID {
+		return "", document.ErrFormJobConflict
+	}
+	references, err := tool.formJobs.FormIntakeReferences(ctx, guard.JobID, guard.ModeID, owner)
+	if err != nil || len(references) == 0 {
+		return "", document.ErrFormJobConflict
+	}
+	if guard.Reference != "" {
+		if !slices.Contains(references, guard.Reference) {
+			return "", document.ErrFormJobConflict
+		}
+		return guard.Reference, nil
+	}
+	return references[0], nil
+}
+
 // AdmitProtectedFormIntake runs only after the coordinator persists the exact
 // document guard. Source/schema loading uses the existing immutable media owner.
 func (tool *DocumentTool) AdmitProtectedFormIntake(
