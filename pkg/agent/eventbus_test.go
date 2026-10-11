@@ -338,6 +338,25 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	if !slices.Equal(kinds, expectedKinds) {
 		t.Fatalf("unexpected event sequence: got %v want %v", kinds, expectedKinds)
 	}
+	firstAttemptID := events[1].Correlation.ModelAttemptID
+	if firstAttemptID == "" || events[2].Correlation.ModelAttemptID != firstAttemptID {
+		t.Fatalf(
+			"first model attempt correlation = request %q response %q",
+			firstAttemptID,
+			events[2].Correlation.ModelAttemptID,
+		)
+	}
+	secondAttemptID := events[5].Correlation.ModelAttemptID
+	if secondAttemptID == "" || events[6].Correlation.ModelAttemptID != secondAttemptID {
+		t.Fatalf(
+			"second model attempt correlation = request %q response %q",
+			secondAttemptID,
+			events[6].Correlation.ModelAttemptID,
+		)
+	}
+	if secondAttemptID == firstAttemptID {
+		t.Fatalf("separate model iterations reused attempt ID %q", firstAttemptID)
+	}
 
 	turnID := events[0].Scope.TurnID
 	if turnID == "" {
@@ -629,6 +648,7 @@ func TestAgentLoop_DoesNotEmitContextCompressEventForNoOpRetry(t *testing.T) {
 		t,
 		al,
 		16,
+		runtimeevents.KindAgentLLMRequest,
 		runtimeevents.KindAgentLLMRetry,
 		runtimeevents.KindAgentContextCompress,
 	)
@@ -652,6 +672,22 @@ func TestAgentLoop_DoesNotEmitContextCompressEventForNoOpRetry(t *testing.T) {
 	}
 
 	events := collectRuntimeEventStream(runtimeCh)
+	requestEvents := filterRuntimeEvents(events, runtimeevents.KindAgentLLMRequest)
+	if len(requestEvents) != 2 {
+		t.Fatalf("llm request events = %d, want 2", len(requestEvents))
+	}
+	requestPayloads := make([]LLMRequestPayload, 0, len(requestEvents))
+	for index, event := range requestEvents {
+		payload, ok := event.Payload.(LLMRequestPayload)
+		if !ok {
+			t.Fatalf("llm request event %d payload = %T, want LLMRequestPayload", index, event.Payload)
+		}
+		requestPayloads = append(requestPayloads, payload)
+	}
+	if !requestPayloads[1].PromptCache.TailBoundaryFound ||
+		requestPayloads[1].PromptCache.DynamicTailMessages == 0 {
+		t.Fatalf("context retry cache boundary = %#v", requestPayloads[1].PromptCache)
+	}
 	retryEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentLLMRetry)
 	if !ok {
 		t.Fatal("expected llm retry event")

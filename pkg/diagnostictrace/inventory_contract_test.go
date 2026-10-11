@@ -161,6 +161,14 @@ func validateCodingDiagnosticPath(
 			t.Fatalf("path %q documents non-required gap %q", path.ID, identity)
 		}
 	}
+	if path.ID == "local_coding_turn" || path.ID == "provider_retry_and_fallback" {
+		if !slices.Contains(path.AvailableIDs, "model_attempt_id") {
+			t.Fatalf("path %q lost model_attempt_id evidence", path.ID)
+		}
+		if _, unresolved := gaps["model_attempt_id"]; unresolved {
+			t.Fatalf("path %q reintroduced the resolved model-attempt gap", path.ID)
+		}
+	}
 
 	lifecycleGaps := make(map[string]struct{}, len(path.KnownLifecycleGaps))
 	for _, gap := range path.KnownLifecycleGaps {

@@ -784,10 +784,11 @@ func runtimeEventRecord(
 			TargetHash:  safeHash(settings, targetKey(event.Scope.Channel, event.Scope.ChatID)),
 		},
 		Correlation: diagnostictrace.Correlation{
-			ParentTurnID: event.Correlation.ParentTurnID,
-			RequestID:    event.Correlation.RequestID,
-			ToolCallID:   toolCallID,
-			EventID:      event.ID,
+			ParentTurnID:   event.Correlation.ParentTurnID,
+			ModelAttemptID: event.Correlation.ModelAttemptID,
+			RequestID:      event.Correlation.RequestID,
+			ToolCallID:     toolCallID,
+			EventID:        event.ID,
 		},
 		Data: data,
 	}, critical, true

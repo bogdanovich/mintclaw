@@ -59,6 +59,7 @@ jq -r '
     ("+" + (((.offset_nanos / 1000000) | floor) | tostring) + "ms"),
     .kind,
     (.scope.turn_id // "-"),
+    (.correlation.model_attempt_id // "-"),
     (.correlation.tool_call_id // "-"),
     (.scope.target_hash // "-"),
     (.correlation.event_id // "-")
@@ -71,6 +72,13 @@ IDs with service logs. Current turn traces do not include task or completion
 IDs; obtain those from logs or the durable task registry when needed. The
 bundled `mintclaw-trace-debug` skill provides the full investigation and
 reporting workflow.
+
+Runtime-generated `model_attempt_id` joins one logical provider attempt across
+`model.request`, any candidate-level `model.fallback_attempt` records, the
+retry decision for a failed attempt, and its eventual `model.response`. An
+outer retry gets a new ID. This is separate from a provider-controlled request
+ID, which remains optional. Historical traces written before this field was
+introduced must be correlated conservatively by turn and sequence.
 
 A trace is passive, best-effort evidence. A missing or incomplete trace can
 make diagnosis harder, but it does not imply that the agent run failed. Never

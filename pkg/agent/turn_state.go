@@ -361,29 +361,33 @@ func (d toolResponseDisposition) String() string {
 }
 
 type LLMIterationState struct {
-	iteration                   int
-	assistantMessageID          string
-	response                    *providers.LLMResponse
-	normalizedToolCalls         []providers.ToolCall
-	toolResponseDisposition     toolResponseDisposition
-	streamingPublisher          *streamingChunkPublisher
-	streamingFallback           bool
-	suppressReasoning           bool
-	callMessages                []providers.Message
-	providerToolDefs            []providers.ToolDefinition
-	llmModel                    string
-	llmOpts                     map[string]any
-	gracefulTerminal            bool
-	useNativeSearch             bool
-	protectedDiagnosticContext  bool
-	assistantToolCallsPersisted bool
-	assistantToolCallsWriteErr  error
-	codingInstructionBarrier    bool
-	requiresDocumentVision      bool
-	documentVisionResolved      bool
-	documentVisionAvailable     bool
-	responseProvider            string
-	responseModel               string
+	iteration                    int
+	modelAttemptID               string
+	diagnosticMessages           []providers.Message
+	promptCacheTailStart         int
+	promptCacheTailBoundaryFound bool
+	assistantMessageID           string
+	response                     *providers.LLMResponse
+	normalizedToolCalls          []providers.ToolCall
+	toolResponseDisposition      toolResponseDisposition
+	streamingPublisher           *streamingChunkPublisher
+	streamingFallback            bool
+	suppressReasoning            bool
+	callMessages                 []providers.Message
+	providerToolDefs             []providers.ToolDefinition
+	llmModel                     string
+	llmOpts                      map[string]any
+	gracefulTerminal             bool
+	useNativeSearch              bool
+	protectedDiagnosticContext   bool
+	assistantToolCallsPersisted  bool
+	assistantToolCallsWriteErr   error
+	codingInstructionBarrier     bool
+	requiresDocumentVision       bool
+	documentVisionResolved       bool
+	documentVisionAvailable      bool
+	responseProvider             string
+	responseModel                string
 }
 
 func newLLMIterationState(iteration int) *LLMIterationState {
@@ -391,6 +395,39 @@ func newLLMIterationState(iteration int) *LLMIterationState {
 		iteration:          iteration,
 		assistantMessageID: fmt.Sprintf("provider-message-%d", iteration),
 	}
+}
+
+func (state *LLMIterationState) beginModelAttempt() string {
+	if state == nil {
+		return ""
+	}
+	state.modelAttemptID = "model-attempt-" + uuid.NewString()
+	return state.modelAttemptID
+}
+
+func (state *LLMIterationState) setCanonicalAttemptMessages(
+	messages []providers.Message,
+	boundary promptCacheTailBoundary,
+) {
+	if state == nil {
+		return
+	}
+	state.diagnosticMessages = cloneProviderMessages(messages)
+	state.promptCacheTailStart = boundary.Start
+	state.promptCacheTailBoundaryFound = boundary.Found
+	state.callMessages = projectTurnEnvelopesForProvider(messages)
+}
+
+func (state *LLMIterationState) replaceCanonicalAttemptMessages(messages []providers.Message) {
+	start, found := promptCacheDynamicTailStart(messages)
+	state.setCanonicalAttemptMessages(messages, promptCacheTailBoundary{Start: start, Found: found})
+}
+
+func (state *LLMIterationState) diagnosticMessagesForAttempt() []providers.Message {
+	if state == nil {
+		return nil
+	}
+	return stripCanonicalMessageStateFromAll(state.diagnosticMessages)
 }
 
 func (state *LLMIterationState) recordResponseSource(

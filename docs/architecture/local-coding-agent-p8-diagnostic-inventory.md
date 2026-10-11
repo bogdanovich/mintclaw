@@ -3,7 +3,8 @@
 Roadmap packet:
 [H1a — Evidence inventory and correlation tests](local-coding-agent-p8-hardening.md#h1a--evidence-inventory-and-correlation-tests).
 
-Status: H1a implementation baseline.
+Status: H1a baseline with the H1b terminal-truth and model-attempt slices
+implemented.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -48,11 +49,12 @@ inspection.
 
 ## H1b priority gaps
 
-The following gaps must close in the existing event/trace pipeline:
+The following gaps drive H1b work in the existing event/trace pipeline:
 
-1. **Model attempts.** Request, response, retry, and fallback records need one
-   runtime-generated attempt identity. A provider request ID is retained when
-   safely available but cannot be required from every provider.
+1. **Model attempts (resolved).** Request, response, retry, and fallback
+   records now share one runtime-generated identity for each logical provider
+   attempt. Candidate-level fallbacks retain that identity; an outer retry gets
+   a new one. A provider request ID remains separate and optional.
 2. **Tool-loop decisions.** The decision must identify the relevant tool-call
    generation when one exists, without using argument text.
 3. **Async task and delivery.** `AsyncCompletionPayload` already owns task and
@@ -138,8 +140,8 @@ truth is production-qualified.
 
 | Path | Authoritative evidence | Passive evidence | H1b/H1c action |
 | --- | --- | --- | --- |
-| Local coding turn | Coding JSONL, metadata, Git/filesystem | Turn/model/tool/context/error records | Add model-attempt and thread/project joins |
-| Provider retry/fallback | Runtime provider outcome | Model retry/fallback records | Correlate one runtime attempt across request/response/retry/fallback |
+| Local coding turn | Coding JSONL, metadata, Git/filesystem | Turn/model/tool/context/error records | Model-attempt join complete; add thread/project joins |
+| Provider retry/fallback | Runtime provider outcome | Model retry/fallback records | Model-attempt join complete; retain optional provider request ID separately |
 | Tool/process lifecycle | Tool record, process owner | Tool call/result/skip/loop records | Add loop-decision call/generation join; keep PID/process details external |
 | Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Add attempt/status and bounded repository re-anchor identity |
 | Human interaction | Interaction registry/events | No interaction trace records today | Project bounded lifecycle and interaction/revision correlation |

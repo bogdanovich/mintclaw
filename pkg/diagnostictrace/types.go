@@ -103,11 +103,12 @@ type Scope struct {
 }
 
 type Correlation struct {
-	ParentTurnID string `json:"parent_turn_id,omitempty"`
-	RequestID    string `json:"request_id,omitempty"`
-	ToolCallID   string `json:"tool_call_id,omitempty"`
-	CompletionID string `json:"completion_id,omitempty"`
-	EventID      string `json:"event_id,omitempty"`
+	ParentTurnID   string `json:"parent_turn_id,omitempty"`
+	ModelAttemptID string `json:"model_attempt_id,omitempty"`
+	RequestID      string `json:"request_id,omitempty"`
+	ToolCallID     string `json:"tool_call_id,omitempty"`
+	CompletionID   string `json:"completion_id,omitempty"`
+	EventID        string `json:"event_id,omitempty"`
 }
 
 type Outcome struct {

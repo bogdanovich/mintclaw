@@ -28,9 +28,10 @@ func runtimeScopeFromHookMeta(meta HookMeta, eventCtx *TurnContext) runtimeevent
 
 func runtimeCorrelationFromHookMeta(meta HookMeta) runtimeevents.Correlation {
 	return runtimeevents.Correlation{
-		TraceID:      meta.TracePath,
-		ParentTurnID: meta.ParentTurnID,
-		ChildTurnID:  meta.ChildTurnID,
+		TraceID:        meta.TracePath,
+		ParentTurnID:   meta.ParentTurnID,
+		ChildTurnID:    meta.ChildTurnID,
+		ModelAttemptID: meta.ModelAttemptID,
 	}
 }
 

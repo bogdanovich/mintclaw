@@ -216,20 +216,36 @@ func (p *Pipeline) prepareLLMRequest(
 		llm.llmModel,
 		primaryCandidateProvider(exec.model.activeCandidates),
 	)
-	diagnosticMessages := stripCanonicalMessageStateFromAll(llm.callMessages)
-	llm.callMessages = projectTurnEnvelopesForProvider(llm.callMessages)
+	llm.setCanonicalAttemptMessages(
+		llm.callMessages,
+		promptCacheTailBoundary{Start: promptCacheTailStart, Found: promptCacheTailBoundaryFound},
+	)
 	llm.requiresDocumentVision = exec.hasLiveDocumentContextMedia() && hasMediaRefs(llm.callMessages)
+	llm.modelAttemptID = p.emitLLMRequestAttempt(ts, exec, llm, llm.diagnosticMessagesForAttempt())
 
+	return llmStageResult{}, nil
+}
+
+func (p *Pipeline) emitLLMRequestAttempt(
+	ts *turnState,
+	exec *turnExecution,
+	llm *LLMIterationState,
+	diagnosticMessages []providers.Message,
+) string {
+	attemptID := llm.beginModelAttempt()
 	traceSettings := traceCaptureSettingsFromConfig(p.Cfg)
 	promptCache := fingerprintPromptCacheRequest(
 		traceSettings,
 		llm.callMessages,
 		llm.providerToolDefs,
-		promptCacheTailBoundary{Start: promptCacheTailStart, Found: promptCacheTailBoundaryFound},
+		promptCacheTailBoundary{
+			Start: llm.promptCacheTailStart,
+			Found: llm.promptCacheTailBoundaryFound,
+		},
 	)
 	p.emitEvent(
 		runtimeevents.KindAgentLLMRequest,
-		ts.eventMeta("runTurn", "turn.llm.request"),
+		ts.eventMeta("runTurn", "turn.llm.request").withModelAttemptID(attemptID),
 		LLMRequestPayload{
 			Provider:           primaryCandidateProvider(exec.model.activeCandidates),
 			Model:              llm.llmModel,
@@ -246,7 +262,8 @@ func (p *Pipeline) prepareLLMRequest(
 
 	logger.DebugCF("agent", "LLM request", map[string]any{
 		"agent_id":                               ts.agent.ID,
-		"iteration":                              iteration,
+		"model_attempt_id":                       attemptID,
+		"iteration":                              llm.iteration,
 		"model":                                  llm.llmModel,
 		"messages_count":                         len(llm.callMessages),
 		"tools_count":                            len(llm.providerToolDefs),
@@ -261,12 +278,13 @@ func (p *Pipeline) prepareLLMRequest(
 		"cache_dynamic_system_before_transcript": promptCache.DynamicSystemBeforeTranscript,
 	})
 	logger.DebugCF("agent", "Full LLM request", map[string]any{
-		"iteration":     iteration,
-		"messages_json": formatMessagesForLog(diagnosticMessages),
-		"tools_json":    formatToolsForLog(llm.providerToolDefs),
+		"model_attempt_id": attemptID,
+		"iteration":        llm.iteration,
+		"messages_json":    formatMessagesForLog(diagnosticMessages),
+		"tools_json":       formatToolsForLog(llm.providerToolDefs),
 	})
 
-	return llmStageResult{}, nil
+	return attemptID
 }
 
 func objectiveRecoveryToolDefs(

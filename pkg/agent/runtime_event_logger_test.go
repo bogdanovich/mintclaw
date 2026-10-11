@@ -90,6 +90,7 @@ func TestRuntimeEventLogFieldsSummarizeAgentPayload(t *testing.T) {
 			AgentID:    "main",
 			SessionKey: "session-1",
 		},
+		Correlation: runtimeevents.Correlation{ModelAttemptID: "model-attempt-1"},
 		Payload: ToolExecStartPayload{
 			Tool: "exec",
 			Arguments: map[string]any{
@@ -100,6 +101,9 @@ func TestRuntimeEventLogFieldsSummarizeAgentPayload(t *testing.T) {
 
 	if fields["event_id"] != "evt-test" || fields["source_component"] != "agent" {
 		t.Fatalf("missing common event fields: %#v", fields)
+	}
+	if fields["model_attempt_id"] != "model-attempt-1" {
+		t.Fatalf("missing model attempt correlation: %#v", fields)
 	}
 	if fields["tool"] != "exec" || fields["args_count"] != 1 {
 		t.Fatalf("missing safe agent payload summary fields: %#v", fields)
