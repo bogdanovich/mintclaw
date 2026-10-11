@@ -8,9 +8,13 @@ implementation; an admission document alone is not a functioning eval engine.
 
 The roadmap builds a small manual quality harness, not a replacement runtime or an automatic self-improvement system.
 
-The [first live pilot](../operations/manual-agent-evals-pilot-20261011.md) has now run on isolated Linux profiles:
-one general context case passed, interaction navigation remained inconclusive, and judge calibration agreed on
-4/6 labels. The goal remains active; this partial diagnostic result is not PDF/browser or full-suite qualification.
+The [first live pilot](../operations/manual-agent-evals-pilot-20261011.md) is preserved with its inconclusive
+interaction and failed 4/6 judge calibration. The subsequent
+[v2 judge calibration](../operations/manual-agent-evals-judge-v2-calibration-20261011.md) agreed on 6/6 unchanged
+labels. After a reviewed native outbox observer fix, the
+[general v3 pilot](../operations/manual-agent-evals-general-v3-pilot-20261011.md) passed both required scripted
+general cases on an isolated Linux profile. The goal remains active; these results are not adaptive, PDF/browser,
+macOS live, complete cleanup or full-suite qualification.
 
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
@@ -20,11 +24,11 @@ may run in normal CI without credentials, a live gateway, paid models, or instal
 | Stage | Outcome | Dependency | Status |
 | --- | --- | --- | --- |
 | E0 | Agree architecture and freeze first-goal acceptance | Operator review | Approved; admission recorded |
-| E1 | Run bounded scripted multi-turn cases and produce honest reports | E0 | Contracts, client, runtime probe, admission, and reports merged; real-model qualification pending |
-| E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation and adaptive runner/grade merged (#1531, #1541); live calibration/qualification pending |
+| E1 | Run bounded scripted multi-turn cases and produce honest reports | E0 | Contracts/client/runtime admission merged; both required general scripted cases passed on Linux after #1598, with recorded platform/cleanup limits |
+| E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation/adaptive runner/grade merged (#1531, #1541); judge v2 live calibration passed 6/6; adaptive live qualification pending |
 | E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Fixtures/oracle, preparation, approval contracts, dialogue, write intent, native write observation, metadata settlement and artifact collection merged (#1544, #1546, #1547, #1550, #1552, #1553, #1557, #1558); uniqueness/privacy/cleanup and live qualification pending |
-| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Fixture and native snapshot prerequisites merged (#1564, #1567); six typed case contracts implemented; runtime integration/privacy/cleanup/qualification pending |
-| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Bounded serial repeats and all-trial regrade implemented independently; provisioning/comparison/qualification pending |
+| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Fixture/native snapshots and independent fixture oracles merged (#1564, #1567, #1591); six typed cases; native execution/privacy/cleanup/live qualification pending |
+| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Bounded serial repeats/all-trial regrade and offline compatible comparison (#1588) merged; product provisioning/fingerprints/live qualification pending |
 
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
 prerequisites when necessary. Do not reimplement protected intake, browser sessions, approval, or delivery in the harness.
