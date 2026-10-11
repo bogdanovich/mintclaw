@@ -171,9 +171,23 @@ func TestDocumentNativeBoundaryDeniesHostFileAndNetwork(t *testing.T) {
 	}
 	defer func() { _ = listener.Close() }()
 
-	snapshot, input := processWorkerFixture(t)
+	snapshot, input := processReadFixture(t, "boundary_probe", "acroform-fields.pdf")
+	source, err := os.ReadFile(snapshot.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := newFormFieldsBackend().Fields(bytes.NewReader(source), defaultInspectionLimits(), input.SHA256)
+	if fields.State != StateSucceeded || fields.Facts == nil {
+		t.Fatal("boundary probe form schema is unavailable")
+	}
+	value := "Boundary probe"
+	fill := normalizedNamedFill(t, input, *fields.Facts, map[string]FormValue{
+		"full_name": {Type: FormValueText, Text: &value},
+	})
 	worker := testProcessWorker("boundary-probe", secretPath, listener.Addr().String())
 	request := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFillCandidate)
+	request.OperationID = writeTestOperationID("boundary_probe")
+	request.Fill = &fill
 	scratch := directTempDir(t)
 	if err := os.Chmod(scratch, 0o700); err != nil {
 		t.Fatal(err)
