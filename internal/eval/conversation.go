@@ -250,7 +250,7 @@ func (flow *conversation) adaptiveFollowups(ctx context.Context, item Case, user
 		if verdict != Pass {
 			return verdict, code
 		}
-		if decision.Action.Kind == "finish" {
+		if decision.Action.Kind == "finish" || decision.Action.Kind == "allow_once" {
 			if flow.last.Kind != "final" {
 				return Inconclusive, "unfinished_interaction"
 			}

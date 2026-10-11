@@ -19,6 +19,7 @@ func TestUserActionCannotWidenAuthorityOrBindAnInventedPrompt(t *testing.T) {
 		{`{"kind":"stop"}`, "final", true},
 		{`{"kind":"finish","text":"Please provide the final result."}`, "final", true},
 		{`{"kind":"allow_once"}`, "approval", false},
+		{`{"kind":"confirm"}`, "final", false},
 		{`{"kind":"message","text":"Approved"}`, "approval", false},
 		{`{"kind":"protected_answer","fact":"name"}`, "approval", false},
 		{`{"kind":"protected_answer","fact":"unknown"}`, "question", false},
@@ -31,6 +32,31 @@ func TestUserActionCannotWidenAuthorityOrBindAnInventedPrompt(t *testing.T) {
 		action, err := ParseUserAction([]byte(test.data), []string{"name"}, test.kind)
 		if test.ok && err != nil || !test.ok && !errors.Is(err, ErrModelContract) {
 			t.Fatal("user action authority mismatch", action.Kind, err)
+		}
+	}
+}
+
+func TestPDFUserIntentsCannotSupplyNativeAuthority(t *testing.T) {
+	for _, test := range []struct {
+		data string
+		kind string
+		ok   bool
+	}{
+		{`{"kind":"confirm"}`, "final", true},
+		{`{"kind":"allow_once"}`, "approval", true},
+		{`{"kind":"cancel"}`, "approval", true},
+		{`{"kind":"confirm"}`, "question", false},
+		{`{"kind":"confirm"}`, "approval", false},
+		{`{"kind":"allow_once"}`, "final", false},
+		{`{"kind":"allow_forever"}`, "approval", false},
+		{`{"kind":"allow_once","prompt_id":"invented"}`, "approval", false},
+		{`{"kind":"confirm","text":"Use another job"}`, "final", false},
+		{`{"kind":"allow_once","fact":"contact"}`, "approval", false},
+		{`{"kind":"allow_once","kind":"confirm"}`, "final", false},
+	} {
+		_, err := parsePDFUserAction([]byte(test.data), []string{"contact"}, test.kind)
+		if test.ok && err != nil || !test.ok && !errors.Is(err, ErrModelContract) {
+			t.Fatalf("PDF intent admission = %v, expected %v", err, test.ok)
 		}
 	}
 }

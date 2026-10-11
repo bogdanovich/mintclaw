@@ -15,12 +15,17 @@ func nextModelAction(
 	if user == nil || user.identity.Role != "user" {
 		return result
 	}
-	input, err := userInput(item, events, pendingKind, remaining)
+	system, version := userSystemPrompt, UserPromptVersion
+	parse := ParseUserAction
+	if item.PDF != nil && item.PDF.Output == "required" {
+		system, version, parse = pdfUserSystemPrompt, PDFUserPromptVersion, parsePDFUserAction
+	}
+	input, err := userInputWithPrompt(item, events, pendingKind, remaining, system)
 	if err != nil {
 		result.Code = "ineligible_user_evidence"
 		return result
 	}
-	output, call, err := user.Call(ctx, UserPromptVersion, userSystemPrompt, input)
+	output, call, err := user.Call(ctx, version, system, input)
 	result.Call = &call
 	if err != nil {
 		result.Code = "user_call_failed"
@@ -30,7 +35,7 @@ func nextModelAction(
 	for handle := range item.Driver.Facts {
 		handles = append(handles, handle)
 	}
-	action, err := ParseUserAction([]byte(output), handles, pendingKind)
+	action, err := parse([]byte(output), handles, pendingKind)
 	if err != nil || privateJSONValue(action, item.Driver.Facts) {
 		result.Code = "invalid_user_action"
 		return result

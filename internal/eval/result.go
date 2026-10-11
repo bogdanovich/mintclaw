@@ -63,11 +63,20 @@ type Trial struct {
 }
 
 type PDFTrialEvidence struct {
-	Version      int    `json:"version"`
-	SourceSHA256 string `json:"source_sha256"`
-	JobID        string `json:"job_id,omitempty"`
-	State        string `json:"state"`
-	Cleanup      string `json:"cleanup"`
+	Version      int                     `json:"version"`
+	SourceSHA256 string                  `json:"source_sha256"`
+	JobID        string                  `json:"job_id,omitempty"`
+	State        string                  `json:"state"`
+	Cleanup      string                  `json:"cleanup"`
+	WriteIntent  *PDFWriteIntentEvidence `json:"write_intent,omitempty"`
+}
+
+// An intent is not a consumed native grant, settled write or delivery receipt.
+type PDFWriteIntentEvidence struct {
+	ReviewRevision        int64  `json:"review_revision"`
+	ConfirmationRequestID string `json:"confirmation_request_id"`
+	ApprovalInteractionID string `json:"approval_interaction_id,omitempty"`
+	OperationID           string `json:"operation_id,omitempty"`
 }
 
 // Hard failure remains visible even when the transport, judge, or cleanup also

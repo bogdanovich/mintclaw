@@ -21,6 +21,7 @@ func ParseUserAction(data []byte, factHandles []string, pendingKind string) (Act
 		facts[handle] = "available"
 	}
 	if err != nil || action.validate(facts) != nil ||
+		action.Kind == "confirm" || action.Kind == "allow_once" ||
 		pendingKind == "approval" && action.Kind != "cancel" && action.Kind != "stop" ||
 		action.Kind == "protected_answer" && pendingKind != "question" ||
 		pendingKind == "final" &&
@@ -31,6 +32,27 @@ func ParseUserAction(data []byte, factHandles []string, pendingKind string) (Act
 		if strings.HasPrefix(strings.TrimSpace(line), "/") {
 			return Action{}, ErrModelContract
 		}
+	}
+	return action, nil
+}
+
+// These are user intents, not grants. The PDF adapter must independently admit
+// the native reviewed job and exact approval before constructing any request.
+func parsePDFUserAction(data []byte, factHandles []string, pendingKind string) (Action, error) {
+	if len(data) > MaxRoleOutputBytes || !validIDs(factHandles, 64) {
+		return Action{}, ErrModelContract
+	}
+	action, err := DecodeManifest[Action](data)
+	if err != nil {
+		return Action{}, ErrModelContract
+	}
+	if action.Kind != "confirm" && action.Kind != "allow_once" {
+		return ParseUserAction(data, factHandles, pendingKind)
+	}
+	if action.Text != "" || action.Fact != "" ||
+		action.Kind == "confirm" && pendingKind != "final" ||
+		action.Kind == "allow_once" && pendingKind != "approval" {
+		return Action{}, ErrModelContract
 	}
 	return action, nil
 }
