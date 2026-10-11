@@ -155,6 +155,33 @@ func TestDecideAsyncToolResultDelivery(t *testing.T) {
 				IsError:       true,
 			},
 		},
+		{
+			name: "error fallback text is delivered without parent synthesis",
+			in: (&toolshared.ToolResult{
+				ForLLM:  "internal failure",
+				IsError: true,
+			}).WithAsyncDelivery(toolshared.AsyncDeliveryParentOnly),
+			want: AsyncDeliveryDecision{
+				DeliveryMode:  toolshared.AsyncDeliveryParentOnly,
+				PublishToUser: true,
+				QueueParent:   false,
+				ContentLen:    len("internal failure"),
+				IsError:       true,
+			},
+		},
+		{
+			name: "silent error has no delivery path",
+			in: (&toolshared.ToolResult{
+				ForLLM:   "internal failure",
+				IsError:  true,
+				Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+			}).WithAsyncDelivery(toolshared.AsyncDeliveryUserAndParent),
+			want: AsyncDeliveryDecision{
+				DeliveryMode: toolshared.AsyncDeliveryUserAndParent,
+				ContentLen:   len("internal failure"),
+				IsError:      true,
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -215,7 +215,18 @@ func (p *turnTraceProjector) observeRuntimeEvent(event runtimeevents.Event) {
 	}
 	traceScopes, traceSettlement := runtimeEventTraceScopes(event)
 	if event.Kind == runtimeevents.KindAgentTurnStart && len(traceScopes) == 1 {
-		p.startTurnLocked(settings, traceScopes[0], event)
+		p.startTraceLocked(settings, traceScopes[0], event, "turn")
+	}
+	completionTraceStarted := false
+	if event.Kind == runtimeevents.KindAgentAsyncCompletion && len(traceScopes) == 1 {
+		if _, ok := event.Payload.(AsyncCompletionPayload); ok {
+			completionTraceStarted = p.startTraceLocked(
+				settings,
+				traceScopes[0],
+				event,
+				"async-completion",
+			)
+		}
 	}
 	for _, traceScope := range traceScopes {
 		trace := p.turns[traceScope]
@@ -225,6 +236,24 @@ func (p *turnTraceProjector) observeRuntimeEvent(event runtimeevents.Event) {
 		if record, critical, ok := runtimeEventRecord(settings, trace, event); ok {
 			appendCaptureRecord(trace, record, critical)
 		}
+	}
+	if completionTraceStarted {
+		traceScope := traceScopes[0]
+		trace := p.turns[traceScope]
+		payload := event.Payload.(AsyncCompletionPayload)
+		if payload.WillUser {
+			trace.settlementTimer = time.AfterFunc(traceDeliverySettlementTimeout, func() {
+				p.expireTurnSettlement(traceScope, trace)
+			})
+			p.mu.Unlock()
+			return
+		}
+		p.removeTurnLocked(traceScope, trace)
+		p.mu.Unlock()
+		if p.submit != nil {
+			_ = p.submit(settings, trace)
+		}
+		return
 	}
 	if isTerminalChannelDeliveryEvent(event.Kind) && traceSettlement {
 		settled := make([]*activeTraceCapture, 0, len(traceScopes))
@@ -316,16 +345,17 @@ func isTerminalChannelDeliveryEvent(kind runtimeevents.Kind) bool {
 		kind == runtimeevents.KindChannelMessageOutboundFailed
 }
 
-func (p *turnTraceProjector) startTurnLocked(
+func (p *turnTraceProjector) startTraceLocked(
 	settings traceCaptureSettings,
 	traceScope runtimeevents.TraceScope,
 	event runtimeevents.Event,
-) {
+	traceKind string,
+) bool {
 	if !traceScope.Complete() {
-		return
+		return false
 	}
 	if _, exists := p.turns[traceScope]; exists {
-		return
+		return false
 	}
 	trace := &activeTraceCapture{
 		turnID:    traceScope.TurnID,
@@ -334,7 +364,7 @@ func (p *turnTraceProjector) startTurnLocked(
 		builder: diagnosticcapture.NewTraceBuilder(diagnostictrace.Trace{
 			SchemaVersion: diagnostictrace.SchemaVersionV1,
 			TraceID: opaqueTraceID(
-				"turn", traceScope.Workspace+"\x00"+traceScope.TurnID, event.Time,
+				traceKind, traceScope.Workspace+"\x00"+traceScope.TurnID, event.Time,
 			),
 			CreatedAt: event.Time.UTC(),
 			Policy: diagnostictrace.CapturePolicy{
@@ -352,6 +382,7 @@ func (p *turnTraceProjector) startTurnLocked(
 		}),
 	}
 	p.turns[traceScope] = trace
+	return true
 }
 
 func runtimeEventTraceScopes(event runtimeevents.Event) ([]runtimeevents.TraceScope, bool) {

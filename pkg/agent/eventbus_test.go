@@ -1143,6 +1143,7 @@ func TestAgentLoop_EmitsAsyncCompletionEvent(t *testing.T) {
 	al.RegisterTool(&asyncFollowUpTool{
 		name:             "async_completion_event",
 		followUpText:     "background result",
+		forUserText:      "background result for user",
 		completionSig:    doneCh,
 		deliveryMode:     toolshared.AsyncDeliveryUserOnly,
 		taskID:           "subagent-42",
@@ -1200,8 +1201,8 @@ func TestAgentLoop_EmitsAsyncCompletionEvent(t *testing.T) {
 	if payload.ContentLen != len("background result") {
 		t.Fatalf("ContentLen = %d, want %d", payload.ContentLen, len("background result"))
 	}
-	if payload.WillUser {
-		t.Fatal("expected user delivery to be false because the result has no ForUser text")
+	if !payload.WillUser {
+		t.Fatal("expected user delivery for the explicit ForUser result")
 	}
 	if payload.WillParent {
 		t.Fatal("expected parent delivery to be false")
@@ -1214,6 +1215,24 @@ func TestAgentLoop_EmitsAsyncCompletionEvent(t *testing.T) {
 	}
 	if payload.TaskGenerationID != taskRecord.GenerationID {
 		t.Fatalf("TaskGenerationID = %q, want %q", payload.TaskGenerationID, taskRecord.GenerationID)
+	}
+	if !evt.Scope.TurnTraceScope().Complete() ||
+		!strings.HasPrefix(evt.Scope.TurnID, "async-completion-") {
+		t.Fatalf("completion trace scope = %#v", evt.Scope.TurnTraceScope())
+	}
+	if evt.Correlation.ParentTurnID == "" || evt.Correlation.ParentTurnID == evt.Scope.TurnID {
+		t.Fatalf("completion parent correlation = %#v", evt.Correlation)
+	}
+	if evt.Correlation.ModelAttemptID == "" || evt.Correlation.ToolCallID != "call_async_1" ||
+		evt.Correlation.ToolCallGeneration == "" {
+		t.Fatalf("completion tool correlation = %#v", evt.Correlation)
+	}
+	outbound := waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
+		return msg.Content == "background result for user"
+	})
+	if !outbound.TraceSettlement || len(outbound.TraceScopes) != 1 ||
+		outbound.TraceScopes[0] != evt.Scope.TurnTraceScope() {
+		t.Fatalf("completion outbound trace scope = %+v, settlement=%v", outbound.TraceScopes, outbound.TraceSettlement)
 	}
 }
 

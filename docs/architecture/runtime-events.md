@@ -101,6 +101,7 @@ The table below lists the current runtime event kinds, when they are emitted, an
 | `agent.tool.exec_end` | After a tool call completes, including successful results, tool errors, and async results. | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |
 | `agent.tool.exec_skipped` | A tool call is skipped because the tool is unavailable, arguments are invalid, or turn control logic requires skipping it. | `tool`, `reason` |
 | `agent.tool.loop_decision` | Tool-loop protection warns about or blocks a repeated non-progressing call. Arguments and results are represented only by safe metadata. | `tool`, `args_hash`, `action`, `code`, `count`, `threshold` |
+| `agent.async.completion` | An async tool reports its terminal result before user/parent delivery policy is applied. | `source_tool`, `task_id`, `task_generation_id`, `completion_id`, `delivery_mode`, `will_user`, `will_parent`, bounded lengths/counts; a unique completion trace scope links back through `parent_turn_id` and retains the originating model/tool generation |
 | `agent.steering.injected` | Queued steering messages are injected into the next LLM context. | `count`, `total_content_len` |
 | `agent.follow_up.queued` | An async tool result is queued back into the inbound/follow-up flow. | `source_tool`, `content_len` |
 | `agent.interrupt.received` | A turn accepts steering, graceful interrupt, or hard-abort input. | `interrupt_kind`, `role`, `content_len`, `queue_depth`, `hint_len` |
@@ -202,6 +203,7 @@ Agent events add safe payload summaries:
 | `agent.tool.exec_end` | `tool`, `duration_ms`, `for_llm_len`, `for_user_len`, `is_error`, `async` |
 | `agent.tool.exec_skipped` | `tool`, `reason` |
 | `agent.tool.loop_decision` | `tool`, `args_hash`, `action`, `code`, `count`, `threshold` |
+| `agent.async.completion` | `source_tool`, `completion_id`, `task_id`, `task_generation_id`, `delivery_mode`, `will_user`, `will_parent`, bounded lengths/counts |
 | `agent.steering.injected` | `count`, `total_content_len` |
 | `agent.follow_up.queued` | `source_tool`, `content_len` |
 | `agent.interrupt.received` | `interrupt_kind`, `role`, `content_len`, `queue_depth`, `hint_len` |

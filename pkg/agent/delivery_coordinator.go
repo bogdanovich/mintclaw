@@ -441,6 +441,18 @@ func decideAsyncToolResultDelivery(result *toolshared.ToolResult) AsyncDeliveryD
 	if decision.DeliveryMode != toolshared.AsyncDeliveryUserOnly {
 		decision.QueueParent = content != ""
 	}
+	// Errors take the dedicated delivery branch above: it sends one available
+	// error message to the user unless delivery is silent, then returns without
+	// synthesizing a parent continuation. Keep the diagnostic decision aligned
+	// with that actual path rather than the success-mode routing preference.
+	if result.IsError {
+		errorContent := strings.TrimSpace(result.ForUser)
+		if errorContent == "" {
+			errorContent = strings.TrimSpace(content)
+		}
+		decision.PublishToUser = errorContent != "" && result.Delivery.Intent != toolshared.DeliverySilent
+		decision.QueueParent = false
+	}
 	decision.ParentHandled = !decision.QueueParent && !result.IsError &&
 		decision.DeliveryMode == toolshared.AsyncDeliveryUserOnly
 	return decision

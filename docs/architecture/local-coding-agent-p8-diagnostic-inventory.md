@@ -60,10 +60,15 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    loop-decision events retain that generation together with the provider call
    ID and originating model-attempt ID. Reuse of a provider call ID therefore
    cannot join records from separate attempts, and no argument text is needed.
-3. **Async task and delivery (resolved).** `AsyncCompletionPayload` retains the
-   task ID, runtime-owned task generation, and completion ID, while
-   `ChannelOutboundPayload` retains the durable delivery ID. Passive delivery
-   decision, attempt, and outcome records now preserve those bounded joins.
+3. **Async task and delivery (implemented; production requalification
+   pending).** `AsyncCompletionPayload` retains the task ID, runtime-owned task
+   generation, and completion ID, while `ChannelOutboundPayload` retains the
+   durable delivery ID. Because a background task can finish after its parent
+   turn trace is finalized, each completion now starts a bounded continuation
+   trace. Its envelope points to the original turn through `parent_turn_id`,
+   and its decision record retains the originating model attempt and exact tool
+   call/generation. A user-bound continuation waits at most 30 seconds for the
+   correlated channel outcome; a parent-only completion persists immediately.
 4. **Interactions.** Existing interaction runtime events carry interaction ID,
    revision, event, status, outcome, code, and success, but the turn projector
    currently ignores them. H1b needs bounded lifecycle records and joins, not a
@@ -206,6 +211,24 @@ commit attribution therefore remains an independent open H1b gap; the tool
 call, generation, model-attempt, and loop-decision joins are qualified without
 claiming that the source-commit gap is resolved.
 
+### Async-completion production finding
+
+The first async-correlation deployment merged through PR #1524 as merge commit
+`f753c03dd55c1eb5cdc202e38172d2342ff6e5cc`. A harmless live `spawn` canary
+proved the new task ID, task generation, completion ID, tool-call generation,
+and model-attempt fields in the runtime journal and task registry. It also
+found that the completion arrived about five seconds after the original turn
+trace had finalized, so the passive trace could not retain the decision. This
+was a trace-lifecycle gap, not an execution or delivery failure.
+
+The follow-up implementation gives every async completion its own bounded
+continuation trace instead of retaining the parent trace indefinitely. This
+preserves passive one-way capture, bounds user-delivery settlement, and remains
+valid when a background task outlives its originating turn. Production
+requalification must prove the continuation envelope and decision record; a
+user-bound canary must additionally prove the matching delivery attempt and
+outcome before this slice is marked production-qualified.
+
 ## Evidence map
 
 | Path | Authoritative evidence | Passive evidence | H1b/H1c action |
@@ -215,7 +238,7 @@ claiming that the source-commit gap is resolved.
 | Tool/process lifecycle | Tool record, process owner | Tool call/result/skip/loop records | Call/generation join complete; keep PID/process details external |
 | Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Add attempt/status and bounded repository re-anchor identity |
 | Human interaction | Interaction registry/events | No interaction trace records today | Project bounded lifecycle and interaction/revision correlation |
-| Channel/async delivery | Task registry, outbox, channel receipt | Delivery decision/attempt/outcome | Task/generation, completion, and delivery joins complete |
+| Channel/async delivery | Task registry, outbox, channel receipt | Bounded completion continuation with delivery decision/attempt/outcome | Task/generation, completion, tool-generation, parent-turn, and delivery joins implemented; production requalification pending |
 | Remote coding task | Task registry, worker ledger/thread | Parent async/delivery evidence | Add task/generation/worker/thread references and terminal uncertainty |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Retain invocation ID and safe policy/target aliases |
 | Repository/worktree | Git/filesystem, worktree owner | Context snapshot only | Add commit/worktree/snapshot digests and counts; no paths or diffs |
