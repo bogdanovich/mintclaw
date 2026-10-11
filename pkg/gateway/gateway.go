@@ -71,22 +71,23 @@ const (
 )
 
 type services struct {
-	CronService      *cron.CronService
-	HeartbeatService *heartbeat.HeartbeatService
-	MediaStore       media.MediaStore
-	ChannelManager   *channels.Manager
-	OutboundRecovery *gatewayOutboundReconciler
-	DeviceService    *devices.Service
-	NodeAdmission    *nodeAdmissionRuntime
-	CodingRemote     *codingremote.Server
-	browserMu        sync.RWMutex
-	Browser          *browserRuntime
-	HealthServer     *health.Server
-	VoiceAgentCancel context.CancelFunc
-	VoiceAgentDone   <-chan struct{}
-	manualReloadChan chan struct{}
-	reloading        atomic.Bool
-	authToken        string
+	CronService       *cron.CronService
+	HeartbeatService  *heartbeat.HeartbeatService
+	MediaStore        media.MediaStore
+	ChannelManager    *channels.Manager
+	OutboundRecovery  *gatewayOutboundReconciler
+	DeviceService     *devices.Service
+	NodeAdmission     *nodeAdmissionRuntime
+	CodingRemote      *codingremote.Server
+	browserMu         sync.RWMutex
+	Browser           *browserRuntime
+	HealthServer      *health.Server
+	VoiceAgentCancel  context.CancelFunc
+	VoiceAgentDone    <-chan struct{}
+	manualReloadChan  chan struct{}
+	reloading         atomic.Bool
+	runtimeSnapshotMu sync.RWMutex
+	authToken         string
 }
 
 type startupBlockedProvider struct {
@@ -1499,6 +1500,8 @@ func handleConfigReloadWithHooks(
 	shutdownTimeout time.Duration,
 	hooks gatewayReloadHooks,
 ) error {
+	runningServices.runtimeSnapshotMu.Lock()
+	defer runningServices.runtimeSnapshotMu.Unlock()
 	logger.Info("🔄 Config file changed, reloading...")
 	if err := preflightConfigReload(al, newCfg); err != nil {
 		return err

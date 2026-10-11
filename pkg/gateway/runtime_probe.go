@@ -19,19 +19,30 @@ func snapshotRuntimeProbe(
 	loop *agent.AgentLoop,
 	running *services,
 ) (health.RuntimeProbe, error) {
+	return snapshotRuntimeProbeWithPaths(home, configPath, loop, running, physicalPathFingerprint)
+}
+
+func snapshotRuntimeProbeWithPaths(
+	home, configPath string,
+	loop *agent.AgentLoop,
+	running *services,
+	pathFingerprint func(string) (string, error),
+) (health.RuntimeProbe, error) {
 	var result health.RuntimeProbe
-	if loop == nil || running == nil || running.authToken == "" || running.reloading.Load() {
+	if loop == nil || running == nil || running.authToken == "" || running.reloading.Load() ||
+		!running.runtimeSnapshotMu.TryRLock() {
 		return result, errors.New("runtime probe unavailable")
 	}
+	defer running.runtimeSnapshotMu.RUnlock()
 	fingerprint, err := loop.PublicConfigFingerprint()
 	if err != nil {
 		return result, errors.New("runtime probe unavailable")
 	}
-	homeHash, err := physicalPathFingerprint(home)
+	homeHash, err := pathFingerprint(home)
 	if err != nil {
 		return result, err
 	}
-	configHash, err := physicalPathFingerprint(configPath)
+	configHash, err := pathFingerprint(configPath)
 	if err != nil || running.reloading.Load() {
 		return result, errors.New("runtime probe unavailable")
 	}

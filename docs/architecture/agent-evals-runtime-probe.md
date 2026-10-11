@@ -22,6 +22,12 @@ configuration lock. Binary build information is excluded from this fingerprint
 and reported separately. An on-disk config edit or failed reload is not confused
 with an accepted active configuration.
 
+Snapshot collection holds the runtime's reload exclusion through the final log
+level read. Reload transitions take the exclusive side of that same lock. Probe
+requests refuse immediately while the lock is busy, rather than waiting behind
+a potentially slow reload. A complete reload between two boolean flag reads
+therefore cannot produce a mixed-generation successful observation.
+
 ## Admission Ownership
 
 E1B2 compares this observation with the inspected private preset/profile before
