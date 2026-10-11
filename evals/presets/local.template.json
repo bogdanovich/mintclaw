@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "local-eval",
+  "config_path": "profile/config.json",
+  "expected_agent": "main",
+  "expected_workspace": "profile/workspace",
+  "isolation_root": "profile",
+  "capabilities": ["conversation", "interactions"]
+}
