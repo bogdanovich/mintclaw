@@ -97,3 +97,31 @@ func TestFormIntakeLiteralOccurrenceIgnoresEmbeddedEarlierSubstring(t *testing.T
 		}
 	}
 }
+
+func TestFormIntakeLiteralKeepsOverlappingCandidatesAfterRejectedMatch(t *testing.T) {
+	for _, test := range []struct{ text, literal, prefix string }{
+		{"xA-A-A", "A-A", "xA-"},
+		{"xЖ-Ж-Ж", "Ж-Ж", "xЖ-"},
+	} {
+		span, err := resolveFormIntakeLiteral(test.text, FormIntakeLiteral{Text: test.literal, Occurrence: 1})
+		if err != nil || span.Start != len(test.prefix) || span.End != len(test.text) ||
+			formIntakeLiteralOccurrence(test.text, span) != 1 {
+			t.Fatalf("rejected embedded match skipped valid overlapping candidate: %#v, %v", span, err)
+		}
+		if _, err = resolveFormIntakeLiteral(test.text, FormIntakeLiteral{
+			Text: test.literal, Occurrence: 2,
+		}); !errors.Is(err, ErrFormJobAnswerConflict) {
+			t.Fatal("rejected match was counted as a valid occurrence")
+		}
+	}
+	text := "A-A-A"
+	span, err := resolveFormIntakeLiteral(text, FormIntakeLiteral{Text: "A-A", Occurrence: 1})
+	if err != nil || span.Start != 0 || span.End != len("A-A") {
+		t.Fatal("first accepted occurrence changed")
+	}
+	if _, err = resolveFormIntakeLiteral(text, FormIntakeLiteral{
+		Text: "A-A", Occurrence: 2,
+	}); !errors.Is(err, ErrFormJobAnswerConflict) {
+		t.Fatal("accepted overlapping matches must remain non-overlapping")
+	}
+}

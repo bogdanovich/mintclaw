@@ -52,7 +52,8 @@ func nextFormIntakeLiteral(text, literal string, offset int) (formIntakeSpan, bo
 		if formIntakeLiteralTokenBoundaries(text, start, end) {
 			return formIntakeSpan{Start: start, End: end}, true
 		}
-		offset = end
+		_, width := utf8.DecodeRuneInString(text[start:])
+		offset = start + width
 	}
 	return formIntakeSpan{}, false
 }
