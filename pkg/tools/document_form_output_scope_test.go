@@ -64,13 +64,13 @@ func TestDocumentFormOutputScopeProjectionsAndDeliveryDistinguishDraft(t *testin
 		documentFormDeliveryDescription(job) != deliverable.Text {
 		t.Fatal("draft delivery claimed full completion")
 	}
-	legacy := documentFormApprovalArguments(document.FormCommitBinding{})
+	legacy := (document.FormCommitBinding{}).ApprovalArguments()
 	if _, present := legacy["output_scope"]; present {
 		t.Fatal("empty output scope changed the persisted legacy approval shape")
 	}
-	draft := documentFormApprovalArguments(document.FormCommitBinding{
+	draft := (document.FormCommitBinding{
 		OutputScope: review.OutputScope, OutputMode: review.OutputMode,
-	})
+	}).ApprovalArguments()
 	if draft["output_scope"] != review.OutputScope || draft["output_mode"] != review.OutputMode {
 		t.Fatal("draft approval arguments lost output identity")
 	}

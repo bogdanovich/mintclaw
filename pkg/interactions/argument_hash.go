@@ -28,6 +28,24 @@ func HashArgumentsAtPath(keyPath string, arguments map[string]any) (string, erro
 	if err != nil {
 		return "", err
 	}
+	return hashArguments(key, arguments)
+}
+
+// VerifyArgumentHash compares the native argument fingerprint without reading,
+// creating or changing key files. The caller owns and admits the key material;
+// a matching digest alone does not establish route, freshness or grant authority.
+func VerifyArgumentHash(key []byte, arguments map[string]any, expected string) (bool, error) {
+	if len(key) != argumentHashKeySize || !validArgumentHashForKind(KindApproval, expected) {
+		return false, ErrInvalidInteraction
+	}
+	digest, err := hashArguments(key, arguments)
+	if err != nil {
+		return false, ErrInvalidInteraction
+	}
+	return hmac.Equal([]byte(digest), []byte(strings.TrimSpace(expected))), nil
+}
+
+func hashArguments(key []byte, arguments map[string]any) (string, error) {
 	canonical, err := json.Marshal(arguments)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize approval arguments: %w", err)
