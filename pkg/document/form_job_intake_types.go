@@ -92,6 +92,7 @@ type FormIntakeInput struct {
 	Intent    interactions.ProtectedAnswerIntent `json:"-"`
 	Text      string                             `json:"-"`
 	Context   FormIntakeContext                  `json:"-"`
+	Accounted []FormIntakeAccountedLiteral       `json:"-"`
 }
 
 type FormIntakePassRequest struct {
@@ -155,13 +156,16 @@ type formIntakeStoredInput struct {
 	CreatedAt     int64                              `json:"created_at"`
 	CommittedAt   int64                              `json:"committed_at,omitempty"`
 	Reservations  []formIntakeStoredPass             `json:"reservations,omitempty"`
+	OriginalBytes int                                `json:"original_bytes,omitempty"`
+	Accounted     []formIntakeSpan                   `json:"accounted,omitempty"`
 }
 
 // The bounded reservation list is also the budget: no separately mutable
 // counter or latest-only binding can drift from durable replay identity.
 type formIntakeStoredPass struct {
-	ID           string   `json:"id"`
-	KeyDigest    string   `json:"key_digest"`
-	Revision     int64    `json:"revision"`
-	CandidateIDs []string `json:"candidate_field_ids"`
+	ID           string                   `json:"id"`
+	KeyDigest    string                   `json:"key_digest"`
+	Revision     int64                    `json:"revision"`
+	CandidateIDs []string                 `json:"candidate_field_ids"`
+	Outcome      *formIntakeStoredOutcome `json:"outcome,omitempty"`
 }
