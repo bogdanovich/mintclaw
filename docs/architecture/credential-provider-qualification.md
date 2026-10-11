@@ -180,3 +180,49 @@ Validation uses fake item APIs and synthetic canaries; provider authentication
 and a real isolated deployment remain pending. The SDK also builds against
 MintClaw's resolved Wazero `v1.12.0` and `x/sys v0.48.0` for the four recorded
 targets in the separate qualification checkout.
+
+## Linux host readiness observation
+
+Read-only observation on `server@oc`, 2026-10-11 at 06:51–06:55 UTC:
+
+- Deployed core: `422300d7c5401651da945ff5fcd11ceffa987b77`.
+- Kernel: `7.0.0-30-generic`; systemd: `255.4-1ubuntu8.17`.
+- The main gateway is a user service under operator UID/GID `1000`. The
+  operator belongs to the sudo group and has a shell authorization rule.
+  Its observed service properties are `NoNewPrivileges=no`,
+  `PrivateUsers=no`, `ProtectSystem=no`, and `ProtectProc=default`.
+- No production service or configuration changed. No vault token, private
+  environment, or full configuration was displayed or copied.
+
+These properties do not qualify the credential host. Agent execution and
+file authority require separate evidence. A new broker UID alone cannot
+protect secrets if an agent retains root, operator impersonation, or
+service-management authority on that host. Before real provisioning, qualify
+the complete confined execution path or use a credential/browser host outside
+those capabilities. Preserve existing administration flows while preparing
+that boundary; do not silently revoke operator privileges during setup.
+
+A private socket-pair probe passed on the actual server: kernel
+`SO_PEERCRED` matched the connected process, and `SO_PEERPIDFD` returned a
+live close-on-exec handle. This supports the intended caller-authentication
+mechanism. Trusted process/cgroup binding, delegated descriptor denial,
+dead-peer handling, and typed transport still need integration tests.
+
+A temporary disposable Linux fixture also demonstrated service-UID-only
+credential ACL access. A distinct agent UID was denied credential-file,
+broker environment, process-memory, and process-control access. Its overlay
+filesystem supported ACLs; its tmpfs did not. Systemd may use service ownership
+with a read-only mount when ACLs are unavailable. Check the actual descriptor,
+ACL/ownership authority, mount protection, and bounded input together; an
+owner/mode check alone is insufficient for the loader admission.
+
+An attempted disposable systemd activation exited before starting a service.
+It supplied no credential and qualifies no activation path. Actual systemd
+credential delivery, mount isolation, browser-child filesystem isolation, and
+provider-readiness-before-retrieval remain open gates. Keep them explicit in
+the next CA2 merge unit and keep runtime credential access disabled.
+
+Sources:
+
+- [Linux v6.12 socket peer identity implementation](https://github.com/torvalds/linux/blob/v6.12/net/core/sock.c)
+- [Systemd v252 credential ownership and ACL implementation](https://github.com/systemd/systemd/blob/v252/src/core/execute.c)
