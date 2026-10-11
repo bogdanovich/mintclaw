@@ -1,6 +1,6 @@
 import AppKit
 
-final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
+final class Fixture: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextFieldDelegate {
     var windows: [NSWindow] = []
     var fields: [NSTextField] = []
     var counts = [0, 0]
@@ -20,6 +20,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "MintClaw disposable fixture \(index)"
             window.isReleasedWhenClosed = false
+            window.delegate = self
             let heading = NSTextField(labelWithString: "MintClaw qualification fixture")
             heading.frame = NSRect(x: 25, y: 180, width: 390, height: 24)
             window.contentView!.addSubview(heading)
@@ -40,6 +41,9 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         emit(["kind": "ready", "pid": ProcessInfo.processInfo.processIdentifier,
               "windows": windows.map { $0.windowNumber }])
         state()
+        if ProcessInfo.processInfo.environment["MINTCLAW_FIXTURE_CLOSE_AFTER_READY"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.windows[0].performClose(nil) }
+        }
         Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
             let values = self.fields.map { $0.stringValue }
             if values != self.lastValues {
@@ -50,6 +54,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     func controlTextDidChange(_ notification: Notification) { state() }
+    func windowWillClose(_ notification: Notification) { NSApp.terminate(nil) }
     @objc func apply(_ button: NSButton) { counts[button.tag] += 1; state() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
