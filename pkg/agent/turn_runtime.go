@@ -18,6 +18,7 @@ type turnRuntime struct {
 	inbound             *inboundSpool
 	activeTurnStates    sync.Map
 	activeRouteSessions sync.Map
+	routeAdmissionMu    sync.Mutex
 	pendingStops        sync.Map
 	sequence            atomic.Uint64
 

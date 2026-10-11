@@ -6,6 +6,7 @@ type runtimeSessionClaim struct {
 	runtime     *turnRuntime
 	scope       runtimeSessionScope
 	routeScope  runtimeRouteScope
+	routeTarget *inboundDispatchTarget
 	placeholder *turnState
 }
 
@@ -13,10 +14,21 @@ func (r *turnRuntime) claimRuntimeRouteSession(
 	target *inboundDispatchTarget,
 	turnID string,
 ) (*runtimeSessionClaim, *inboundDispatchTarget, bool) {
+	r.routeAdmissionMu.Lock()
+	defer r.routeAdmissionMu.Unlock()
+	return r.claimRuntimeRouteSessionLocked(target, turnID)
+}
+
+func (r *turnRuntime) claimRuntimeRouteSessionLocked(
+	target *inboundDispatchTarget,
+	turnID string,
+) (*runtimeSessionClaim, *inboundDispatchTarget, bool) {
 	routeScope := target.runtimeRouteScope()
 	if routeScope.workspace == "" || routeScope.claimKey == "" {
 		return nil, target, false
 	}
+	claimedTarget := *target
+	target = &claimedTarget
 	if existing, loaded := r.activeRouteSessions.LoadOrStore(routeScope, target); loaded {
 		activeTarget, ok := existing.(*inboundDispatchTarget)
 		if !ok {
@@ -31,6 +43,7 @@ func (r *turnRuntime) claimRuntimeRouteSession(
 		return nil, target, false
 	}
 	claim.routeScope = routeScope
+	claim.routeTarget = target
 	return claim, target, true
 }
 
@@ -58,14 +71,15 @@ func (claim *runtimeSessionClaim) releaseIfOwned() {
 	if claim == nil || claim.placeholder == nil || claim.runtime == nil {
 		return
 	}
+	claim.runtime.routeAdmissionMu.Lock()
+	defer claim.runtime.routeAdmissionMu.Unlock()
+	claim.releaseIfOwnedLocked()
+}
+
+func (claim *runtimeSessionClaim) releaseIfOwnedLocked() {
 	claim.releaseSessionIfOwned()
-	if claim.routeScope.claimKey != "" {
-		if target, ok := claim.runtime.activeRouteSessions.Load(claim.routeScope); ok {
-			activeTarget, targetOK := target.(*inboundDispatchTarget)
-			if targetOK && activeTarget.runtimeSessionScope() == claim.scope {
-				claim.runtime.activeRouteSessions.CompareAndDelete(claim.routeScope, target)
-			}
-		}
+	if claim.routeTarget != nil {
+		claim.runtime.activeRouteSessions.CompareAndDelete(claim.routeScope, claim.routeTarget)
 	}
 }
 
