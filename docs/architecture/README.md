@@ -129,6 +129,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Credential Phone Approval Verifier Qualification](credential-phone-approval-qualification.md):
   pinned WebAuthn candidate build evidence, caller timeout and verification
   requirements, and pending Android approval qualification.
+- [Protected Credential Approval Service](credential-approval-service.md):
+  Root configuration, dedicated Linux identity, native phone TLS, protected
+  enrollment socket, shutdown, and disposable qualification limits.
 - [Credential Browser Login Admission](credential-browser-login-admission.md):
   configured private login flow, sandbox and process requirements, lease
   retirement, fixed outputs, and actual-host qualification gates.

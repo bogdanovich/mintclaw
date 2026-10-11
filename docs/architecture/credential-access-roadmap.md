@@ -121,6 +121,12 @@ encoding a credential into arbitrary page content.
 | CA5 | Explicitly scoped non-browser connector operations | CA2, CA3 | One concrete connector operation with host/endpoint/action constraints, private credential injection, bounded safe results, independent effect policy, and adversarial egress tests |
 | CA6 | End-to-end qualification and protected personal pilot | CA4; CA5 only for enabled connectors | Canary-secrets suite passes; phone and isolated-host setup documented and verified; dedicated-vault token provisioned privately; one operator-selected login succeeds without secret material in provider requests or durable outputs |
 
+The [protected approval-service implementation](credential-approval-service.md)
+provides concrete native TLS startup and initial enrollment under a dedicated
+Linux identity. It does not complete CA2 or CA3: real-host isolation, private
+caller/provider wiring, generic notifications, and physical Android
+qualification remain required before credential access is activated.
+
 ### CA1: policy and grant foundation
 
 Introduce a small `pkg/credentialbroker` package separate from the existing
