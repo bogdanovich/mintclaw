@@ -29,7 +29,7 @@ func (sink *FormProtectedAnswerSink) acceptFormIntake(
 		!validFormIntakeText(request.Intent, request.Text) {
 		return interactions.ProtectedAnswerReceipt{}, ErrFormJobAnswerConflict
 	}
-	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
+	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
 		return interactions.ProtectedAnswerReceipt{}, err
 	}
@@ -52,7 +52,7 @@ func (sink *FormProtectedAnswerSink) acceptFormIntake(
 func (sink *FormProtectedAnswerSink) commitFormIntake(
 	ctx context.Context, request interactions.ProtectedAnswerCommitRequest, envelope formJobEnvelope,
 ) error {
-	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
+	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
 		return err
 	}
@@ -101,7 +101,7 @@ func (sink *FormProtectedAnswerSink) commitFormIntake(
 func (sink *FormProtectedAnswerSink) discardFormIntake(
 	ctx context.Context, request interactions.ProtectedAnswerDiscardRequest, envelope formJobEnvelope,
 ) error {
-	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
+	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
 		return err
 	}
@@ -152,7 +152,7 @@ func (sink *FormProtectedAnswerSink) discardFormIntake(
 func (sink *FormProtectedAnswerSink) cancelFormIntake(
 	ctx context.Context, request interactions.ProtectedAnswerCancelRequest, envelope formJobEnvelope,
 ) error {
-	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
+	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
 		return err
 	}
