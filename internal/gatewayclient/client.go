@@ -241,7 +241,8 @@ func (client *Client) readLoop() {
 	for {
 		var message protocol.MintClawMessage
 		if err := client.readMessage(&message); err != nil {
-			if client.ctx.Err() == nil {
+			// Caller closure cannot erase a safety failure from an already admitted frame.
+			if client.ctx.Err() == nil || frameSafetyFailure(err) {
 				client.fail(err)
 			}
 			return
@@ -280,9 +281,14 @@ func (client *Client) readMessage(message *protocol.MintClawMessage) error {
 	return nil
 }
 
+func frameSafetyFailure(err error) bool {
+	return errors.Is(err, websocket.ErrReadLimit) || errors.Is(err, ErrFrameInspection)
+}
+
 func (client *Client) fail(err error) {
 	client.errorMu.Lock()
-	if client.failure == nil {
+	// A concurrent shutdown/write failure cannot conceal an admitted unsafe frame.
+	if client.failure == nil || frameSafetyFailure(err) && !frameSafetyFailure(client.failure) {
 		client.failure = err
 	}
 	client.errorMu.Unlock()
