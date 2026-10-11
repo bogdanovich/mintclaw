@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	manualeval "github.com/bogdanovich/mintclaw/internal/eval"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
 func TestOfflineCommands(t *testing.T) {
@@ -60,5 +62,28 @@ func TestOfflinePresetAndSelection(t *testing.T) {
 	command.SetArgs([]string{"list", "--root", "../../../../evals", "--case", "general.unknown"})
 	if err := command.Execute(); !errors.Is(err, manualeval.ErrInvalidFilter) {
 		t.Fatal("unknown case ignored", err)
+	}
+}
+
+func TestRunRequiresExplicitPreparedTargetAndNeverEchoesCase(t *testing.T) {
+	t.Setenv(config.EnvHome, filepath.Join(t.TempDir(), "not-prepared"))
+	for _, args := range [][]string{
+		{"run", "--root", "../../../../evals"},
+		{"run", "--root", "../../../../evals", "--preset", "../../../../evals/presets/local.template.json"},
+		{
+			"run", "--root", "../../../../evals", "--preset", "../../../../evals/presets/local.template.json",
+			"--out", t.TempDir(), "--json",
+		},
+	} {
+		command := NewEvalCommand()
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetErr(&output)
+		command.SetArgs(args)
+		err := command.Execute()
+		if err == nil || strings.Contains(output.String(), "MC_EVAL_CONTEXT") ||
+			strings.Contains(output.String(), `"verdict":"pass"`) {
+			t.Fatal("unprepared target ran or failed CLI exposed task/success")
+		}
 	}
 }
