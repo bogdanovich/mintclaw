@@ -58,6 +58,45 @@ the PID namespace. It cannot alone establish this credential isolation
 boundary. Use a separately owned service and explicitly qualified execution
 profiles; do not infer security from `isolation.enabled`.
 
+## Credential-browser startup qualification
+
+The first pilot targets an isolated Linux browser on the MintClaw server.
+This is an implementation assumption pending the operator's placement choice;
+it does not admit an attached desktop profile or a cloud browser.
+
+The ordinary Playwright sidecar is not yet a qualified credential consumer.
+`playwrightLibraryEnvironment` copies the parent environment, and the sidecar
+does not set `chromiumSandbox`. Playwright documents that Chromium sandboxing
+defaults to disabled. Before enabling the credential path:
+
+- Build a bounded child environment from an operator-owned allowlist rather
+  than copying the broker environment. Exclude vault tokens, service-credential
+  directory variables, IPC authentication material, loader overrides, and
+  arbitrary runtime startup options. Forward only explicitly qualified proxy
+  and browser configuration, never a model-provided command or environment.
+- Require Chromium sandboxing and verify a real launch under the service's
+  deployment restrictions. Do not retry with `--no-sandbox`, accept arbitrary
+  launch flags, or silently use an unqualified browser when startup fails.
+- Keep broker credential files and IPC keys outside the browser child's
+  filesystem view. A clean environment alone does not make files unreadable.
+  Verify this separately from the denial checks for agent shell/file tools.
+- Use a private credential-only context/profile. Disable inherited recording,
+  downloads, storage export, raw execution, and diagnostics until their safe
+  output contracts are admitted. Qualify lease checks and output projection
+  before loading a token or retrieving a login item.
+
+On Linux, evaluate `LoadCredentialEncrypted=` with a private service mount
+namespace as the preferred token-delivery path. Systemd decrypts credentials
+at activation and exposes them to service code as files; this does not replace
+separate OS identities or protect against a trusted service compromise.
+
+Sources:
+
+- `pkg/browser/playwright_library_client.go`
+- `runtime/browser/playwright-library/sidecar.cjs`
+- [Playwright Chromium sandbox option](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-option-chromium-sandbox)
+- [Systemd service credentials](https://github.com/systemd/systemd/blob/main/docs/CREDENTIALS.md)
+
 ## Provisioning and lifecycle
 
 Prefer an OS service credential facility with encryption at rest. A fallback
