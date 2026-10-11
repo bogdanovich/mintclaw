@@ -361,3 +361,41 @@ func TestCodingRuntimeLayoutResolvesDiagnosticStateOutsideCheckout(t *testing.T)
 		t.Fatal("expected checkout-owned absolute state rejection")
 	}
 }
+
+func TestCodingRuntimeLayoutRejectsThreadStateSymlinkEscape(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		configured string
+		linkName   string
+	}{
+		{name: "default", linkName: "diagnostics"},
+		{name: "relative", configured: "custom-traces", linkName: "custom-traces"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			root, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			project := filepath.Join(root, "project")
+			stateRoot := filepath.Join(root, "state", "thread-1")
+			siblingDiagnostics := filepath.Join(root, "state", "thread-2", "diagnostics")
+			for _, directory := range []string{project, stateRoot, siblingDiagnostics} {
+				if err := os.MkdirAll(directory, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(siblingDiagnostics, filepath.Join(stateRoot, test.linkName)); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+			layout, err := NewCodingRuntimeLayout("thread-1", project, stateRoot, []string{project})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = layout.ResolveExternalStatePath(test.configured, "diagnostics")
+			if err == nil || !strings.Contains(err.Error(), "within the thread state root") {
+				t.Fatalf("ResolveExternalStatePath() error = %v", err)
+			}
+		})
+	}
+}

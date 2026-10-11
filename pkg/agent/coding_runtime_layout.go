@@ -201,6 +201,7 @@ func (l CodingRuntimeLayout) ResolveExternalStatePath(
 		return "", err
 	}
 	configured = strings.TrimSpace(configured)
+	requireThreadOwnership := configured == "" || !filepath.IsAbs(configured)
 	var candidate string
 	switch {
 	case configured == "":
@@ -224,6 +225,17 @@ func (l CodingRuntimeLayout) ResolveExternalStatePath(
 	}
 	if insideExecution {
 		return "", fmt.Errorf("coding runtime layout: external state path must be outside the execution root")
+	}
+	if requireThreadOwnership {
+		insideStateRoot, containmentErr := runtimeLayoutPathWithin(resolved, l.stateRoot)
+		if containmentErr != nil {
+			return "", fmt.Errorf("coding runtime layout: check thread state containment: %w", containmentErr)
+		}
+		if !insideStateRoot {
+			return "", fmt.Errorf(
+				"coding runtime layout: default or relative state path must remain within the thread state root",
+			)
+		}
 	}
 	return resolved, nil
 }
