@@ -393,30 +393,59 @@ func (journal *WriteJournal) load(operationID string) (WriteOperationRecord, boo
 		return WriteOperationRecord{}, false, safeWriteJournalError(ErrWriteJournalFailed, err)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, DefaultMaxWriteJournalRecord+1))
+	defer clear(data)
 	if err != nil || len(data) > DefaultMaxWriteJournalRecord {
 		return WriteOperationRecord{}, false, safeWriteJournalError(
 			ErrWriteJournalFailed,
 			errors.New("read journal record"),
 		)
 	}
+	record, err := decodeWriteOperationSnapshot(data, operationID)
+	return record, err == nil, err
+}
+
+// InspectWriteOperationSnapshot validates an owner-bound observation of the
+// exact caller-admitted bytes. It does not reopen a journal, acquire a lock,
+// initialize storage, transition an operation, or grant write authority.
+func InspectWriteOperationSnapshot(
+	data []byte, operationID string, owner Authority,
+) (WriteOperationRecord, error) {
+	ownerDigest, err := documentOwnerDigest(owner)
+	if err != nil || !validWriteOperationID(operationID) {
+		return WriteOperationRecord{}, ErrWriteConflict
+	}
+	record, err := decodeWriteOperationSnapshot(data, operationID)
+	if err != nil {
+		return WriteOperationRecord{}, err
+	}
+	if record.OwnerSHA256 != ownerDigest {
+		return WriteOperationRecord{}, ErrWriteConflict
+	}
+	return record, nil
+}
+
+func decodeWriteOperationSnapshot(data []byte, operationID string) (WriteOperationRecord, error) {
+	if len(data) == 0 || len(data) > DefaultMaxWriteJournalRecord || !validWriteOperationID(operationID) {
+		return WriteOperationRecord{}, ErrWriteJournalFailed
+	}
 	var record WriteOperationRecord
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&record); err != nil {
-		return WriteOperationRecord{}, false, safeWriteJournalError(
+	if err := decoder.Decode(&record); err != nil {
+		return WriteOperationRecord{}, safeWriteJournalError(
 			ErrWriteJournalFailed,
 			errors.New("decode journal record"),
 		)
 	}
 	var trailing any
-	if err = decoder.Decode(&trailing); !errors.Is(err, io.EOF) || !validWriteOperationRecord(record) ||
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) || !validWriteOperationRecord(record) ||
 		record.OperationID != operationID {
-		return WriteOperationRecord{}, false, safeWriteJournalError(
+		return WriteOperationRecord{}, safeWriteJournalError(
 			ErrWriteJournalFailed,
 			errors.New("invalid journal record"),
 		)
 	}
-	return record, true, nil
+	return record, nil
 }
 
 func (journal *WriteJournal) lockPath() string {
