@@ -3450,7 +3450,8 @@ func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Con
 	}
 	ctx = toolshared.WithToolDocumentContext(ctx, documentRefs, ts.documentVisionAvailable)
 	ctx = toolshared.WithToolDocumentLocalPaths(ctx, ts.documentLocalPaths)
-	return toolshared.WithToolExecutionIdentity(ctx, ts.workspace, effectiveToolExecutionID(ts))
+	ctx = toolshared.WithToolExecutionIdentity(ctx, ts.workspace, effectiveToolExecutionID(ts))
+	return toolshared.WithToolTraceTurnID(ctx, ts.turnID)
 }
 
 func (r *toolLoopRunner) appendSkippedToolMessage(
