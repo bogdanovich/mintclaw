@@ -202,8 +202,10 @@ entire personal vault.
 
 ## Progress record
 
-- CA0: roadmap written; documentation publication in progress.
-- CA1: next implementation slice; runtime credential access remains disabled.
+- CA0: merged in [PR #1511](https://github.com/bogdanovich/mintclaw/pull/1511);
+  `make lint-docs` passed.
+- CA1: policy and grant foundation implemented; validation and review in
+  progress. Runtime credential access remains disabled.
 - CA2–CA6: pending their dependencies and admission/qualification gates.
 
 Update this record with PRs, validation, and any narrowed admissions as work
