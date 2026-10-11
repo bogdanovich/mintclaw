@@ -2,6 +2,7 @@ package eval
 
 import (
 	"os"
+	"reflect"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -74,6 +75,11 @@ func (domain *pdfConversation) observeSettlement() (pdfSettlement, error) {
 }
 
 func (domain *pdfConversation) settledApprovalMatches(record interactions.Record, terminalAt int64) bool {
+	if domain.approvalRecord == nil || domain.approvalRecord.Origin.ExecutionContext == nil ||
+		record.Origin.ExecutionContext == nil ||
+		!reflect.DeepEqual(record.Origin.ExecutionContext, domain.approvalRecord.Origin.ExecutionContext) {
+		return false
+	}
 	return record.Kind == interactions.KindApproval && record.Status == interactions.StatusResolved &&
 		record.Outcome == interactions.OutcomeAllowed && record.ApprovalConsumedAt >= domain.confirmedAt.UnixMilli() &&
 		record.ApprovalConsumedAt <= terminalAt && record.ResolvedAt >= record.ApprovalConsumedAt &&

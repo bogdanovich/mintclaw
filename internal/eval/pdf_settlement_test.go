@@ -293,3 +293,39 @@ func TestPDFSettlementRejectsStaleOrNonAllowedAnswer(t *testing.T) {
 		})
 	}
 }
+
+func TestPDFSettlementBindsCapturedExecutionContext(t *testing.T) {
+	domain, settlement := settledPDFControl(t)
+	if !domain.settledApprovalMatches(settlement.approval, settlement.job.TerminalAt) {
+		t.Fatal("unchanged native context was rejected")
+	}
+	for _, mode := range []string{"actor", "sender", "account", "raw", "missing", "missing_capture"} {
+		t.Run(mode, func(t *testing.T) {
+			record := settlement.approval
+			context := *record.Origin.ExecutionContext
+			record.Origin.ExecutionContext = &context
+			switch mode {
+			case "actor":
+				context.ActorID = "foreign-actor"
+			case "sender":
+				context.SenderID = "foreign-sender"
+			case "account":
+				context.Account = "foreign-account"
+			case "raw":
+				context.Raw = map[string]string{"foreign": "context"}
+			case "missing":
+				record.Origin.ExecutionContext = nil
+			case "missing_capture":
+				captured := domain.approvalRecord.Origin.ExecutionContext
+				domain.approvalRecord.Origin.ExecutionContext = nil
+				t.Cleanup(func() { domain.approvalRecord.Origin.ExecutionContext = captured })
+			}
+			if domain.settledApprovalMatches(record, settlement.job.TerminalAt) {
+				t.Fatal("changed or missing execution context admitted settlement authority")
+			}
+		})
+	}
+	if !domain.settledApprovalMatches(settlement.approval, settlement.job.TerminalAt) {
+		t.Fatal("negative controls changed the captured approval")
+	}
+}
