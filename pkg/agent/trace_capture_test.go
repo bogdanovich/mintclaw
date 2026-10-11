@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/channels"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -74,6 +75,232 @@ func TestToolLoopDecisionTraceRetainsExactCallGeneration(t *testing.T) {
 		record.Correlation.ToolCallID != correlation.ToolCallID ||
 		record.Correlation.ToolCallGeneration != correlation.ToolCallGeneration {
 		t.Fatalf("loop decision correlation = %+v", record.Correlation)
+	}
+}
+
+func TestTraceCapturePersistsOutOfTurnCompactionLifecycle(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	scope := runtimeevents.Scope{
+		TraceScope: runtimeevents.NewTraceScope(workspace, ""),
+		AgentID:    "coding",
+		SessionKey: "coding:thread-private-canary",
+	}
+	base := ContextCompressLifecyclePayload{
+		AttemptID:          "compaction-attempt-1",
+		ThreadID:           "thread-private-canary",
+		TranscriptRevision: 17,
+		TranscriptCount:    42,
+		Reason:             ContextCompressReasonProactive,
+		Background:         true,
+	}
+	events := []struct {
+		id      string
+		kind    runtimeevents.Kind
+		status  ContextCompressLifecycleStatus
+		elapsed time.Duration
+	}{
+		{"compaction-start", runtimeevents.KindAgentContextCompressStart, ContextCompressLifecycleStarted, 0},
+		{
+			"compaction-progress", runtimeevents.KindAgentContextCompressProgress,
+			ContextCompressLifecycleProgress, 40 * time.Millisecond,
+		},
+		{
+			"compaction-end", runtimeevents.KindAgentContextCompressEnd,
+			ContextCompressLifecycleCompleted, 75 * time.Millisecond,
+		},
+	}
+	for index, fixture := range events {
+		payload := base
+		payload.Status = fixture.status
+		payload.Duration = fixture.elapsed
+		if fixture.status != ContextCompressLifecycleStarted {
+			payload.TokensBefore = 1200
+			payload.TokensAfter = 800
+			payload.TokensSaved = 400
+			payload.TokenCountsObserved = true
+			payload.SummariesCreated = 2
+			payload.LeafSummaries = 1
+			payload.CondensedSummaries = 1
+		}
+		publishCaptureEvent(t, eventBus, runtimeevents.Event{
+			ID: fixture.id, Kind: fixture.kind,
+			Time:  startedAt.Add(time.Duration(index) * time.Millisecond),
+			Scope: scope, Payload: payload,
+		})
+	}
+
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if err := diagnostictrace.Validate(trace); err != nil {
+		t.Fatalf("validate compaction continuation: %v", err)
+	}
+	if !strings.HasPrefix(trace.Metadata.RootTurnID, "compaction-") ||
+		trace.Metadata.ParentTurnID != "" || trace.Outcome == nil ||
+		trace.Outcome.Status != string(ContextCompressLifecycleCompleted) ||
+		trace.Truncation.Incomplete || len(trace.Records) != len(events) {
+		t.Fatalf("compaction continuation envelope = %#v", trace)
+	}
+	for index, record := range trace.Records {
+		if record.Kind != diagnostictrace.RecordContextCompaction ||
+			record.Correlation.CompactionAttemptID != base.AttemptID {
+			t.Fatalf("compaction record %d = %#v", index, record)
+		}
+		var payload diagnostictrace.ContextPayload
+		if err := json.Unmarshal(record.Data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Status != string(events[index].status) ||
+			payload.TranscriptRevision != base.TranscriptRevision ||
+			payload.TranscriptCount != base.TranscriptCount || !payload.Background {
+			t.Fatalf("compaction payload %d = %#v", index, payload)
+		}
+	}
+	encoded, err := json.Marshal(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(base.ThreadID)) || bytes.Contains(encoded, []byte(scope.SessionKey)) {
+		t.Fatalf("compaction trace retained private thread/session identity: %s", encoded)
+	}
+}
+
+func TestTraceCaptureKeepsActiveTurnCompactionInParentTrace(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	traceScope := runtimeevents.NewTraceScope(workspace, "turn-with-compaction")
+	scope := runtimeevents.Scope{TraceScope: traceScope, AgentID: "main", SessionKey: "session-compaction"}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "turn-start", Kind: runtimeevents.KindAgentTurnStart, Time: startedAt,
+		Scope: scope, Payload: TurnStartPayload{Workspace: workspace},
+	})
+	for index, fixture := range []struct {
+		kind   runtimeevents.Kind
+		status ContextCompressLifecycleStatus
+	}{
+		{runtimeevents.KindAgentContextCompressStart, ContextCompressLifecycleStarted},
+		{runtimeevents.KindAgentContextCompressEnd, ContextCompressLifecycleNoProgress},
+	} {
+		publishCaptureEvent(t, eventBus, runtimeevents.Event{
+			ID: "compaction-" + string(fixture.status), Kind: fixture.kind,
+			Time: startedAt.Add(time.Duration(index+1) * time.Millisecond), Scope: scope,
+			Payload: ContextCompressLifecyclePayload{
+				AttemptID: "compaction-parent-1", Status: fixture.status,
+				Reason: ContextCompressReasonRetry,
+			},
+		})
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "turn-end", Kind: runtimeevents.KindAgentTurnEnd,
+		Time: startedAt.Add(3 * time.Millisecond), Scope: scope,
+		Payload: TurnEndPayload{Workspace: workspace, Status: TurnEndStatusCompleted},
+	})
+
+	paths := waitForTraceFiles(t, workspace, 1)
+	if len(paths) != 1 {
+		t.Fatalf("active-turn compaction created %d traces, want 1", len(paths))
+	}
+	trace := readCapturedTrace(t, paths[0])
+	if trace.Metadata.RootTurnID != traceScope.TurnID || trace.Outcome == nil ||
+		trace.Outcome.Status != string(TurnEndStatusCompleted) {
+		t.Fatalf("parent trace envelope = %#v", trace)
+	}
+	compactionRecords := 0
+	for _, record := range trace.Records {
+		if record.Kind != diagnostictrace.RecordContextCompaction {
+			continue
+		}
+		compactionRecords++
+		if record.Correlation.CompactionAttemptID != "compaction-parent-1" {
+			t.Fatalf("active compaction correlation = %#v", record.Correlation)
+		}
+	}
+	if compactionRecords != 2 {
+		t.Fatalf("active compaction records = %d, want 2", compactionRecords)
+	}
+}
+
+func TestWorkspaceSnapshotTraceRetainsOnlyBoundedRepositoryEvidence(t *testing.T) {
+	const (
+		privateRoot    = "/private/project-root-canary"
+		privateCWD     = "/private/project-root-canary/secret-subdir"
+		privateGitDir  = "/private/git-dir-canary"
+		privateBranch  = "private-branch-canary"
+		privatePath    = "private/source-canary.go"
+		privateWarning = "private-warning-canary"
+	)
+	commit := strings.Repeat("a", 40)
+	snapshot := codingworkspace.Snapshot{
+		ProjectRoot: privateRoot,
+		CWD:         privateCWD,
+		Git: codingworkspace.GitState{
+			Available: true, StatusAvailable: true, TopLevel: privateRoot,
+			GitDir: privateGitDir, CommonDir: privateGitDir, Branch: privateBranch,
+			Head: commit, Detached: true, Worktree: true, Dirty: true,
+			UnavailableReason: "private-unavailable-reason-canary",
+		},
+		ChangedPaths: []codingworkspace.ChangedPath{
+			{Path: privatePath, OriginalPath: "private/original-canary.go", Status: "M"},
+		},
+		DiffStat: codingworkspace.DiffStat{
+			Files: 1, Additions: 7, Deletions: 3, BinaryFiles: 1,
+		},
+		DiffStatAvailable: true, SubmoduleWorktreeStateIgnored: true,
+		Truncated: true, Warning: privateWarning,
+	}
+	startedAt := time.Now().UTC()
+	record, critical, ok := runtimeEventRecord(
+		traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted},
+		&activeTraceCapture{startedAt: startedAt, turnID: "turn-repository-snapshot"},
+		runtimeevents.Event{
+			ID: "workspace-snapshot", Kind: runtimeevents.KindAgentWorkspaceSnapshot,
+			Time:    startedAt.Add(time.Millisecond),
+			Payload: WorkspaceSnapshotPayload{Snapshot: snapshot},
+		},
+	)
+	if !ok || !critical || record.Kind != diagnostictrace.RecordContextSnapshot {
+		t.Fatalf("workspace snapshot projection = ok %v critical %v record %#v", ok, critical, record)
+	}
+	if record.Correlation.RepositorySnapshotHash != snapshot.Identity() ||
+		record.Correlation.RepositoryCommit != commit {
+		t.Fatalf("workspace snapshot correlation = %#v", record.Correlation)
+	}
+	var payload diagnostictrace.ContextPayload
+	if err := json.Unmarshal(record.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.SnapshotType != "repository" || !payload.RepositoryAvailable ||
+		!payload.RepositoryStatusAvailable || !payload.RepositoryDetached ||
+		payload.RepositoryUnborn || !payload.RepositoryWorktree || !payload.RepositoryDirty ||
+		!payload.DiffStatAvailable || payload.ChangedFiles != 1 || payload.AddedLines != 7 ||
+		payload.DeletedLines != 3 || payload.BinaryFiles != 1 ||
+		!payload.SubmoduleWorktreeStateIgnored || !payload.SnapshotTruncated {
+		t.Fatalf("workspace snapshot payload = %#v", payload)
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		privateRoot, privateCWD, privateGitDir, privateBranch, privatePath,
+		"private/original-canary.go", privateWarning, "private-unavailable-reason-canary",
+	} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("workspace snapshot trace retained %q: %s", forbidden, encoded)
+		}
 	}
 }
 
@@ -1152,6 +1379,42 @@ func TestTraceCaptureShutdownDoesNotWaitForIncompleteActiveTurn(t *testing.T) {
 	}
 	if trace.Outcome != nil {
 		t.Fatalf("active-turn outcome = %#v, want nil", trace.Outcome)
+	}
+	_ = eventBus.Close()
+}
+
+func TestTraceCaptureShutdownMarksIncompleteStandaloneCompaction(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "compaction-start", Kind: runtimeevents.KindAgentContextCompressStart,
+		Time: time.Now().UTC(),
+		Scope: runtimeevents.Scope{
+			TraceScope: runtimeevents.NewTraceScope(workspace, ""),
+			AgentID:    "coding",
+			SessionKey: "coding:shutdown-compaction",
+		},
+		Payload: ContextCompressLifecyclePayload{
+			AttemptID: "compaction-shutdown-1", Status: ContextCompressLifecycleStarted,
+			Reason: ContextCompressReasonManual,
+		},
+	})
+
+	startedClosing := time.Now()
+	manager.close()
+	if elapsed := time.Since(startedClosing); elapsed > time.Second {
+		t.Fatalf("compaction capture shutdown took %v", elapsed)
+	}
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if !trace.Truncation.Incomplete ||
+		!slices.Contains(trace.Truncation.Reasons, traceIncompleteRuntimeClosedBeforeCompactionEnd) ||
+		slices.Contains(trace.Truncation.Reasons, traceIncompleteRuntimeClosedBeforeTerminalOutcome) {
+		t.Fatalf("standalone compaction truncation = %#v", trace.Truncation)
+	}
+	if trace.Outcome != nil || len(trace.Records) != 1 ||
+		trace.Records[0].Correlation.CompactionAttemptID != "compaction-shutdown-1" {
+		t.Fatalf("standalone compaction trace = %#v", trace)
 	}
 	_ = eventBus.Close()
 }

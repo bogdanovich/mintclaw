@@ -27,6 +27,7 @@ const (
 
 	traceIncompleteRuntimeClosedBeforeTerminalOutcome    = "runtime_closed_before_terminal_outcome"
 	traceIncompleteRuntimeClosedBeforeDeliverySettlement = "runtime_closed_before_delivery_settlement"
+	traceIncompleteRuntimeClosedBeforeCompactionEnd      = "runtime_closed_before_compaction_end"
 )
 
 type traceCaptureSettings struct {
@@ -41,6 +42,7 @@ type traceCaptureSettings struct {
 
 type activeTraceCapture struct {
 	builder         *diagnosticcapture.TraceBuilder
+	traceKind       string
 	turnID          string
 	workspace       string
 	startedAt       time.Time
@@ -178,7 +180,9 @@ func (p *turnTraceProjector) close() {
 	traces := make([]*activeTraceCapture, 0, len(p.turns))
 	for _, trace := range p.turns {
 		reason := traceIncompleteRuntimeClosedBeforeTerminalOutcome
-		if trace.settlementTimer != nil {
+		if trace.traceKind == "compaction" {
+			reason = traceIncompleteRuntimeClosedBeforeCompactionEnd
+		} else if trace.settlementTimer != nil {
 			reason = traceIncompleteRuntimeClosedBeforeDeliverySettlement
 			trace.settlementTimer.Stop()
 			trace.settlementTimer = nil
@@ -214,6 +218,19 @@ func (p *turnTraceProjector) observeRuntimeEvent(event runtimeevents.Event) {
 		event.Time = time.Now()
 	}
 	traceScopes, traceSettlement := runtimeEventTraceScopes(event)
+	compactionContinuation := false
+	if isContextCompactionLifecycleEvent(event.Kind) &&
+		(len(traceScopes) != 1 || p.turns[traceScopes[0]] == nil) {
+		continuationEvent, continuationScope, ok := compactionContinuationEvent(event)
+		if ok {
+			event = continuationEvent
+			traceScopes = []runtimeevents.TraceScope{continuationScope}
+			if p.turns[continuationScope] == nil {
+				p.startTraceLocked(settings, continuationScope, event, "compaction")
+			}
+			compactionContinuation = true
+		}
+	}
 	if event.Kind == runtimeevents.KindAgentTurnStart && len(traceScopes) == 1 {
 		p.startTraceLocked(settings, traceScopes[0], event, "turn")
 	}
@@ -255,6 +272,21 @@ func (p *turnTraceProjector) observeRuntimeEvent(event runtimeevents.Event) {
 		if record, critical, ok := runtimeEventRecord(settings, trace, event); ok {
 			appendCaptureRecord(trace, record, critical)
 		}
+	}
+	if compactionContinuation && event.Kind == runtimeevents.KindAgentContextCompressEnd {
+		traceScope := traceScopes[0]
+		trace := p.turns[traceScope]
+		if trace != nil {
+			if payload, ok := event.Payload.(ContextCompressLifecyclePayload); ok {
+				trace.builder.SetOutcome(diagnostictrace.Outcome{Status: string(payload.Status)})
+			}
+			p.removeTurnLocked(traceScope, trace)
+		}
+		p.mu.Unlock()
+		if trace != nil && p.submit != nil {
+			_ = p.submit(settings, trace)
+		}
+		return
 	}
 	if completionTraceStarted {
 		traceScope := traceScopes[0]
@@ -382,6 +414,42 @@ func isInteractionRuntimeEvent(kind runtimeevents.Kind) bool {
 	}
 }
 
+func isContextCompactionLifecycleEvent(kind runtimeevents.Kind) bool {
+	switch kind {
+	case runtimeevents.KindAgentContextCompressStart,
+		runtimeevents.KindAgentContextCompressProgress,
+		runtimeevents.KindAgentContextCompressEnd:
+		return true
+	default:
+		return false
+	}
+}
+
+func compactionContinuationEvent(
+	event runtimeevents.Event,
+) (runtimeevents.Event, runtimeevents.TraceScope, bool) {
+	payload, ok := event.Payload.(ContextCompressLifecyclePayload)
+	attemptID := strings.TrimSpace(payload.AttemptID)
+	workspace := strings.TrimSpace(event.Scope.Workspace)
+	if !ok || attemptID == "" || workspace == "" {
+		return runtimeevents.Event{}, runtimeevents.TraceScope{}, false
+	}
+	parentScope := event.Scope.TurnTraceScope()
+	sum := sha256.Sum256([]byte(workspace + "\x00" + attemptID))
+	continuationScope := runtimeevents.NewTraceScope(
+		workspace,
+		"compaction-"+hex.EncodeToString(sum[:12]),
+	)
+	event.Scope.TraceScope = continuationScope
+	if parentScope.Complete() {
+		event.Correlation.ParentTurnID = firstNonEmptyString(
+			event.Correlation.ParentTurnID,
+			parentScope.TurnID,
+		)
+	}
+	return event, continuationScope, true
+}
+
 func interactionContinuationEvent(
 	event runtimeevents.Event,
 ) (runtimeevents.Event, runtimeevents.TraceScope, bool) {
@@ -419,6 +487,7 @@ func (p *turnTraceProjector) startTraceLocked(
 		return false
 	}
 	trace := &activeTraceCapture{
+		traceKind: traceKind,
 		turnID:    traceScope.TurnID,
 		workspace: traceScope.Workspace,
 		startedAt: event.Time,
@@ -520,6 +589,9 @@ func runtimeEventRecord(
 	interactionID := ""
 	interactionEventID := ""
 	interactionRevision := int64(0)
+	compactionAttemptID := ""
+	repositorySnapshotHash := ""
+	repositoryCommit := ""
 	deliveryID := ""
 	switch event.Kind {
 	case runtimeevents.KindAgentTurnStart:
@@ -782,6 +854,31 @@ func runtimeEventRecord(
 				settings, value.DiagnosticContent, diagnosticSteeringBytes,
 			),
 		}
+	case runtimeevents.KindAgentContextCompressStart,
+		runtimeevents.KindAgentContextCompressProgress,
+		runtimeevents.KindAgentContextCompressEnd:
+		value, ok := event.Payload.(ContextCompressLifecyclePayload)
+		if !ok || strings.TrimSpace(value.AttemptID) == "" {
+			return diagnostictrace.Record{}, false, false
+		}
+		kind = diagnostictrace.RecordContextCompaction
+		critical = event.Kind == runtimeevents.KindAgentContextCompressEnd
+		compactionAttemptID = strings.TrimSpace(value.AttemptID)
+		payload = diagnostictrace.ContextPayload{
+			Reason:              string(value.Reason),
+			Status:              string(value.Status),
+			TranscriptRevision:  value.TranscriptRevision,
+			TranscriptCount:     value.TranscriptCount,
+			TokensBefore:        value.TokensBefore,
+			TokensAfter:         value.TokensAfter,
+			TokensSaved:         value.TokensSaved,
+			TokenCountsObserved: value.TokenCountsObserved,
+			SummariesCreated:    value.SummariesCreated,
+			LeafSummaries:       value.LeafSummaries,
+			CondensedSummaries:  value.CondensedSummaries,
+			DurationMS:          max(int64(0), value.Duration.Milliseconds()),
+			Background:          value.Background,
+		}
 	case runtimeevents.KindAgentContextCompress, runtimeevents.KindAgentSessionSummarize:
 		kind = diagnostictrace.RecordContextCompaction
 		switch value := event.Payload.(type) {
@@ -817,6 +914,31 @@ func runtimeEventRecord(
 		payload = diagnostictrace.ContextPayload{
 			AfterMessages: value.MessageCount, SnapshotHash: value.SnapshotHash,
 			ProtectedFactRefs: protected,
+		}
+	case runtimeevents.KindAgentWorkspaceSnapshot:
+		value, ok := event.Payload.(WorkspaceSnapshotPayload)
+		if !ok {
+			return diagnostictrace.Record{}, false, false
+		}
+		snapshot := value.Snapshot
+		kind, critical = diagnostictrace.RecordContextSnapshot, true
+		repositorySnapshotHash = snapshot.Identity()
+		repositoryCommit = safeRepositoryCommit(snapshot.Git.Head)
+		payload = diagnostictrace.ContextPayload{
+			SnapshotType:                  "repository",
+			RepositoryAvailable:           snapshot.Git.Available,
+			RepositoryStatusAvailable:     snapshot.Git.StatusAvailable,
+			RepositoryDetached:            snapshot.Git.Detached,
+			RepositoryUnborn:              snapshot.Git.Unborn,
+			RepositoryWorktree:            snapshot.Git.Worktree,
+			RepositoryDirty:               snapshot.Git.Dirty,
+			DiffStatAvailable:             snapshot.DiffStatAvailable,
+			ChangedFiles:                  snapshot.DiffStat.Files,
+			AddedLines:                    snapshot.DiffStat.Additions,
+			DeletedLines:                  snapshot.DiffStat.Deletions,
+			BinaryFiles:                   snapshot.DiffStat.BinaryFiles,
+			SubmoduleWorktreeStateIgnored: snapshot.SubmoduleWorktreeStateIgnored,
+			SnapshotTruncated:             snapshot.Truncated,
 		}
 	case runtimeevents.KindAgentSubTurnAdmission:
 		value, ok := event.Payload.(SubTurnAdmissionPayload)
@@ -946,22 +1068,25 @@ func runtimeEventRecord(
 			ProfileAlias: profileAlias,
 		},
 		Correlation: diagnostictrace.Correlation{
-			ParentTurnID:        event.Correlation.ParentTurnID,
-			ModelAttemptID:      event.Correlation.ModelAttemptID,
-			RequestID:           event.Correlation.RequestID,
-			ToolCallID:          toolCallID,
-			ToolCallGeneration:  toolCallGeneration,
-			TaskGenerationID:    taskGenerationID,
-			CompletionID:        completionID,
-			WorkerGenerationID:  workerGenerationID,
-			RemoteThreadID:      remoteThreadID,
-			InvocationID:        invocationID,
-			PolicyRevision:      policyRevision,
-			InteractionID:       interactionID,
-			InteractionRevision: interactionRevision,
-			InteractionEventID:  interactionEventID,
-			DeliveryID:          deliveryID,
-			EventID:             event.ID,
+			ParentTurnID:           event.Correlation.ParentTurnID,
+			ModelAttemptID:         event.Correlation.ModelAttemptID,
+			RequestID:              event.Correlation.RequestID,
+			ToolCallID:             toolCallID,
+			ToolCallGeneration:     toolCallGeneration,
+			TaskGenerationID:       taskGenerationID,
+			CompletionID:           completionID,
+			WorkerGenerationID:     workerGenerationID,
+			RemoteThreadID:         remoteThreadID,
+			InvocationID:           invocationID,
+			PolicyRevision:         policyRevision,
+			InteractionID:          interactionID,
+			InteractionRevision:    interactionRevision,
+			InteractionEventID:     interactionEventID,
+			CompactionAttemptID:    compactionAttemptID,
+			RepositorySnapshotHash: repositorySnapshotHash,
+			RepositoryCommit:       repositoryCommit,
+			DeliveryID:             deliveryID,
+			EventID:                event.ID,
 		},
 		Data: data,
 	}, critical, true
@@ -1047,6 +1172,17 @@ func safeCode(value string) string {
 	}, value)
 	if len(value) > 64 {
 		value = value[:64]
+	}
+	return value
+}
+
+func safeRepositoryCommit(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(value) != 40 && len(value) != 64 {
+		return ""
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return ""
 	}
 	return value
 }

@@ -53,11 +53,8 @@
       "runtime_events": ["agent.context.compress_start", "agent.context.compress_progress", "agent.context.compress_end", "agent.context.compress", "agent.context.snapshot", "agent.workspace.snapshot"],
       "trace_records": ["context.compaction", "context.snapshot"],
       "required_ids": ["thread_id", "turn_id", "compaction_attempt_id", "context_snapshot_hash", "repository_snapshot_hash", "repository_commit"],
-      "available_ids": ["thread_id", "turn_id", "context_snapshot_hash", "repository_commit"],
-      "missing_trace_joins": [
-        {"id": "compaction_attempt_id", "disposition": "close_h1b", "observation": "Coding presentation owns the attempt ID but the passive trace records only a coarse compaction result."},
-        {"id": "repository_snapshot_hash", "disposition": "close_h1b", "observation": "Workspace snapshot events are not projected into a bounded trace record."}
-      ],
+      "available_ids": ["thread_id", "turn_id", "compaction_attempt_id", "context_snapshot_hash", "repository_snapshot_hash", "repository_commit"],
+      "missing_trace_joins": [],
       "terminal_facts": ["agent.context.compress_end", "context.snapshot", "coding_resume_reconciliation"],
       "retention_owner": "coding_thread_seahorse_and_diagnostic_store",
       "export_class": "metadata_safe"
@@ -121,10 +118,8 @@
       "runtime_events": ["agent.workspace.snapshot", "agent.context.snapshot"],
       "trace_records": ["context.snapshot"],
       "required_ids": ["project_hash", "thread_id", "worktree_id", "repository_commit", "repository_snapshot_hash"],
-      "available_ids": ["project_hash", "thread_id", "worktree_id", "repository_commit"],
-      "missing_trace_joins": [
-        {"id": "repository_snapshot_hash", "disposition": "close_h1b", "observation": "Deterministic workspace snapshot identity is not passively projected."}
-      ],
+      "available_ids": ["project_hash", "thread_id", "worktree_id", "repository_commit", "repository_snapshot_hash"],
+      "missing_trace_joins": [],
       "terminal_facts": ["workspace_snapshot", "worktree_handoff", "git_filesystem_observation"],
       "retention_owner": "coding_thread_worktree_store_and_git_filesystem",
       "export_class": "private_redacted"
