@@ -28,6 +28,7 @@
     "mintclaw": {
       "type": "mintclaw",
       "enabled": true,
+      "allow_from": ["mintclaw-user"],
       "settings": {"read_timeout": 60}
     }
   },
