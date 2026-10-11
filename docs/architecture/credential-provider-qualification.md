@@ -3,8 +3,9 @@
 Qualification record dated 2026-10-10 for CA2 of the
 [credential access roadmap](credential-access-roadmap.md). This records
 provider build evidence and the service boundary required by the next
-admission. Runtime qualification and protected token provisioning remain
-pending. The record does not enable credential access or admit CA3/CA4.
+admission. Protected token provisioning is implemented; isolated service
+activation and actual provider/consumer qualification remain pending.
+The record does not enable credential access or admit CA3/CA4.
 
 ## Provider candidate
 
@@ -205,8 +206,9 @@ that boundary; do not silently revoke operator privileges during setup.
 A private socket-pair probe passed on the actual server: kernel
 `SO_PEERCRED` matched the connected process, and `SO_PEERPIDFD` returned a
 live close-on-exec handle. This supports the intended caller-authentication
-mechanism. Trusted process/cgroup binding, delegated descriptor denial,
-dead-peer handling, and typed transport still need integration tests.
+mechanism. The private transport fixtures below exercise delegated descriptor
+denial, dead-peer handling, and typed requests. Trusted process-role binding
+and complete deployment integration remain pending on the actual host.
 
 A temporary disposable Linux fixture also demonstrated service-UID-only
 credential ACL access. A distinct agent UID was denied credential-file,
@@ -226,3 +228,46 @@ Sources:
 
 - [Linux v6.12 socket peer identity implementation](https://github.com/torvalds/linux/blob/v6.12/net/core/sock.c)
 - [Systemd v252 credential ownership and ACL implementation](https://github.com/systemd/systemd/blob/v252/src/core/execute.c)
+
+## CA2 private intent transport
+
+`pkg/credentialbroker/intent` defines the shared, versioned request/response
+contract and its Linux client. It has no 1Password SDK dependency. Requests
+carry account aliases, bounded approval duration, and opaque request/grant
+references. They cannot choose a principal, provider item, URL, selector,
+command, or secret. Responses admit fixed outcomes and controller-owned
+references, never provider errors or browser diagnostics. References locate
+service state; possession does not authorize a grant or session.
+
+`cmd/mintclaw-credential/internal/transport` owns the private handler boundary.
+Its caller configuration is trusted startup authority, not evidence that a
+process is a gateway. Before calling `PinCaller`, startup must prove the
+supervised process role, separate OS identities, and denied agent access to
+process control, service management, and credential storage. A saved PID file,
+model-selected PID, or same-UID process is insufficient. Restarting the caller
+requires fresh trusted admission; an exited process's pin is never rebound.
+
+The Linux transport requires a live process handle, `SO_PEERPIDFD`, matching
+kernel UID/GID/PID, and matching per-message `SCM_CREDENTIALS`. It admits one
+bounded sequenced packet per connection. Descriptor handoff and received
+rights are rejected; received descriptors are made close-on-exec atomically
+and closed before rejection. Exact JSON keys, duplicate rejection, field
+bounds, and operation-specific response validation prevent free-form output.
+Private handler errors, panics, and invalid responses become fixed failures.
+
+Calls have a five-second deadline and a shared eight-call capacity. Caller
+exit, client disconnect, cancellation, or service shutdown invalidates the
+borrowed call and cancels its handler. A trusted handler must honor that
+context and acknowledge private side effects; transport cannot forcibly stop
+Go code or undo an injection already in flight. The client makes one attempt
+and does not replay an uncertain result. Grant/policy/origin/browser-lease
+checks remain required immediately before every private consumer operation.
+
+Startup owns the Unix listener and must establish protected path permissions
+and sender-credential reception before publishing readiness. The client needs
+a protected socket path and qualified dedicated server identity. This slice
+creates no production listener, loads no token, invokes no provider, and adds
+no model tool. `ready` requires a qualified service handler and consumer;
+the existence of a transport is insufficient. Linux fixtures use synthetic
+inputs and unprivileged identities. They do not qualify systemd activation,
+host confinement, Android approval, or credential-browser execution.

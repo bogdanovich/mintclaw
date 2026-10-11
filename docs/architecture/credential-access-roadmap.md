@@ -216,9 +216,16 @@ entire personal vault.
   [PR #1514](https://github.com/bogdanovich/mintclaw/pull/1514), with browser
   startup requirements in [PR #1519](https://github.com/bogdanovich/mintclaw/pull/1519).
   The protected Linux provisioning command and disposable real-OS qualification
-  are implemented; [operator setup](../security/credential-broker-setup.md)
-  records the boundary and remaining gates. Isolated startup and authenticated
-  IPC remain pending. Provisioning alone enables no agent access.
+  are merged in [PR #1525](https://github.com/bogdanovich/mintclaw/pull/1525);
+  [operator setup](../security/credential-broker-setup.md) records the boundary
+  and remaining gates. [PR #1526](https://github.com/bogdanovich/mintclaw/pull/1526)
+  records the observed host boundary and why that host is not yet qualified.
+  The private intent transport implements bounded, process-pinned local IPC
+  with kernel peer and per-message identity checks. Linux normal/race fixtures
+  exercise identity substitution, descriptor handoff, cancellation, capacity,
+  and fixed response projection. It creates no listener or model tool by
+  itself. Isolated startup, trusted process-role admission, and service wiring
+  remain pending. Provisioning and transport alone enable no agent access.
 - CA3: [verifier candidate qualification](credential-phone-approval-qualification.md)
   records build and upstream fixture evidence; control-plane and Android
   end-to-end implementation remain pending.
