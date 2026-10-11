@@ -5,7 +5,6 @@ package intent
 import (
 	"context"
 	"net"
-	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -30,7 +29,7 @@ func (client Client) Call(ctx context.Context, request Request) (Response, error
 		return Response{}, ErrInvalid
 	}
 	defer clear(data)
-	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, CallTimeout(request.Operation))
 	defer cancel()
 	connection, err := (&net.Dialer{}).DialContext(callCtx, "unixpacket", client.SocketPath)
 	if err != nil {

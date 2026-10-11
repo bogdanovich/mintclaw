@@ -142,9 +142,15 @@ func (server *Server) handle(parent context.Context, connection *net.UnixConn) {
 		!server.caller.lifetime.Alive() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	started := time.Now()
+	// Preserve one original maximum lifetime. An incomplete packet still has
+	// only five seconds; a decoded login cannot revive canceled authority.
+	ctx, cancel := context.WithTimeout(parent, intent.CallTimeout(intent.Login))
 	defer cancel()
 	deadline, _ := ctx.Deadline()
+	if readDeadline := started.Add(intent.CallTimeout(intent.Status)); readDeadline.Before(deadline) {
+		deadline = readDeadline
+	}
 	if connection.SetDeadline(deadline) != nil {
 		return
 	}
@@ -169,11 +175,17 @@ func (server *Server) handle(parent context.Context, connection *net.UnixConn) {
 		writeOutcome(connection, request.Operation, intent.Response{Code: intent.Denied})
 		return
 	}
-	call := Call{ctx, server.caller, peer, request}
+	callCtx, finishCall := context.WithDeadline(ctx, started.Add(intent.CallTimeout(request.Operation)))
+	defer finishCall()
+	deadline, _ = callCtx.Deadline()
+	if connection.SetDeadline(deadline) != nil {
+		return
+	}
+	call := Call{callCtx, server.caller, peer, request}
 	if call.Authorize() != nil {
 		return
 	}
-	response := server.invoke(ctx, call)
+	response := server.invoke(callCtx, call)
 	if call.Authorize() != nil {
 		return
 	}

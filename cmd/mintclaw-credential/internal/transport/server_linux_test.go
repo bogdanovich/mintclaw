@@ -186,43 +186,50 @@ func TestPrivateHandlerFailuresNeverEscapeResponseBoundary(t *testing.T) {
 }
 
 func TestClientCancellationStopsPrivateHandlerAndDoesNotReplay(t *testing.T) {
-	started, stopped := make(chan struct{}), make(chan struct{})
-	var calls atomic.Int32
-	fixture := newTransportFixture(t, func(ctx context.Context, call Call) (intent.Response, error) {
-		calls.Add(1)
-		close(started)
-		<-ctx.Done()
-		defer close(stopped)
-		if call.Authorize() == nil {
-			return intent.Response{}, errors.New("canceled call kept authority")
-		}
-		return intent.Response{Code: intent.OutcomeUnknown}, nil
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { _, err := fixture.client.Call(ctx, intent.Request{Operation: intent.Status}); done <- err }()
-	select {
-	case <-started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("fixture handler never started")
-	}
-	cancel()
-	select {
-	case err := <-done:
-		if !errors.Is(err, intent.ErrUnavailable) {
-			t.Fatal("canceled client did not fail closed")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("client cancellation did not close its connection")
-	}
-	select {
-	case <-stopped:
-	case <-time.After(2 * time.Second):
-		t.Fatal("private consumer cancellation was not delivered")
-	}
-	if calls.Load() != 1 {
-		t.Fatal("canceled operation was replayed")
+	for _, request := range []intent.Request{
+		{Operation: intent.Status},
+		{Operation: intent.Login, Account: "facebook", GrantID: testReference},
+	} {
+		t.Run(string(request.Operation), func(t *testing.T) {
+			started, stopped := make(chan struct{}), make(chan struct{})
+			var calls atomic.Int32
+			fixture := newTransportFixture(t, func(ctx context.Context, call Call) (intent.Response, error) {
+				calls.Add(1)
+				close(started)
+				<-ctx.Done()
+				defer close(stopped)
+				if call.Authorize() == nil {
+					return intent.Response{}, errors.New("canceled call kept authority")
+				}
+				return intent.Response{Code: intent.OutcomeUnknown}, nil
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { _, err := fixture.client.Call(ctx, request); done <- err }()
+			select {
+			case <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("fixture handler never started")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, intent.ErrUnavailable) {
+					t.Fatal("canceled client did not fail closed")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("client cancellation did not close its connection")
+			}
+			select {
+			case <-stopped:
+			case <-time.After(2 * time.Second):
+				t.Fatal("private consumer cancellation was not delivered")
+			}
+			if calls.Load() != 1 {
+				t.Fatal("canceled operation was replayed")
+			}
+		})
 	}
 }
 

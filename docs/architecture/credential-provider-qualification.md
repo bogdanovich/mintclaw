@@ -256,7 +256,11 @@ and closed before rejection. Exact JSON keys, duplicate rejection, field
 bounds, and operation-specific response validation prevent free-form output.
 Private handler errors, panics, and invalid responses become fixed failures.
 
-Calls have a five-second deadline and a shared eight-call capacity. Caller
+Control and approval calls have a five-second deadline; one login attempt has
+a 75-second maximum for private browser setup, bounded login and cleanup.
+Incomplete packets still have five seconds, and the operation deadline remains
+anchored to the original accepted call. Earlier caller cancellation or a
+shorter parent deadline cannot be extended. The shared capacity is eight calls. Caller
 exit, client disconnect, cancellation, or service shutdown invalidates the
 borrowed call and cancels its handler. A trusted handler must honor that
 context and acknowledge private side effects; transport cannot forcibly stop

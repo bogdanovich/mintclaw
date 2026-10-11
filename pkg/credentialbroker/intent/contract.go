@@ -1,6 +1,9 @@
 package intent
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 const (
 	Version        = 1
@@ -23,6 +26,16 @@ const (
 	GrantStatus     Operation = "grant_status"
 	Login           Operation = "login"
 )
+
+// CallTimeout bounds one attempt, including transport setup. Login admits the
+// private browser's 20-second startup, 40-second operation and bounded cleanup;
+// other intents retain the short deadline. This creates no grant or retry.
+func CallTimeout(operation Operation) time.Duration {
+	if operation == Login {
+		return 75 * time.Second
+	}
+	return 5 * time.Second
+}
 
 // Request excludes identity, provider references, URLs, selectors, and secret
 // values. Identity comes from the authenticated service caller. A login still
