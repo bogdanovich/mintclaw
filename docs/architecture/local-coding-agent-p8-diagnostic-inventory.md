@@ -11,6 +11,9 @@ qualification is pending. Compaction-attempt and repository-snapshot
 correlation are production-qualified. Local-coding trace-store ownership,
 deployment attribution, and privacy-safe project correlation are implemented
 and production-qualified.
+The H1c metadata-only list/show/correlate/export surface is implemented with
+bounded scans and checksummed support directories; production qualification
+and the remaining authoritative-owner/presentation summary are pending.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -554,7 +557,7 @@ coding canary is intended to use a deployed profile's authenticated provider.
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Invocation ID and safe policy/target aliases implemented and production-qualified |
 | Repository/worktree | Git/filesystem, worktree owner | Bounded repository context snapshot | Commit/snapshot projection, privacy-safe project hash, and trace-store corrections are production-qualified without paths or diffs |
 | TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c exports bounded current-view/version facts, not cell history |
-| Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c summarizes disabled/drop/expiry/corruption truth |
+| Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c bounded query/export summarizes disabled/drop/expiry/corruption truth and awaits production qualification |
 
 ## H1a exit assessment
 

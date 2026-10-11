@@ -144,9 +144,7 @@
       "trace_records": [],
       "required_ids": ["trace_id", "capture_policy", "redactor_version", "retention_window", "drop_count", "truncation_reason", "source_commit"],
       "available_ids": ["trace_id", "capture_policy", "redactor_version", "retention_window", "drop_count", "truncation_reason", "source_commit"],
-      "missing_trace_joins": [
-        {"id": "trace_id", "disposition": "close_h1c", "observation": "A bounded operator command is needed to locate and summarize health without broad content scans."}
-      ],
+      "missing_trace_joins": [],
       "terminal_facts": ["trace.outcome", "trace.truncation", "writer_drop_log", "retention_expiry_or_missing"],
       "retention_owner": "diagnostic_store_and_service_logs",
       "export_class": "metadata_safe"

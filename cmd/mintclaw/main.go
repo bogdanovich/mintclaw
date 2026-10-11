@@ -24,6 +24,7 @@ import (
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/coding"
 	configcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/config"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/cron"
+	diagnosticscmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/diagnostics"
 	doctorcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/doctor"
 	documentcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/document"
 	evalcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/eval"
@@ -93,7 +94,8 @@ func machineJSONRequested(args []string) bool {
 	hasJSON := false
 	for _, arg := range args {
 		switch arg {
-		case "doctor", "document", "nodes", "agent", "code", "resume", "review", "threads", "skills", "eval":
+		case "doctor", "diagnostics", "document", "nodes", "agent", "code", "resume", "review", "threads",
+			"skills", "eval":
 			hasJSONCommand = true
 		case "--json":
 			hasJSON = true
@@ -176,6 +178,7 @@ mintclaw --no-color status`,
 		gateway.NewGatewayCommand(),
 		status.NewStatusCommand(),
 		doctorcmd.NewDoctorCommand(),
+		diagnosticscmd.NewDiagnosticsCommand(),
 		evalcmd.NewEvalCommand(),
 		documentcmd.NewDocumentCommand(func() string {
 			return filepath.Join(config.GetHome(), "state", "document-scratch")
