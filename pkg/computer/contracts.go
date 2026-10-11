@@ -1,6 +1,6 @@
-// Package computer defines provider-neutral contracts for desktop capability
-// hosts. These types do not grant authority, register tools, launch drivers, or
-// control an OS desktop. Trusted runtime and host policy must admit each request.
+// Package computer defines provider-neutral desktop contracts and an opt-in
+// read-only host. Types alone grant no authority; trusted host policy admits
+// each request. No model tools or desktop input are registered by this package.
 package computer
 
 import (
