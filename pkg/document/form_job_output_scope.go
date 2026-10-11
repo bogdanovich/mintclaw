@@ -71,7 +71,7 @@ func (store *FormJobStore) SetFormOutputScope(
 			result = cloneFormJobRecord(record.Public)
 			return false, nil
 		}
-		if record.Public.Revision != request.ExpectedRevision {
+		if record.Public.Revision != request.ExpectedRevision || len(record.PendingEvents) != 0 {
 			return false, ErrFormJobConflict
 		}
 		if record.Public.Revision == math.MaxInt64 {

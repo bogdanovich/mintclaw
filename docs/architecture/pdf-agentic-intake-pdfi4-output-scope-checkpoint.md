@@ -36,5 +36,6 @@ backup only with an operator-checked delivery/transaction reconciliation, not as
 
 Portable tests cover required deferral versus full refusal, accepted/source values, later values, invalid blockers,
 audit refusal, stale authority, scope replay/change, staged claims, failed publication, restart, capability refusal,
-and output-policy/mode mismatches. These are native and mocked semantic boundary tests, not proof of an emitted PDF,
+pending protected value publication with commit/discard recovery, and output-policy/mode mismatches. These are native
+and mocked semantic boundary tests, not proof of an emitted PDF,
 real language extraction, Telegram ingress or production deployment. Those remain the next admitted work.

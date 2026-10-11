@@ -398,6 +398,94 @@ func TestFormOutputScopeCannotCrossAStagedQuestionClaim(t *testing.T) {
 	}
 }
 
+func TestFormOutputScopeCannotCrossPendingValuePublicationAndRecovery(t *testing.T) {
+	for _, recovery := range []string{"commit", "discard"} {
+		t.Run(recovery, func(t *testing.T) {
+			store, options, job, schema, _ := outputScopeFixture(t, FormOutputEditableAcroForm)
+			owner := testFormJobOwner()
+			binding, err := store.NewProtectedAnswerBinding(t.Context(), FormProtectedAnswerBindingRequest{
+				JobID: job.JobID, ExpectedRevision: job.Revision, Owner: owner, FieldID: schema.Fields[1].ID,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sink, err := NewFormProtectedAnswerSink(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := sink.Accept(t.Context(), interactions.ProtectedAnswerSinkRequest{
+				Binding: binding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
+				InteractionID: "scope-pending-value", IdempotencyKey: "scope-pending-answer",
+				Intent: interactions.ProtectedAnswerValue, Text: "Synthetic pending source detail",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(formJobStatePath(options))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := FormOutputScopeRequest{
+				JobID: job.JobID, ExpectedRevision: job.Revision, Owner: owner, Schema: schema,
+				Scope: FormOutputEditableDraft, DeferredFieldIDs: []string{schema.Fields[1].ID},
+			}
+			if result, scopeErr := store.SetFormOutputScope(
+				t.Context(),
+				request,
+			); !errors.Is(
+				scopeErr,
+				ErrFormJobConflict,
+			) ||
+				result.JobID != "" {
+				t.Fatal("scope mutation advanced a pending protected value binding")
+			}
+			// Exact no-op scope reads are harmless and must not publish a snapshot.
+			request.Scope, request.DeferredFieldIDs = "", nil
+			if replayed, scopeErr := store.SetFormOutputScope(t.Context(), request); scopeErr != nil ||
+				replayed.Revision != job.Revision {
+				t.Fatal("non-mutating scope replay changed pending publication")
+			}
+			after, err := os.ReadFile(formJobStatePath(options))
+			if err != nil || string(before) != string(after) {
+				t.Fatal("refused scope mutation changed the durable pending envelope")
+			}
+			store.Close()
+			store, err = OpenFormJobStore(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(store.Close)
+			sink, err = NewFormProtectedAnswerSink(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recovery == "commit" {
+				err = sink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
+					Binding: binding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
+					InteractionID: "scope-pending-value", Receipt: receipt,
+				})
+			} else {
+				err = sink.Discard(t.Context(), interactions.ProtectedAnswerDiscardRequest{
+					Binding: binding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
+					InteractionID: "scope-pending-value", Receipt: &receipt, Force: true,
+				})
+			}
+			if err != nil {
+				t.Fatalf("pending value could not %s after restart: %v", recovery, err)
+			}
+			current, err := store.Get(t.Context(), job.JobID, owner)
+			if err != nil || current.OutputScope != "" {
+				t.Fatal("pending value recovery left a corrupt job or changed output authority")
+			}
+			if recovery == "commit" && (current.Revision != job.Revision+1 || len(current.Fields) != 2) ||
+				recovery == "discard" && (current.Revision != job.Revision || len(current.Fields) != 1) {
+				t.Fatal("recovery changed an unrelated assignment or revision")
+			}
+			assertFormStoreContainsNoPlaintext(t, options, "Synthetic pending source detail")
+		})
+	}
+}
+
 func TestFormOutputScopeFailedPublicationIsAtomic(t *testing.T) {
 	store, options, job, schema, _ := outputScopeFixture(t, FormOutputEditableAcroForm)
 	before, err := os.ReadFile(formJobStatePath(options))
