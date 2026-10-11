@@ -27,6 +27,12 @@ no tool definitions. Disable ordinary prompt-cache lineage/write intent, use onl
 the dedicated system instruction, and install no ordinary streaming, trace or history callback. These client-side
 controls do not imply a provider-side retention guarantee.
 
+Compatibility-provider `extra_body` is an opaque final override: it can restore tools/cache fields, replace the
+private messages or redirect the configured model, including through provider-specific extensions. Marked calls
+with any such overrides are unsupported and refuse before request construction or HTTP send, for both chat and
+streaming entry points. Ordinary overrides remain unchanged; a no-override API configuration/equivalent fallback
+can serve the protected lane. Do not silently reinterpret arbitrary vendor extensions as private-safe controls.
+
 Source inspection also confirms that Codex/Claude CLI adapters run autonomous local tools, and the Copilot adapter
 shares a persistent session. A nil MintClaw tool list does not disable those facilities. These adapters must refuse
 marked requests before building a prompt, spawning a process or sending to the session; ordinary CLI/session calls
@@ -46,6 +52,9 @@ of an unsupported protected lane, not a new CLI isolation backend or provider-se
   in serialized API bodies. Existing provider/audit tests, race checks, formatting and lint remain required.
 - CLI/session adapters reject before accessing command configuration or execution/send, without copying the synthetic
   sentinel into the refusal. Tests use nil receivers and a counted fake session; they never launch a coding agent.
+- Configured search/cache overrides, message/model overrides and unknown vendor extensions cannot reach HTTP on a
+  marked request. Ordinary chat/stream requests still send those same configured fields; no-override marked chat
+  remains supported. The refusal contains no private value or configured override content.
 
 This checkpoint is not semantic intake or actual Telegram qualification. That later integration must also remove
 Telegram's pre-admission content preview and fence ordinary history before protected ingestion. Existing raw ingress

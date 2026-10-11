@@ -542,6 +542,11 @@ func (p *Provider) Chat(
 	model string,
 	options map[string]any,
 ) (*LLMResponse, error) {
+	// Opaque configured body overrides can replace private messages/model or
+	// restore provider-specific search/cache fields after caller controls.
+	if protocoltypes.IsSensitiveRequest(ctx) && len(p.extraBody) != 0 {
+		return nil, protocoltypes.ErrSensitiveRequestUnsupported
+	}
 	if p.apiBase == "" {
 		return nil, fmt.Errorf("API base not configured")
 	}
@@ -588,6 +593,9 @@ func (p *Provider) ChatStreamEvents(
 	options map[string]any,
 	onChunk func(StreamChunk),
 ) (*LLMResponse, error) {
+	if protocoltypes.IsSensitiveRequest(ctx) && len(p.extraBody) != 0 {
+		return nil, protocoltypes.ErrSensitiveRequestUnsupported
+	}
 	if p.apiBase == "" {
 		return nil, fmt.Errorf("API base not configured")
 	}
