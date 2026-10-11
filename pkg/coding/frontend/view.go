@@ -471,22 +471,23 @@ type CompactionState struct {
 // It is not the canonical coding transcript and may omit old entries and large
 // output.
 type ThreadSnapshot struct {
-	ThreadID         string                        `json:"thread_id"`
-	ActiveTurnID     string                        `json:"active_turn_id,omitempty"`
-	Metadata         ThreadMetadata                `json:"metadata,omitempty"`
-	Runtime          *RuntimeStatus                `json:"runtime,omitempty"`
-	Activity         Activity                      `json:"activity"`
-	LastTurn         *LastTurnOutcome              `json:"last_turn,omitempty"`
-	Items            []PresentationItem            `json:"items,omitempty"`
-	PendingInputs    []PendingInputState           `json:"-"`
-	ContextUsage     ContextUsage                  `json:"context_usage,omitempty"`
-	LastCompaction   *CompactionState              `json:"last_compaction,omitempty"`
-	Workspace        *codingworkspace.Snapshot     `json:"workspace,omitempty"`
-	RepositoryStatus *codingworkspace.StatusResult `json:"repository_status,omitempty"`
-	RepositoryDiff   *codingworkspace.DiffResult   `json:"repository_diff,omitempty"`
-	Review           *codingreview.State           `json:"review,omitempty"`
-	Status           string                        `json:"status,omitempty"`
-	HasOlderEntries  bool                          `json:"has_older_entries,omitempty"`
+	PresentationRevision uint64                        `json:"presentation_revision"`
+	ThreadID             string                        `json:"thread_id"`
+	ActiveTurnID         string                        `json:"active_turn_id,omitempty"`
+	Metadata             ThreadMetadata                `json:"metadata,omitempty"`
+	Runtime              *RuntimeStatus                `json:"runtime,omitempty"`
+	Activity             Activity                      `json:"activity"`
+	LastTurn             *LastTurnOutcome              `json:"last_turn,omitempty"`
+	Items                []PresentationItem            `json:"items,omitempty"`
+	PendingInputs        []PendingInputState           `json:"-"`
+	ContextUsage         ContextUsage                  `json:"context_usage,omitempty"`
+	LastCompaction       *CompactionState              `json:"last_compaction,omitempty"`
+	Workspace            *codingworkspace.Snapshot     `json:"workspace,omitempty"`
+	RepositoryStatus     *codingworkspace.StatusResult `json:"repository_status,omitempty"`
+	RepositoryDiff       *codingworkspace.DiffResult   `json:"repository_diff,omitempty"`
+	Review               *codingreview.State           `json:"review,omitempty"`
+	Status               string                        `json:"status,omitempty"`
+	HasOlderEntries      bool                          `json:"has_older_entries,omitempty"`
 }
 
 // CurrentPlan returns an independent copy of the latest authoritative plan

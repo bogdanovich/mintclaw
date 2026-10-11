@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -62,6 +63,18 @@ func (tool protectedAnswerContinuationTestTool) Execute(
 type protectedAnswerContinuationRewriteHook struct{}
 
 type protectedAnswerContinuationFailureMaskHook struct{}
+
+type protectedAnswerContinuationRemoveToolHook struct {
+	protectedAnswerContinuationRewriteHook
+}
+
+func (protectedAnswerContinuationRemoveToolHook) BeforeLLM(
+	_ context.Context, request *LLMHookRequest,
+) (*LLMHookRequest, HookDecision) {
+	next := request.Clone()
+	next.Tools = nil
+	return next, HookDecision{Action: HookActionModify}
+}
 
 func (protectedAnswerContinuationRewriteHook) BeforeLLM(
 	_ context.Context,
@@ -289,6 +302,126 @@ func TestProtectedAnswerContinuationRequiresExactOriginatingToolCall(t *testing.
 	}
 }
 
+func TestProtectedAnswerContinuationRestoresOnlyDeferredOrigin(t *testing.T) {
+	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	executions := 0
+	agent.Tools.RegisterHidden(protectedAnswerContinuationTestTool{executions: &executions})
+	agent.Tools.RegisterHidden(unsupportedProtectedAnswerContinuationTestTool{})
+	pipeline := newTestPipeline(loop)
+	spec := makeTestTurnSpec("deferred-protected-origin")
+	spec.InteractionContinuation = interactionContinuationPromptContext{
+		Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
+		OriginToolName: "protected_answer_test", ProtectedAnswer: "protected.receipt",
+	}
+	ts := newTurnState(agent, spec, turnEventScope{
+		turnID: "deferred-protected-origin", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, visible := agent.Tools.Get("protected_answer_test"); visible {
+		t.Fatal("origin unexpectedly visible before continuation")
+	}
+	llm := newLLMIterationState(1)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); err != nil {
+		t.Fatal(err)
+	}
+	if len(llm.providerToolDefs) != 1 || llm.providerToolDefs[0].Function.Name != "protected_answer_test" {
+		t.Fatalf("restricted tools = %#v", llm.providerToolDefs)
+	}
+	llm.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: "restored-exact-receipt", Name: "protected_answer_test",
+		Arguments: map[string]any{"action": "continue", "receipt": "protected.receipt"},
+	}}}
+	outcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+	if err != nil || outcome.Control != turnStepExecuteTools {
+		t.Fatalf("continuation = %#v error = %v", outcome, err)
+	}
+	result := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if result.TurnErr != nil || result.Control != turnStepContinue || executions != 1 {
+		t.Fatalf("result = %#v executions = %d", result, executions)
+	}
+	if _, visible := agent.Tools.Get("protected_answer_test"); visible {
+		t.Fatal("completed continuation retained discovery visibility")
+	}
+	if _, visible := agent.Tools.Get("unsupported_protected_answer_test"); visible {
+		t.Fatal("unrelated hidden tool was promoted")
+	}
+}
+
+func TestProtectedAnswerContinuationDeferredVisibilityHonorsProfileAndHooks(t *testing.T) {
+	for _, mode := range []string{"off", "custom", "response-only", "hook-removed"} {
+		t.Run(mode, func(t *testing.T) {
+			loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+			defer cleanup()
+			agent.Tools.RegisterHidden(protectedAnswerContinuationTestTool{})
+			pipeline := newTestPipeline(loop)
+			spec := makeTestTurnSpec("restricted-deferred-origin")
+			spec.InteractionContinuation = interactionContinuationPromptContext{
+				Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
+				OriginToolName: "protected_answer_test", ProtectedAnswer: "protected.receipt",
+			}
+			ts := newTurnState(agent, spec, turnEventScope{
+				turnID: "restricted-deferred-origin", context: newTurnContext(nil, nil, nil),
+			})
+			exec, err := pipeline.SetupTurn(t.Context(), ts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "response-only":
+				err = exec.protectedAnswerContinuation.beginFollowup(&toolshared.ToolOnlyFollowup{
+					Instruction: "Render the review and wait.", ResponseOnly: true,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "hook-removed":
+				pipeline.Interaction.Hooks = protectedAnswerContinuationRemoveToolHook{}
+			default:
+				ts.profile = config.EffectiveTurnProfile{Enabled: true, ToolsMode: config.TurnProfileMode(mode)}
+			}
+			llm := newLLMIterationState(1)
+			_, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, llm)
+			if (err == nil) != (mode == "response-only") || len(llm.providerToolDefs) != 0 {
+				t.Fatalf("tools = %#v error = %v", llm.providerToolDefs, err)
+			}
+			if _, visible := agent.Tools.Get("protected_answer_test"); visible && mode != "hook-removed" {
+				t.Fatal("denied or response-only origin was promoted")
+			}
+		})
+	}
+}
+
+func TestProtectedAnswerContinuationPreservesExistingDiscoveryLease(t *testing.T) {
+	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	agent.Tools.RegisterHidden(protectedAnswerContinuationTestTool{})
+	agent.Tools.PromoteTools([]string{"protected_answer_test"}, 5)
+	pipeline := newTestPipeline(loop)
+	spec := makeTestTurnSpec("existing-protected-lease")
+	spec.InteractionContinuation = interactionContinuationPromptContext{
+		Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
+		OriginToolName: "protected_answer_test", ProtectedAnswer: "protected.receipt",
+	}
+	ts := newTurnState(agent, spec, turnEventScope{
+		turnID: "existing-protected-lease", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, newLLMIterationState(1)); err != nil {
+		t.Fatal(err)
+	}
+	agent.Tools.TickTTL()
+	if _, visible := agent.Tools.Get("protected_answer_test"); !visible {
+		t.Fatal("protected continuation shortened an existing discovery lease")
+	}
+}
+
 func TestProtectedAnswerContinuationAllowsDurableQuestionSuspension(t *testing.T) {
 	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
 	defer cleanup()
@@ -356,7 +489,7 @@ func TestProtectedAnswerContinuationRequiresValidatedToolOnlyFollowup(t *testing
 	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
 	defer cleanup()
 	executions := 0
-	agent.Tools.Register(protectedAnswerContinuationTestTool{
+	agent.Tools.RegisterHidden(protectedAnswerContinuationTestTool{
 		executions: &executions,
 		followup: &toolshared.ToolOnlyFollowup{
 			Instruction: "Call the trusted tool with action=next and receipt=current.",
@@ -411,6 +544,10 @@ func TestProtectedAnswerContinuationRequiresValidatedToolOnlyFollowup(t *testing
 		)
 	}
 
+	agent.Tools.TickTTL()
+	if _, visible := agent.Tools.Get("protected_answer_test"); visible {
+		t.Fatal("fixture failed to expire the originating tool before its follow-up")
+	}
 	reprompt := newLLMIterationState(2)
 	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, reprompt); err != nil {
 		t.Fatal(err)

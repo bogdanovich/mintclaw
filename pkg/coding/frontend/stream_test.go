@@ -370,6 +370,7 @@ func TestStreamCancelDoesNotRollbackLaterEntryWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeCancel.PresentationRevision = snapshot.PresentationRevision
 	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Messages()) != 2 ||
 		snapshot.Messages()[1].Text != "newer writer reasoning" {
 		t.Fatalf("later writer after stream cancel = %+v", snapshot)
@@ -715,6 +716,7 @@ func TestNoopStreamCannotClaimIdenticalLaterWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeCancel.PresentationRevision = snapshot.PresentationRevision
 	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Messages()) != 1 ||
 		snapshot.Messages()[0].Text != "accepted answer" || !snapshot.Messages()[0].Complete {
 		t.Fatalf("no-op stream reclaimed later writer = %+v", snapshot)
@@ -751,6 +753,7 @@ func TestRejectedActiveStreamCannotClaimTerminalLaterWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeCancel.PresentationRevision = snapshot.PresentationRevision
 	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Messages()) != 1 ||
 		snapshot.Messages()[0].Text != "accepted answer" || !snapshot.Messages()[0].Complete {
 		t.Fatalf("rejected active stream reclaimed terminal writer = %+v", snapshot)

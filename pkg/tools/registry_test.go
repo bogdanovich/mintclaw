@@ -18,6 +18,59 @@ import (
 
 // --- mock types ---
 
+func TestRestoreToolVisibilityPreservesCatalogAndExistingLeases(t *testing.T) {
+	for _, kind := range []string{"missing", "hidden", "promoted", "core", "sealed"} {
+		t.Run(kind, func(t *testing.T) {
+			registry := NewToolRegistry()
+			tool := &mockRegistryTool{name: "restore_test"}
+			switch kind {
+			case "core":
+				registry.Register(tool)
+			case "hidden", "promoted", "sealed":
+				registry.RegisterHidden(tool)
+			}
+			if kind == "promoted" {
+				registry.PromoteTools([]string{tool.Name()}, 5)
+			}
+			if kind == "sealed" {
+				registry.Seal()
+			}
+			registry.RestoreToolVisibility(tool.Name())
+			_, visible := registry.Get(tool.Name())
+			if visible != (kind == "hidden" || kind == "promoted" || kind == "core") {
+				t.Fatalf("unexpected restored visibility: %v", visible)
+			}
+			registry.TickTTL()
+			_, visible = registry.Get(tool.Name())
+			if visible != (kind == "promoted" || kind == "core") {
+				t.Fatalf("unexpected visibility after one tick: %v", visible)
+			}
+		})
+	}
+}
+
+func TestRestoreToolVisibilityDoesNotShortenConcurrentDiscovery(t *testing.T) {
+	for range 100 {
+		registry := NewToolRegistry()
+		registry.RegisterHidden(&mockRegistryTool{name: "concurrent_restore"})
+		var workers sync.WaitGroup
+		workers.Add(2)
+		go func() {
+			defer workers.Done()
+			registry.RestoreToolVisibility("concurrent_restore")
+		}()
+		go func() {
+			defer workers.Done()
+			registry.PromoteTools([]string{"concurrent_restore"}, 5)
+		}()
+		workers.Wait()
+		registry.TickTTL()
+		if _, visible := registry.Get("concurrent_restore"); !visible {
+			t.Fatal("restore shortened concurrent discovery")
+		}
+	}
+}
+
 type mockRegistryTool struct {
 	name   string
 	desc   string
