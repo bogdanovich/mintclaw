@@ -6,7 +6,9 @@
 on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,
 bootstrap skills, deploy a binary, restart a gateway, grant broad approval, or retry uncertain task admission.
 
-Native browser execution, baseline comparison and complete domain qualification remain later packets.
+Native browser execution, preset provisioning and complete domain qualification remain later packets.
+Offline `compare` reports all retained trial counts, case compatibility and observed environment changes; it does
+not execute tasks, regrade evidence, or establish causal quality drift.
 Missing capabilities/drivers/domain evidence produce explicit non-passing coverage. A text response never proves
 that a PDF was filled, a browser action happened, or Telegram delivery worked. See the
 [roadmap](../architecture/agent-evals-roadmap.md) for the remaining packets.
@@ -242,3 +244,28 @@ agreement and private judge findings, and exposes only summary metrics through t
 or a shorter explicit suite limit; regrading defaults to one hour (maximum four hours). A canceled/failed judge call
 is non-passing, with available call usage retained. `calibration.json` with `complete: true` marks report completion,
 not target qualification. Stub tests and successful regrading are not real-model scenario evidence.
+
+## Compare Retained Runs
+
+```sh
+mintclaw eval compare /absolute/private/baseline-report /absolute/private/current-report --json
+```
+
+Comparison needs neither a live profile nor credentials, a corpus checkout, a gateway, or a model. Both report
+directories must be private; `run.json` and every referenced trial must be bounded regular `0600` files.
+The reader admits complete run/grade reports, verifies trial identities, hashes, files, ordinals, unique sessions,
+all repetitions, summary consistency, hard-failure dominance and aggregate verdict/coverage. It never modifies
+reports, drops nonpassing trials, chooses the best repetition, or regrades the saved findings. This is consistency
+checking of operator-owned evidence, not a signature or independent proof that the reported work happened.
+
+Each case reports baseline/current trial counts and all five verdict counts. Added, removed or changed case
+digests make the case cohort incompatible; the CLI still emits that comparison and exits nonzero. Different repeat
+counts are shown as a sampling change, not paired retries or an automatic improvement/regression label.
+
+Recorded preset, public configuration, runtime revision/platform, grading mode and model-role/prompt changes are
+separate from case compatibility. Dynamic PID/instance tokens and per-call conversation prompt hashes are not
+cohort identities. No raw transcript, prompt, path, model configuration or artifact contents enter comparison output.
+Instruction/skill fingerprints and complete target-call model accounting remain explicitly unknown; current
+reports do not record them. `quality_attribution: not_established` is reported even when the available metadata
+matches. Complete preset/input fingerprints and live domain qualification remain later E5/exit work, not claims
+made by an offline comparison. Compare complete saved selections; use suite/tag/case selection when producing runs.

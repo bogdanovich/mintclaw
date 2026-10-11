@@ -42,6 +42,7 @@ func NewEvalCommand() *cobra.Command {
 	}
 	command.AddCommand(newRunCommand())
 	command.AddCommand(newGradeCommand())
+	command.AddCommand(newCompareCommand())
 	return command
 }
 
