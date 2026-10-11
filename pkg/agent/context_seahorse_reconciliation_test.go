@@ -11,6 +11,7 @@ import (
 	"time"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
@@ -653,6 +654,7 @@ func TestSeahorseReconciliationUsesRoutedSessionOwner(t *testing.T) {
 }
 
 func BenchmarkSeahorseCleanRevisionCheck(b *testing.B) {
+	suppressSeahorseBenchmarkLogs(b)
 	dir := b.TempDir()
 	canonical, _ := memory.NewJSONLStore(dir + "/sessions")
 	backend := session.NewJSONLBackend(canonical)
@@ -671,6 +673,7 @@ func BenchmarkSeahorseCleanRevisionCheck(b *testing.B) {
 }
 
 func BenchmarkSeahorseForcedReconciliation100Messages(b *testing.B) {
+	suppressSeahorseBenchmarkLogs(b)
 	dir := b.TempDir()
 	canonical, _ := memory.NewJSONLStore(dir + "/sessions")
 	backend := session.NewJSONLBackend(canonical)
@@ -694,4 +697,11 @@ func BenchmarkSeahorseForcedReconciliation100Messages(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func suppressSeahorseBenchmarkLogs(b *testing.B) {
+	b.Helper()
+	level := logger.GetLevel()
+	logger.SetLevel(logger.ERROR)
+	b.Cleanup(func() { logger.SetLevel(level) })
 }

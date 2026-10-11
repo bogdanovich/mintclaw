@@ -27,6 +27,7 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Local Coding Agent P8 Diagnostic Evidence Inventory](local-coding-agent-p8-diagnostic-inventory.md): machine-checked map of coding incident paths, authoritative evidence, passive trace coverage, correlation gaps, retention, and H1b/H1c dispositions.
 - [Diagnostic Queries And Support Bundles](../operations/diagnostic-support-bundles.md): H1c read-only trace discovery,
   safe correlation timelines, checksum-verifiable export, and privacy boundaries.
+- [Local Coding Agent P8.1 Performance Qualification](local-coding-agent-p8-performance.md): cold/warm process, native runtime, first-request/token, catalogue, TUI, compaction, reconciliation, allocation, and deterministic-bound evidence.
 - [Model And Reasoning Unification Roadmap](model-reasoning-unification-roadmap.md): evidence-backed shared capability, selection, persistence, gateway, provider, migration, and rollout contract for model-specific reasoning controls.
 - [Local Coding Agent TUI.15 Exit Record](local-coding-agent-tui-15-exit.md): final semantic-renderer migration, performance, PTY, recovery, documentation, and parity audit for TUI.6–TUI.15.
 - [Local Coding Agent TUI Visual Follow-up Roadmap](local-coding-agent-tui-visual-followup-roadmap.md): completed compact-inline, Markdown, layout, response-policy, and visual-parity work discovered by the 08–12 screenshot audit.

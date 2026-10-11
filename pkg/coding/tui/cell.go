@@ -1460,22 +1460,32 @@ func expandCellLineTabs(line cellLine, tabWidth int) cellLine {
 	expanded := cellLine{RowStyle: line.RowStyle, structuralBlank: line.structuralBlank}
 	column := 0
 	for _, span := range line.Spans {
+		if !strings.ContainsRune(span.Text, '\t') {
+			appendCellSpan(&expanded.Spans, span.Text, span.Role)
+			column += ansi.StringWidth(span.Text)
+			continue
+		}
+		var spanText strings.Builder
+		spanText.Grow(len(span.Text))
 		value := span.Text
 		for value != "" {
-			cluster, width := ansi.FirstGraphemeCluster(value, ansi.GraphemeWidth)
-			if cluster == "" {
+			tab := strings.IndexByte(value, '\t')
+			if tab < 0 {
+				spanText.WriteString(value)
+				column += ansi.StringWidth(value)
 				break
 			}
-			value = value[len(cluster):]
-			if cluster == "\t" {
-				spaces := tabWidth - column%tabWidth
-				appendCellSpan(&expanded.Spans, strings.Repeat(" ", spaces), span.Role)
-				column += spaces
-				continue
+			if tab > 0 {
+				prefix := value[:tab]
+				spanText.WriteString(prefix)
+				column += ansi.StringWidth(prefix)
 			}
-			appendCellSpan(&expanded.Spans, cluster, span.Role)
-			column += max(0, width)
+			spaces := tabWidth - column%tabWidth
+			spanText.WriteString(strings.Repeat(" ", spaces))
+			column += spaces
+			value = value[tab+1:]
 		}
+		appendCellSpan(&expanded.Spans, spanText.String(), span.Role)
 	}
 	return expanded
 }
@@ -1543,6 +1553,9 @@ func replaceOverwideCellSpanGraphemes(spans []cellSpan, widthLimit int) []cellSp
 	bounded := make([]cellSpan, 0, len(spans))
 	for _, span := range spans {
 		value := span.Text
+		remaining := value
+		var replacement strings.Builder
+		replaced := false
 		for value != "" {
 			cluster, width := ansi.FirstGraphemeCluster(value, ansi.GraphemeWidth)
 			if cluster == "" {
@@ -1550,10 +1563,21 @@ func replaceOverwideCellSpanGraphemes(spans []cellSpan, widthLimit int) []cellSp
 			}
 			value = value[len(cluster):]
 			if width > widthLimit {
-				cluster = "�"
+				if !replaced {
+					replacement.Grow(len(span.Text))
+				}
+				replacement.WriteString(remaining[:len(remaining)-len(value)-len(cluster)])
+				replacement.WriteRune('�')
+				remaining = value
+				replaced = true
 			}
-			appendCellSpan(&bounded, cluster, span.Role)
 		}
+		if !replaced {
+			appendCellSpan(&bounded, span.Text, span.Role)
+			continue
+		}
+		replacement.WriteString(remaining)
+		appendCellSpan(&bounded, replacement.String(), span.Role)
 	}
 	return bounded
 }
