@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -15,7 +16,8 @@ import (
 )
 
 type inboundTurnCoordinator struct {
-	al *AgentLoop
+	al      *AgentLoop
+	workers sync.WaitGroup
 }
 
 func newInboundTurnCoordinator(al *AgentLoop) *inboundTurnCoordinator {
@@ -257,7 +259,18 @@ func (c *inboundTurnCoordinator) startWorker(
 	target *inboundDispatchTarget,
 	claim *runtimeSessionClaim,
 ) {
-	go c.runWorker(ctx, msg, target, claim)
+	c.workers.Add(1)
+	go func() {
+		defer c.workers.Done()
+		c.runWorker(ctx, msg, target, claim)
+	}()
+}
+
+// wait prevents AgentLoop.Run from returning while an admitted worker can
+// still access registry-owned sessions or providers. Only the Run goroutine
+// calls startWorker, so no Add can race with this wait after ingress stops.
+func (c *inboundTurnCoordinator) wait() {
+	c.workers.Wait()
 }
 
 func (al *AgentLoop) settleInboundAdmission(

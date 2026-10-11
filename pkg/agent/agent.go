@@ -56,6 +56,7 @@ type AgentLoop struct {
 
 	// Runtime state
 	running atomic.Bool
+	runLife agentLoopRunLifecycle
 	// startupResult carries the outcome of Run's initialization phase (hooks
 	// and MCP). Buffered so Run never blocks when no caller waits for startup.
 	startupResult         chan error
@@ -134,6 +135,15 @@ const (
 // registerSharedTools registers tools that are shared across all agents (web, message, spawn).
 
 func (al *AgentLoop) Run(ctx context.Context) error {
+	runCtx, runDone, err := al.beginRun(ctx)
+	if err != nil {
+		al.signalStartup(err)
+		return err
+	}
+	ctx = runCtx
+	defer al.finishRun(runDone)
+	defer al.running.Store(false)
+
 	if al.contextManagerInitErr != nil {
 		al.signalStartup(al.contextManagerInitErr)
 		return al.contextManagerInitErr
@@ -157,6 +167,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 	}
 
 	ingress := newInboundTurnCoordinator(al)
+	defer ingress.wait()
 	idleTicker := time.NewTicker(100 * time.Millisecond)
 	defer idleTicker.Stop()
 	interactionTicker := time.NewTicker(humanInteractionRecoveryInterval)
@@ -224,17 +235,22 @@ func (al *AgentLoop) WaitStartup(ctx context.Context) error {
 // publishResponseOrError publishes the response, or an error message if processing failed.
 
 func (al *AgentLoop) Stop() {
-	al.running.Store(false)
+	al.stopRun()
 }
 
-// Close releases resources held by agent session stores. Call after Stop.
+// Close stops the active runtime, drains admitted workers, and releases
+// resources held by agent session stores.
 func (al *AgentLoop) Close() {
 	_ = al.CloseContext(context.Background())
 }
 
-// CloseContext releases resources while bounding MCP operation drain and
-// process cleanup by ctx.
+// CloseContext stops the active runtime and drains admitted workers before
+// releasing resources. Runtime drain, MCP operations, and process cleanup are
+// bounded by ctx.
 func (al *AgentLoop) CloseContext(ctx context.Context) error {
+	if err := al.stopAndWaitRun(ctx); err != nil {
+		return fmt.Errorf("stop agent runtime: %w", err)
+	}
 	var closeErrors []error
 	al.interactions.closeProtectedAnswerSinks()
 	if err := al.closeOutboundOutbox(); err != nil {
