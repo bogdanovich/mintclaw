@@ -199,6 +199,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: Darwin AMD64
+            goos: darwin
+            goarch: amd64
           - name: Darwin ARM64
             goos: darwin
             goarch: arm64
@@ -297,6 +300,26 @@ jobs:
           go test -count=1 -tags goolm,stdjson,integration \
             -run '^(TestNativeMintClawWorker.*|TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice)$' \
             ./pkg/coding/workerprocess ./pkg/gateway
+
+      - name: Qualify native coding terminal and process lifecycle
+        shell: bash
+        run: |
+          go test -count=1 -tags goolm,stdjson \
+            -run '^(TestTerminalLifecycleEmitsRestorationForExitSignalAndPanic|TestTerminalPTYMatrixCoversRemoteNarrowAndRecoveryPresentation|TestTerminalPTYInterruptsActiveWorkThenReturnsToUsableShell|TestTerminalLifecycleRunsInsideTmuxWhenAvailable)$' \
+            ./pkg/coding/tui
+          go test -count=1 -tags goolm,stdjson \
+            -run '^(TestThreadLeaseIsExclusiveAndReportsOwner|TestThreadLeaseRecoversAfterOwnerProcessCrash)$' \
+            ./pkg/coding/thread
+          go test -count=1 -tags goolm,stdjson \
+            -run '^(TestManagerAllocatesIdempotentIsolatedWorktreeFromDirtySource|TestManagerMapsNestedInvocationDirectoryIntoExecutionWorktree|TestOwnerLeaseExcludesAnotherProcess)$' \
+            ./pkg/coding/worktree
+          go test -count=1 -tags goolm,stdjson \
+            -run '^(TestTerminateKillsUnixWorkerProcessGroup|TestDetachedUnixDescendantDoesNotBlockNormalCompletion|TestDetachedUnixDescendantDoesNotBlockTermination)$' \
+            ./pkg/coding/workerprocess
+
+      - name: Smoke native coding CLI from zsh
+        shell: zsh {0}
+        run: go run -tags goolm,stdjson ./cmd/mintclaw code --help >/dev/null
 
       - name: Run shared context and cache lifecycle contracts
         run: bash scripts/test-context-cache-contracts.sh --unit-only
@@ -494,8 +517,14 @@ jobs:
           go test -tags goolm,stdjson ./pkg/browser ./pkg/fileutil
           go test -tags goolm,stdjson -count=1 ./pkg/document ./cmd/mintclaw/internal/document
           go test -tags goolm,stdjson ./pkg/coding/workerprocess
+          go test -tags goolm,stdjson -count=1 ./pkg/coding/tui
+          go test -tags goolm,stdjson -count=1 -run '^(TestCodeAndResumePersistOutsideProjectAcrossCommands|TestCodeUsesInteractiveShellOnlyForCapableTerminal|TestPlainResultDistinguishesProjectAndWorkingDirectory)$' ./cmd/mintclaw/internal/coding
+          go test -tags goolm,stdjson -count=1 -run '^(TestManagerAllocatesIdempotentIsolatedWorktreeFromDirtySource|TestManagerMapsNestedInvocationDirectoryIntoExecutionWorktree|TestOwnerLeaseExcludesAnotherProcess)$' ./pkg/coding/worktree
           go test -tags goolm,stdjson -count=1 -run '^TestPreset' ./internal/eval
           go test -tags goolm,stdjson -run '^(TestThreadLease|TestWindowsThreadLease|TestAttachment(Maintenance|Inflight|GarbageCollectionDoesNotRecoverLiveQuarantine))' ./pkg/coding/thread
+
+      - name: Smoke native coding CLI from PowerShell
+        run: go run -tags goolm,stdjson ./cmd/mintclaw code --help | Out-Null
 
       - name: Run portable protected intake and gateway composition
         run: >-

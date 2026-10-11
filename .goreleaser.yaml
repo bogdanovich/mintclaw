@@ -31,30 +31,20 @@ builds:
       - linux
       - windows
       - darwin
-      - freebsd
-      - netbsd
     goarch:
       - amd64
       - arm64
-      - riscv64
-      - loong64
       - arm
-      - s390x
     goarm:
-      - "6"
       - "7"
     main: ./cmd/mintclaw
     ignore:
       - goos: windows
         goarch: arm
-      - goos: netbsd
-        goarch: s390x
-      - goos: netbsd
-        goarch: mips64
-      - goos: netbsd
-        goarch: arm
-      - goos: netbsd
+      - goos: windows
         goarch: arm64
+      - goos: darwin
+        goarch: arm
 
   - id: mintclaw-launcher
     binary: mintclaw-launcher
@@ -73,30 +63,20 @@ builds:
       - linux
       - windows
       - darwin
-      - freebsd
-      - netbsd
     goarch:
       - amd64
       - arm64
-      - riscv64
-      - loong64
       - arm
-      - s390x
     goarm:
-      - "6"
       - "7"
     main: ./web/backend
     ignore:
       - goos: windows
         goarch: arm
-      - goos: netbsd
-        goarch: s390x
-      - goos: netbsd
-        goarch: mips64
-      - goos: netbsd
-        goarch: arm
-      - goos: netbsd
+      - goos: windows
         goarch: arm64
+      - goos: darwin
+        goarch: arm
 
   - id: mintclaw-node
     binary: mintclaw-node
@@ -134,7 +114,6 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
-      - linux/riscv64
 
   - id: mintclaw-launcher
     dockerfile: docker/Dockerfile.goreleaser.launcher
@@ -153,7 +132,6 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
-      - linux/riscv64
 
 archives:
   - id: mintclaw
