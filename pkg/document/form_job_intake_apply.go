@@ -112,7 +112,7 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		}
 		if source.Intake.State != FormIntakeActive || input.State != formIntakeInputCommitted ||
 			!formIntakeMutable(record.Public) || record.Public.Revision != request.ExpectedRevision ||
-			len(record.PendingEvents) != 0 {
+			len(record.PendingEvents) != 0 || pass.ReceiptCount != len(source.Intake.Inputs) {
 			return false, ErrFormJobConflict
 		}
 		if stageErr := requireNoStagedFormIntake(record, key); stageErr != nil {

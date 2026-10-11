@@ -173,9 +173,11 @@ type formIntakeStoredInput struct {
 // The bounded reservation list is also the budget: no separately mutable
 // counter or latest-only binding can drift from durable replay identity.
 type formIntakeStoredPass struct {
-	ID           string                   `json:"id"`
-	KeyDigest    string                   `json:"key_digest"`
-	GroupDigest  string                   `json:"group_digest,omitempty"`
+	ID          string `json:"id"`
+	KeyDigest   string `json:"key_digest"`
+	GroupDigest string `json:"group_digest,omitempty"`
+	// ReceiptCount binds this pass to an existing immutable admission snapshot.
+	ReceiptCount int                      `json:"receipt_count,omitempty"`
 	Revision     int64                    `json:"revision"`
 	CandidateIDs []string                 `json:"candidate_field_ids"`
 	Outcome      *formIntakeStoredOutcome `json:"outcome,omitempty"`

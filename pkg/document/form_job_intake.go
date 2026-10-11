@@ -346,6 +346,9 @@ func (store *FormJobStore) ReserveFormIntakePass(
 			record.Public.Revision != request.ExpectedRevision || source.Intake.Inputs[index].State != formIntakeInputCommitted {
 			return false, ErrFormJobConflict
 		}
+		if stageErr := requireNoStagedFormIntake(record, key); stageErr != nil {
+			return false, stageErr
+		}
 		input := &source.Intake.Inputs[index]
 		digest := keyedDigest(store.profileKey, "intake_pass", input.ID, request.IdempotencyKey)
 		group := ""
@@ -372,6 +375,7 @@ func (store *FormJobStore) ReserveFormIntakePass(
 				"intake_retry",
 				group,
 				strconv.FormatInt(request.ExpectedRevision, 10),
+				strconv.Itoa(len(source.Intake.Inputs)),
 			)
 		}
 		reservationIndex := slices.IndexFunc(input.Reservations, func(pass formIntakeStoredPass) bool {
@@ -385,6 +389,9 @@ func (store *FormJobStore) ReserveFormIntakePass(
 				!slices.Equal(reservation.CandidateIDs, request.CandidateIDs) {
 				return false, ErrFormJobAnswerConflict
 			}
+			if reservation.Outcome == nil && reservation.ReceiptCount != len(source.Intake.Inputs) {
+				return false, ErrFormJobConflict
+			}
 		} else {
 			if len(input.Reservations) >= MaxFormIntakeExtractionPasses {
 				return false, ErrFormJobCapacityExceeded
@@ -393,6 +400,7 @@ func (store *FormJobStore) ReserveFormIntakePass(
 				ID:           "form_pass_" + digest[:32],
 				KeyDigest:    digest,
 				GroupDigest:  group,
+				ReceiptCount: len(source.Intake.Inputs),
 				Revision:     request.ExpectedRevision,
 				CandidateIDs: slices.Clone(request.CandidateIDs),
 			}
@@ -407,6 +415,9 @@ func (store *FormJobStore) ReserveFormIntakePass(
 			ID: reservation.ID, Revision: reservation.Revision,
 			CandidateIDs: slices.Clone(reservation.CandidateIDs), Reused: reused,
 		}
+		// This ephemeral interpretation sees the question at its reserved
+		// revision. The receipt's persisted origin remains immutable.
+		result.Input.Context = cloneFormIntakeContext(source.Intake.Context)
 		return !reused, nil
 	})
 	if err != nil {
@@ -665,6 +676,7 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 		for _, reservation := range input.Reservations {
 			if !validDocumentDigest(reservation.KeyDigest) ||
 				reservation.GroupDigest != "" && !validDocumentDigest(reservation.GroupDigest) ||
+				reservation.ReceiptCount < 0 || reservation.ReceiptCount > len(mode.Inputs) ||
 				reservation.ID != "form_pass_"+prefixFormIntakeDigest(reservation.KeyDigest) ||
 				seenReservations[reservation.ID] || reservation.Revision <= 0 || reservation.Revision > record.Revision ||
 				!validFormIntakeCandidateIDs(reservation.CandidateIDs) {

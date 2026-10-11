@@ -50,3 +50,9 @@ only a receipt admitted at that exact ready review can request the existing fina
 auto-finish a newly published review. Intent is derived from existing encrypted outcomes on restart, not a second
 state machine or approval grant. Native and tool tests cover this boundary; full/partial output and real channel
 qualification remain mandatory before enabling the dialogue.
+
+Extraction reservations also bind the count of existing immutable admitted receipts. A new message invalidates an
+in-flight interpretation without resetting assignment review; bounded retry identity includes that admission snapshot.
+No staged claim may exist when reserving. Committed/consumed receipts are retained until terminal cleanup, so the
+snapshot is derived from the existing ledger, not a new counter. The bridge refreshes related inputs after reservation.
+Legacy committed outcomes remain replayable; unfinished unbound reservations cannot acquire fresh apply authority.
