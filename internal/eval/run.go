@@ -83,7 +83,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			trial.Verdict, trial.Code = Skipped, "capability_unavailable"
 		case item.Case.Driver.Mode == "llm_user" && roles.user == nil:
 			trial.Verdict, trial.Code = Skipped, "driver_unavailable"
-		case len(item.Case.Fixtures) != 0 || len(item.Case.Driver.Facts) != 0:
+		case item.Case.PDF == nil && (len(item.Case.Fixtures) != 0 || len(item.Case.Driver.Facts) != 0):
 			trial.Verdict, trial.Code = Skipped, "domain_evidence_unavailable"
 		case suiteCtx.Err() != nil:
 			trial.Verdict, trial.Code = Inconclusive, "suite_interrupted"
@@ -167,10 +167,38 @@ func runAdmittedTrial(
 		trial.Verdict, trial.Code = Inconclusive, "target_changed"
 		return trial
 	}
-	client, err := gatewayclient.Connect(caseCtx, target.config, sessionID, gatewayclient.Options{})
+	var domain *pdfConversation
+	options := gatewayclient.Options{}
+	if item.Case.PDF != nil {
+		prepared, prepareErr := preparePDFTrial(item, target.preset.IsolationRoot,
+			target.preset.ExpectedWorkspace, sessionID, target.preset.ExpectedAgent)
+		if prepareErr != nil {
+			trial.Verdict, trial.Code = Inconclusive, "pdf_preparation_unavailable"
+			return trial
+		}
+		domain = &pdfConversation{prepared: prepared}
+		prepared.filter = roles.filter
+		item = prepared.item
+		options.InspectFrame = func(data []byte) error {
+			return inspectPDFWire(data, item.Case.Driver.Facts, roles.filter)
+		}
+	}
+	client, err := gatewayclient.Connect(caseCtx, target.config, sessionID, options)
 	if err != nil {
+		if domain != nil {
+			_ = domain.prepared.release(true)
+		}
 		trial.Verdict, trial.Code = Inconclusive, "gateway_unavailable"
 		trial.DurationMS = time.Since(trial.StartedAt).Milliseconds()
+		return trial
+	}
+	if domain != nil {
+		trial = runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, domain)
+		if domain.prepared.release(false) != nil {
+			trial.Verdict = combineVerdicts(trial.Verdict, Inconclusive)
+			trial.Code = "pdf_local_cleanup_failed"
+		}
 		return trial
 	}
 	return runConversation(caseCtx, client, item, sessionID,

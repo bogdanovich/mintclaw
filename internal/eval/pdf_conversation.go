@@ -1,0 +1,132 @@
+package eval
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"strings"
+	"time"
+
+	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
+	"github.com/bogdanovich/mintclaw/pkg/document"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
+)
+
+// The callback inspects bytes in the client's sole reader before JSON maps can
+// discard duplicate keys or response projection can discard auxiliary frames.
+func inspectPDFWire(data []byte, facts map[string]string, filter *strings.Replacer) error {
+	scan := privateContentScan{facts: facts, filter: filter, tokens: 32768}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	matched, complete := scan.value(decoder, 0)
+	if matched && !scan.uncertain {
+		return ErrPrivateEvidence
+	}
+	if matched || !complete || scan.uncertain {
+		return ErrPDFTrial
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return ErrPDFTrial
+	}
+	return nil
+}
+
+type pdfConversation struct {
+	prepared *pdfTrial
+	jobID    string
+	owner    document.FormJobOwner
+}
+
+func (domain *pdfConversation) initialTask() string { return domain.prepared.task }
+
+func (domain *pdfConversation) request(
+	ctx context.Context, action Action, prompt Event,
+) (protocol.MintClawMessage, bool, error) {
+	if action.Kind == "protected_answer" {
+		request, err := domain.prepared.protectedRequest(prompt, action.Fact)
+		return request, true, err
+	}
+	if prompt.Kind == "question" || prompt.Kind == "approval" {
+		if err := domain.observe(ctx, prompt); err != nil {
+			return protocol.MintClawMessage{}, false, err
+		}
+	}
+	if action.Kind == "message" || action.Kind == "finish" {
+		for _, line := range strings.Split(action.Text, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "/") {
+				return protocol.MintClawMessage{}, false, ErrPDFTrial
+			}
+		}
+	}
+	// Approval stays deny-default. A later reviewed/confirmed write admission
+	// must use the native binding rather than widening this general path.
+	return protocol.MintClawMessage{}, false, nil
+}
+
+func (domain *pdfConversation) observe(ctx context.Context, prompt Event) error {
+	if prompt.Kind != "question" && prompt.Kind != "approval" {
+		return nil
+	}
+	// The wire prompt can precede the durable delivered/waiting transition.
+	// Re-observe reads for one bounded grace period; never replay an input.
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		record, err := domain.prepared.observePrompt(prompt)
+		if errors.Is(err, ErrPrivateEvidence) {
+			return err
+		}
+		if err != nil && prompt.Kind == "question" {
+			public, publicErr := domain.prepared.observePromptOrigin(prompt, "request_user_input")
+			if publicErr == nil && public.ProtectedAnswer == nil {
+				return nil
+			}
+			if errors.Is(publicErr, ErrPrivateEvidence) {
+				return publicErr
+			}
+		}
+		if err == nil {
+			if record.Kind == interactions.KindApproval {
+				return nil
+			}
+			job, owner, jobErr := domain.prepared.observeProtectedJob(record)
+			if jobErr != nil {
+				return jobErr
+			}
+			if domain.jobID != "" && (domain.jobID != job.JobID || domain.owner != owner) {
+				return ErrPDFTrial
+			}
+			domain.jobID, domain.owner = job.JobID, owner
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ErrPDFTrial
+		case <-ticker.C:
+		}
+	}
+}
+
+func (domain *pdfConversation) conclude(_ context.Context, trial *Trial) {
+	trial.PDF = &PDFTrialEvidence{
+		Version: Version, SourceSHA256: domain.prepared.item.Case.Fixtures[0].SHA256,
+		JobID: domain.jobID, State: "unknown", Cleanup: "owned_fixture_retained; native_settlement_unknown",
+	}
+	if domain.jobID == "" {
+		return
+	}
+	job, err := domain.prepared.observeExistingJob(domain.jobID, domain.owner)
+	if errors.Is(err, ErrPrivateEvidence) {
+		trial.Verdict, trial.Code = Fail, "private_native_evidence"
+		trial.ExecutionVerdict, trial.ExecutionCode = Fail, trial.Code
+		return
+	}
+	if err == nil && job.SourceDigest == trial.PDF.SourceSHA256 {
+		trial.PDF.State = string(job.State)
+	}
+	// A native job observation is not an artifact, privacy, no-write or cleanup
+	// proof. Required domain checks remain unknown until those witnesses exist.
+}
