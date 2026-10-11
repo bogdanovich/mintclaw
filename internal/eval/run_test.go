@@ -157,6 +157,21 @@ func TestPreparedRunRejectsInputsBeforeAdmission(t *testing.T) {
 	}
 }
 
+func TestPreparedRunRejectsRelativeOracleBeforeAdmission(t *testing.T) {
+	fixture := newAdmissionFixture(t)
+	result, err := Run(
+		t.Context(),
+		fixture.preset,
+		[]LoadedCase{loadedTestCase(t, "general.test.oracle-path")},
+		RunOptions{
+			Home: fixture.home, OutputParent: fixture.output, PDFOraclePython: "./private-oracle",
+		},
+	)
+	if !errors.Is(err, ErrRunOptions) || result.ID != "" || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+		t.Fatal("relative oracle reached target admission or produced a completed report")
+	}
+}
+
 func assertPrivateReport(t *testing.T, result RunReport) {
 	t.Helper()
 	info, err := os.Stat(result.ReportDir)

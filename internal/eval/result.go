@@ -70,6 +70,14 @@ type PDFTrialEvidence struct {
 	Cleanup      string                  `json:"cleanup"`
 	WriteIntent  *PDFWriteIntentEvidence `json:"write_intent,omitempty"`
 	Settlement   *PDFSettlementEvidence  `json:"settlement,omitempty"`
+	Artifact     *PDFArtifactEvidence    `json:"artifact,omitempty"`
+}
+
+type PDFArtifactEvidence struct {
+	Verdict Verdict          `json:"verdict"`
+	Code    string           `json:"code"`
+	File    string           `json:"file,omitempty"`
+	Oracle  *PDFOracleResult `json:"oracle,omitempty"`
 }
 
 // Native metadata is not an independent artifact, privacy or cleanup oracle.

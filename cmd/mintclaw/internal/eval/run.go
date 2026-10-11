@@ -3,6 +3,7 @@ package eval
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -13,6 +14,7 @@ import (
 func newRunCommand() *cobra.Command {
 	options := corpusOptions{root: "evals", selection: manualeval.Selection{Suite: "all"}}
 	var outputParent string
+	python := os.Getenv("MINTCLAW_EVAL_PDF_ORACLE_PYTHON")
 	suiteTimeout := time.Hour
 	command := &cobra.Command{
 		Use: "run", Short: "Run selected scenarios against a prepared isolated gateway", Args: cobra.NoArgs,
@@ -31,6 +33,7 @@ func newRunCommand() *cobra.Command {
 			}
 			result, runErr := manualeval.Run(cmd.Context(), preset, selected, manualeval.RunOptions{
 				Home: manualeval.RuntimeHome(), OutputParent: outputParent, SuiteTimeout: suiteTimeout,
+				PDFOraclePython: python,
 			})
 			if result.ID == "" {
 				return runErr
@@ -55,6 +58,8 @@ func newRunCommand() *cobra.Command {
 	bindCorpusFlags(command, &options)
 	command.Flags().StringVar(&outputParent, "out", "", "Existing private report directory outside the workspace")
 	command.Flags().DurationVar(&suiteTimeout, "suite-timeout", suiteTimeout, "Whole run limit (maximum 4h)")
+	command.Flags().
+		StringVar(&python, "pdf-oracle-python", python, "Absolute executable of the pinned independent PDF oracle")
 	_ = command.MarkFlagRequired("preset")
 	_ = command.MarkFlagRequired("out")
 	return command
