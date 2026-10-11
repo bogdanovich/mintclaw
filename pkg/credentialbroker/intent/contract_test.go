@@ -6,9 +6,58 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/credentialbroker"
 )
 
-const reference = "0123456789abcdef0123456789abcdef"
+const reference = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func TestIssuedAuthorityGrantSurvivesIntentBoundary(t *testing.T) {
+	principal := credentialbroker.Principal{OwnerID: "owner", ActorID: "actor", AgentID: "agent", HostID: "host"}
+	policy, err := credentialbroker.NewPolicy([]credentialbroker.AccountRule{{
+		Alias: "facebook", VaultID: "synthetic-vault", ItemID: "synthetic-item",
+		Origins: []string{"https://login.example.com"}, Principals: []credentialbroker.Principal{principal},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := credentialbroker.NewAuthority(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := authority.Approve(credentialbroker.Approval{
+		Principal: principal, Accounts: []string{"facebook"}, PolicyRevision: policy.Revision(), Lifetime: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []Request{
+		{Operation: GrantStatus, GrantID: grant.ID},
+		{Operation: Login, Account: "facebook", GrantID: grant.ID},
+	} {
+		data, err := EncodeRequest(request)
+		if err != nil {
+			t.Fatal("issued authority grant was rejected by the intent boundary")
+		}
+		decoded, err := DecodeRequest(data)
+		if err != nil || decoded.GrantID != grant.ID {
+			t.Fatal("issued authority grant changed at the intent boundary")
+		}
+	}
+	response := Response{Code: GrantActive, GrantID: grant.ID, ValidForSeconds: 3600}
+	data, err := EncodeResponse(ApprovalStatus, response)
+	if err != nil {
+		t.Fatal("issued authority grant could not be returned after approval")
+	}
+	decoded, err := DecodeResponse(ApprovalStatus, data)
+	if err != nil || decoded != response {
+		t.Fatal("approval result lost its issued authority grant")
+	}
+	if (Request{Operation: Login, Account: "facebook", GrantID: grant.ID[:len(grant.ID)/2]}).Validate() == nil {
+		t.Fatal("truncated authority grant acquired a valid wire representation")
+	}
+}
 
 func TestIntentRoundTripCarriesOnlyAdmittedScope(t *testing.T) {
 	for _, request := range []Request{

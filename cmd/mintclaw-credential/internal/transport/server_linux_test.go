@@ -22,7 +22,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/credentialbroker/intent"
 )
 
-const testReference = "0123456789abcdef0123456789abcdef"
+const testReference = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 var testPrincipal = credentialbroker.Principal{OwnerID: "owner", ActorID: "actor", AgentID: "agent", HostID: "host"}
 

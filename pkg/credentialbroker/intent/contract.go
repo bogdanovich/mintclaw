@@ -6,6 +6,7 @@ const (
 	Version        = 1
 	MaxPacketBytes = 32768
 	MaxAccounts    = 16
+	ReferenceBytes = 32
 )
 
 var (
@@ -175,7 +176,7 @@ func ValidAlias(value string) bool {
 }
 
 func ValidReference(value string) bool {
-	if len(value) != 32 {
+	if len(value) != ReferenceBytes*2 {
 		return false
 	}
 	for _, character := range []byte(value) {
