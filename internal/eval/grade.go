@@ -59,18 +59,28 @@ func Grade(
 	original, err := decodeDocument[RunReport](data, 8*1024*1024)
 	if err != nil || original.Version != Version || !original.Complete || original.Mode != "run" ||
 		!validID(original.ID) || original.PresetID != preset.ID || len(original.Trials) == 0 ||
-		len(original.Trials) > MaxCorpusCases || credentialJSONValue(original, filter) {
+		len(original.Trials) > MaxCorpusCases || original.Repeat < 0 || original.Repeat > MaxRepeat ||
+		credentialJSONValue(original, filter) {
 		return RunReport{}, ErrGrade
+	}
+	repeat := original.Repeat
+	if repeat == 0 {
+		repeat = 1
 	}
 	// Admit every selected source before making a billable judge call.
 	trials := make([]Trial, 0, len(original.Trials))
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
+	identities := make(map[string]bool)
+	sessions := make(map[string]bool)
 	for _, summary := range original.Trials {
 		item, wanted := selected[summary.CaseID]
 		if !wanted {
 			continue
 		}
-		if seen[summary.CaseID] || !validID(summary.ID) || summary.CaseSHA256 != item.Digest ||
+		if seen[summary.CaseID] >= repeat || !validID(summary.ID) || identities[summary.ID] ||
+			summary.CaseSHA256 != item.Digest ||
+			original.Repeat == 0 && summary.Repetition != 0 ||
+			original.Repeat != 0 && summary.Repetition != seen[summary.CaseID]+1 ||
 			summary.File != "trial-"+summary.ID+".json" {
 			return RunReport{}, ErrGrade
 		}
@@ -80,14 +90,21 @@ func Grade(
 		}
 		trial, decodeErr := decodeDocument[Trial](data, 8*1024*1024)
 		if decodeErr != nil || !gradeEligible(trial, item, summary, preset, workspace) ||
-			credentialJSONValue(trial, filter) {
+			sessions[trial.SessionID] || credentialJSONValue(trial, filter) {
 			return RunReport{}, ErrGrade
 		}
 		trials = append(trials, trial)
-		seen[summary.CaseID] = true
+		seen[summary.CaseID]++
+		identities[summary.ID] = true
+		sessions[trial.SessionID] = true
 	}
 	if len(seen) != len(selected) {
 		return RunReport{}, ErrGrade
+	}
+	for _, count := range seen {
+		if count != repeat {
+			return RunReport{}, ErrGrade
+		}
 	}
 	judge, err := NewModelRole(cfg, preset.JudgeModel, "judge")
 	if err != nil {
@@ -100,6 +117,7 @@ func Grade(
 	result := RunReport{
 		Version: Version, ID: uuid.NewString(), PresetID: preset.ID, Runtime: original.Runtime,
 		Mode: "grade", SourceRun: original.ID, Verdict: Pass, StartedAt: time.Now().UTC(),
+		Repeat: original.Repeat,
 		Trials: []TrialSummary{}, Coverage: map[Verdict]int{}, Usage: "unknown", Cleanup: "no_target_or_tool_work",
 	}
 	writer, err := newPrivateReport(options.OutputParent, home, workspace, result.ID)
@@ -142,7 +160,8 @@ func Grade(
 		name := "trial-" + trial.ID + ".json"
 		result.Trials = append(result.Trials, TrialSummary{
 			ID: trial.ID, CaseID: trial.CaseID, CaseSHA256: trial.CaseSHA256, Verdict: trial.Verdict,
-			Code: trial.Code, DurationMS: trial.DurationMS, File: name,
+			Repetition: trial.Repetition,
+			Code:       trial.Code, DurationMS: trial.DurationMS, File: name,
 		})
 		result.Coverage[trial.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, trial.Verdict)
@@ -183,6 +202,7 @@ func readPrivateReportFile(root *os.Root, name string) ([]byte, error) {
 
 func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Preset, workspace string) bool {
 	if trial.Version != Version || trial.ID != summary.ID || trial.CaseID != item.Case.ID ||
+		trial.Repetition != summary.Repetition ||
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||
 		!trial.TransportClosed || !trial.EvidenceEligible || trial.ExecutionVerdict != Pass ||

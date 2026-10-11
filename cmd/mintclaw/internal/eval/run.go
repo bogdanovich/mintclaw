@@ -16,9 +16,13 @@ func newRunCommand() *cobra.Command {
 	var outputParent string
 	python := os.Getenv("MINTCLAW_EVAL_PDF_ORACLE_PYTHON")
 	suiteTimeout := time.Hour
+	repeat := 1
 	command := &cobra.Command{
 		Use: "run", Short: "Run selected scenarios against a prepared isolated gateway", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if repeat < 1 || repeat > manualeval.MaxRepeat {
+				return manualeval.ErrRunOptions
+			}
 			corpus, err := manualeval.LoadCorpus(options.root)
 			if err != nil {
 				return err
@@ -34,6 +38,7 @@ func newRunCommand() *cobra.Command {
 			result, runErr := manualeval.Run(cmd.Context(), preset, selected, manualeval.RunOptions{
 				Home: manualeval.RuntimeHome(), OutputParent: outputParent, SuiteTimeout: suiteTimeout,
 				PDFOraclePython: python,
+				Repeat:          repeat,
 			})
 			if result.ID == "" {
 				return runErr
@@ -48,7 +53,8 @@ func newRunCommand() *cobra.Command {
 				}
 			} else {
 				for _, trial := range result.Trials {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\n", trial.CaseID, trial.Verdict, trial.Code)
+					fmt.Fprintf(cmd.OutOrStdout(), "%s\t%d/%d\t%s\t%s\n",
+						trial.CaseID, trial.Repetition, result.Repeat, trial.Verdict, trial.Code)
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Verdict: %s; private report: %s\n", result.Verdict, result.ReportDir)
 			}
@@ -58,6 +64,7 @@ func newRunCommand() *cobra.Command {
 	bindCorpusFlags(command, &options)
 	command.Flags().StringVar(&outputParent, "out", "", "Existing private report directory outside the workspace")
 	command.Flags().DurationVar(&suiteTimeout, "suite-timeout", suiteTimeout, "Whole run limit (maximum 4h)")
+	command.Flags().IntVar(&repeat, "repeat", repeat, "Independent serial trials per case (1-64; at most 256 total)")
 	command.Flags().
 		StringVar(&python, "pdf-oracle-python", python, "Absolute executable of the pinned independent PDF oracle")
 	_ = command.MarkFlagRequired("preset")

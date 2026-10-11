@@ -21,8 +21,11 @@ prove target isolation, or run a task. JSON explicitly reports `runtime_run: fal
 `run` executes bounded scripted or adaptive conversations against an admitted, prepared isolated profile. Setup, admission,
 private report permissions, and limitations are in the [operator guide](../docs/operations/manual-agent-evals.md).
 `grade` rejudges eligible private evidence or the pinned calibration corpus without target/tool work. Model user/judge
-aliases use the isolated profile's native credential configuration. Domain suites, protected fact answers, repeats,
-and baseline comparison remain later implementation packets; stub tests are not live scenario qualification.
+aliases use the isolated profile's native credential configuration. `run --repeat N` retains independent serial
+trials (1-64 per case, at most 256 total), and `grade` rejudges all eligible source repetitions without target work.
+Native PDF execution/artifact controls have domain-specific admission and unresolved qualification checks;
+browser integration, owned provisioning and baseline comparison remain later packets. Stub tests are not live
+scenario qualification.
 The two general cases now require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
 Preset paths resolve relative to the preset file, not the shell's working directory. The included preset is a

@@ -18,6 +18,7 @@ type TrialSummary struct {
 	ID         string  `json:"id"`
 	CaseID     string  `json:"case_id"`
 	CaseSHA256 string  `json:"case_sha256"`
+	Repetition int     `json:"repetition,omitempty"`
 	Verdict    Verdict `json:"verdict"`
 	Code       string  `json:"code"`
 	DurationMS int64   `json:"duration_ms"`
@@ -37,6 +38,7 @@ type RunReport struct {
 	Usage      string              `json:"usage"`
 	RoleUsage  []RoleUsage         `json:"role_usage,omitempty"`
 	Mode       string              `json:"mode,omitempty"`
+	Repeat     int                 `json:"repeat,omitempty"`
 	SourceRun  string              `json:"source_run,omitempty"`
 	ReportDir  string              `json:"-"`
 	Cleanup    string              `json:"cleanup"`
@@ -120,15 +122,19 @@ func (report *privateReport) finish(result RunReport) error {
 	}
 	_, writeErr := fmt.Fprintf(file,
 		"# Agent Eval Run\n\nRun: `%s`\n\nVerdict: **%s**\n\n"+
-			"| Case | Verdict | Code | Evidence |\n| --- | --- | --- | --- |\n",
+			"| Case | Trial | Verdict | Code | Evidence |\n| --- | --- | --- | --- | --- |\n",
 		result.ID, result.Verdict,
 	)
 	for _, trial := range result.Trials {
 		if writeErr != nil {
 			break
 		}
-		_, writeErr = fmt.Fprintf(file, "| %s | %s | %s | [%s](%s) |\n",
-			trial.CaseID, trial.Verdict, trial.Code, trial.ID, trial.File)
+		repetition, repeat := trial.Repetition, result.Repeat
+		if repeat == 0 {
+			repetition, repeat = 1, 1
+		}
+		_, writeErr = fmt.Fprintf(file, "| %s | %d/%d | %s | %s | [%s](%s) |\n",
+			trial.CaseID, repetition, repeat, trial.Verdict, trial.Code, trial.ID, trial.File)
 	}
 	if writeErr == nil {
 		for _, usage := range result.RoleUsage {
