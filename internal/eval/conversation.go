@@ -45,6 +45,12 @@ type conversationDomain interface {
 	conclude(context.Context, *Trial)
 }
 
+// A control reply is not an LLM turn. Only native terminal evidence can
+// establish its outcome without inventing a missing LLM trace scope.
+type cancellationObserver interface {
+	observeCancellation(context.Context, Event, Event) error
+}
+
 type conversationRoles struct {
 	user   *ModelRole
 	judge  *ModelRole
@@ -256,6 +262,9 @@ func (flow *conversation) adaptiveFollowups(ctx context.Context, item Case, user
 			}
 			return Pass, "adaptive_completed"
 		}
+		if decision.Action.Kind == "cancel" && flow.last.Kind == "canceled" {
+			return Pass, "adaptive_canceled"
+		}
 	}
 	return Inconclusive, "user_turn_limit"
 }
@@ -336,17 +345,30 @@ func (flow *conversation) turn(
 		if event.Kind == "auxiliary" {
 			continue
 		}
-		if !flow.append(event) {
-			return Inconclusive, "event_limit"
-		}
 		if event.AgentID != "" && event.AgentID != flow.agent ||
 			flow.trial.SessionKey != "" && event.SessionKey != "" && event.SessionKey != flow.trial.SessionKey {
+			flow.append(event)
 			return Fail, "route_changed"
+		}
+		if action.Kind == "cancel" && event.Kind == "final" {
+			if observer, ok := flow.domain.(cancellationObserver); ok {
+				if err := observer.observeCancellation(turnCtx, prompt, event); err != nil {
+					flow.append(event)
+					if errors.Is(err, ErrPrivateEvidence) {
+						return Fail, "private_native_evidence"
+					}
+					return Inconclusive, "cancellation_evidence_unavailable"
+				}
+				event.Kind = "canceled"
+			}
+		}
+		if !flow.append(event) {
+			return Inconclusive, "event_limit"
 		}
 		if event.Kind == "stream" {
 			continue
 		}
-		if event.AgentID == "" || event.SessionKey == "" || len(event.TraceScopes) == 0 {
+		if event.AgentID == "" || event.SessionKey == "" || len(event.TraceScopes) == 0 && event.Kind != "canceled" {
 			return Inconclusive, "missing_route_identity"
 		}
 		flow.trial.SessionKey = event.SessionKey
@@ -457,6 +479,8 @@ func responseEvent(message protocol.MintClawMessage, turn int) (Event, error) {
 		Model:              payloadString(message.Payload, protocol.PayloadKeyModelName),
 		InteractionID:      payloadString(message.Payload, protocol.PayloadKeyInteractionID),
 		InteractionShortID: payloadString(message.Payload, protocol.PayloadKeyInteractionShortID),
+		Controls:           payloadString(message.Payload, protocol.PayloadKeyControls),
+		InteractionKind:    payloadString(message.Payload, protocol.PayloadKeyInteraction),
 	}
 	if raw, present := message.Payload[protocol.PayloadKeyTraceScopes]; present {
 		data, err := json.Marshal(raw)

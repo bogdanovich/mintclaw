@@ -37,6 +37,7 @@ type admissionFixture struct {
 	requests    chan protocol.MintClawMessage
 	mutateProbe func(*health.RuntimeProbe, int32)
 	respond     func(protocol.MintClawMessage, *protocol.MintClawMessage)
+	rawResponse func(protocol.MintClawMessage) []byte
 }
 
 func newAdmissionFixture(t *testing.T) *admissionFixture {
@@ -103,6 +104,12 @@ func newAdmissionFixture(t *testing.T) *admissionFixture {
 			}}
 			if fixture.respond != nil {
 				fixture.respond(request, &response)
+			}
+			if fixture.rawResponse != nil {
+				if connection.WriteMessage(websocket.TextMessage, fixture.rawResponse(response)) != nil {
+					return
+				}
+				continue
 			}
 			if connection.WriteJSON(response) != nil {
 				return

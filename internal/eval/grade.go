@@ -229,7 +229,11 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 				return false
 			}
 		}
-		if event.Kind != "stream" && (event.AgentID == "" || event.SessionKey == "" || len(event.TraceScopes) == 0) {
+		if event.Kind == "canceled" && !validQuestionCancellation(trial, event, workspace) {
+			return false
+		}
+		if event.Kind != "stream" && (event.AgentID == "" || event.SessionKey == "" ||
+			len(event.TraceScopes) == 0 && event.Kind != "canceled") {
 			return false
 		}
 	}
@@ -238,7 +242,8 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 
 func lastOutcome(events []Event) Event {
 	for index := len(events) - 1; index >= 0; index-- {
-		if events[index].Kind == "final" || events[index].Kind == "question" || events[index].Kind == "approval" {
+		if events[index].Kind == "final" || events[index].Kind == "question" || events[index].Kind == "approval" ||
+			events[index].Kind == "canceled" {
 			return events[index]
 		}
 	}

@@ -41,6 +41,15 @@ calibration pass means agreement on these examples, not a passing target task. D
 verify contracts, privacy boundaries, and reduction only. They are not live LLM calibration or domain qualification.
 The macOS portability job runs these deterministic harness tests, never the manual paid scenario suite.
 
+Ordinary `request_user_input` questions support prompt-bound cancellation, not the protected PDF question's
+Clarify/Back/Skip controls. The general interaction case therefore cancels the offered ordinary question. It checks
+the fresh owner route, native waiting record and delivered prompt before sending the control, then requires the
+same record's terminal cancellation before recognizing a `canceled` outcome. A cancellation reply is not an LLM
+turn and has no invented trace scope. Retained cancellation identities and revisions are required for regrading;
+conversation text alone is insufficient. This proves one question's terminal state, not whole-runtime quiescence,
+PDF no-write behavior or owned-resource cleanup. Raw frames and inspected native files are checked for known
+credentials before projection; observed leaks fail, while incomplete inspection remains non-passing uncertainty.
+
 ## Corpus Storage
 
 Keep the runner, schema, deterministic harness tests and wholly synthetic shared regression cases in `mintclaw`.

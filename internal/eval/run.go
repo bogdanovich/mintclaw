@@ -186,7 +186,9 @@ func runAdmittedTrial(
 		return trial
 	}
 	var domain *pdfConversation
-	options := gatewayclient.Options{}
+	options := gatewayclient.Options{InspectFrame: func(data []byte) error {
+		return inspectNativeJSON(data, item.Case.Driver.Facts, roles.filter)
+	}}
 	if item.Case.PDF != nil {
 		prepared, prepareErr := preparePDFTrial(item, target.preset.IsolationRoot,
 			target.preset.ExpectedWorkspace, sessionID, target.preset.ExpectedAgent)
@@ -199,9 +201,6 @@ func runAdmittedTrial(
 		}}
 		prepared.filter = roles.filter
 		item = prepared.item
-		options.InspectFrame = func(data []byte) error {
-			return inspectPDFWire(data, item.Case.Driver.Facts, roles.filter)
-		}
 	}
 	client, err := gatewayclient.Connect(caseCtx, target.config, sessionID, options)
 	if err != nil {
@@ -220,6 +219,15 @@ func runAdmittedTrial(
 			trial.Code = "pdf_local_cleanup_failed"
 		}
 		return trial
+	}
+	if containsAll(item.Case.Requires, []string{"interactions"}) {
+		questions := &questionConversation{
+			task: item.Case.Task, home: target.preset.IsolationRoot,
+			workspace: target.preset.ExpectedWorkspace, sessionID: sessionID,
+			agent: target.preset.ExpectedAgent, started: started, filter: roles.filter,
+		}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, questions)
 	}
 	return runConversation(caseCtx, client, item, sessionID,
 		target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles)

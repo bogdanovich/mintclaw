@@ -27,14 +27,15 @@ func gradeConversation(checks []Check, evidence []Event, last Event) []CheckResu
 				result.Verdict, result.Code = Pass, "matched"
 			}
 		case "last_outcome":
-			if last.ID != "" && check.Expected != "canceled" {
+			if last.ID != "" {
 				result = booleanCheck(check.ID, last.Kind == check.Expected, []string{last.ID})
 			}
 		case "same_session":
 			key := ""
 			requests := make(map[string]bool)
 			for _, event := range evidence {
-				if event.Kind == "final" || event.Kind == "question" || event.Kind == "approval" {
+				if event.Kind == "final" || event.Kind == "question" || event.Kind == "approval" ||
+					event.Kind == "canceled" {
 					if key == "" {
 						key = event.SessionKey
 					}
