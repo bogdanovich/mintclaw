@@ -83,9 +83,19 @@ func TestRealBrowserActionRepairsUnselectedChildFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	session.TabID = catalog.SelectedTabID
-	observation, err = broker.Observe(ctx, testOwner(), session.ID, session.TabID)
-	if errors.Is(err, ErrStale) {
+	// Child-frame navigation can invalidate more than one snapshot. Wait for a
+	// current observation within the fixture deadline, without weakening the
+	// context-selection or click assertions below.
+	for {
 		observation, err = broker.Observe(ctx, testOwner(), session.ID, session.TabID)
+		if !errors.Is(err, ErrStale) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("fixture navigation did not produce a current observation")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	if err != nil {
 		t.Fatal(err)
