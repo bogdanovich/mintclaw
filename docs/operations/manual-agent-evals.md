@@ -16,7 +16,7 @@ artifact collection are described in the [PDF guide](manual-agent-evals-pdf.md).
 whole-runtime privacy and owned cleanup are still unproven; artifact predicates alone cannot qualify a PDF case.
 
 The E2 integration adds tools-disabled user/judge roles to `run`, a judge-only `grade` command, versioned prompts,
-strict typed actions/findings, and [six manually labelled calibration examples](../../evals/calibration/judge-v1.json).
+strict typed actions/findings, and [six manually labelled calibration examples](../../evals/calibration/judge-v2.json).
 Model context excludes runtime authority, hidden hard-check expectations, simulator
 persona from judge input, and private fact values; fact handles alone are available to the user role. Protected
 answers require PDF-specific native admission, not arbitrary case facts. Private values observed in raw events, even an
@@ -39,6 +39,9 @@ unobservable provider-internal attempts remain unknown.
 Calibration compares judge findings to labels only after the call; it does not expose labels to the judge. A
 calibration pass means agreement on these examples, not a passing target task. Deterministic stub-provider tests
 verify contracts, privacy boundaries, and reduction only. They are not live LLM calibration or domain qualification.
+Judge prompt v2 requires positive evidence for pass and a visible contradiction or observed violation for fail;
+missing artifact or runtime verification is inconclusive. The v2 corpus keeps all six v1 examples and labels
+unchanged; the historical v1 corpus and live reports remain preserved. A v1 corpus cannot calibrate a v2 prompt.
 The macOS portability job runs these deterministic harness tests, never the manual paid scenario suite.
 
 ## Corpus Storage
@@ -205,7 +208,7 @@ MINTCLAW_HOME=/absolute/PRIVATE_HOME mintclaw eval grade /absolute/PRIVATE_HOME/
   --root ./evals --preset /absolute/preset.json --case general.context.followup \
   --out /absolute/PRIVATE_HOME/reports --json
 MINTCLAW_HOME=/absolute/PRIVATE_HOME mintclaw eval grade \
-  --calibration ./evals/calibration/judge-v1.json --preset /absolute/preset.json \
+  --calibration ./evals/calibration/judge-v2.json --preset /absolute/preset.json \
   --out /absolute/PRIVATE_HOME/reports --suite-timeout 10m --json
 ```
 
