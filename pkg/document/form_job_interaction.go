@@ -261,7 +261,7 @@ func (sink *FormProtectedAnswerSink) Accept(
 	if envelope.Kind == formIntakeBindingKind {
 		return sink.acceptFormIntake(ctx, request, envelope)
 	}
-	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
+	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
 		return interactions.ProtectedAnswerReceipt{}, err
 	}
@@ -824,7 +824,7 @@ func (sink *FormProtectedAnswerSink) Commit(
 	if envelope.Kind == formIntakeBindingKind {
 		return sink.commitFormIntake(ctx, request, envelope)
 	}
-	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
+	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
 		return err
 	}
@@ -863,7 +863,7 @@ func (sink *FormProtectedAnswerSink) Discard(
 	if envelope.Kind == formIntakeBindingKind {
 		return sink.discardFormIntake(ctx, request, envelope)
 	}
-	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
+	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
 		return err
 	}
@@ -1127,7 +1127,7 @@ func (sink *FormProtectedAnswerSink) Cancel(
 	if intakeEnvelope.Kind == formIntakeBindingKind {
 		return sink.cancelFormIntake(ctx, request, intakeEnvelope)
 	}
-	owner, err := formJobOwnerFromProtectedRequest(request.Workspace, request.Route)
+	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
 		return err
 	}
@@ -1243,7 +1243,9 @@ func decodeFormProtectedBindingEnvelope(token string) (formJobEnvelope, error) {
 	return envelope, nil
 }
 
-func formJobOwnerFromProtectedRequest(workspace string, route interactions.Route) (FormJobOwner, error) {
+// FormJobOwnerFromProtectedRoute applies the native protected-input route mapping.
+// It validates identity shape, not the route's freshness or authorization.
+func FormJobOwnerFromProtectedRoute(workspace string, route interactions.Route) (FormJobOwner, error) {
 	routeSessionKey := strings.TrimSpace(route.RouteSessionKey)
 	if routeSessionKey == "" {
 		routeSessionKey = strings.TrimSpace(route.SessionKey)
