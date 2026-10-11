@@ -173,26 +173,26 @@ type turnExecution struct {
 	checkpoint    *ContextCheckpoint
 
 	// Turn output
-	deliverable                      *taskresult.Deliverable
-	actionLog                        []TurnActionRecord
-	writeAudit                       []toolshared.WriteAuditEntry
-	receipts                         []taskresult.Receipt
-	finalRenderToolCalls             map[string]finalRenderToolCallState
-	sawSteering                      bool
-	sawAdditionalUserInput           bool
-	objectiveOutcomeRepairAttempted  bool
-	liveHandoffRecoveryAttempted     bool
-	resourceDispositionAttempted     bool
-	resourceDispositionCloseVerified bool
-	objectiveRepairPending           bool
-	objectiveRepairActive            bool
-	objectiveRepairMessages          []providers.Message
-	objectiveRepairTailIndex         int
-	objectiveRepairToolKind          string
-	serializedToolProjectionRepairs  int
-	continuationDecision             interactionContinuationDecisionState
-	protectedAnswerContinuation      protectedAnswerContinuationState
-	terminal                         terminalContent
+	deliverable                     *taskresult.Deliverable
+	actionLog                       []TurnActionRecord
+	writeAudit                      []toolshared.WriteAuditEntry
+	receipts                        []taskresult.Receipt
+	finalRenderToolCalls            map[string]finalRenderToolCallState
+	sawSteering                     bool
+	sawAdditionalUserInput          bool
+	objectiveOutcomeRepairAttempted bool
+	liveHandoffRecoveryAttempted    bool
+	resourceDispositionAttempted    bool
+	resourceDispositionVerified     bool
+	objectiveRepairPending          bool
+	objectiveRepairActive           bool
+	objectiveRepairMessages         []providers.Message
+	objectiveRepairTailIndex        int
+	objectiveRepairToolKind         string
+	serializedToolProjectionRepairs int
+	continuationDecision            interactionContinuationDecisionState
+	protectedAnswerContinuation     protectedAnswerContinuationState
+	terminal                        terminalContent
 
 	loopGuard *loopguard.Controller
 

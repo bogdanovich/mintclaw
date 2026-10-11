@@ -122,24 +122,10 @@ func (store *FormJobStore) AppendComposite(
 		if len(findings) != 0 {
 			return false, &FormCompositeValidationError{Findings: findings}
 		}
-		// Detach slices before construction: updateAt may still save expiry/prune
-		// changes on error, so even a corrected field must not alias the snapshot.
-		record.Public = cloneFormJobRecord(record.Public)
-		record.Events = slices.Clone(record.Events)
-		for index := range payloads {
-			payload := &payloads[index]
-			payload.Revision = record.Public.Revision + 1
-			payload.PreviousDigest = record.Public.LedgerDigest
-			payload.CreatedAt = now.UnixMilli()
-			payload.IdempotencyDigest = keyedDigest(store.profileKey, "composite_value", id, payload.FieldID)
-			payload.EventID = "form_value_" + payload.IdempotencyDigest[:32]
-			payload.Composite = &formCompositeValueBinding{
-				Version: FormCompositeVersion, ID: id, Digest: digest, BaseRevision: request.ExpectedRevision,
-				Index: index, Count: len(payloads),
-			}
-			if appendErr := store.appendValueToRecord(&record, jobKey, *payload, digest); appendErr != nil {
-				return false, appendErr
-			}
+		if appendErr := store.appendCompositeToRecord(
+			&record, jobKey, payloads, id, digest, request.ExpectedRevision, now,
+		); appendErr != nil {
+			return false, appendErr
 		}
 		snapshot.Records[record.Public.JobID] = record
 		result = formCompositeResult(record, id, payloads, false)
@@ -149,6 +135,35 @@ func (store *FormJobStore) AppendComposite(
 		return FormCompositeResult{}, err
 	}
 	return result, nil
+}
+
+// appendCompositeToRecord constructs one detached ledger chain, not a second
+// transaction. Callers validate the whole accepted set and publish the record
+// only after their other protected bookkeeping is also ready.
+func (store *FormJobStore) appendCompositeToRecord(
+	record *formJobStoredRecord, jobKey []byte, payloads []formJobValuePayload,
+	id, digest string, baseRevision int64, now time.Time,
+) error {
+	// updateAt can save unrelated expiry/prune changes on error. Even a
+	// corrected field must not alias the snapshot while constructing events.
+	record.Public = cloneFormJobRecord(record.Public)
+	record.Events = slices.Clone(record.Events)
+	for index := range payloads {
+		payload := &payloads[index]
+		payload.Revision = record.Public.Revision + 1
+		payload.PreviousDigest = record.Public.LedgerDigest
+		payload.CreatedAt = now.UnixMilli()
+		payload.IdempotencyDigest = keyedDigest(store.profileKey, "composite_value", id, payload.FieldID)
+		payload.EventID = "form_value_" + payload.IdempotencyDigest[:32]
+		payload.Composite = &formCompositeValueBinding{
+			Version: FormCompositeVersion, ID: id, Digest: digest, BaseRevision: baseRevision,
+			Index: index, Count: len(payloads),
+		}
+		if err := store.appendValueToRecord(record, jobKey, *payload, digest); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateFormCompositeRequest(request FormCompositeRequest) ([]FormCompositeAssignment, error) {

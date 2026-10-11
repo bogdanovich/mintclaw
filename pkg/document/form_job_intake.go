@@ -476,6 +476,7 @@ func formIntakeInput(record FormJobRecord, mode *formIntakeStoredMode, input for
 		JobID: record.JobID, ModeID: mode.ID, Reference: formIntakeReceiptPrefix + record.JobID + "." + input.ID,
 		Revision: record.Revision, Passes: len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
 		Intent: input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
+		Accounted: formIntakeAccountedLiterals(input),
 	}
 }
 
@@ -597,6 +598,9 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 			return ErrFormJobRecordCorrupt
 		}
 		seen[input.ID] = true
+		if err := validateFormIntakeAccounting(record, input); err != nil {
+			return err
+		}
 		switch input.State {
 		case formIntakeInputStaged:
 			staged++
@@ -623,6 +627,9 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 				return ErrFormJobRecordCorrupt
 			}
 			seenReservations[reservation.ID] = true
+			if err := validateFormIntakeOutcome(record, reservation); err != nil {
+				return err
+			}
 		}
 	}
 	progress := formIntakeProgress(record, mode)

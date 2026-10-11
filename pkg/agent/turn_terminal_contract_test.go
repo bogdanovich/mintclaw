@@ -69,6 +69,12 @@ func (tool *resourceDispositionCloseTestTool) TurnFinalizationRequirement(
 	}, tool.liveSessions > 0, nil
 }
 
+func (*resourceDispositionCloseTestTool) VerifyResourceDisposition(
+	_ context.Context, args map[string]any, result *toolshared.ToolResult,
+) bool {
+	return args["operation"] == "close" && result != nil && !result.IsError
+}
+
 func (*resourceDispositionCloseTestTool) ObjectiveRecoveryParameters(kind string) (map[string]any, bool) {
 	if kind != taskresult.ObjectiveKindResourceDisposition {
 		return nil, false
@@ -592,8 +598,8 @@ func TestResourceDispositionBatchKeepsSiblingRestrictionsAndRequiresAllSessionsT
 	result, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al))
 	if err != nil || result.status != TurnEndStatusCompleted || provider.callCount != 2 ||
 		tool.executions != 1 || tool.liveSessions != 1 ||
-		result.finalContent != "Browser session disposition could not be verified for every live session. "+
-			"Runtime cleanup will close any remaining session." {
+		result.finalContent != "Resource disposition could not be verified for every live resource. "+
+			"Runtime cleanup will attempt to release any remaining automation-owned resources." {
 		t.Fatalf(
 			"turn result = %#v, %v; calls=%d executions=%d live=%d",
 			result, err, provider.callCount, tool.executions, tool.liveSessions,

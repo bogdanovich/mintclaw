@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 )
 
@@ -34,6 +36,38 @@ func (provider *trackedStartupProvider) Close() {
 type failingStopStartupChannel struct {
 	channels.BaseChannel
 	stopErr error
+}
+
+type blockingRollbackProvider struct {
+	started     chan struct{}
+	release     chan struct{}
+	startedOnce sync.Once
+	releaseOnce sync.Once
+}
+
+func newBlockingRollbackProvider() *blockingRollbackProvider {
+	return &blockingRollbackProvider{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (provider *blockingRollbackProvider) Chat(
+	context.Context,
+	[]providers.Message,
+	[]providers.ToolDefinition,
+	string,
+	map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.startedOnce.Do(func() { close(provider.started) })
+	<-provider.release
+	return &providers.LLMResponse{Content: "done"}, nil
+}
+
+func (*blockingRollbackProvider) GetDefaultModel() string { return "test-model" }
+
+func (provider *blockingRollbackProvider) unblock() {
+	provider.releaseOnce.Do(func() { close(provider.release) })
 }
 
 func (channel *failingStopStartupChannel) Start(context.Context) error {
@@ -194,6 +228,79 @@ func TestGatewayProcessStartupRollbackClosesEveryOwner(t *testing.T) {
 	case <-runDone:
 	default:
 		t.Fatal("agent loop remains running after startup rollback")
+	}
+}
+
+func TestGatewayProcessStartupRollbackBoundsAgentWorkerDrain(t *testing.T) {
+	const rollbackTimeout = 25 * time.Millisecond
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.ContextManagerConfig = nil
+	cfg.Agents.Defaults.ModelName = "test-model"
+
+	provider := newBlockingRollbackProvider()
+	t.Cleanup(provider.unblock)
+	msgBus := bus.NewMessageBus()
+	al := agent.NewAgentLoop(cfg, msgBus, provider)
+	runCtx, cancelRun := context.WithCancel(t.Context())
+	runDone := make(chan struct{})
+	runErr := make(chan error, 1)
+	go func() {
+		defer close(runDone)
+		runErr <- al.Run(runCtx)
+	}()
+	if err := al.WaitStartup(t.Context()); err != nil {
+		t.Fatalf("WaitStartup() error = %v", err)
+	}
+	if err := msgBus.PublishInbound(t.Context(), bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+		Content: "keep the startup worker active",
+	}); err != nil {
+		t.Fatalf("PublishInbound() error = %v", err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not start")
+	}
+
+	tx := &gatewayStartupTransaction{}
+	tx.ownMessageBus(msgBus)
+	tx.ownAgent(al)
+	tx.ownAgentRun(al, cancelRun, runDone)
+	rollbackDone := make(chan error, 1)
+	go func() {
+		rollbackDone <- tx.rollback(rollbackTimeout)
+	}()
+
+	var rollbackErr error
+	select {
+	case rollbackErr = <-rollbackDone:
+	case <-time.After(500 * time.Millisecond):
+		provider.unblock()
+		<-rollbackDone
+		t.Fatal("startup rollback ignored its deadline while draining an agent worker")
+	}
+	if !errors.Is(rollbackErr, context.DeadlineExceeded) {
+		t.Fatalf("rollback error = %v, want context deadline exceeded", rollbackErr)
+	}
+	if defaultAgent := al.GetRegistry().GetDefaultAgent(); defaultAgent == nil || defaultAgent.Sessions == nil {
+		t.Fatal("timed-out startup rollback closed registry-owned sessions")
+	}
+
+	provider.unblock()
+	<-runDone
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	closeCtx, cancelClose := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancelClose()
+	if err := al.CloseContext(closeCtx); err != nil {
+		t.Fatalf("CloseContext() retry error = %v", err)
 	}
 }
 

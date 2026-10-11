@@ -1,0 +1,85 @@
+package document
+
+import (
+	"slices"
+	"unicode/utf8"
+)
+
+func formIntakeAccountedLiterals(input formIntakeStoredInput) []FormIntakeAccountedLiteral {
+	if input.State == formIntakeInputConsumed {
+		return nil
+	}
+	result := make([]FormIntakeAccountedLiteral, 0, len(input.Accounted))
+	for _, span := range input.Accounted {
+		text := input.Text[span.Start:span.End]
+		occurrence := formIntakeLiteralOccurrence(input.Text, span)
+		result = append(result, FormIntakeAccountedLiteral{
+			Literal: FormIntakeLiteral{Text: text, Occurrence: occurrence}, FieldID: span.FieldID,
+		})
+	}
+	return result
+}
+
+func validateFormIntakeAccounting(record FormJobRecord, input formIntakeStoredInput) error {
+	if len(input.Accounted) > MaxFormIntakeAccountedSpans || input.OriginalBytes < 0 ||
+		input.OriginalBytes > MaxFormIntakeInputBytes ||
+		(input.State == formIntakeInputStaged && (len(input.Accounted) != 0 || input.OriginalBytes != 0)) ||
+		(input.State == formIntakeInputCommitted && input.OriginalBytes != 0 && input.OriginalBytes != len(input.Text)) {
+		return ErrFormJobRecordCorrupt
+	}
+	for index, span := range input.Accounted {
+		if span.Start < 0 || span.End <= span.Start || span.End > input.OriginalBytes ||
+			span.FieldID != "" && !slices.ContainsFunc(record.Fields, func(field FormJobFieldState) bool {
+				return field.FieldID == span.FieldID
+			}) {
+			return ErrFormJobRecordCorrupt
+		}
+		if input.State != formIntakeInputConsumed && (!utf8.ValidString(input.Text[span.Start:span.End]) ||
+			!formIntakeLiteralTokenBoundaries(input.Text, span.Start, span.End)) {
+			return ErrFormJobRecordCorrupt
+		}
+		for _, prior := range input.Accounted[:index] {
+			if span == prior || formIntakeSpansOverlap(span, prior) && (span.FieldID != "" || prior.FieldID != "") {
+				return ErrFormJobRecordCorrupt
+			}
+		}
+	}
+	return nil
+}
+
+func validateFormIntakeOutcome(record FormJobRecord, pass formIntakeStoredPass) error {
+	outcome := pass.Outcome
+	if outcome == nil {
+		return nil
+	}
+	if !validDocumentDigest(outcome.Digest) || outcome.AppliedRevision <= pass.Revision ||
+		outcome.AppliedRevision > record.Revision ||
+		outcome.AppliedRevision != pass.Revision+int64(len(outcome.AcceptedIDs))+1 ||
+		len(outcome.AcceptedIDs)+len(outcome.AcknowledgedIDs)+len(outcome.Findings) > len(pass.CandidateIDs) {
+		return ErrFormJobRecordCorrupt
+	}
+	seen := make(map[string]bool, len(pass.CandidateIDs))
+	for _, ids := range [][]string{outcome.AcceptedIDs, outcome.AcknowledgedIDs} {
+		if !slices.IsSorted(ids) {
+			return ErrFormJobRecordCorrupt
+		}
+		for _, id := range ids {
+			if seen[id] || !slices.Contains(pass.CandidateIDs, id) {
+				return ErrFormJobRecordCorrupt
+			}
+			seen[id] = true
+		}
+	}
+	for _, finding := range outcome.Findings {
+		if seen[finding.FieldID] || !slices.Contains(pass.CandidateIDs, finding.FieldID) {
+			return ErrFormJobRecordCorrupt
+		}
+		switch finding.Code {
+		case "field_ambiguous", "field_conflicting", "field_invalid", "field_unsupported", "field_unresolved":
+		default:
+			return ErrFormJobRecordCorrupt
+		}
+		seen[finding.FieldID] = true
+	}
+	return nil
+}
