@@ -2,6 +2,9 @@
 
 Internal architecture notes for major runtime mechanisms and subsystem design.
 
+- [Protected Mac Credential VM Package](credential-mac-vm-package.md): fixed Virtualization launcher,
+  protected input contract, disabled system service, public qualification, and remaining host activation gates.
+
 - [Steering](steering.md): injecting messages into a running agent loop between tool calls.
 - [Codex-Style Steering Roadmap](codex-style-steering-roadmap.md): incompatible replacement of pending-tool classification with same-turn post-batch user-input steering.
 - [Code Health Architecture State](code-health.md): current ownership,
