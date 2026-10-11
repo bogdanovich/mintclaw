@@ -31,6 +31,13 @@ type conversation struct {
 	frames    int
 	bytes     int
 	last      Event
+	filter    *strings.Replacer
+}
+
+type conversationRoles struct {
+	user   *ModelRole
+	judge  *ModelRole
+	filter *strings.Replacer
 }
 
 // The CLI admission layer must prove target isolation before connecting or
@@ -41,10 +48,21 @@ func runScriptedConversation(
 	item LoadedCase,
 	sessionID, agent, workspace string,
 ) (trial Trial) {
+	return runConversation(ctx, transport, item, sessionID, agent, workspace, conversationRoles{})
+}
+
+func runConversation(
+	ctx context.Context,
+	transport conversationTransport,
+	item LoadedCase,
+	sessionID, agent, workspace string,
+	roles conversationRoles,
+) (trial Trial) {
 	trial = Trial{
 		Version: Version, ID: uuid.NewString(), CaseID: item.Case.ID, CaseSHA256: item.Digest,
 		SessionID: sessionID, AgentID: agent, Verdict: Inconclusive, Code: "not_completed",
 		StartedAt: time.Now().UTC(), Events: []Event{}, Checks: []CheckResult{}, RemoteState: "unknown",
+		ExecutionVerdict: Inconclusive, ExecutionCode: "not_completed",
 	}
 	defer func() {
 		transport.Close()
@@ -55,24 +73,29 @@ func runScriptedConversation(
 				trial.Code = "transport_limit"
 			}
 			trial.Verdict = combineVerdicts(trial.Verdict, Inconclusive)
+			trial.ExecutionVerdict = combineVerdicts(trial.ExecutionVerdict, Inconclusive)
+			trial.ExecutionCode = "transport_limit"
+			trial.EvidenceEligible = false
 		}
 		trial.DurationMS = time.Since(trial.StartedAt).Milliseconds()
 	}()
 	if item.Case.Validate() != nil || !validDigest(item.Digest) || !validID(agent) ||
 		!validID(sessionID) || workspace == "" {
 		trial.Verdict, trial.Code = Error, "invalid_admission"
+		trial.ExecutionVerdict, trial.ExecutionCode = trial.Verdict, trial.Code
 		return trial
 	}
-	if item.Case.Driver.Mode != "scripted" {
+	if item.Case.Driver.Mode == "llm_user" && roles.user == nil {
 		trial.Verdict, trial.Code = Skipped, "driver_unavailable"
+		trial.ExecutionVerdict, trial.ExecutionCode = trial.Verdict, trial.Code
 		return trial
 	}
 	caseTimeout, _ := time.ParseDuration(item.Case.Limits.CaseTimeout)
 	caseCtx, cancel := context.WithTimeout(ctx, caseTimeout)
 	defer cancel()
-	flow := conversation{transport: transport, trial: &trial, agent: agent, workspace: workspace}
+	flow := conversation{transport: transport, trial: &trial, agent: agent, workspace: workspace, filter: roles.filter}
 	verdict, code := flow.turn(caseCtx, item.Case.Limits, Action{Kind: "message", Text: item.Case.Task}, Event{}, 1)
-	if verdict == Pass {
+	if verdict == Pass && item.Case.Driver.Mode == "scripted" {
 		for index, step := range item.Case.Driver.Steps {
 			if flow.last.Kind != step.WaitFor.Kind ||
 				step.WaitFor.Contains != "" && !strings.Contains(flow.last.Content, step.WaitFor.Contains) {
@@ -89,8 +112,12 @@ func runScriptedConversation(
 			}
 		}
 	}
+	if verdict == Pass && item.Case.Driver.Mode == "llm_user" {
+		verdict, code = flow.adaptiveFollowups(caseCtx, item.Case, roles.user)
+	}
 	trial.Checks = gradeConversation(item.Case.Checks, trial.Events, flow.last)
 	trial.Verdict, trial.Code = verdict, code
+	trial.ExecutionVerdict, trial.ExecutionCode = verdict, code
 	for _, check := range trial.Checks {
 		combined := combineVerdicts(trial.Verdict, check.Verdict)
 		if combined != trial.Verdict {
@@ -103,10 +130,82 @@ func runScriptedConversation(
 		}
 		trial.Verdict = combined
 	}
-	if len(item.Case.Rubric) > 0 && trial.Verdict == Pass {
-		trial.Verdict, trial.Code = Inconclusive, "judge_required"
+	if _, err := visibleConversation(trial.Events, item.Case.Driver.Facts); verdict == Pass && err == nil &&
+		len(item.Case.Driver.Facts) == 0 && len(item.Case.Fixtures) == 0 {
+		trial.EvidenceEligible = true
+	}
+	if len(item.Case.Rubric) > 0 {
+		judgement := Judgement{
+			Version: Version, Verdict: Inconclusive, Code: "ineligible_judge_evidence",
+			Findings: JudgeFindings{Version: Version, Criteria: []JudgeFinding{}},
+		}
+		if trial.EvidenceEligible {
+			judgement = judgeConversation(caseCtx, roles.judge, item.Case, trial.Events)
+		}
+		if credentialJSONValue(judgement, flow.filter) {
+			judgement.Findings = JudgeFindings{Version: Version, Criteria: []JudgeFinding{}}
+			judgement.Verdict, judgement.Code = Fail, "private_judge_output"
+		}
+		trial.Judge = &judgement
+		if judgement.Code == "private_judge_output" {
+			trial.EvidenceEligible = false
+			trial.ExecutionVerdict, trial.ExecutionCode = Fail, judgement.Code
+		}
+		if requiredRubric(item.Case.Rubric) || judgement.Code == "private_judge_output" {
+			combined := combineVerdicts(trial.Verdict, judgement.Verdict)
+			if combined != trial.Verdict {
+				trial.Code = judgement.Code
+			}
+			trial.Verdict = combined
+		}
 	}
 	return trial
+}
+
+func requiredRubric(rubric []Criterion) bool {
+	for _, criterion := range rubric {
+		if criterion.Required {
+			return true
+		}
+	}
+	return false
+}
+
+func (flow *conversation) adaptiveFollowups(ctx context.Context, item Case, user *ModelRole) (Verdict, string) {
+	for number := 2; number <= item.Limits.MaxUserTurns; number++ {
+		if len(flow.trial.DriverCalls) >= item.Limits.MaxDriverCalls {
+			return Inconclusive, "driver_call_limit"
+		}
+		decision := nextModelAction(ctx, user, item, flow.trial.Events, flow.last.Kind,
+			item.Limits.MaxUserTurns-number+1)
+		if decision.Call != nil {
+			flow.trial.DriverCalls = append(flow.trial.DriverCalls, *decision.Call)
+		}
+		if decision.Code != "user_action_received" {
+			if decision.Call != nil &&
+				(decision.Call.Code == "private_input" || decision.Call.Code == "private_output") {
+				return Fail, "private_user_action"
+			}
+			return Error, decision.Code
+		}
+		if credentialJSONValue(decision.Action, flow.filter) {
+			return Fail, "private_user_action"
+		}
+		if decision.Action.Kind == "stop" {
+			return Inconclusive, "driver_stopped"
+		}
+		verdict, code := flow.turn(ctx, item.Limits, decision.Action, flow.last, number)
+		if verdict != Pass {
+			return verdict, code
+		}
+		if decision.Action.Kind == "finish" {
+			if flow.last.Kind != "final" {
+				return Inconclusive, "unfinished_interaction"
+			}
+			return Pass, "adaptive_completed"
+		}
+	}
+	return Inconclusive, "user_turn_limit"
 }
 
 func (flow *conversation) turn(
@@ -123,10 +222,16 @@ func (flow *conversation) turn(
 	if code != "" {
 		return Inconclusive, code
 	}
+	if credentialJSONValue(request, flow.filter) {
+		return Fail, "private_input"
+	}
 	if err := flow.transport.Send(turnCtx, request); err != nil {
 		return Inconclusive, transportCode(err)
 	}
-	if !flow.append(Event{Turn: number, Kind: "input", RequestID: request.ID, Content: action.Text}) {
+	if !flow.append(Event{
+		Turn: number, Kind: "input", RequestID: request.ID,
+		Content: payloadString(request.Payload, protocol.PayloadKeyContent),
+	}) {
 		return Inconclusive, "event_limit"
 	}
 	for {
@@ -139,6 +244,9 @@ func (flow *conversation) turn(
 		flow.bytes += len(encoded)
 		if encodeErr != nil || flow.frames > 256 || flow.bytes > 2*1024*1024 {
 			return Inconclusive, "event_limit"
+		}
+		if credentialJSONValue(message, flow.filter) {
+			return Fail, "private_wire_evidence"
 		}
 		if message.SessionID != "" && message.SessionID != flow.trial.SessionID {
 			continue

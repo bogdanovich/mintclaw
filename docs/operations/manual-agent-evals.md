@@ -3,21 +3,23 @@
 ## Current Scope
 
 `mintclaw eval list` and `validate` remain offline. `run` attaches to an already prepared isolated loopback gateway
-on Linux or macOS and executes bounded scripted conversation/navigation cases. It does not create a profile,
+on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,
 bootstrap skills, deploy a binary, restart a gateway, grant approval, or retry uncertain task admission.
 
-This packet does not yet implement adaptive users, judging, domain oracles, artifact downloads, repeats, or comparison.
+This packet does not yet implement domain oracles, protected fact answers, artifact downloads, repeats, or comparison.
 Missing capabilities/drivers/domain evidence produce explicit non-passing coverage. A text response never proves
 that a PDF was filled, a browser action happened, or Telegram delivery worked. See the
 [roadmap](../architecture/agent-evals-roadmap.md) for the remaining packets.
 
-The E2 foundation adds internal tools-disabled user/judge roles, versioned prompts, strict typed actions/findings,
-and [six manually labelled calibration examples](../../evals/calibration/judge-v1.json). These are not yet wired to
-`run` or a `grade` command. Model context excludes runtime authority, hidden hard-check expectations, simulator
+The E2 integration adds tools-disabled user/judge roles to `run`, a judge-only `grade` command, versioned prompts,
+strict typed actions/findings, and [six manually labelled calibration examples](../../evals/calibration/judge-v1.json).
+Model context excludes runtime authority, hidden hard-check expectations, simulator
 persona from judge input, and private fact values; fact handles alone are available to the user role. Admission of
 protected wire answers and domain evidence remains a later packet. Private values observed in raw events, even an
-excluded streaming revision, refuse model projection. JSON escaping is not treated as redaction.
-When private facts exist, escape-bearing content must be one complete, bounded JSON value whose decoded tokens
+excluded streaming revision, refuse model projection. Known credentials from native configuration are checked before
+wire/model input and report retention; unsafe output is withheld, not sanitized into a passing assessment.
+JSON escaping is not treated as redaction. When private facts or a credential filter exist, escape-bearing content
+must be one complete, bounded JSON value whose decoded tokens
 can all be checked. Escaped opaque prose, trailing fragments, malformed input, and exhausted bounds are ineligible,
 even when they look harmless. This conservative refusal avoids heuristic decoding of arbitrary prose; it is not
 a guarantee against all possible encodings.
@@ -126,7 +128,9 @@ each task. The whole-suite timeout defaults to one hour, with a four-hour maximu
 Every run gets a new `0700` directory with exclusive `0600` trial JSON, `summary.md`, and `run.json`. Trial files
 contain private transcripts; they must not be published. The public CLI summary contains IDs, verdicts, static
 codes, and the private report path, not task contents or credentials. JSON reports raw durations and observed
-identity. Usage is explicitly unknown until all-call collection is implemented.
+identity. User/judge call usage is summed from every available caller response, separately by role. Raw integers stay
+in JSON; Markdown truncates compact counts, for example `10252` becomes `10.2k`. Missing returned usage and
+provider-internal attempts remain explicitly unknown. Target usage remains unknown until all-call collection exists.
 
 `pass`, `fail`, `error`, `inconclusive`, and `skipped` are distinct. Any required unknown or unavailable case prevents
 a passing run. A hard failure remains a failure even if reporting also fails. A final response ends a turn, not
@@ -143,3 +147,40 @@ automatically rerunning a possibly mutating operation. This first profile runs n
 Stop only the gateway that the operator started for this profile. Evidence cleanup/retention is explicit operator
 work; the runner does not delete profile sessions or infer that remote work stopped. Never remove a production
 profile to clean up an eval run.
+
+## Adaptive Users And Judging
+
+Add `user_model` and `judge_model` aliases to the non-secret preset. They select enabled HTTP model configurations
+in the same isolated native profile; their credentials are resolved by the native security overlay. A case with
+`driver.mode: llm_user` also supplies a bounded persona, not tool or prompt bindings. The runner sends only new user
+intent in the same target session. `finish` sends one last request and requires a final response; `stop` never passes.
+An absent/unsupported user model skips the case without sending its task. Missing required judging cannot pass.
+
+Model roles are tools-disabled and separate from the target. The native runner binds navigation to the observed
+prompt and refuses grants. Facts/fixtures still require later domain admission; merely adding those fields does
+not make protected intake or artifacts available. Optional judge findings never hide transport or mandatory-check
+failures; private judge output fails even an optional rubric and becomes ineligible for regrading.
+
+## Regrade And Calibrate
+
+```sh
+MINTCLAW_HOME=/absolute/PRIVATE_HOME mintclaw eval grade /absolute/PRIVATE_HOME/reports/SOURCE_RUN \
+  --root ./evals --preset /absolute/preset.json --case general.context.followup \
+  --out /absolute/PRIVATE_HOME/reports --json
+MINTCLAW_HOME=/absolute/PRIVATE_HOME mintclaw eval grade \
+  --calibration ./evals/calibration/judge-v1.json --preset /absolute/preset.json \
+  --out /absolute/PRIVATE_HOME/reports --suite-timeout 10m --json
+```
+
+`grade` reads complete, eligible private run/trial files and verifies case digests and route/evidence metadata
+before calling the judge. It requires a matching preset ID and current cases; changed, incomplete, unsafe, or legacy
+ineligible reports are refused. Operator-owned evidence is trusted input, not cryptographically signed evidence.
+Mandatory checks are recomputed, not replaced with a previous judge verdict. A new private report is created;
+source evidence is never overwritten. No gateway connection, PID file, task input, or tool execution is involved.
+Source runtime identity is retained as historical evidence, not claimed as a newly observed running target.
+
+Calibration uses `grade --calibration` without a source directory or corpus selection flags. It persists the labelled
+agreement and private judge findings, and exposes only summary metrics through the CLI. Its limit is ten minutes,
+or a shorter explicit suite limit; regrading defaults to one hour (maximum four hours). A canceled/failed judge call
+is non-passing, with available call usage retained. `calibration.json` with `complete: true` marks report completion,
+not target qualification. Stub tests and successful regrading are not real-model scenario evidence.

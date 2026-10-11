@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 )
 
 const (
@@ -111,23 +112,42 @@ func privateJSONValue(value any, facts map[string]string) bool {
 }
 
 func privateDecodedValue(value any, facts map[string]string) bool {
+	return matchingDecodedString(value, func(text string) bool { return containsPrivate(text, facts) })
+}
+
+func matchingDecodedString(value any, matches func(string) bool) bool {
 	switch typed := value.(type) {
 	case string:
-		return containsPrivate(typed, facts)
+		return matches(typed)
 	case []any:
 		for _, child := range typed {
-			if privateDecodedValue(child, facts) {
+			if matchingDecodedString(child, matches) {
 				return true
 			}
 		}
 	case map[string]any:
 		for key, child := range typed {
-			if containsPrivate(key, facts) || privateDecodedValue(child, facts) {
+			if matches(key) || matchingDecodedString(child, matches) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func credentialJSONValue(value any, filter *strings.Replacer) bool {
+	if filter == nil {
+		return false
+	}
+	data, err := json.Marshal(value)
+	var decoded any
+	if err != nil || json.Unmarshal(data, &decoded) != nil {
+		return true
+	}
+	return matchingDecodedString(decoded, func(text string) bool {
+		scan := privateContentScan{filter: filter, tokens: 4096}
+		return scan.text(text, 0)
+	})
 }
 
 func userInput(item Case, events []Event, pendingKind string, remaining int) (string, error) {

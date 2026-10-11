@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
 
 type Judgement struct {
@@ -18,7 +19,10 @@ type Judgement struct {
 // This is an assessment, not a trial verdict. The runner must combine it with
 // transport completeness and mandatory checks; it never replaces those facts.
 func judgeConversation(ctx context.Context, judge *ModelRole, item Case, events []Event) Judgement {
-	result := Judgement{Version: Version, Verdict: Inconclusive, Code: "judge_unavailable"}
+	result := Judgement{
+		Version: Version, Verdict: Inconclusive, Code: "judge_unavailable",
+		Findings: JudgeFindings{Version: Version, Criteria: []JudgeFinding{}},
+	}
 	if judge == nil || judge.identity.Role != "judge" {
 		return result
 	}
@@ -33,6 +37,9 @@ func judgeConversation(ctx context.Context, judge *ModelRole, item Case, events 
 	result.Call = &call
 	if err != nil {
 		result.Verdict, result.Code = Error, "judge_call_failed"
+		if errors.Is(err, ErrPrivateEvidence) {
+			result.Verdict, result.Code = Fail, "private_judge_output"
+		}
 		return result
 	}
 	if containsPrivate(output, item.Driver.Facts) {

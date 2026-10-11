@@ -13,8 +13,12 @@ import (
 // DecodeManifest validates exact JSON member names/types with the repository's
 // existing schema library; token parsing also rejects nested duplicate keys.
 func DecodeManifest[T any](data []byte) (T, error) {
+	return decodeDocument[T](data, MaxManifestBytes)
+}
+
+func decodeDocument[T any](data []byte, maximum int) (T, error) {
 	var result T
-	if len(data) == 0 || len(data) > MaxManifestBytes || !utf8.Valid(data) {
+	if len(data) == 0 || len(data) > maximum || !utf8.Valid(data) {
 		return result, ErrInvalidJSON
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
