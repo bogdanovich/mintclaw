@@ -193,3 +193,31 @@ func TestIneligibleRoleEvidenceDoesNotCallProvider(t *testing.T) {
 		t.Fatal("ineligible judge evidence reached a model")
 	}
 }
+
+func TestModelJudgeRetainsVerdictsRatherThanCoercingUnverifiedClaims(t *testing.T) {
+	item := rolePromptCase()
+	item.Task = "Produce an independently checked synthetic artifact."
+	item.Rubric = []Criterion{{ID: "artifact", Description: "The actual artifact is correct.", Required: true}}
+	events := []Event{{ID: "event-000001", Turn: 1, Kind: "final", Content: "The artifact is correct."}}
+	for _, verdict := range []Verdict{Pass, Fail, Inconclusive} {
+		t.Run(string(verdict), func(t *testing.T) {
+			data, err := json.Marshal(JudgeFindings{Version: Version, Criteria: []JudgeFinding{{
+				ID: "artifact", Verdict: verdict, Reason: "No independently verified artifact was supplied.",
+				EvidenceIDs: []string{"event-000001"},
+			}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider := &roleTestProvider{
+				mediated: true, response: &providers.LLMResponse{Content: string(data), FinishReason: "stop"},
+			}
+			judge := &ModelRole{provider: provider, identity: RoleIdentity{Role: "judge"}}
+			result := judgeConversation(t.Context(), judge, item, events)
+			if result.Verdict != verdict || result.Code != "judge_completed" || provider.calls != 1 ||
+				len(result.Findings.Criteria) != 1 || result.Findings.Criteria[0].Verdict != verdict ||
+				combineVerdicts(Fail, result.Verdict) != Fail {
+				t.Fatal("judge verdict was rewritten or overrode an independent failure", result.Code)
+			}
+		})
+	}
+}

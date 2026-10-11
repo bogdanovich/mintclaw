@@ -15,7 +15,7 @@ func TestGradeRequiresExplicitEvidenceOrCalibrationAndIsolatedProfile(t *testing
 	for _, extra := range [][]string{
 		nil,
 		{"/missing/private-run"},
-		{"--calibration", "../../../../evals/calibration/judge-v1.json"},
+		{"--calibration", "../../../../evals/calibration/judge-v2.json"},
 		{"--calibration", "missing.json", "/extra/source"},
 		{"--calibration", "missing.json", "--suite", "all"},
 		{"--calibration", "missing.json", "--case", "general.context.followup"},
