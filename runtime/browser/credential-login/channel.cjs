@@ -94,6 +94,7 @@ function startChannel(stream, factory) {
         remaining = fields.number(); initializedAt = performance.now();
         if (!remaining || remaining > 20 * 60 * 60 * 1000) throw new Error();
         config.executablePath = fields.string(4096); config.proxyServer = fields.string(256);
+        config.proxyPin = fields.string(44);
         const flow = {};
         for (const name of FLOW) flow[name] = fields.string(2048);
         const count = fields.number(), origins = [];

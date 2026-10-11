@@ -2,8 +2,9 @@
 
 The standalone credential command's private consumer connects the approval
 lease and 1Password adapter to the credential-only Chromium worker. The
-executable still exposes only protected provisioning/enrollment and version
-commands. This component does not activate a service or retrieve a real token.
+executable exposes protected provisioning/enrollment, native phone approval
+service startup and version commands. This component does not activate a browser
+or provider, or retrieve a real token.
 
 ## Ownership and admission
 
@@ -22,6 +23,13 @@ the current authenticated owner, actor, agent, execution host, account and
 policy revision against that generation, using live origin from the private
 worker. Submission also requires the independent browser action policy. No
 model-supplied approval boolean substitutes for either check.
+
+The public connection API requires the actual
+[enforcing proxy](credential-browser-enforcing-proxy.md) from the same original
+lease. Launcher configuration derives its endpoint and single certificate pin
+from that object. Before provider retrieval, the broker seals preparation
+connections; after the external-effect gate, it permits the one configured POST.
+Proxy failure retires the worker, and worker retirement closes the proxy.
 
 The binary protocol bounds every frame to 32 KiB. Fixed command kinds cover
 configuration, preparation, readiness, injection, submission and shutdown.
@@ -53,10 +61,13 @@ private injection, page credential/cookie echoes, stale readiness before and
 after retrieval, independent submission denial, identity change, revocation
 and process termination. They do not enroll Android, initialize 1Password,
 prove actual TLS/DNS/HTTP redirects, qualify the intended restricted launcher,
-or prove separate process roles and complete host isolation.
+or prove separate process roles and complete host isolation. The separate real
+Chromium proxy fixture exercises actual CONNECT/TLS/HTTP, synthetic credentials
+and cookies, exact POST/outcome navigation, and incorrect certificate-pin denial
+through a synthetic upstream. Restricted Linux browser qualification runs in CI.
 
 The current host remains unqualified: MintClaw's shell identity has Root
-administration access and its sandbox launch probe failed. Protected startup,
-an enforcing proxy, phone HTTPS and isolated-host qualification must pass before
+administration access and its sandbox launch probe failed. Full protected browser
+startup, network/host isolation and physical phone qualification must pass before
 real token access. No diagnostic, screenshot, network trace, artifact or
 ordinary-browser observation path is enabled for credential sessions.

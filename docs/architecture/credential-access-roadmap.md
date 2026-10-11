@@ -260,14 +260,18 @@ entire personal vault.
   and protected owner-key store, merged in
   [PR #1539](https://github.com/bogdanovich/mintclaw/pull/1539), implement signed enrollment/approval/revoke
   verification, scope binding, bounded single-use challenges, policy-transition
-  invalidation, and durable counter updates. They have no executable entry
-  point that activates listeners. The embedded mobile enrollment/approval/revoke
+  invalidation, and durable counter updates. The embedded mobile enrollment/approval/revoke
   page and private root-authenticated enrollment console are merged in
   [PR #1543](https://github.com/bogdanovich/mintclaw/pull/1543),
   with bounded exact-origin HTTPS handlers and the protected `enroll` command.
   Synthetic Linux and actual browser WebAuthn fixtures qualify the software
-  boundary. Protected service/listener startup, authorized notifications, and
-  physical Android end-to-end qualification remain pending.
+  boundary. The protected native approval service in
+  [PR #1566](https://github.com/bogdanovich/mintclaw/pull/1566) adds strict root-owned
+  configuration, native TLS startup, a service-created enrollment console and
+  cancellation/restart qualification under the restricted Linux service role.
+  See [approval service startup](credential-approval-service.md).
+  Actual isolated-host deployment, authorized notifications and physical
+  Android end-to-end qualification remain pending.
 - CA4: the consumer lease foundation, merged in
   [PR #1549](https://github.com/bogdanovich/mintclaw/pull/1549), binds a private login binding to one
   live grant generation. Consumers share the original expiry signal; revocation,
@@ -286,6 +290,13 @@ entire personal vault.
   Its cross-process fixture uses real CA1 grant lifetimes and a synthetic source;
   it does not initialize the SDK or enroll a physical phone. See the
   [private channel contract](credential-browser-private-channel.md).
+  The pinned private HTTPS transport, merged in
+  [PR #1561](https://github.com/bogdanovich/mintclaw/pull/1561), independently checks
+  public DNS destinations, ordinary TLS, current scope and the original lease.
+  The [enforcing browser proxy](credential-browser-enforcing-proxy.md) connects
+  that transport to the private browser and constrains the actual HTTP operation
+  across preparation, injection, submission and outcome navigation. Its current
+  implementation is undergoing real Chromium and Linux CI qualification.
   Protected service wiring, actual startup/network/host qualification,
   remote human handoff and the personal pilot remain pending.
 - CA5–CA6: pending their dependencies and admission/qualification gates.

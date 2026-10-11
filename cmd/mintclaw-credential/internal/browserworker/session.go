@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/approval"
+	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/egress"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/vault"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/credentialbroker"
@@ -20,8 +21,8 @@ import (
 // proxy, command, or browser profile. The launcher's checks are additional gates;
 // startup must prove the complete role, file, network and agent isolation first.
 type (
-	Config       struct{ ExecutablePath, ProxyServer string }
-	launchConfig struct{ executablePath, proxyServer string }
+	Config       struct{ ExecutablePath string }
+	launchConfig struct{ executablePath, proxyServer, proxyPin string }
 )
 
 // CurrentScope must derive the current owner/actor/agent/host/account/revision
@@ -35,6 +36,38 @@ type (
 type loginSource interface {
 	UseLogin(context.Context, vault.Binding, func([]byte, []byte) error) error
 }
+
+type networkBoundary interface {
+	Match(context.Context, credentialbroker.Request) error
+	Endpoint(context.Context) (string, string, error)
+	LockForInjection(context.Context) error
+	PermitSubmit(context.Context) error
+	Done() <-chan struct{}
+	Close() error
+}
+
+type proxyBoundary struct {
+	proxy *egress.LoginProxy
+	lease approval.LoginLease
+}
+
+func (boundary proxyBoundary) Match(ctx context.Context, request credentialbroker.Request) error {
+	return boundary.proxy.Match(ctx, boundary.lease, request)
+}
+
+func (boundary proxyBoundary) Endpoint(ctx context.Context) (string, string, error) {
+	return boundary.proxy.Endpoint(ctx)
+}
+
+func (boundary proxyBoundary) LockForInjection(ctx context.Context) error {
+	return boundary.proxy.LockForInjection(ctx)
+}
+
+func (boundary proxyBoundary) PermitSubmit(ctx context.Context) error {
+	return boundary.proxy.PermitSubmit(ctx)
+}
+func (boundary proxyBoundary) Done() <-chan struct{} { return boundary.proxy.Done() }
+func (boundary proxyBoundary) Close() error          { return boundary.proxy.Close() }
 
 // The production implementation is approval.LoginLease. This private contract
 // also lets synthetic consumer tests exercise the real CA1 lifetime authority
@@ -55,6 +88,7 @@ type Session struct {
 	lease   loginLease
 	flow    credentialbroker.LoginFlow
 	current CurrentScope
+	network networkBoundary
 	used    atomic.Bool
 }
 
@@ -62,13 +96,13 @@ type Session struct {
 // its verified termination operation. It never creates a listener or launches
 // an arbitrary subprocess. Main does not call this until startup is qualified.
 func Connect(ctx context.Context, connection net.Conn, config Config, lease approval.LoginLease,
-	current CurrentScope, submit AdmitSubmission, stop func(context.Context) error,
+	current CurrentScope, submit AdmitSubmission, network *egress.LoginProxy, stop func(context.Context) error,
 ) (*Session, error) {
-	return connect(ctx, connection, config, lease, current, submit, stop)
+	return connect(ctx, connection, config, lease, current, submit, proxyBoundary{network, lease}, stop)
 }
 
 func connect(ctx context.Context, connection net.Conn, config Config, lease loginLease,
-	current CurrentScope, submit AdmitSubmission, stop func(context.Context) error,
+	current CurrentScope, submit AdmitSubmission, network networkBoundary, stop func(context.Context) error,
 ) (result *Session, resultErr error) {
 	var worker *channel
 	defer func() {
@@ -76,6 +110,9 @@ func connect(ctx context.Context, connection net.Conn, config Config, lease logi
 			result, resultErr = nil, errUnavailable
 		}
 		if resultErr != nil {
+			if network != nil {
+				_ = network.Close()
+			}
 			if worker != nil {
 				worker.retire()
 			} else {
@@ -89,11 +126,18 @@ func connect(ctx context.Context, connection net.Conn, config Config, lease logi
 		}
 	}()
 	if ctx == nil || ctx.Err() != nil || connection == nil || lease == nil || current == nil || submit == nil ||
-		stop == nil {
+		stop == nil || network == nil {
 		return nil, errUnavailable
 	}
 	request, err := current(ctx)
 	if err != nil || ctx.Err() != nil {
+		return nil, errUnavailable
+	}
+	if network.Match(ctx, request) != nil {
+		return nil, errUnavailable
+	}
+	proxyServer, proxyPin, err := network.Endpoint(ctx)
+	if err != nil {
 		return nil, errUnavailable
 	}
 	flow, err := lease.Flow(ctx, request)
@@ -104,7 +148,7 @@ func connect(ctx context.Context, connection net.Conn, config Config, lease logi
 	if err != nil {
 		return nil, errUnavailable
 	}
-	session := &Session{lease: lease, flow: flow, current: current}
+	session := &Session{lease: lease, flow: flow, current: current, network: network}
 	check := func(ctx context.Context, operation, origin string) error {
 		normalized, originErr := browserpolicy.NormalizePublicOrigin(origin)
 		if originErr != nil || normalized != origin || !strings.HasPrefix(origin, "https://") {
@@ -131,6 +175,9 @@ func connect(ctx context.Context, connection net.Conn, config Config, lease logi
 			if submit(ctx, flow) != nil {
 				return errUnavailable
 			}
+			if network.PermitSubmit(ctx) != nil {
+				return errUnavailable
+			}
 		}
 		_, bindingErr := session.binding(ctx, origin)
 		return bindingErr
@@ -143,15 +190,17 @@ func connect(ctx context.Context, connection net.Conn, config Config, lease logi
 	go func() {
 		select {
 		case <-lease.Done():
-			worker.retire()
+		case <-network.Done():
 		case <-worker.done:
 		}
+		_ = network.Close()
+		worker.retire()
 	}()
 	remaining, err := lease.Remaining(ctx, request)
 	if err != nil || remaining < time.Millisecond {
 		return nil, errUnavailable
 	}
-	body, err := encodeConfiguration(launchConfig{config.ExecutablePath, config.ProxyServer}, flow, origins,
+	body, err := encodeConfiguration(launchConfig{config.ExecutablePath, proxyServer, proxyPin}, flow, origins,
 		uint32(remaining/time.Millisecond))
 	if err != nil {
 		return nil, errUnavailable
@@ -199,6 +248,9 @@ func (session *Session) login(ctx context.Context, provider loginSource) (result
 			result = intent.OutcomeUnknown
 		}
 		if result != intent.LoggedIn && result != intent.HandoffRequired && session != nil && session.worker != nil {
+			if session.network != nil {
+				_ = session.network.Close()
+			}
 			session.worker.retire()
 		}
 	}()
@@ -215,6 +267,9 @@ func (session *Session) login(ctx context.Context, provider loginSource) (result
 		if err != nil || code != 1 {
 			return intent.OutcomeUnknown
 		}
+	}
+	if session.network.LockForInjection(operationCtx) != nil {
+		return intent.Denied
 	}
 	binding, err := session.binding(operationCtx, session.flow.EntryOrigin)
 	if err != nil {
@@ -273,6 +328,7 @@ func (session *Session) Close(ctx context.Context) error {
 	if session == nil || session.worker == nil {
 		return errUnavailable
 	}
+	_ = session.network.Close()
 	return session.worker.close(ctx)
 }
 

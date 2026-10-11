@@ -1,6 +1,6 @@
-// Package egress owns private credential-consumer HTTPS connections. It creates
-// no browser proxy, listener, SDK client, or model tool. Startup and the caller
-// must separately qualify process isolation and each HTTP operation's authority.
+// Package egress owns private credential-consumer HTTPS connections and the
+// enforcing private login proxy. It creates no listener, SDK client, or model
+// tool. Startup must qualify process isolation and supply any proxy listener.
 package egress
 
 import (

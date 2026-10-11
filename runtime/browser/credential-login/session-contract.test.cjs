@@ -5,6 +5,7 @@ const { test } = require('node:test');
 const { createSession } = require('./session.cjs');
 const { launch } = require('./launch.cjs');
 const { qualifySandbox } = require('./sandbox.cjs');
+const { privateArguments } = require('./launch-arguments.cjs');
 const vm = require('node:vm');
 const origin = 'https://login.example.org';
 const flow = { navigation_url: `${origin}/login`, entry_origin: origin, form_id: 'login',
@@ -52,6 +53,17 @@ test('launch rejects arbitrary browser options and unsafe process startup', asyn
   for (const config of [null, {}, { executablePath: '/tmp/browser', proxyServer: 'http://127.0.0.1:18080', args: ['--no-sandbox'] },
     { executablePath: '/tmp/browser', proxyServer: 'http://127.0.0.1:18080' }]) {
     await assert.rejects(launch(config), error => error.message === 'credential browser unavailable');
+  }
+});
+
+test('private certificate exception accepts exactly one canonical SPKI pin', () => {
+  const pin = Buffer.alloc(32).toString('base64');
+  const args = privateArguments(pin);
+  assert.deepEqual(args.filter(value => value.startsWith('--ignore-certificate-errors')), [
+    `--ignore-certificate-errors-spki-list=${pin}`]);
+  for (const invalid of [undefined, '', pin.slice(0, -1), `${pin},${pin}`, ` ${pin}`,
+    Buffer.alloc(31).toString('base64'), Buffer.alloc(33).toString('base64'), `${pin.slice(0, -2)}B=`]) {
+    assert.throws(() => privateArguments(invalid), error => error.message === 'credential browser unavailable');
   }
 });
 
