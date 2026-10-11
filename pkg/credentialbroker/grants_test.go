@@ -26,6 +26,7 @@ func newGrantFixture(t *testing.T) *grantFixture {
 		t.Fatal(err)
 	}
 	fixture.authority = authority
+	t.Cleanup(authority.Close)
 	start := time.Unix(1800000000, 0)
 	authority.now = func() time.Time { return start.Add(time.Duration(fixture.elapsed.Load())) }
 	return fixture

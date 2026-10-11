@@ -51,6 +51,10 @@ func (r *Registry) load() error {
 	if err != nil {
 		return err
 	}
+	return r.loadData(data)
+}
+
+func (r *Registry) loadData(data []byte) error {
 	snapshot, err := decodeSnapshot(data)
 	if err != nil {
 		return err

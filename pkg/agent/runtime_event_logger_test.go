@@ -14,7 +14,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -118,6 +121,109 @@ func TestRuntimeEventLogFieldsSummarizeAgentPayload(t *testing.T) {
 	}
 	if _, ok := fields["payload"]; ok {
 		t.Fatalf("raw payload should not be included by runtimeEventLogFields: %#v", fields)
+	}
+}
+
+func TestRuntimeEventLogFieldsRetainAsyncCompletionCorrelation(t *testing.T) {
+	fields := runtimeEventLogFields(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentAsyncCompletion,
+		Payload: AsyncCompletionPayload{
+			SourceTool: "coding_task", TaskID: "task-1", TaskGenerationID: "task-generation-1",
+			CompletionID: "completion-1", DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
+			RemoteCoding: &RemoteCodingCompletionEvidence{
+				WorkerGenerationID: "worker-1", RemoteThreadID: "thread-1",
+				ScopeAlias: "mintclaw-dev", ProfileAlias: "project-yolo",
+				TaskStatus: "failed", RemoteState: "uncertain", FailureCode: "worker_lost",
+			},
+			ContentLen: 12, ForUserLen: 8, MediaCount: 1, WillUser: true,
+		},
+	})
+
+	if fields["source_tool"] != "coding_task" || fields["task_id"] != "task-1" ||
+		fields["task_generation_id"] != "task-generation-1" ||
+		fields["completion_id"] != "completion-1" ||
+		fields["delivery_mode"] != string(toolshared.AsyncDeliveryUserOnly) {
+		t.Fatalf("async completion summary = %#v", fields)
+	}
+	if fields["content_len"] != 12 || fields["for_user_len"] != 8 || fields["media_count"] != 1 ||
+		fields["will_user"] != true {
+		t.Fatalf("async completion facts = %#v", fields)
+	}
+	for field, want := range map[string]any{
+		"worker_generation_id": "worker-1",
+		"remote_thread_id":     "thread-1",
+		"scope_alias":          "mintclaw-dev",
+		"profile_alias":        "project-yolo",
+		"task_status":          "failed",
+		"remote_state":         "uncertain",
+		"failure_code":         "worker_lost",
+	} {
+		if fields[field] != want {
+			t.Fatalf("async completion %s = %#v, want %#v; fields=%#v", field, fields[field], want, fields)
+		}
+	}
+}
+
+func TestRuntimeEventLogFieldsRetainInteractionCorrelation(t *testing.T) {
+	success := false
+	fields := runtimeEventLogFields(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentInteractionAnswer,
+		Payload: InteractionEventPayload{
+			InteractionID: "interaction-1", InteractionEventID: "interaction-1:004:answer",
+			TaskID: "task-1", DeliveryID: "delivery-prompt-1",
+			Kind: interactions.KindQuestion, Event: interactions.EventAnswerClaimed,
+			Status: interactions.StatusClaimed, Outcome: interactions.OutcomeAnswered,
+			Revision: 4, Sequence: 4, Code: "accepted", Success: &success,
+		},
+	})
+
+	for field, want := range map[string]any{
+		"interaction_id":       "interaction-1",
+		"interaction_event_id": "interaction-1:004:answer",
+		"task_id":              "task-1",
+		"delivery_id":          "delivery-prompt-1",
+		"interaction_kind":     string(interactions.KindQuestion),
+		"interaction_event":    string(interactions.EventAnswerClaimed),
+		"status":               string(interactions.StatusClaimed),
+		"outcome":              string(interactions.OutcomeAnswered),
+		"revision":             int64(4),
+		"sequence":             int64(4),
+		"code":                 "accepted",
+		"success":              false,
+	} {
+		if fields[field] != want {
+			t.Fatalf("interaction field %q = %#v, want %#v; fields=%#v", field, fields[field], want, fields)
+		}
+	}
+}
+
+func TestRuntimeEventLogFieldsRetainNodeInvocationCorrelation(t *testing.T) {
+	fields := runtimeEventLogFields(runtimeevents.Event{
+		Kind: runtimeevents.KindNodeInvocationObserved,
+		Payload: tools.NodeInvocationEventPayload{
+			Observation:  tools.NodeInvocationObservationUncertain,
+			InvocationID: "inv-node-1", Target: "workstation", ScopeAlias: "project",
+			ProfileAlias: "owner", PolicyRevision: "policy-v7", Command: "shell.exec.v1",
+			GatewayState: nodes.GatewayInvocationDispatched, State: string(nodes.InvocationUnknown),
+			ErrorCode: "DISPATCH_UNCERTAIN",
+		},
+	})
+
+	for field, want := range map[string]any{
+		"observation":     tools.NodeInvocationObservationUncertain,
+		"invocation_id":   "inv-node-1",
+		"target_alias":    "workstation",
+		"scope_alias":     "project",
+		"profile_alias":   "owner",
+		"policy_revision": "policy-v7",
+		"command":         "shell.exec.v1",
+		"gateway_state":   string(nodes.GatewayInvocationDispatched),
+		"state":           string(nodes.InvocationUnknown),
+		"error_code":      "DISPATCH_UNCERTAIN",
+	} {
+		if fields[field] != want {
+			t.Fatalf("node invocation %s = %#v, want %#v; fields=%#v", field, fields[field], want, fields)
+		}
 	}
 }
 

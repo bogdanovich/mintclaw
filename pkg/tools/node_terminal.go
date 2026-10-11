@@ -836,6 +836,10 @@ func (tool *NodeTerminalTool) publishEvent(
 	if sessionKey == "" {
 		sessionKey = strings.TrimSpace(toolshared.ToolSessionKey(ctx))
 	}
+	traceTurnID := strings.TrimSpace(toolshared.ToolTraceTurnID(ctx))
+	if traceTurnID == "" {
+		traceTurnID = strings.TrimSpace(toolshared.ToolExecutionID(ctx))
+	}
 	payload := NodeTerminalEventPayload{
 		Observation: observation,
 		TerminalID:  terminalID,
@@ -864,7 +868,7 @@ func (tool *NodeTerminalTool) publishEvent(
 		Scope: runtimeevents.Scope{
 			TraceScope: runtimeevents.NewTraceScope(
 				toolshared.ToolWorkspace(ctx),
-				toolshared.ToolExecutionID(ctx),
+				traceTurnID,
 			),
 			AgentID:    toolshared.ToolAgentID(ctx),
 			SessionKey: sessionKey,

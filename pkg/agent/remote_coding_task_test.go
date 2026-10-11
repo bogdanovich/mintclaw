@@ -13,6 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
@@ -823,6 +824,13 @@ func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 		},
 	}
 	tasks := al.taskRegistryForWorkspace(workspace)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		8,
+		runtimeevents.KindAgentAsyncCompletion,
+	)
+	defer closeRuntimeEvents()
 	if err := al.remoteCoding.projectResult(workspace, tasks, record, result); err != nil {
 		t.Fatal(err)
 	}
@@ -840,6 +848,36 @@ func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 	if message.Context.SenderID != "owner-42" || message.Context.TopicID != "topic-1" ||
 		message.Metadata.MessageKind != bus.OutboundMessageKindFinalReply {
 		t.Fatalf("terminal coding delivery = %#v", message)
+	}
+	evt := waitForRuntimeEvent(t, runtimeCh, 2*time.Second, func(evt runtimeevents.Event) bool {
+		return evt.Kind == runtimeevents.KindAgentAsyncCompletion
+	})
+	payload, ok := evt.Payload.(AsyncCompletionPayload)
+	if !ok || payload.RemoteCoding == nil {
+		t.Fatalf("terminal coding event payload = %#v", evt.Payload)
+	}
+	if payload.SourceTool != "coding_task" || payload.TaskID != record.TaskID ||
+		payload.TaskGenerationID != record.GenerationID ||
+		payload.CompletionID != "coding-task:"+record.GenerationID ||
+		payload.RemoteCoding.WorkerGenerationID != record.Coding.WorkerGenerationID ||
+		payload.RemoteCoding.RemoteThreadID != record.Coding.ThreadID ||
+		payload.RemoteCoding.ScopeAlias != record.Coding.Alias ||
+		payload.RemoteCoding.ProfileAlias != string(record.Coding.Profile) ||
+		payload.RemoteCoding.TaskStatus != string(taskregistry.StatusSucceeded) ||
+		payload.RemoteCoding.RemoteState != string(codingtask.StateCompleted) ||
+		!payload.WillUser || payload.WillParent {
+		t.Fatalf("terminal coding event correlation = %#v", payload)
+	}
+	if !evt.Scope.TurnTraceScope().Complete() ||
+		!strings.HasPrefix(evt.Scope.TurnID, "coding-completion-") ||
+		!message.TraceSettlement || len(message.TraceScopes) != 1 ||
+		message.TraceScopes[0] != evt.Scope.TurnTraceScope() {
+		t.Fatalf(
+			"terminal coding trace scope = event %#v message scopes %#v settlement=%v",
+			evt.Scope.TurnTraceScope(),
+			message.TraceScopes,
+			message.TraceSettlement,
+		)
 	}
 	settled, _ := tasks.Get(record.TaskID)
 	if settled.Status != taskregistry.StatusSucceeded ||

@@ -1692,7 +1692,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	result := (&toolshared.ToolResult{
 		ForLLM: projection, ForUser: projection,
 	}).
-		WithTaskID(taskID).
+		WithTaskIdentity(taskID, task.GenerationID).
 		WithAsyncDelivery(mode)
 	if mode != toolshared.AsyncDeliveryParentOnly {
 		result.WithDeliveryIntent(toolshared.DeliveryFinalHandled)

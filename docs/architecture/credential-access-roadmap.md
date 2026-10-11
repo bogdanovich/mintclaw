@@ -121,6 +121,12 @@ encoding a credential into arbitrary page content.
 | CA5 | Explicitly scoped non-browser connector operations | CA2, CA3 | One concrete connector operation with host/endpoint/action constraints, private credential injection, bounded safe results, independent effect policy, and adversarial egress tests |
 | CA6 | End-to-end qualification and protected personal pilot | CA4; CA5 only for enabled connectors | Canary-secrets suite passes; phone and isolated-host setup documented and verified; dedicated-vault token provisioned privately; one operator-selected login succeeds without secret material in provider requests or durable outputs |
 
+The [protected approval-service implementation](credential-approval-service.md)
+provides concrete native TLS startup and initial enrollment under a dedicated
+Linux identity. It does not complete CA2 or CA3: real-host isolation, private
+caller/provider wiring, generic notifications, and physical Android
+qualification remain required before credential access is activated.
+
 ### CA1: policy and grant foundation
 
 Introduce a small `pkg/credentialbroker` package separate from the existing
@@ -175,6 +181,12 @@ the protected fill contract. Prefer a typed login operation using a fresh
 semantic password-field reference and trusted account mapping. Return only
 status, approved alias, safe handoff state, and allowed page observations.
 
+The first [credential browser login admission](credential-browser-login-admission.md)
+limits the consumer to a configured private login and fixed outcomes. General
+page observations and subsequent account operations retain separate admission
+gates. It also records the failed actual-server sandbox launch; that host is
+not qualified for real credentials.
+
 Review all live and durable output paths: accessibility/DOM projections,
 screenshots, console/network diagnostics, browser artifacts, session history,
 coding context, interaction records, provider requests, Seahorse state,
@@ -215,11 +227,60 @@ entire personal vault.
   Process/provisioning qualification is recorded in
   [PR #1514](https://github.com/bogdanovich/mintclaw/pull/1514), with browser
   startup requirements in [PR #1519](https://github.com/bogdanovich/mintclaw/pull/1519).
-  Protected provisioning, isolated startup, and authenticated IPC remain pending.
+  The protected Linux provisioning command and disposable real-OS qualification
+  are merged in [PR #1525](https://github.com/bogdanovich/mintclaw/pull/1525);
+  [operator setup](../security/credential-broker-setup.md) records the boundary
+  and remaining gates. [PR #1526](https://github.com/bogdanovich/mintclaw/pull/1526)
+  records the observed host boundary and why that host is not yet qualified.
+  The private intent transport is merged in
+  [PR #1530](https://github.com/bogdanovich/mintclaw/pull/1530). Linux normal/race
+  fixtures exercise identity substitution, descriptor handoff, cancellation,
+  capacity, fixed response projection, and actual CA1 grant IDs. All 16 GitHub
+  checks passed and review found no must-fix issues. It creates no listener or
+  model tool by itself. The qualification record includes a disposable
+  actual-host plaintext credential-delivery probe; encrypted activation,
+  isolated startup, trusted process-role admission, and service wiring remain
+  pending. Provisioning and transport alone enable no agent access.
+  The private startup loader, merged in
+  [PR #1534](https://github.com/bogdanovich/mintclaw/pull/1534), validates effective ACL access, read-only mounts,
+  restricted service identity, bounded token data, and single-use consumption.
+  Its synthetic qualification covers both delivery forms and unsafe
+  role/path/data denial; the executable does not invoke it. Full activation
+  and caller/consumer admission remain required before any real token read.
 - CA3: [verifier candidate qualification](credential-phone-approval-qualification.md)
-  records build and upstream fixture evidence; control-plane and Android
-  end-to-end implementation remain pending.
-- CA4–CA6: pending their dependencies and admission/qualification gates.
+  records build and upstream fixture evidence. The private passkey controller
+  and protected owner-key store, merged in
+  [PR #1539](https://github.com/bogdanovich/mintclaw/pull/1539), implement signed enrollment/approval/revoke
+  verification, scope binding, bounded single-use challenges, policy-transition
+  invalidation, and durable counter updates. They have no executable entry
+  point that activates listeners. The embedded mobile enrollment/approval/revoke
+  page and private root-authenticated enrollment console are merged in
+  [PR #1543](https://github.com/bogdanovich/mintclaw/pull/1543),
+  with bounded exact-origin HTTPS handlers and the protected `enroll` command.
+  Synthetic Linux and actual browser WebAuthn fixtures qualify the software
+  boundary. Protected service/listener startup, authorized notifications, and
+  physical Android end-to-end qualification remain pending.
+- CA4: the consumer lease foundation, merged in
+  [PR #1549](https://github.com/bogdanovich/mintclaw/pull/1549), binds a private login binding to one
+  live grant generation. Consumers share the original expiry signal; revocation,
+  effective policy change, controller failure and shutdown retire the lease.
+  Every use still checks live origin and current authority. This supplies no
+  browser worker, vault retrieval or model tool. The private browser session
+  implementation in [PR #1555](https://github.com/bogdanovich/mintclaw/pull/1555)
+  adds revision-bound single-page login configuration, immutable
+  lease flow snapshots, guarded DOM injection/submission, fixed outcomes and
+  context retirement. Its routed synthetic fixtures exercise browser behavior;
+  they do not qualify TLS, DNS, redirect transport or complete process/host
+  isolation. The private Go/Node channel connects that consumer to current
+  principal/grant callbacks and the provider's single-use consumption path.
+  It rechecks DOM readiness before and after retrieval, cancels retrieval on
+  retirement, and requires acknowledged close plus verified process termination.
+  Its cross-process fixture uses real CA1 grant lifetimes and a synthetic source;
+  it does not initialize the SDK or enroll a physical phone. See the
+  [private channel contract](credential-browser-private-channel.md).
+  Protected service wiring, actual startup/network/host qualification,
+  remote human handoff and the personal pilot remain pending.
+- CA5–CA6: pending their dependencies and admission/qualification gates.
   Runtime credential access remains disabled and no real token is provisioned.
 
 Update this record with PRs, validation, and any narrowed admissions as work

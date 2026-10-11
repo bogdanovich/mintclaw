@@ -89,6 +89,99 @@ func TestNodeFileDiagnosticTraceRetainsLifecycleWithoutSensitivePreviews(t *test
 	}
 }
 
+func TestNodeInvocationDiagnosticTraceRetainsExactAuthorityAndTerminalTruth(t *testing.T) {
+	settings := traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted}
+	started := time.Now()
+	trace := &activeTraceCapture{startedAt: started, turnID: "turn-node"}
+	tests := []struct {
+		name        string
+		observation string
+		state       string
+		errorCode   string
+	}{
+		{name: "healthy", observation: tools.NodeInvocationObservationCompleted, state: "succeeded"},
+		{
+			name:        "failed",
+			observation: tools.NodeInvocationObservationStatus,
+			state:       "failed",
+			errorCode:   "REMOTE_FAILED",
+		},
+		{
+			name:        "canceled",
+			observation: tools.NodeInvocationObservationStatus,
+			state:       "canceled",
+			errorCode:   "CANCELED",
+		},
+		{
+			name:        "timed out",
+			observation: tools.NodeInvocationObservationCompleted,
+			state:       "failed",
+			errorCode:   "COMMAND_TIMEOUT",
+		},
+		{
+			name: "disconnected uncertain", observation: tools.NodeInvocationObservationUncertain,
+			state: "unknown", errorCode: "DISPATCH_UNCERTAIN",
+		},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			safeName := strings.ReplaceAll(test.name, " ", "-")
+			invocationID := "inv-node-" + safeName
+			record, _, ok := runtimeEventRecord(
+				settings,
+				trace,
+				runtimeevents.Event{
+					ID:   "event-node-" + safeName,
+					Kind: runtimeevents.KindNodeInvocationObserved,
+					Time: started.Add(time.Duration(index+1) * time.Millisecond),
+					Source: runtimeevents.Source{
+						Component: "nodes",
+						Name:      "nodes_invoke",
+					},
+					Scope: runtimeevents.Scope{
+						TraceScope: runtimeevents.NewTraceScope("/private/project", "turn-node"),
+						AgentID:    "main",
+					},
+					Correlation: runtimeevents.Correlation{RequestID: "tool-call-node"},
+					Payload: tools.NodeInvocationEventPayload{
+						Observation: test.observation, InvocationID: invocationID,
+						Target: "workstation", ScopeAlias: "project", ProfileAlias: "owner",
+						PolicyRevision: "policy-v7", Command: "shell.exec.v1",
+						Risk: nodes.RiskPrivileged, GatewayState: nodes.GatewayInvocationDispatched,
+						State: test.state, ErrorCode: test.errorCode,
+					},
+				},
+			)
+			if !ok || record.Kind != diagnostictrace.RecordToolResult {
+				t.Fatalf("node event produced kind %q, ok=%v", record.Kind, ok)
+			}
+			if record.Scope.TargetAlias != "workstation" || record.Scope.ScopeAlias != "project" ||
+				record.Scope.ProfileAlias != "owner" || record.Correlation.InvocationID != invocationID ||
+				record.Correlation.PolicyRevision != "policy-v7" ||
+				record.Correlation.ToolCallID != "tool-call-node" {
+				t.Fatalf("node correlation = scope %#v correlation %#v", record.Scope, record.Correlation)
+			}
+			var payload diagnostictrace.ToolPayload
+			if err := json.Unmarshal(record.Data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Status != test.state || payload.Action != test.observation ||
+				payload.DecisionCode != strings.ToLower(test.errorCode) {
+				t.Fatalf("node terminal payload = %#v", payload)
+			}
+			encoded, err := json.Marshal(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, forbidden := range []string{"/private/project", "command body", "command output"} {
+				if strings.Contains(string(encoded), forbidden) {
+					t.Fatalf("node trace leaked %q: %s", forbidden, encoded)
+				}
+			}
+		})
+	}
+}
+
 func TestBrowserContextsDiagnosticTraceRetainsOnlySafeOperation(t *testing.T) {
 	settings := traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted}
 	started := time.Now()

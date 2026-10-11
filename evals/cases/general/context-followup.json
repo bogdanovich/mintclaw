@@ -22,5 +22,11 @@
     {"id": "same-session", "kind": "same_session"},
     {"id": "final", "kind": "last_outcome", "expected": "final"}
   ],
-  "rubric": []
+  "rubric": [
+    {
+      "id": "grounded-followup",
+      "description": "The follow-up answers the user's marker question from the same conversation, without inventing a different marker or claiming unseen work.",
+      "required": true
+    }
+  ]
 }

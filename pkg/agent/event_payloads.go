@@ -288,6 +288,8 @@ type ToolExecProgressPayload struct {
 type ToolExecEndPayload struct {
 	ToolCallID         string
 	ToolCallGeneration string
+	TaskID             string
+	TaskGenerationID   string
 	Tool               string
 	Duration           time.Duration
 	ForLLMLen          int
@@ -348,16 +350,31 @@ type FollowUpQueuedPayload struct {
 // AsyncCompletionPayload describes a typed async tool completion event before
 // the runtime applies user/parent delivery policy.
 type AsyncCompletionPayload struct {
-	SourceTool   string
-	CompletionID string
-	TaskID       string
-	DeliveryMode string
-	ContentLen   int
-	ForUserLen   int
-	MediaCount   int
-	IsError      bool
-	WillUser     bool
-	WillParent   bool
+	SourceTool       string
+	CompletionID     string
+	TaskID           string
+	TaskGenerationID string
+	RemoteCoding     *RemoteCodingCompletionEvidence
+	DeliveryMode     string
+	ContentLen       int
+	ForUserLen       int
+	MediaCount       int
+	IsError          bool
+	WillUser         bool
+	WillParent       bool
+}
+
+// RemoteCodingCompletionEvidence contains only bounded identities and terminal
+// state already owned by the durable task projection. It deliberately excludes
+// objectives, summaries, transcripts, commands, paths, diffs, and artifacts.
+type RemoteCodingCompletionEvidence struct {
+	WorkerGenerationID string
+	RemoteThreadID     string
+	ScopeAlias         string
+	ProfileAlias       string
+	TaskStatus         string
+	RemoteState        string
+	FailureCode        string
 }
 
 type InterruptKind string

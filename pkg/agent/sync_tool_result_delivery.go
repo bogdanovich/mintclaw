@@ -19,6 +19,7 @@ type syncToolResultDelivery struct {
 		result *toolshared.ToolResult,
 		toolName string,
 		traceScopes []runtimeevents.TraceScope,
+		traceSettlement bool,
 		metadata bus.OutboundMetadata,
 	) ([]providers.Attachment, toolResultDeliveryOutcome, error)
 }
@@ -79,7 +80,7 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 		if d == nil || d.deliverToUser == nil {
 			return nil, toolshared.ErrorResult("tool result delivery is not initialized")
 		}
-		_, outcome, err := d.deliverToUser(ctx, ts, result, toolName, nil, bus.OutboundMetadata{})
+		_, outcome, err := d.deliverToUser(ctx, ts, result, toolName, nil, true, bus.OutboundMetadata{})
 		if err != nil {
 			return nil, wrapToolDeliveryError(result, fmt.Sprintf("failed to deliver attachment: %v", err), err)
 		}
@@ -93,7 +94,7 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 			return nil, toolshared.ErrorResult("tool result delivery is not initialized")
 		}
 		attachments, outcome, err := d.deliverToUser(
-			ctx, ts, result, toolName, nil, bus.OutboundMetadata{},
+			ctx, ts, result, toolName, nil, true, bus.OutboundMetadata{},
 		)
 		if err != nil {
 			return nil, wrapToolDeliveryError(result, fmt.Sprintf("failed to deliver attachment: %v", err), err)

@@ -39,21 +39,68 @@ type CheckResult struct {
 }
 
 type Trial struct {
-	Version         int           `json:"version"`
-	ID              string        `json:"id"`
-	CaseID          string        `json:"case_id"`
-	CaseSHA256      string        `json:"case_sha256"`
-	SessionID       string        `json:"session_id"`
-	AgentID         string        `json:"agent_id"`
-	SessionKey      string        `json:"session_key,omitempty"`
-	Verdict         Verdict       `json:"verdict"`
-	Code            string        `json:"code"`
-	StartedAt       time.Time     `json:"started_at"`
-	DurationMS      int64         `json:"duration_ms"`
-	Events          []Event       `json:"events"`
-	Checks          []CheckResult `json:"checks"`
-	TransportClosed bool          `json:"transport_closed"`
-	RemoteState     string        `json:"remote_state"`
+	Version          int               `json:"version"`
+	ID               string            `json:"id"`
+	CaseID           string            `json:"case_id"`
+	CaseSHA256       string            `json:"case_sha256"`
+	SessionID        string            `json:"session_id"`
+	AgentID          string            `json:"agent_id"`
+	SessionKey       string            `json:"session_key,omitempty"`
+	Verdict          Verdict           `json:"verdict"`
+	Code             string            `json:"code"`
+	ExecutionVerdict Verdict           `json:"execution_verdict,omitempty"`
+	ExecutionCode    string            `json:"execution_code,omitempty"`
+	StartedAt        time.Time         `json:"started_at"`
+	DurationMS       int64             `json:"duration_ms"`
+	Events           []Event           `json:"events"`
+	Checks           []CheckResult     `json:"checks"`
+	DriverCalls      []RoleCall        `json:"driver_calls,omitempty"`
+	Judge            *Judgement        `json:"judge,omitempty"`
+	EvidenceEligible bool              `json:"evidence_eligible"`
+	TransportClosed  bool              `json:"transport_closed"`
+	RemoteState      string            `json:"remote_state"`
+	PDF              *PDFTrialEvidence `json:"pdf,omitempty"`
+}
+
+type PDFTrialEvidence struct {
+	Version      int                     `json:"version"`
+	SourceSHA256 string                  `json:"source_sha256"`
+	JobID        string                  `json:"job_id,omitempty"`
+	State        string                  `json:"state"`
+	Cleanup      string                  `json:"cleanup"`
+	WriteIntent  *PDFWriteIntentEvidence `json:"write_intent,omitempty"`
+	Settlement   *PDFSettlementEvidence  `json:"settlement,omitempty"`
+	Artifact     *PDFArtifactEvidence    `json:"artifact,omitempty"`
+}
+
+type PDFArtifactEvidence struct {
+	Verdict Verdict          `json:"verdict"`
+	Code    string           `json:"code"`
+	File    string           `json:"file,omitempty"`
+	Oracle  *PDFOracleResult `json:"oracle,omitempty"`
+}
+
+// Native metadata is not an independent artifact, privacy or cleanup oracle.
+type PDFSettlementEvidence struct {
+	ApprovalInteractionID string   `json:"approval_interaction_id"`
+	ApprovalRequestID     string   `json:"approval_request_id"`
+	ApprovalConsumedAt    int64    `json:"approval_consumed_at"`
+	OperationID           string   `json:"operation_id"`
+	OperationRevision     uint64   `json:"operation_revision"`
+	BackendGeneration     string   `json:"backend_generation"`
+	OutboxDeliveryID      string   `json:"outbox_delivery_id"`
+	PlatformMessageIDs    []string `json:"platform_message_ids"`
+	ArtifactRef           string   `json:"artifact_ref"`
+	ArtifactSHA256        string   `json:"artifact_sha256"`
+	ArtifactSize          int64    `json:"artifact_size"`
+}
+
+// An intent is not a consumed native grant, settled write or delivery receipt.
+type PDFWriteIntentEvidence struct {
+	ReviewRevision        int64  `json:"review_revision"`
+	ConfirmationRequestID string `json:"confirmation_request_id"`
+	ApprovalInteractionID string `json:"approval_interaction_id,omitempty"`
+	OperationID           string `json:"operation_id,omitempty"`
 }
 
 // Hard failure remains visible even when the transport, judge, or cleanup also

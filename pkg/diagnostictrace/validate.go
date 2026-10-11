@@ -17,7 +17,8 @@ var supportedKinds = map[RecordKind]struct{}{
 	RecordToolCall: {}, RecordToolResult: {}, RecordToolSkipped: {}, RecordToolLoopDecision: {},
 	RecordSteeringInjected: {}, RecordInterrupt: {},
 	RecordDeliveryDecision: {}, RecordDeliveryAttempt: {}, RecordDeliveryOutcome: {},
-	RecordContextCompaction: {}, RecordContextSnapshot: {},
+	RecordInteractionLifecycle: {},
+	RecordContextCompaction:    {}, RecordContextSnapshot: {},
 	RecordSubTurnAdmission: {},
 	RecordRuntimeError:     {},
 }

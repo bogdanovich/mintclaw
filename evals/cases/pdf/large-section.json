@@ -1,0 +1,574 @@
+{
+  "version": 1,
+  "id": "pdf.large.section",
+  "suite": "pdf",
+  "tags": [
+    "pdf",
+    "synthetic",
+    "artifact",
+    "partial"
+  ],
+  "description": "Work only on Safety findings 71 and 72 in this synthetic inspection form.",
+  "task": "Work only on Safety findings 71 and 72 in this synthetic inspection form. Ask for those two findings, leave all other entries blank and deferred, and request separate confirmation after a review. Produce an editable partial draft, clearly identify the omitted sections, and never claim the entire inspection is complete Source: {{fixture}}.",
+  "requires": [
+    "conversation",
+    "interactions",
+    "pdf"
+  ],
+  "fixtures": [
+    {
+      "id": "source",
+      "path": "fixtures/pdf/large.pdf",
+      "sha256": "0d179b4cf276c59eef0e960cd1120cfe7924adc13b65a900094fbdad79ace7b5",
+      "kind": "pdf"
+    }
+  ],
+  "driver": {
+    "mode": "llm_user",
+    "persona": "Only Safety findings 71 and 72 are in scope. Use finding-071 and finding-072 handles for those findings. All other findings must remain blank and deferred. Do not provide or invent data for the other 98 entries. Confirm a partial editable draft only after the review describes its limited scope.",
+    "facts": {
+      "finding-071": "MC_EVAL_GENERATE_PRIVATE_V1",
+      "finding-072": "MC_EVAL_GENERATE_PRIVATE_V1"
+    }
+  },
+  "limits": {
+    "max_user_turns": 18,
+    "turn_timeout": "3m",
+    "case_timeout": "10m",
+    "max_driver_calls": 18
+  },
+  "checks": [
+    {
+      "id": "privacy",
+      "kind": "private_surfaces"
+    },
+    {
+      "id": "pdf-fields",
+      "kind": "pdf_fields"
+    },
+    {
+      "id": "pdf-structure",
+      "kind": "pdf_structure"
+    },
+    {
+      "id": "pdf-delivery",
+      "kind": "pdf_delivery"
+    }
+  ],
+  "rubric": [
+    {
+      "id": "coherent",
+      "description": "The agent understands the form, asks coherent questions matching offered choices, preserves supplied facts, shows a review and obtains separate confirmation before producing the requested PDF.",
+      "required": true
+    }
+  ],
+  "pdf": {
+    "fixture": "source",
+    "output": "required",
+    "pages": 10,
+    "field_count": 100,
+    "fields": [
+      {
+        "name": "finding_001",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_002",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_003",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_004",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_005",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_006",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_007",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_008",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_009",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_010",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_011",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_012",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_013",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_014",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_015",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_016",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_017",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_018",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_019",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_020",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_021",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_022",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_023",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_024",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_025",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_026",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_027",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_028",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_029",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_030",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_031",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_032",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_033",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_034",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_035",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_036",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_037",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_038",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_039",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_040",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_041",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_042",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_043",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_044",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_045",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_046",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_047",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_048",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_049",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_050",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_051",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_052",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_053",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_054",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_055",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_056",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_057",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_058",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_059",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_060",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_061",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_062",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_063",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_064",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_065",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_066",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_067",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_068",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_069",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_070",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_071",
+        "kind": "text",
+        "fact": "finding-071"
+      },
+      {
+        "name": "finding_072",
+        "kind": "text",
+        "fact": "finding-072"
+      },
+      {
+        "name": "finding_073",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_074",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_075",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_076",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_077",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_078",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_079",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_080",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_081",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_082",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_083",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_084",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_085",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_086",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_087",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_088",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_089",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_090",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_091",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_092",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_093",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_094",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_095",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_096",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_097",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_098",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_099",
+        "kind": "text",
+        "preserve": true
+      },
+      {
+        "name": "finding_100",
+        "kind": "text",
+        "preserve": true
+      }
+    ],
+    "draft": true
+  }
+}

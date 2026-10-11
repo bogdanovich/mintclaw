@@ -3,8 +3,9 @@
 Qualification record dated 2026-10-10 for CA2 of the
 [credential access roadmap](credential-access-roadmap.md). This records
 provider build evidence and the service boundary required by the next
-admission. Runtime qualification and protected token provisioning remain
-pending. The record does not enable credential access or admit CA3/CA4.
+admission. Protected token provisioning is implemented; isolated service
+activation and actual provider/consumer qualification remain pending.
+The record does not enable credential access or admit CA3/CA4.
 
 ## Provider candidate
 
@@ -180,3 +181,207 @@ Validation uses fake item APIs and synthetic canaries; provider authentication
 and a real isolated deployment remain pending. The SDK also builds against
 MintClaw's resolved Wazero `v1.12.0` and `x/sys v0.48.0` for the four recorded
 targets in the separate qualification checkout.
+
+## Linux host readiness observation
+
+Read-only observation on `server@oc`, 2026-10-11 at 06:51–06:55 UTC:
+
+- Deployed core: `422300d7c5401651da945ff5fcd11ceffa987b77`.
+- Kernel: `7.0.0-30-generic`; systemd: `255.4-1ubuntu8.17`.
+- The main gateway is a user service under operator UID/GID `1000`. The
+  operator belongs to the sudo group and has a shell authorization rule.
+  Its observed service properties are `NoNewPrivileges=no`,
+  `PrivateUsers=no`, `ProtectSystem=no`, and `ProtectProc=default`.
+- No production service or configuration changed. No vault token, private
+  environment, or full configuration was displayed or copied.
+
+These properties do not qualify the credential host. Agent execution and
+file authority require separate evidence. A new broker UID alone cannot
+protect secrets if an agent retains root, operator impersonation, or
+service-management authority on that host. Before real provisioning, qualify
+the complete confined execution path or use a credential/browser host outside
+those capabilities. Preserve existing administration flows while preparing
+that boundary; do not silently revoke operator privileges during setup.
+
+A private socket-pair probe passed on the actual server: kernel
+`SO_PEERCRED` matched the connected process, and `SO_PEERPIDFD` returned a
+live close-on-exec handle. This supports the intended caller-authentication
+mechanism. The private transport fixtures below exercise delegated descriptor
+denial, dead-peer handling, and typed requests. Trusted process-role binding
+and complete deployment integration remain pending on the actual host.
+
+A temporary disposable Linux fixture also demonstrated service-UID-only
+credential ACL access. A distinct agent UID was denied credential-file,
+broker environment, process-memory, and process-control access. Its overlay
+filesystem supported ACLs; its tmpfs did not. Systemd may use service ownership
+with a read-only mount when ACLs are unavailable. Check the actual descriptor,
+ACL/ownership authority, mount protection, and bounded input together; an
+owner/mode check alone is insufficient for the loader admission.
+
+An attempted disposable container systemd activation exited before starting a
+service. It supplied no credential and qualifies no activation path. The later
+actual-host plaintext delivery probe below qualifies a narrower mechanism.
+Encrypted activation, complete isolation, browser-child filesystem isolation,
+and provider-readiness-before-retrieval remain open gates. Keep them explicit
+in the next CA2 merge unit and keep runtime credential access disabled.
+
+Sources:
+
+- [Linux v6.12 socket peer identity implementation](https://github.com/torvalds/linux/blob/v6.12/net/core/sock.c)
+- [Systemd v252 credential ownership and ACL implementation](https://github.com/systemd/systemd/blob/v252/src/core/execute.c)
+
+## CA2 private intent transport
+
+`pkg/credentialbroker/intent` defines the shared, versioned request/response
+contract and its Linux client. It has no 1Password SDK dependency. Requests
+carry account aliases, bounded approval duration, and opaque request/grant
+references. They cannot choose a principal, provider item, URL, selector,
+command, or secret. Responses admit fixed outcomes and controller-owned
+references, never provider errors or browser diagnostics. References locate
+service state; possession does not authorize a grant or session.
+
+`cmd/mintclaw-credential/internal/transport` owns the private handler boundary.
+Its caller configuration is trusted startup authority, not evidence that a
+process is a gateway. Before calling `PinCaller`, startup must prove the
+supervised process role, separate OS identities, and denied agent access to
+process control, service management, and credential storage. A saved PID file,
+model-selected PID, or same-UID process is insufficient. Restarting the caller
+requires fresh trusted admission; an exited process's pin is never rebound.
+
+The Linux transport requires a live process handle, `SO_PEERPIDFD`, matching
+kernel UID/GID/PID, and matching per-message `SCM_CREDENTIALS`. It admits one
+bounded sequenced packet per connection. Descriptor handoff and received
+rights are rejected; received descriptors are made close-on-exec atomically
+and closed before rejection. Exact JSON keys, duplicate rejection, field
+bounds, and operation-specific response validation prevent free-form output.
+Private handler errors, panics, and invalid responses become fixed failures.
+
+Calls have a five-second deadline and a shared eight-call capacity. Caller
+exit, client disconnect, cancellation, or service shutdown invalidates the
+borrowed call and cancels its handler. A trusted handler must honor that
+context and acknowledge private side effects; transport cannot forcibly stop
+Go code or undo an injection already in flight. The client makes one attempt
+and does not replay an uncertain result. Grant/policy/origin/browser-lease
+checks remain required immediately before every private consumer operation.
+
+Startup owns the Unix listener and must establish protected path permissions
+and sender-credential reception before publishing readiness. The client needs
+a protected socket path and qualified dedicated server identity. This slice
+creates no production listener, loads no token, invokes no provider, and adds
+no model tool. `ready` requires a qualified service handler and consumer;
+the existence of a transport is insufficient. Linux fixtures use synthetic
+inputs and unprivileged identities. They do not qualify systemd activation,
+host confinement, Android approval, or credential-browser execution.
+
+## Actual-host plaintext delivery probe
+
+On `server@oc`, 2026-10-11 at 08:06 UTC, a disposable transient systemd unit
+received one synthetic value through `LoadCredential=`. It used `DynamicUser`,
+private mounts and temporary files, strict filesystem/home protection,
+restricted process visibility, no capabilities, no privilege escalation, and
+disabled core dumps. A fixed Python fixture inspected only the synthetic
+credential's metadata and returned bounded boolean/metadata results.
+
+- The service ran under temporary UID/GID `65125` and read the expected value.
+- The credential file was root-owned, mode `0440`; its directory was
+  root-owned, mode `0550`. Their ACLs granted the named service UID read and
+  read/traverse access respectively, with no group or other access. The group
+  mode bits represented the ACL mask, not permission for an arbitrary group.
+- The credential descriptor's mount was read-only. The service was denied
+  reads of the root-only input source and root supervisor's environment and
+  memory, and denied process-control permission on that supervisor.
+- The transient unit and its generated files were removed. All ten deployed
+  MintClaw services remained active, with zero failed units and zero error
+  journal entries in the checked ten-minute window. Core SHA before/after
+  this probe was `f753c03dd55c1eb5cdc202e38172d2342ff6e5cc`.
+
+This exercised plaintext credential delivery and actual ACL/mount protection,
+not `LoadCredentialEncrypted=` activation. No host encryption key existed at
+the checked systemd host-key path; this probe created none. No real token,
+provider, account, browser, or agent credential operation was involved.
+
+The probe does not prove that an agent cannot obtain root or impersonate the
+service, establish the gateway's trusted process role, or isolate a browser
+child. The observed host remains unqualified for real token provisioning.
+Require those independent gates and encrypted activation in the next startup
+admission; do not treat these successful file-delivery checks as full CA2
+completion.
+
+## Private consumer lease lifetime
+
+`credentialbroker.GrantLease` binds one authenticated principal, account and
+policy revision to a specific live grant generation. All borrowers share one
+read-only retirement signal and the original deadline. There is one timer and
+channel per grant, bounded by the existing 64-grant limit. Borrowing creates no
+additional timer, renews no approval, and accepts no replacement identity.
+Every operation must compare the current authenticated caller, account and
+revision to the immutable lease and check origin from trusted live browser or
+connector state; a delayed timer cannot authorize an expired grant.
+
+Owner revocation, effective policy replacement, expiration, authority shutdown
+and private controller failure close the signal. Equivalent normalized policy
+preserves it. A retired lease and its expiry callback cannot bind to or revoke
+a later generation even if the random reference is reused. Authority shutdown
+is permanent; a fresh authority starts without grants.
+
+`approval.LoginLease` retains the immutable provider binding from the authorized
+revision. Binding access checks the live lease and origin again; generic
+formatting and serialization disclose neither provider IDs nor lease state.
+It creates no listener, reads no token, calls no SDK and exposes no model tool.
+
+The concrete isolated consumer must watch retirement, cancel work, acknowledge
+termination and quarantine an unknown outcome. It must also enforce current
+frame/element authority and session checks for cookie-backed reads. A lease
+does not undo an already-dispatched private effect or establish process role,
+host confinement, browser sandboxing, or a safe observation projection. Those
+remain mandatory before credential-browser activation.
+
+## CA2 protected token loader
+
+The unexported loader under `cmd/mintclaw-credential/internal/startup` reads
+only the fixed `op-service-account` basename from a trusted startup directory.
+No command, listener, model tool, environment-token fallback, provider call,
+or service activation is added. The provision-only executable does not invoke
+this helper. Qualified startup must establish its process role, dedicated
+identity, complete agent/browser isolation, actual systemd delivery, and
+consumer readiness before calling it.
+
+The loader requires matching non-root real/effective UID and GID, no unrelated
+supplementary groups, `NoNewPrivileges`, and zero permitted/effective/inherited
+capabilities. It disables core dumps and process dumpability before opening a
+source. These are executing-thread checks: startup must set the inherited
+restrictions before exec so every Go runtime thread receives them. They do
+not establish the complete host boundary or protect against a trusted root.
+
+Directory traversal is bounded, descriptor-relative, and rejects symlinks and
+non-root or writable ancestors. The final directory and file must both be on
+read-only mounts with either the canonical root-owned, named-service-UID ACL
+shape or service-owned private modes without an ACL. Named groups, additional
+users, broader access, special mode bits, ambiguous ACLs, and unexpected
+ownership are denied. The fallback requires qualified systemd delivery and
+denial of writable aliases outside the service namespace; a read-only bind
+mount alone does not prove those properties.
+
+The file is pinned with `O_PATH` before reopening that still-owned inode through
+`/proc/self/fd`. No caller supplies a descriptor or proc path. This avoids
+opening devices or blocking on FIFOs before checking the regular-file type.
+Symlinks, multiple links, empty/oversized files, and invalid single-line ASCII
+are rejected. Read bounds use one allocation; context and metadata are checked
+before/after the read. Local regular-file syscalls are not forcibly interrupted
+by context cancellation. Only a qualified local delivery path is admitted.
+
+The result is a private single-use initialization buffer. Copies share state;
+generic formatting/serialization is redacted. Consumption and destruction
+clear owned bytes, and initializer errors/panics become fixed failures.
+This does not guarantee erasure of SDK/runtime copies or cancel an initializer
+already in flight; future startup must enforce its own cancellation boundary.
+
+`scripts/qualify-credential-loader.sh` cross-builds a test binary and exercises
+synthetic ACL and no-ACL sources in a disposable Docker volume. It tests both
+read-only admission forms and denial for writable mounts, unhardened/root
+processes, broad access, unsafe paths, special files, links, and malformed data.
+Captured fixture output is checked for raw, base64, and hex canaries before
+display. The PR workflow runs this qualification; normal/race package tests
+also cover concurrent consumption, clearing, and safe projection. These checks
+do not qualify encrypted activation, real provider initialization, Android,
+browser isolation, or the operator's eventual host.

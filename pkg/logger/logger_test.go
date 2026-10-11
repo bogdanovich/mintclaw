@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,6 +52,32 @@ func TestLogLevelFiltering(t *testing.T) {
 	}
 
 	SetLevel(INFO)
+}
+
+func TestConcurrentLevelChangesAndFiltering(t *testing.T) {
+	initialLevel := GetLevel()
+	defer SetLevel(initialLevel)
+	SetLevel(WARN)
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		<-start
+		for range 1000 {
+			SetLevel(ERROR)
+			SetLevel(WARN)
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		for range 1000 {
+			InfoC("test", "filtered during concurrent level changes")
+		}
+	}()
+	close(start)
+	workers.Wait()
 }
 
 func TestLoggerWithComponent(t *testing.T) {

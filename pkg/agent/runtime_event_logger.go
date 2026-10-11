@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 const (
@@ -487,6 +488,8 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["tool"] = payload.Tool
 	case ToolExecEndPayload:
 		fields["tool"] = payload.Tool
+		setStringField(fields, "task_id", payload.TaskID)
+		setStringField(fields, "task_generation_id", payload.TaskGenerationID)
 		fields["duration_ms"] = payload.Duration.Milliseconds()
 		fields["for_llm_len"] = payload.ForLLMLen
 		fields["for_user_len"] = payload.ForUserLen
@@ -508,6 +511,53 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 	case FollowUpQueuedPayload:
 		fields["source_tool"] = payload.SourceTool
 		fields["content_len"] = payload.ContentLen
+	case AsyncCompletionPayload:
+		setStringField(fields, "source_tool", payload.SourceTool)
+		setStringField(fields, "completion_id", payload.CompletionID)
+		setStringField(fields, "task_id", payload.TaskID)
+		setStringField(fields, "task_generation_id", payload.TaskGenerationID)
+		setStringField(fields, "delivery_mode", payload.DeliveryMode)
+		fields["content_len"] = payload.ContentLen
+		fields["for_user_len"] = payload.ForUserLen
+		fields["media_count"] = payload.MediaCount
+		fields["is_error"] = payload.IsError
+		fields["will_user"] = payload.WillUser
+		fields["will_parent"] = payload.WillParent
+		if payload.RemoteCoding != nil {
+			setStringField(fields, "worker_generation_id", payload.RemoteCoding.WorkerGenerationID)
+			setStringField(fields, "remote_thread_id", payload.RemoteCoding.RemoteThreadID)
+			setStringField(fields, "scope_alias", payload.RemoteCoding.ScopeAlias)
+			setStringField(fields, "profile_alias", payload.RemoteCoding.ProfileAlias)
+			setStringField(fields, "task_status", payload.RemoteCoding.TaskStatus)
+			setStringField(fields, "remote_state", payload.RemoteCoding.RemoteState)
+			setStringField(fields, "failure_code", payload.RemoteCoding.FailureCode)
+		}
+	case InteractionEventPayload:
+		setStringField(fields, "interaction_id", payload.InteractionID)
+		setStringField(fields, "interaction_event_id", payload.InteractionEventID)
+		setStringField(fields, "task_id", payload.TaskID)
+		setStringField(fields, "delivery_id", payload.DeliveryID)
+		setStringField(fields, "interaction_kind", string(payload.Kind))
+		setStringField(fields, "interaction_event", string(payload.Event))
+		setStringField(fields, "status", string(payload.Status))
+		setStringField(fields, "outcome", string(payload.Outcome))
+		fields["revision"] = payload.Revision
+		fields["sequence"] = payload.Sequence
+		setStringField(fields, "code", payload.Code)
+		if payload.Success != nil {
+			fields["success"] = *payload.Success
+		}
+	case tools.NodeInvocationEventPayload:
+		setStringField(fields, "observation", payload.Observation)
+		setStringField(fields, "invocation_id", payload.InvocationID)
+		setStringField(fields, "target_alias", payload.Target)
+		setStringField(fields, "scope_alias", payload.ScopeAlias)
+		setStringField(fields, "profile_alias", payload.ProfileAlias)
+		setStringField(fields, "policy_revision", payload.PolicyRevision)
+		setStringField(fields, "command", payload.Command)
+		setStringField(fields, "gateway_state", string(payload.GatewayState))
+		setStringField(fields, "state", payload.State)
+		setStringField(fields, "error_code", payload.ErrorCode)
 	case InterruptReceivedPayload:
 		fields["interrupt_kind"] = payload.Kind
 		fields["role"] = payload.Role

@@ -97,6 +97,13 @@ func (c *MintClawChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMe
 		"attachments":     attachments,
 		"message_id":      msgID,
 	})
+	setOutboundIdentityPayload(outMsg.Payload, bus.OutboundMessage{
+		AgentID: msg.AgentID, SessionKey: msg.SessionKey, TraceScopes: msg.TraceScopes,
+		Context: msg.Context, Metadata: msg.Metadata,
+	})
+	if deliveryID := strings.TrimSpace(msg.DeliveryID); deliveryID != "" {
+		outMsg.Payload[PayloadKeyDeliveryID] = deliveryID
+	}
 	if modelName := strings.TrimSpace(msg.Metadata.ModelName); modelName != "" {
 		outMsg.Payload[PayloadKeyModelName] = modelName
 	}

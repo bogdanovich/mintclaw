@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
@@ -1387,6 +1388,7 @@ func remoteCodingTaskResult(
 	}
 	data, _ := json.Marshal(projection)
 	result := toolshared.NewToolResult(string(data))
+	result.WithTaskIdentity(record.TaskID, record.GenerationID)
 	if forUser {
 		result.ForUser = string(data)
 	}
@@ -1711,7 +1713,7 @@ func (runtime *remoteCodingRuntime) deliverTerminal(
 	result := (&toolshared.ToolResult{
 		ForLLM: record.Deliverable.Text, ForUser: record.Deliverable.Text,
 		Deliverable: taskresult.CloneDeliverable(record.Deliverable),
-	}).WithTaskID(record.TaskID).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
+	}).WithTaskIdentity(record.TaskID, record.GenerationID).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 	result.WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	agent, found := runtime.loop.GetRegistry().GetAgent(record.AgentID)
 	runner := runtime.loop.turns.currentRunner()
@@ -1736,11 +1738,44 @@ func (runtime *remoteCodingRuntime) deliverTerminal(
 	deliveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	deliveryCtx = withOutboundTransaction(deliveryCtx, completionID)
+	delivery := decideAsyncToolResultDelivery(result)
+	completionTraceScope := runtimeevents.NewTraceScope(
+		workspace,
+		"coding-completion-"+uuid.NewString(),
+	)
+	completionMeta := turnState.scope.meta(0, "coding_task", "coding_task.completion")
+	completionMeta.TraceScope = completionTraceScope
+	runtime.loop.emitEvent(
+		runtimeevents.KindAgentAsyncCompletion,
+		completionMeta,
+		AsyncCompletionPayload{
+			SourceTool:       "coding_task",
+			CompletionID:     completionID,
+			TaskID:           record.TaskID,
+			TaskGenerationID: record.GenerationID,
+			RemoteCoding: &RemoteCodingCompletionEvidence{
+				WorkerGenerationID: record.Coding.WorkerGenerationID,
+				RemoteThreadID:     record.Coding.ThreadID,
+				ScopeAlias:         record.Coding.Alias,
+				ProfileAlias:       string(record.Coding.Profile),
+				TaskStatus:         string(record.Status),
+				RemoteState:        record.Coding.NodeState,
+				FailureCode:        record.Coding.FailureCode,
+			},
+			DeliveryMode: string(delivery.DeliveryMode),
+			ContentLen:   delivery.ContentLen,
+			ForUserLen:   delivery.ForUserLen,
+			MediaCount:   delivery.MediaCount,
+			IsError:      delivery.IsError,
+			WillUser:     delivery.PublishToUser,
+			WillParent:   delivery.QueueParent,
+		},
+	)
 	runner.pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(
 		AsyncDeliveryRequest{
 			Context: deliveryCtx, TurnState: turnState, ToolName: "coding_task",
 			CompletionID: completionID, Result: result,
-			Decision: decideAsyncToolResultDelivery(result),
+			Decision: delivery, TraceScopes: []runtimeevents.TraceScope{completionTraceScope},
 			Metadata: bus.OutboundMetadata{
 				MessageKind:  bus.OutboundMessageKindFinalReply,
 				OutboundKind: bus.OutboundKindFinal,

@@ -89,6 +89,9 @@ type SteeringPayload struct {
 type DeliveryPayload struct {
 	Mode         string `json:"mode,omitempty"`
 	Status       string `json:"status,omitempty"`
+	TaskStatus   string `json:"task_status,omitempty"`
+	RemoteState  string `json:"remote_state,omitempty"`
+	FailureCode  string `json:"failure_code,omitempty"`
 	TargetHash   string `json:"target_hash,omitempty"`
 	Attempt      int    `json:"attempt,omitempty"`
 	WillUser     bool   `json:"will_user,omitempty"`
@@ -98,13 +101,51 @@ type DeliveryPayload struct {
 	ErrorPreview string `json:"error_preview,omitempty"`
 }
 
+// InteractionPayload retains only bounded lifecycle metadata. Question,
+// answer, approval, failure-detail, and execution-context content remain in
+// the authoritative interaction registry and are never copied into a trace.
+type InteractionPayload struct {
+	Kind     string `json:"kind"`
+	Event    string `json:"event"`
+	Status   string `json:"status"`
+	Outcome  string `json:"outcome,omitempty"`
+	Sequence int64  `json:"sequence"`
+	Code     string `json:"code,omitempty"`
+	Success  *bool  `json:"success,omitempty"`
+}
+
 type ContextPayload struct {
-	Reason            string   `json:"reason,omitempty"`
-	BeforeMessages    int      `json:"before_messages,omitempty"`
-	AfterMessages     int      `json:"after_messages,omitempty"`
-	TokensSaved       int      `json:"tokens_saved,omitempty"`
-	SnapshotHash      string   `json:"snapshot_hash,omitempty"`
-	ProtectedFactRefs []string `json:"protected_fact_refs,omitempty"`
+	Reason                        string   `json:"reason,omitempty"`
+	Status                        string   `json:"status,omitempty"`
+	SnapshotType                  string   `json:"snapshot_type,omitempty"`
+	BeforeMessages                int      `json:"before_messages,omitempty"`
+	AfterMessages                 int      `json:"after_messages,omitempty"`
+	TranscriptRevision            uint64   `json:"transcript_revision,omitempty"`
+	TranscriptCount               int      `json:"transcript_count,omitempty"`
+	TokensBefore                  int      `json:"tokens_before,omitempty"`
+	TokensAfter                   int      `json:"tokens_after,omitempty"`
+	TokensSaved                   int      `json:"tokens_saved,omitempty"`
+	TokenCountsObserved           bool     `json:"token_counts_observed,omitempty"`
+	SummariesCreated              int      `json:"summaries_created,omitempty"`
+	LeafSummaries                 int      `json:"leaf_summaries,omitempty"`
+	CondensedSummaries            int      `json:"condensed_summaries,omitempty"`
+	DurationMS                    int64    `json:"duration_ms,omitempty"`
+	Background                    bool     `json:"background,omitempty"`
+	SnapshotHash                  string   `json:"snapshot_hash,omitempty"`
+	RepositoryAvailable           bool     `json:"repository_available,omitempty"`
+	RepositoryStatusAvailable     bool     `json:"repository_status_available,omitempty"`
+	RepositoryDetached            bool     `json:"repository_detached,omitempty"`
+	RepositoryUnborn              bool     `json:"repository_unborn,omitempty"`
+	RepositoryWorktree            bool     `json:"repository_worktree,omitempty"`
+	RepositoryDirty               bool     `json:"repository_dirty,omitempty"`
+	DiffStatAvailable             bool     `json:"diff_stat_available,omitempty"`
+	ChangedFiles                  int      `json:"changed_files,omitempty"`
+	AddedLines                    int      `json:"added_lines,omitempty"`
+	DeletedLines                  int      `json:"deleted_lines,omitempty"`
+	BinaryFiles                   int      `json:"binary_files,omitempty"`
+	SubmoduleWorktreeStateIgnored bool     `json:"submodule_worktree_state_ignored,omitempty"`
+	SnapshotTruncated             bool     `json:"snapshot_truncated,omitempty"`
+	ProtectedFactRefs             []string `json:"protected_fact_refs,omitempty"`
 }
 
 type SubTurnAdmissionPayload struct {

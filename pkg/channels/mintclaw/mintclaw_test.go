@@ -1529,7 +1529,11 @@ func TestSendMedia_IncludesCaptionAndAttachmentsInSinglePayload(t *testing.T) {
 	}
 
 	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
-		ChatID: "mintclaw:sess-1",
+		ChatID: "mintclaw:sess-1", AgentID: "main", SessionKey: "test-session-key", DeliveryID: "out_test_delivery",
+		TraceScopes: []runtimeevents.TraceScope{{Workspace: "/eval-workspace", TurnID: "eval-turn"}},
+		Context:     bus.InboundContext{MessageID: "context-request"},
+		Metadata:    bus.OutboundMetadata{RequestID: "explicit-request", ModelName: "test-model"},
+		Recovery:    &bus.OutboundRecovery{ArtifactRef: "private-recovery-canary"},
 		Parts: []bus.MediaPart{{
 			Ref:         ref,
 			Type:        "image",
@@ -1548,6 +1552,24 @@ func TestSendMedia_IncludesCaptionAndAttachmentsInSinglePayload(t *testing.T) {
 			t.Fatalf("message type = %q, want %q", msg.Type, TypeMessageCreate)
 		}
 		payload := msg.Payload
+		if msg.SessionID != "sess-1" || payload[PayloadKeyRequestID] != "explicit-request" ||
+			payload[PayloadKeyAgentID] != "main" || payload[PayloadKeySessionKey] != "test-session-key" ||
+			payload[PayloadKeyDeliveryID] != "out_test_delivery" || payload[PayloadKeyModelName] != "test-model" {
+			t.Fatal("media lost native route/request/delivery identity", payload)
+		}
+		scopes, ok := payload[PayloadKeyTraceScopes].([]any)
+		if !ok || len(scopes) != 1 {
+			t.Fatal("media trace scope missing", payload)
+		}
+		scope, ok := scopes[0].(map[string]any)
+		if !ok || scope["workspace"] != "/eval-workspace" || scope["turn_id"] != "eval-turn" {
+			t.Fatal("media trace scope changed", scopes)
+		}
+		encoded, err := json.Marshal(msg)
+		if err != nil || strings.Contains(string(encoded), "private-recovery-canary") ||
+			payload[PayloadKeyFinal] != nil || payload[PayloadKeyUsage] != nil {
+			t.Fatal("private recovery or invented final/usage semantics reached media payload")
+		}
 		if got := payload[PayloadKeyContent]; got != "recipe translation" {
 			t.Fatalf("content = %#v, want %q", got, "recipe translation")
 		}
@@ -1567,6 +1589,47 @@ func TestSendMedia_IncludesCaptionAndAttachmentsInSinglePayload(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected media payload to be delivered")
+	}
+}
+
+func TestSendMediaUsesNativeRequestFallbackWithoutInventingMetadata(t *testing.T) {
+	ch := newTestMintClawChannel(t)
+	ch.SetRunning(true)
+	store := media.NewFileMediaStore()
+	ch.SetMediaStore(store)
+	path := filepath.Join(t.TempDir(), "report.txt")
+	if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(path, media.MediaMeta{Filename: "report.txt"}, "test-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		context bus.InboundContext
+		request string
+	}{
+		{bus.InboundContext{MessageID: "original-request"}, "original-request"},
+		{bus.InboundContext{ReplyToMessageID: "reply-request"}, "reply-request"},
+		{bus.InboundContext{}, ""},
+	} {
+		ch.broadcastFn = func(_ context.Context, _ string, message MintClawMessage) error {
+			got, _ := message.Payload[PayloadKeyRequestID].(string)
+			if got != test.request {
+				t.Fatal("native media request fallback changed", got)
+			}
+			for _, key := range []string{PayloadKeyAgentID, PayloadKeySessionKey, PayloadKeyTraceScopes, PayloadKeyDeliveryID} {
+				if _, invented := message.Payload[key]; invented {
+					t.Fatal("media invented unavailable identity", key)
+				}
+			}
+			return nil
+		}
+		if _, err = ch.sendMedia(t.Context(), bus.OutboundMediaMessage{
+			ChatID: "mintclaw:sess-1", Context: test.context, Parts: []bus.MediaPart{{Ref: ref}},
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

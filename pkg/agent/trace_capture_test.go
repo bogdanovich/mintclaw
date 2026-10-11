@@ -12,10 +12,14 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/channels"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestChildTurnEventMetadataCarriesParentCorrelation(t *testing.T) {
@@ -71,6 +75,820 @@ func TestToolLoopDecisionTraceRetainsExactCallGeneration(t *testing.T) {
 		record.Correlation.ToolCallID != correlation.ToolCallID ||
 		record.Correlation.ToolCallGeneration != correlation.ToolCallGeneration {
 		t.Fatalf("loop decision correlation = %+v", record.Correlation)
+	}
+}
+
+func TestTraceCapturePersistsOutOfTurnCompactionLifecycle(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	scope := runtimeevents.Scope{
+		TraceScope: runtimeevents.NewTraceScope(workspace, ""),
+		AgentID:    "coding",
+		SessionKey: "coding:thread-private-canary",
+	}
+	base := ContextCompressLifecyclePayload{
+		AttemptID:          "compaction-attempt-1",
+		ThreadID:           "thread-private-canary",
+		TranscriptRevision: 17,
+		TranscriptCount:    42,
+		Reason:             ContextCompressReasonProactive,
+		Background:         true,
+	}
+	events := []struct {
+		id      string
+		kind    runtimeevents.Kind
+		status  ContextCompressLifecycleStatus
+		elapsed time.Duration
+	}{
+		{"compaction-start", runtimeevents.KindAgentContextCompressStart, ContextCompressLifecycleStarted, 0},
+		{
+			"compaction-progress", runtimeevents.KindAgentContextCompressProgress,
+			ContextCompressLifecycleProgress, 40 * time.Millisecond,
+		},
+		{
+			"compaction-end", runtimeevents.KindAgentContextCompressEnd,
+			ContextCompressLifecycleCompleted, 75 * time.Millisecond,
+		},
+	}
+	for index, fixture := range events {
+		payload := base
+		payload.Status = fixture.status
+		payload.Duration = fixture.elapsed
+		if fixture.status != ContextCompressLifecycleStarted {
+			payload.TokensBefore = 1200
+			payload.TokensAfter = 800
+			payload.TokensSaved = 400
+			payload.TokenCountsObserved = true
+			payload.SummariesCreated = 2
+			payload.LeafSummaries = 1
+			payload.CondensedSummaries = 1
+		}
+		publishCaptureEvent(t, eventBus, runtimeevents.Event{
+			ID: fixture.id, Kind: fixture.kind,
+			Time:  startedAt.Add(time.Duration(index) * time.Millisecond),
+			Scope: scope, Payload: payload,
+		})
+	}
+
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if err := diagnostictrace.Validate(trace); err != nil {
+		t.Fatalf("validate compaction continuation: %v", err)
+	}
+	if !strings.HasPrefix(trace.Metadata.RootTurnID, "compaction-") ||
+		trace.Metadata.ParentTurnID != "" || trace.Outcome == nil ||
+		trace.Outcome.Status != string(ContextCompressLifecycleCompleted) ||
+		trace.Truncation.Incomplete || len(trace.Records) != len(events) {
+		t.Fatalf("compaction continuation envelope = %#v", trace)
+	}
+	for index, record := range trace.Records {
+		if record.Kind != diagnostictrace.RecordContextCompaction ||
+			record.Correlation.CompactionAttemptID != base.AttemptID {
+			t.Fatalf("compaction record %d = %#v", index, record)
+		}
+		var payload diagnostictrace.ContextPayload
+		if err := json.Unmarshal(record.Data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Status != string(events[index].status) ||
+			payload.TranscriptRevision != base.TranscriptRevision ||
+			payload.TranscriptCount != base.TranscriptCount || !payload.Background {
+			t.Fatalf("compaction payload %d = %#v", index, payload)
+		}
+	}
+	encoded, err := json.Marshal(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(base.ThreadID)) || bytes.Contains(encoded, []byte(scope.SessionKey)) {
+		t.Fatalf("compaction trace retained private thread/session identity: %s", encoded)
+	}
+}
+
+func TestTraceCaptureKeepsActiveTurnCompactionInParentTrace(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	traceScope := runtimeevents.NewTraceScope(workspace, "turn-with-compaction")
+	scope := runtimeevents.Scope{TraceScope: traceScope, AgentID: "main", SessionKey: "session-compaction"}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "turn-start", Kind: runtimeevents.KindAgentTurnStart, Time: startedAt,
+		Scope: scope, Payload: TurnStartPayload{Workspace: workspace},
+	})
+	for index, fixture := range []struct {
+		kind   runtimeevents.Kind
+		status ContextCompressLifecycleStatus
+	}{
+		{runtimeevents.KindAgentContextCompressStart, ContextCompressLifecycleStarted},
+		{runtimeevents.KindAgentContextCompressEnd, ContextCompressLifecycleNoProgress},
+	} {
+		publishCaptureEvent(t, eventBus, runtimeevents.Event{
+			ID: "compaction-" + string(fixture.status), Kind: fixture.kind,
+			Time: startedAt.Add(time.Duration(index+1) * time.Millisecond), Scope: scope,
+			Payload: ContextCompressLifecyclePayload{
+				AttemptID: "compaction-parent-1", Status: fixture.status,
+				Reason: ContextCompressReasonRetry,
+			},
+		})
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "turn-end", Kind: runtimeevents.KindAgentTurnEnd,
+		Time: startedAt.Add(3 * time.Millisecond), Scope: scope,
+		Payload: TurnEndPayload{Workspace: workspace, Status: TurnEndStatusCompleted},
+	})
+
+	paths := waitForTraceFiles(t, workspace, 1)
+	if len(paths) != 1 {
+		t.Fatalf("active-turn compaction created %d traces, want 1", len(paths))
+	}
+	trace := readCapturedTrace(t, paths[0])
+	if trace.Metadata.RootTurnID != traceScope.TurnID || trace.Outcome == nil ||
+		trace.Outcome.Status != string(TurnEndStatusCompleted) {
+		t.Fatalf("parent trace envelope = %#v", trace)
+	}
+	compactionRecords := 0
+	for _, record := range trace.Records {
+		if record.Kind != diagnostictrace.RecordContextCompaction {
+			continue
+		}
+		compactionRecords++
+		if record.Correlation.CompactionAttemptID != "compaction-parent-1" {
+			t.Fatalf("active compaction correlation = %#v", record.Correlation)
+		}
+	}
+	if compactionRecords != 2 {
+		t.Fatalf("active compaction records = %d, want 2", compactionRecords)
+	}
+}
+
+func TestWorkspaceSnapshotTraceRetainsOnlyBoundedRepositoryEvidence(t *testing.T) {
+	const (
+		privateRoot    = "/private/project-root-canary"
+		privateCWD     = "/private/project-root-canary/secret-subdir"
+		privateGitDir  = "/private/git-dir-canary"
+		privateBranch  = "private-branch-canary"
+		privatePath    = "private/source-canary.go"
+		privateWarning = "private-warning-canary"
+	)
+	commit := strings.Repeat("a", 40)
+	snapshot := codingworkspace.Snapshot{
+		ProjectRoot: privateRoot,
+		CWD:         privateCWD,
+		Git: codingworkspace.GitState{
+			Available: true, StatusAvailable: true, TopLevel: privateRoot,
+			GitDir: privateGitDir, CommonDir: privateGitDir, Branch: privateBranch,
+			Head: commit, Detached: true, Worktree: true, Dirty: true,
+			UnavailableReason: "private-unavailable-reason-canary",
+		},
+		ChangedPaths: []codingworkspace.ChangedPath{
+			{Path: privatePath, OriginalPath: "private/original-canary.go", Status: "M"},
+		},
+		DiffStat: codingworkspace.DiffStat{
+			Files: 1, Additions: 7, Deletions: 3, BinaryFiles: 1,
+		},
+		DiffStatAvailable: true, SubmoduleWorktreeStateIgnored: true,
+		Truncated: true, Warning: privateWarning,
+	}
+	startedAt := time.Now().UTC()
+	record, critical, ok := runtimeEventRecord(
+		traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted},
+		&activeTraceCapture{startedAt: startedAt, turnID: "turn-repository-snapshot"},
+		runtimeevents.Event{
+			ID: "workspace-snapshot", Kind: runtimeevents.KindAgentWorkspaceSnapshot,
+			Time:    startedAt.Add(time.Millisecond),
+			Payload: WorkspaceSnapshotPayload{Snapshot: snapshot},
+		},
+	)
+	if !ok || !critical || record.Kind != diagnostictrace.RecordContextSnapshot {
+		t.Fatalf("workspace snapshot projection = ok %v critical %v record %#v", ok, critical, record)
+	}
+	if record.Correlation.RepositorySnapshotHash != snapshot.Identity() ||
+		record.Correlation.RepositoryCommit != commit {
+		t.Fatalf("workspace snapshot correlation = %#v", record.Correlation)
+	}
+	var payload diagnostictrace.ContextPayload
+	if err := json.Unmarshal(record.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.SnapshotType != "repository" || !payload.RepositoryAvailable ||
+		!payload.RepositoryStatusAvailable || !payload.RepositoryDetached ||
+		payload.RepositoryUnborn || !payload.RepositoryWorktree || !payload.RepositoryDirty ||
+		!payload.DiffStatAvailable || payload.ChangedFiles != 1 || payload.AddedLines != 7 ||
+		payload.DeletedLines != 3 || payload.BinaryFiles != 1 ||
+		!payload.SubmoduleWorktreeStateIgnored || !payload.SnapshotTruncated {
+		t.Fatalf("workspace snapshot payload = %#v", payload)
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		privateRoot, privateCWD, privateGitDir, privateBranch, privatePath,
+		"private/original-canary.go", privateWarning, "private-unavailable-reason-canary",
+	} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("workspace snapshot trace retained %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestTraceCaptureRetainsLateAsyncCompletionAndDeliveryCorrelation(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	parentTraceScope := runtimeevents.NewTraceScope(workspace, "turn-async-parent")
+	completionTraceScope := runtimeevents.NewTraceScope(workspace, "async-completion-1")
+	scope := runtimeevents.Scope{
+		TraceScope: parentTraceScope, AgentID: "main", SessionKey: "session-async-delivery",
+		Channel: "telegram", ChatID: "chat-async-delivery",
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "start", Kind: runtimeevents.KindAgentTurnStart, Time: startedAt, Scope: scope,
+		Payload: TurnStartPayload{Workspace: workspace},
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "end", Kind: runtimeevents.KindAgentTurnEnd,
+		Time: startedAt.Add(time.Millisecond), Scope: scope,
+		Payload: TurnEndPayload{Workspace: workspace, Status: TurnEndStatusCompleted},
+	})
+	parentPath := waitForTraceFile(t, workspace)
+
+	completionScope := scope
+	completionScope.TraceScope = completionTraceScope
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "async-completion", Kind: runtimeevents.KindAgentAsyncCompletion,
+		Time: startedAt.Add(2 * time.Millisecond), Scope: completionScope,
+		Correlation: runtimeevents.Correlation{
+			ParentTurnID:       parentTraceScope.TurnID,
+			ModelAttemptID:     "model-attempt-1",
+			ToolCallID:         "tool-call-1",
+			ToolCallGeneration: "tool-call-generation-1",
+		},
+		Payload: AsyncCompletionPayload{
+			SourceTool: "coding_task", TaskID: "task-1", TaskGenerationID: "task-generation-1",
+			CompletionID: "completion-1", DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
+			RemoteCoding: &RemoteCodingCompletionEvidence{
+				WorkerGenerationID: "worker-generation-1", RemoteThreadID: "remote-thread-1",
+				ScopeAlias: "mintclaw-dev", ProfileAlias: "project-yolo",
+				TaskStatus: "succeeded", RemoteState: "completed",
+			},
+			WillUser: true, ContentLen: 12,
+		},
+	})
+	channelScope := runtimeevents.Scope{Channel: "telegram", ChatID: "chat-async-delivery"}
+	channelPayload := channels.ChannelOutboundPayload{
+		DeliveryID: "delivery-1", TraceScopes: []runtimeevents.TraceScope{completionTraceScope},
+		TraceSettlement: true, ContentLen: 12,
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "queued", Kind: runtimeevents.KindChannelMessageOutboundQueued,
+		Time: startedAt.Add(3 * time.Millisecond), Scope: channelScope, Payload: channelPayload,
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "sent", Kind: runtimeevents.KindChannelMessageOutboundSent,
+		Time: startedAt.Add(4 * time.Millisecond), Scope: channelScope, Payload: channelPayload,
+	})
+
+	paths := waitForTraceFiles(t, workspace, 2)
+	parentTrace := readCapturedTrace(t, parentPath)
+	var trace diagnostictrace.Trace
+	for _, path := range paths {
+		candidate := readCapturedTrace(t, path)
+		if candidate.Metadata.RootTurnID == completionTraceScope.TurnID {
+			trace = candidate
+		}
+	}
+	if trace.TraceID == "" {
+		t.Fatalf("completion trace not found in %v", paths)
+	}
+	if err := diagnostictrace.Validate(parentTrace); err != nil {
+		t.Fatalf("validate parent trace: %v", err)
+	}
+	if err := diagnostictrace.Validate(trace); err != nil {
+		t.Fatalf("validate async-delivery trace: %v", err)
+	}
+	if parentTrace.Metadata.RootTurnID != parentTraceScope.TurnID || parentTrace.Outcome == nil ||
+		parentTrace.Outcome.Status != string(TurnEndStatusCompleted) {
+		t.Fatalf("parent trace metadata/outcome = %#v / %#v", parentTrace.Metadata, parentTrace.Outcome)
+	}
+	if trace.Metadata.ParentTurnID != parentTraceScope.TurnID || trace.Outcome != nil ||
+		trace.Truncation.Incomplete {
+		t.Fatalf("completion trace envelope = metadata %#v outcome %#v truncation %#v",
+			trace.Metadata, trace.Outcome, trace.Truncation)
+	}
+	var decision, attempt, outcome *diagnostictrace.Record
+	for index := range parentTrace.Records {
+		if parentTrace.Records[index].Kind == diagnostictrace.RecordDeliveryDecision {
+			t.Fatalf("parent trace unexpectedly retained late completion: %#v", parentTrace.Records[index])
+		}
+	}
+	for index := range trace.Records {
+		record := &trace.Records[index]
+		switch record.Kind {
+		case diagnostictrace.RecordDeliveryDecision:
+			decision = record
+		case diagnostictrace.RecordDeliveryAttempt:
+			attempt = record
+		case diagnostictrace.RecordDeliveryOutcome:
+			outcome = record
+		}
+	}
+	if decision == nil || attempt == nil || outcome == nil {
+		t.Fatalf("async-delivery records = %#v", trace.Records)
+	}
+	if decision.Scope.TaskID != "task-1" ||
+		decision.Scope.ScopeAlias != "mintclaw-dev" ||
+		decision.Scope.ProfileAlias != "project-yolo" ||
+		decision.Correlation.TaskGenerationID != "task-generation-1" ||
+		decision.Correlation.CompletionID != "completion-1" ||
+		decision.Correlation.WorkerGenerationID != "worker-generation-1" ||
+		decision.Correlation.RemoteThreadID != "remote-thread-1" ||
+		decision.Correlation.ParentTurnID != parentTraceScope.TurnID ||
+		decision.Correlation.ModelAttemptID != "model-attempt-1" ||
+		decision.Correlation.ToolCallID != "tool-call-1" ||
+		decision.Correlation.ToolCallGeneration != "tool-call-generation-1" {
+		t.Fatalf("delivery decision correlation = scope %#v correlation %#v", decision.Scope, decision.Correlation)
+	}
+	var decisionPayload diagnostictrace.DeliveryPayload
+	if err := json.Unmarshal(decision.Data, &decisionPayload); err != nil {
+		t.Fatal(err)
+	}
+	if decisionPayload.TaskStatus != "succeeded" || decisionPayload.RemoteState != "completed" ||
+		decisionPayload.FailureCode != "" {
+		t.Fatalf("remote coding delivery decision = %#v", decisionPayload)
+	}
+	if attempt.Correlation.DeliveryID != "delivery-1" || outcome.Correlation.DeliveryID != "delivery-1" {
+		t.Fatalf("delivery attempt/outcome correlation = %#v / %#v", attempt.Correlation, outcome.Correlation)
+	}
+}
+
+func TestToolResultTraceRetainsDurableTaskIdentity(t *testing.T) {
+	started := time.Now()
+	record, _, ok := runtimeEventRecord(
+		traceCaptureSettings{contentMode: diagnostictrace.ContentMetadataOnly},
+		&activeTraceCapture{startedAt: started, turnID: "turn-coding-task"},
+		runtimeevents.Event{
+			ID: "event-coding-task", Kind: runtimeevents.KindAgentToolExecEnd,
+			Time: started.Add(time.Millisecond),
+			Payload: ToolExecEndPayload{
+				ToolCallID: "tool-call-1", ToolCallGeneration: "tool-generation-1",
+				TaskID: "coding-task-1", TaskGenerationID: "task-generation-1",
+				Tool: "coding_task",
+			},
+		},
+	)
+	if !ok || record.Kind != diagnostictrace.RecordToolResult {
+		t.Fatalf("coding task result produced kind %q, ok=%v", record.Kind, ok)
+	}
+	if record.Scope.TaskID != "coding-task-1" ||
+		record.Correlation.TaskGenerationID != "task-generation-1" ||
+		record.Correlation.ToolCallID != "tool-call-1" ||
+		record.Correlation.ToolCallGeneration != "tool-generation-1" {
+		t.Fatalf("coding task result correlation = scope %#v correlation %#v", record.Scope, record.Correlation)
+	}
+}
+
+func TestRemoteCodingTraceExcludesTaskContentPreviews(t *testing.T) {
+	const (
+		argumentCanary = "private-remote-objective-6f4e90"
+		resultCanary   = "private-remote-summary-4102ad"
+	)
+	settings := traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted}
+	started := time.Now()
+	trace := &activeTraceCapture{startedAt: started, turnID: "turn-coding-task"}
+
+	call, _, ok := runtimeEventRecord(
+		settings,
+		trace,
+		runtimeevents.Event{
+			ID: "event-coding-task-call", Kind: runtimeevents.KindAgentToolExecStart,
+			Time: started.Add(time.Millisecond),
+			Payload: ToolExecStartPayload{
+				ToolCallID: "tool-call-1", ToolCallGeneration: "tool-generation-1",
+				Tool: "coding_task", Arguments: map[string]any{
+					"action": "start", "objective": argumentCanary,
+				},
+			},
+		},
+	)
+	if !ok || call.Kind != diagnostictrace.RecordToolCall || bytes.Contains(call.Data, []byte(argumentCanary)) {
+		t.Fatalf("coding task call retained protected content: ok=%v record=%#v", ok, call)
+	}
+	var callPayload diagnostictrace.ToolPayload
+	if err := json.Unmarshal(call.Data, &callPayload); err != nil {
+		t.Fatal(err)
+	}
+	if callPayload.ArgumentsPreview != "" || callPayload.ArgsHash == "" {
+		t.Fatalf("coding task call projection = %#v", callPayload)
+	}
+
+	result, _, ok := runtimeEventRecord(
+		settings,
+		trace,
+		runtimeevents.Event{
+			ID: "event-coding-task-result", Kind: runtimeevents.KindAgentToolExecEnd,
+			Time: started.Add(2 * time.Millisecond),
+			Payload: ToolExecEndPayload{
+				ToolCallID: "tool-call-1", ToolCallGeneration: "tool-generation-1",
+				TaskID: "coding-task-1", TaskGenerationID: "task-generation-1",
+				Tool: "coding_task", DiagnosticResult: resultCanary, ResultHash: "result-hash",
+			},
+		},
+	)
+	if !ok || result.Kind != diagnostictrace.RecordToolResult || bytes.Contains(result.Data, []byte(resultCanary)) {
+		t.Fatalf("coding task result retained protected content: ok=%v record=%#v", ok, result)
+	}
+	var resultPayload diagnostictrace.ToolPayload
+	if err := json.Unmarshal(result.Data, &resultPayload); err != nil {
+		t.Fatal(err)
+	}
+	if resultPayload.ResultPreview != "" || resultPayload.ResultHash != "result-hash" ||
+		result.Scope.TaskID != "coding-task-1" ||
+		result.Correlation.TaskGenerationID != "task-generation-1" {
+		t.Fatalf("coding task result projection = payload %#v record %#v", resultPayload, result)
+	}
+}
+
+func TestRemoteCodingCompletionTraceDistinguishesTerminalStates(t *testing.T) {
+	tests := []struct {
+		name        string
+		taskStatus  string
+		remoteState string
+		failureCode string
+	}{
+		{name: "completed", taskStatus: "succeeded", remoteState: "completed"},
+		{name: "failed", taskStatus: "failed", remoteState: "failed", failureCode: "worker_failed"},
+		{name: "canceled", taskStatus: string(taskregistry.StatusCancelled), remoteState: "canceled"},
+		{name: "uncertain", taskStatus: "failed", remoteState: "uncertain", failureCode: "worker_lost"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			started := time.Now()
+			record, _, ok := runtimeEventRecord(
+				traceCaptureSettings{contentMode: diagnostictrace.ContentMetadataOnly},
+				&activeTraceCapture{startedAt: started, turnID: "coding-completion-1"},
+				runtimeevents.Event{
+					ID: "event-" + test.name, Kind: runtimeevents.KindAgentAsyncCompletion,
+					Time: started.Add(time.Millisecond),
+					Payload: AsyncCompletionPayload{
+						SourceTool: "coding_task", TaskID: "coding-task-1",
+						TaskGenerationID: "task-generation-1", CompletionID: "completion-1",
+						RemoteCoding: &RemoteCodingCompletionEvidence{
+							WorkerGenerationID: "worker-generation-1", RemoteThreadID: "thread-1",
+							ScopeAlias: "mintclaw-dev", ProfileAlias: "project-yolo",
+							TaskStatus: test.taskStatus, RemoteState: test.remoteState,
+							FailureCode: test.failureCode,
+						},
+					},
+				},
+			)
+			if !ok || record.Kind != diagnostictrace.RecordDeliveryDecision {
+				t.Fatalf("remote completion produced kind %q, ok=%v", record.Kind, ok)
+			}
+			var payload diagnostictrace.DeliveryPayload
+			if err := json.Unmarshal(record.Data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.TaskStatus != test.taskStatus || payload.RemoteState != test.remoteState ||
+				payload.FailureCode != test.failureCode {
+				t.Fatalf("remote completion terminal evidence = %#v", payload)
+			}
+		})
+	}
+}
+
+func TestTraceCaptureProjectsInteractionLifecycleAndLateContinuations(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	parentScope := runtimeevents.NewTraceScope(workspace, "turn-interaction-parent")
+	scope := runtimeevents.Scope{
+		TraceScope: parentScope, AgentID: "main", SessionKey: "session-interaction",
+		Channel: "telegram", ChatID: "chat-interaction",
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "turn-start", Kind: runtimeevents.KindAgentTurnStart, Time: startedAt,
+		Scope: scope, Payload: TurnStartPayload{Workspace: workspace},
+	})
+
+	interactionID := "interaction-1"
+	toolCorrelation := runtimeevents.Correlation{ToolCallID: "tool-call-question"}
+	early := []struct {
+		id       string
+		kind     runtimeevents.Kind
+		event    interactions.EventType
+		status   interactions.Status
+		revision int64
+		delivery string
+	}{
+		{
+			"interaction-created", runtimeevents.KindAgentInteractionCreated,
+			interactions.EventCreated, interactions.StatusCreated, 1, "",
+		},
+		{
+			"interaction-prompt", runtimeevents.KindAgentInteractionDelivery,
+			interactions.EventPromptDelivery, interactions.StatusCreated, 2, "delivery-prompt",
+		},
+		{
+			"interaction-waiting", runtimeevents.KindAgentInteractionWaiting,
+			interactions.EventWaiting, interactions.StatusWaiting, 3, "delivery-prompt",
+		},
+	}
+	for index, fixture := range early {
+		publishCaptureEvent(t, eventBus, runtimeevents.Event{
+			ID: fixture.id, Kind: fixture.kind, Time: startedAt.Add(time.Duration(index+1) * time.Millisecond),
+			Scope: scope, Correlation: toolCorrelation,
+			Payload: InteractionEventPayload{
+				InteractionID: interactionID, InteractionEventID: fixture.id,
+				TaskID: "task-1", DeliveryID: fixture.delivery,
+				Kind: interactions.KindQuestion, Event: fixture.event, Status: fixture.status,
+				Revision: fixture.revision, Sequence: fixture.revision,
+			},
+		})
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "turn-end", Kind: runtimeevents.KindAgentTurnEnd, Time: startedAt.Add(4 * time.Millisecond),
+		Scope: scope, Payload: TurnEndPayload{Workspace: workspace, Status: TurnEndStatusCompleted},
+	})
+	parentPath := waitForTraceFile(t, workspace)
+
+	success := true
+	late := []struct {
+		id       string
+		kind     runtimeevents.Kind
+		event    interactions.EventType
+		status   interactions.Status
+		outcome  interactions.Outcome
+		revision int64
+		delivery string
+		code     string
+	}{
+		{
+			"interaction-answer", runtimeevents.KindAgentInteractionAnswer,
+			interactions.EventAnswerClaimed, interactions.StatusClaimed,
+			interactions.OutcomeAnswered, 4, "delivery-prompt", "answer_accepted",
+		},
+		{
+			"interaction-resume", runtimeevents.KindAgentInteractionResume,
+			interactions.EventResumeStarted, interactions.StatusResuming,
+			interactions.OutcomeAnswered, 5, "delivery-prompt", "resume_started",
+		},
+		{
+			"interaction-final-delivery", runtimeevents.KindAgentInteractionDelivery,
+			interactions.EventFinalDelivery, interactions.StatusResuming,
+			interactions.OutcomeAnswered, 6, "delivery-final", "final_bound",
+		},
+		{
+			"interaction-end", runtimeevents.KindAgentInteractionEnd,
+			interactions.EventResolved, interactions.StatusResolved,
+			interactions.OutcomeAnswered, 7, "delivery-final", "completed",
+		},
+	}
+	for index, fixture := range late {
+		publishCaptureEvent(t, eventBus, runtimeevents.Event{
+			ID: fixture.id, Kind: fixture.kind, Time: startedAt.Add(time.Duration(index+5) * time.Millisecond),
+			Scope: scope, Correlation: toolCorrelation,
+			Payload: InteractionEventPayload{
+				InteractionID: interactionID, InteractionEventID: fixture.id,
+				TaskID: "task-1", DeliveryID: fixture.delivery,
+				Kind: interactions.KindQuestion, Event: fixture.event, Status: fixture.status,
+				Outcome: fixture.outcome, Revision: fixture.revision, Sequence: fixture.revision,
+				Code: fixture.code, Success: &success,
+			},
+		})
+	}
+
+	paths := waitForTraceFiles(t, workspace, 1+len(late))
+	parentTrace := readCapturedTrace(t, parentPath)
+	if err := diagnostictrace.Validate(parentTrace); err != nil {
+		t.Fatalf("validate parent trace: %v", err)
+	}
+	interactionRecords := make([]diagnostictrace.Record, 0, len(early))
+	for _, record := range parentTrace.Records {
+		if record.Kind == diagnostictrace.RecordInteractionLifecycle {
+			interactionRecords = append(interactionRecords, record)
+		}
+	}
+	if len(interactionRecords) != len(early) {
+		t.Fatalf("parent interaction records = %#v", interactionRecords)
+	}
+	if interactionRecords[1].Correlation.InteractionID != interactionID ||
+		interactionRecords[1].Correlation.InteractionRevision != 2 ||
+		interactionRecords[1].Correlation.InteractionEventID != "interaction-prompt" ||
+		interactionRecords[1].Correlation.DeliveryID != "delivery-prompt" ||
+		interactionRecords[1].Correlation.ToolCallID != "tool-call-question" ||
+		interactionRecords[1].Scope.TaskID != "task-1" {
+		t.Fatalf("parent interaction correlation = scope %#v correlation %#v",
+			interactionRecords[1].Scope, interactionRecords[1].Correlation)
+	}
+
+	lateEvents := make(map[string]diagnostictrace.Trace, len(late))
+	for _, path := range paths {
+		trace := readCapturedTrace(t, path)
+		if path == parentPath {
+			continue
+		}
+		if err := diagnostictrace.Validate(trace); err != nil {
+			t.Fatalf("validate interaction continuation %s: %v", path, err)
+		}
+		if !strings.HasPrefix(trace.Metadata.RootTurnID, "interaction-") ||
+			trace.Metadata.ParentTurnID != parentScope.TurnID || len(trace.Records) != 1 ||
+			trace.Records[0].Kind != diagnostictrace.RecordInteractionLifecycle ||
+			trace.Truncation.Incomplete {
+			t.Fatalf("interaction continuation = %#v", trace)
+		}
+		var payload diagnostictrace.InteractionPayload
+		if err := json.Unmarshal(trace.Records[0].Data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		lateEvents[payload.Event] = trace
+	}
+	if len(lateEvents) != len(late) {
+		t.Fatalf("late interaction events = %#v", lateEvents)
+	}
+	terminal := lateEvents[string(interactions.EventResolved)].Records[0]
+	if terminal.Correlation.InteractionID != interactionID ||
+		terminal.Correlation.InteractionRevision != 7 ||
+		terminal.Correlation.InteractionEventID != "interaction-end" ||
+		terminal.Correlation.DeliveryID != "delivery-final" ||
+		terminal.Correlation.ParentTurnID != parentScope.TurnID ||
+		terminal.Scope.TaskID != "task-1" {
+		t.Fatalf("terminal interaction correlation = scope %#v correlation %#v",
+			terminal.Scope, terminal.Correlation)
+	}
+}
+
+func TestTraceCaptureWaitsForParentOnlySynthesisDelivery(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	traceScope := runtimeevents.NewTraceScope(workspace, "async-completion-parent-only")
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "async-parent-only", Kind: runtimeevents.KindAgentAsyncCompletion,
+		Time: time.Now().UTC(),
+		Scope: runtimeevents.Scope{
+			TraceScope: traceScope, AgentID: "main", SessionKey: "session-parent-only",
+		},
+		Correlation: runtimeevents.Correlation{ParentTurnID: "turn-parent-only"},
+		Payload: AsyncCompletionPayload{
+			SourceTool: "spawn", TaskID: "task-parent-only",
+			TaskGenerationID: "task-generation-parent-only", CompletionID: "completion-parent-only",
+			DeliveryMode: string(toolshared.AsyncDeliveryParentOnly), WillParent: true,
+		},
+	})
+	if matches, _ := filepath.Glob(filepath.Join(workspace, "state", "diagnostics", "traces", "*.json")); len(
+		matches,
+	) != 0 {
+		t.Fatalf("parent-only completion persisted before synthesized delivery: %v", matches)
+	}
+	channelPayload := channels.ChannelOutboundPayload{
+		DeliveryID: "delivery-parent-only", TraceScopes: []runtimeevents.TraceScope{traceScope},
+		TraceSettlement: true, ContentLen: 18,
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "parent-only-queued", Kind: runtimeevents.KindChannelMessageOutboundQueued,
+		Time: time.Now().UTC(), Payload: channelPayload,
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "parent-only-sent", Kind: runtimeevents.KindChannelMessageOutboundSent,
+		Time: time.Now().UTC(), Payload: channelPayload,
+	})
+
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if err := diagnostictrace.Validate(trace); err != nil {
+		t.Fatalf("validate parent-only completion trace: %v", err)
+	}
+	if trace.Metadata.RootTurnID != traceScope.TurnID || trace.Metadata.ParentTurnID != "turn-parent-only" ||
+		len(trace.Records) != 3 || trace.Records[0].Kind != diagnostictrace.RecordDeliveryDecision ||
+		trace.Records[1].Correlation.DeliveryID != "delivery-parent-only" ||
+		trace.Records[2].Correlation.DeliveryID != "delivery-parent-only" ||
+		trace.Truncation.Incomplete {
+		t.Fatalf("parent-only completion trace = %#v", trace)
+	}
+}
+
+func TestTraceCaptureKeepsUserAndParentCompletionOpenThroughFinalDelivery(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	traceScope := runtimeevents.NewTraceScope(workspace, "async-completion-user-and-parent")
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "async-user-and-parent", Kind: runtimeevents.KindAgentAsyncCompletion,
+		Time: startedAt,
+		Scope: runtimeevents.Scope{
+			TraceScope: traceScope, AgentID: "main", SessionKey: "session-user-and-parent",
+		},
+		Correlation: runtimeevents.Correlation{ParentTurnID: "turn-user-and-parent"},
+		Payload: AsyncCompletionPayload{
+			SourceTool: "spawn", TaskID: "task-user-and-parent",
+			TaskGenerationID: "task-generation-user-and-parent", CompletionID: "completion-user-and-parent",
+			DeliveryMode: string(toolshared.AsyncDeliveryUserAndParent), WillUser: true, WillParent: true,
+		},
+	})
+	interimPayload := channels.ChannelOutboundPayload{
+		DeliveryID: "delivery-interim", TraceScopes: []runtimeevents.TraceScope{traceScope},
+		ContentLen: 12,
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "interim-queued", Kind: runtimeevents.KindChannelMessageOutboundQueued,
+		Time: startedAt.Add(time.Millisecond), Payload: interimPayload,
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "interim-sent", Kind: runtimeevents.KindChannelMessageOutboundSent,
+		Time: startedAt.Add(2 * time.Millisecond), Payload: interimPayload,
+	})
+	if matches, _ := filepath.Glob(filepath.Join(workspace, "state", "diagnostics", "traces", "*.json")); len(
+		matches,
+	) != 0 {
+		t.Fatalf("completion trace settled on intermediate delivery: %v", matches)
+	}
+
+	finalPayload := channels.ChannelOutboundPayload{
+		DeliveryID: "delivery-final", TraceScopes: []runtimeevents.TraceScope{traceScope},
+		TraceSettlement: true, ContentLen: 18,
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "final-queued", Kind: runtimeevents.KindChannelMessageOutboundQueued,
+		Time: startedAt.Add(3 * time.Millisecond), Payload: finalPayload,
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "final-sent", Kind: runtimeevents.KindChannelMessageOutboundSent,
+		Time: startedAt.Add(4 * time.Millisecond), Payload: finalPayload,
+	})
+
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if err := diagnostictrace.Validate(trace); err != nil {
+		t.Fatalf("validate user-and-parent completion trace: %v", err)
+	}
+	if len(trace.Records) != 5 || trace.Records[1].Correlation.DeliveryID != "delivery-interim" ||
+		trace.Records[2].Correlation.DeliveryID != "delivery-interim" ||
+		trace.Records[3].Correlation.DeliveryID != "delivery-final" ||
+		trace.Records[4].Correlation.DeliveryID != "delivery-final" || trace.Truncation.Incomplete {
+		t.Fatalf("user-and-parent completion trace = %#v", trace)
+	}
+}
+
+func TestTraceCaptureMarksPendingAsyncDeliveryOnShutdown(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() { _ = eventBus.Close() })
+
+	traceScope := runtimeevents.NewTraceScope(workspace, "async-completion-pending")
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "async-pending", Kind: runtimeevents.KindAgentAsyncCompletion,
+		Time: time.Now().UTC(),
+		Scope: runtimeevents.Scope{
+			TraceScope: traceScope, AgentID: "main", SessionKey: "session-pending",
+		},
+		Correlation: runtimeevents.Correlation{ParentTurnID: "turn-pending"},
+		Payload: AsyncCompletionPayload{
+			SourceTool: "spawn", TaskID: "task-pending", TaskGenerationID: "task-generation-pending",
+			CompletionID: "completion-pending", DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
+			WillUser: true,
+		},
+	})
+	manager.close()
+
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if !trace.Truncation.Incomplete ||
+		!slices.Contains(trace.Truncation.Reasons, traceIncompleteRuntimeClosedBeforeDeliverySettlement) {
+		t.Fatalf("pending completion truncation = %#v", trace.Truncation)
 	}
 }
 
@@ -561,6 +1379,42 @@ func TestTraceCaptureShutdownDoesNotWaitForIncompleteActiveTurn(t *testing.T) {
 	}
 	if trace.Outcome != nil {
 		t.Fatalf("active-turn outcome = %#v, want nil", trace.Outcome)
+	}
+	_ = eventBus.Close()
+}
+
+func TestTraceCaptureShutdownMarksIncompleteStandaloneCompaction(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "compaction-start", Kind: runtimeevents.KindAgentContextCompressStart,
+		Time: time.Now().UTC(),
+		Scope: runtimeevents.Scope{
+			TraceScope: runtimeevents.NewTraceScope(workspace, ""),
+			AgentID:    "coding",
+			SessionKey: "coding:shutdown-compaction",
+		},
+		Payload: ContextCompressLifecyclePayload{
+			AttemptID: "compaction-shutdown-1", Status: ContextCompressLifecycleStarted,
+			Reason: ContextCompressReasonManual,
+		},
+	})
+
+	startedClosing := time.Now()
+	manager.close()
+	if elapsed := time.Since(startedClosing); elapsed > time.Second {
+		t.Fatalf("compaction capture shutdown took %v", elapsed)
+	}
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if !trace.Truncation.Incomplete ||
+		!slices.Contains(trace.Truncation.Reasons, traceIncompleteRuntimeClosedBeforeCompactionEnd) ||
+		slices.Contains(trace.Truncation.Reasons, traceIncompleteRuntimeClosedBeforeTerminalOutcome) {
+		t.Fatalf("standalone compaction truncation = %#v", trace.Truncation)
+	}
+	if trace.Outcome != nil || len(trace.Records) != 1 ||
+		trace.Records[0].Correlation.CompactionAttemptID != "compaction-shutdown-1" {
+		t.Fatalf("standalone compaction trace = %#v", trace)
 	}
 	_ = eventBus.Close()
 }

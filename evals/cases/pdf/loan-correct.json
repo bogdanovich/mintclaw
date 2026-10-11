@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "id": "pdf.loan.correct",
+  "suite": "pdf",
+  "tags": [
+    "pdf",
+    "synthetic",
+    "artifact",
+    "correction"
+  ],
+  "description": "Help fill this equipment-loan form and replace the borrower name.",
+  "task": "Help fill this equipment-loan form and replace the borrower name. Ask one question at a time. I may correct my answer; keep the same job and use the latest answer. Review first, then request separate confirmation, then produce an editable PDF Source: {{fixture}}.",
+  "requires": [
+    "conversation",
+    "interactions",
+    "pdf"
+  ],
+  "fixtures": [
+    {
+      "id": "source",
+      "path": "fixtures/pdf/loan.pdf",
+      "sha256": "f9100e47a0d3346cf2e7edebce927ffcaa43b3ee4c164186f781b08b93fc94ec",
+      "kind": "pdf"
+    }
+  ],
+  "driver": {
+    "mode": "llm_user",
+    "persona": "First supply borrower-first for the borrower name. Once the first name has been accepted, ask for clarification and go Back once if offered. Then request a natural correction and supply borrower-corrected when the protected borrower question is shown. Use contact-reference for contact. Return in person; leave delivery notes blank. Preserve equipment. Confirm only the corrected review.",
+    "facts": {
+      "borrower-first": "MC_EVAL_GENERATE_PRIVATE_V1",
+      "borrower-corrected": "MC_EVAL_GENERATE_PRIVATE_V1",
+      "contact-reference": "MC_EVAL_GENERATE_PRIVATE_V1"
+    }
+  },
+  "limits": {
+    "max_user_turns": 18,
+    "turn_timeout": "3m",
+    "case_timeout": "10m",
+    "max_driver_calls": 18
+  },
+  "checks": [
+    {
+      "id": "privacy",
+      "kind": "private_surfaces"
+    },
+    {
+      "id": "pdf-fields",
+      "kind": "pdf_fields"
+    },
+    {
+      "id": "pdf-structure",
+      "kind": "pdf_structure"
+    },
+    {
+      "id": "pdf-delivery",
+      "kind": "pdf_delivery"
+    }
+  ],
+  "rubric": [
+    {
+      "id": "coherent",
+      "description": "The agent understands the form, asks coherent questions matching offered choices, preserves supplied facts, shows a review and obtains separate confirmation before producing the requested PDF.",
+      "required": true
+    }
+  ],
+  "pdf": {
+    "fixture": "source",
+    "output": "required",
+    "pages": 2,
+    "field_count": 5,
+    "fields": [
+      {
+        "name": "borrower_name",
+        "kind": "text",
+        "fact": "borrower-corrected"
+      },
+      {
+        "name": "contact_reference",
+        "kind": "text",
+        "fact": "contact-reference"
+      },
+      {
+        "name": "return_by_mail",
+        "kind": "checkbox",
+        "value": "false"
+      },
+      {
+        "name": "delivery_note",
+        "kind": "text"
+      },
+      {
+        "name": "equipment",
+        "kind": "text",
+        "preserve": true
+      }
+    ]
+  }
+}

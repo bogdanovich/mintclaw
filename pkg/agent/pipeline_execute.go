@@ -1513,20 +1513,33 @@ func (runner *toolLoopRunner) invokeToolCall(
 	asyncCallback := func(_ context.Context, result *toolshared.ToolResult) {
 		completionID := asyncCompletionID(ts.turnID, toolCallID, asyncToolName)
 		delivery := decideAsyncToolResultDelivery(result)
+		completionTraceScope := runtimeevents.NewTraceScope(
+			ts.workspace,
+			"async-completion-"+uuid.NewString(),
+		)
+		completionMeta := runner.toolCallEventMeta(
+			i,
+			toolCallID,
+			"runTurn",
+			"turn.async.completion",
+		)
+		completionMeta.TraceScope = completionTraceScope
+		completionMeta.ParentTurnID = ts.turnID
 		p.emitEvent(
 			runtimeevents.KindAgentAsyncCompletion,
-			runner.toolCallEventMeta(i, toolCallID, "runTurn", "turn.async.completion"),
+			completionMeta,
 			AsyncCompletionPayload{
-				SourceTool:   asyncToolName,
-				CompletionID: completionID,
-				TaskID:       delivery.TaskID,
-				DeliveryMode: string(delivery.DeliveryMode),
-				ContentLen:   delivery.ContentLen,
-				ForUserLen:   delivery.ForUserLen,
-				MediaCount:   delivery.MediaCount,
-				IsError:      delivery.IsError,
-				WillUser:     delivery.PublishToUser,
-				WillParent:   delivery.QueueParent,
+				SourceTool:       asyncToolName,
+				CompletionID:     completionID,
+				TaskID:           delivery.TaskID,
+				TaskGenerationID: delivery.TaskGenerationID,
+				DeliveryMode:     string(delivery.DeliveryMode),
+				ContentLen:       delivery.ContentLen,
+				ForUserLen:       delivery.ForUserLen,
+				MediaCount:       delivery.MediaCount,
+				IsError:          delivery.IsError,
+				WillUser:         delivery.PublishToUser,
+				WillParent:       delivery.QueueParent,
 			},
 		)
 		if result != nil && result.IsError {
@@ -1536,6 +1549,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 				CompletionID: completionID,
 				Result:       result,
 				Decision:     delivery,
+				TraceScopes:  []runtimeevents.TraceScope{completionTraceScope},
 			})
 			return
 		}
@@ -1545,6 +1559,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 			CompletionID: completionID,
 			Result:       result,
 			Decision:     delivery,
+			TraceScopes:  []runtimeevents.TraceScope{completionTraceScope},
 		})
 	}
 
@@ -1938,6 +1953,8 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		ToolExecEndPayload{
 			ToolCallID:         toolCallID,
 			ToolCallGeneration: runner.toolCallGeneration(i),
+			TaskID:             toolResult.Control.TaskID,
+			TaskGenerationID:   toolResult.Control.TaskGenerationID,
 			Tool:               toolName,
 			Duration:           toolDuration,
 			ForLLMLen:          len(contentForLLM),
@@ -3433,7 +3450,8 @@ func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Con
 	}
 	ctx = toolshared.WithToolDocumentContext(ctx, documentRefs, ts.documentVisionAvailable)
 	ctx = toolshared.WithToolDocumentLocalPaths(ctx, ts.documentLocalPaths)
-	return toolshared.WithToolExecutionIdentity(ctx, ts.workspace, effectiveToolExecutionID(ts))
+	ctx = toolshared.WithToolExecutionIdentity(ctx, ts.workspace, effectiveToolExecutionID(ts))
+	return toolshared.WithToolTraceTurnID(ctx, ts.turnID)
 }
 
 func (r *toolLoopRunner) appendSkippedToolMessage(

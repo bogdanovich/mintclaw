@@ -59,6 +59,7 @@ dist/
 *.syso
 .cache/
 web/frontend/.pnpm-store/
+runtime/browser/playwright-library/node_modules/
 _tmp_*
 web/frontend/_tmp_*
 

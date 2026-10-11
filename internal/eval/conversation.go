@@ -31,6 +31,24 @@ type conversation struct {
 	frames    int
 	bytes     int
 	last      Event
+	filter    *strings.Replacer
+	domain    conversationDomain
+	facts     map[string]string
+}
+
+// Domain adapters bind inputs to native evidence and add independent checks.
+// They do not own transport, turn correlation, grading, or runtime authority.
+type conversationDomain interface {
+	initialTask() string
+	request(context.Context, Action, Event) (protocol.MintClawMessage, bool, error)
+	observe(context.Context, Event) error
+	conclude(context.Context, *Trial)
+}
+
+type conversationRoles struct {
+	user   *ModelRole
+	judge  *ModelRole
+	filter *strings.Replacer
 }
 
 // The CLI admission layer must prove target isolation before connecting or
@@ -41,38 +59,87 @@ func runScriptedConversation(
 	item LoadedCase,
 	sessionID, agent, workspace string,
 ) (trial Trial) {
+	return runConversation(ctx, transport, item, sessionID, agent, workspace, conversationRoles{})
+}
+
+func runConversation(
+	ctx context.Context,
+	transport conversationTransport,
+	item LoadedCase,
+	sessionID, agent, workspace string,
+	roles conversationRoles,
+) (trial Trial) {
+	return runDomainConversation(ctx, transport, item, sessionID, agent, workspace, roles, nil)
+}
+
+func runDomainConversation(
+	ctx context.Context,
+	transport conversationTransport,
+	item LoadedCase,
+	sessionID, agent, workspace string,
+	roles conversationRoles,
+	domain conversationDomain,
+) (trial Trial) {
 	trial = Trial{
 		Version: Version, ID: uuid.NewString(), CaseID: item.Case.ID, CaseSHA256: item.Digest,
 		SessionID: sessionID, AgentID: agent, Verdict: Inconclusive, Code: "not_completed",
 		StartedAt: time.Now().UTC(), Events: []Event{}, Checks: []CheckResult{}, RemoteState: "unknown",
+		ExecutionVerdict: Inconclusive, ExecutionCode: "not_completed",
 	}
 	defer func() {
 		transport.Close()
 		trial.TransportClosed = true
+		if errors.Is(transport.Failure(), ErrPrivateEvidence) {
+			trial.Verdict, trial.Code = Fail, "private_wire_evidence"
+			trial.ExecutionVerdict, trial.ExecutionCode = Fail, trial.Code
+			trial.EvidenceEligible = false
+		} else if errors.Is(transport.Failure(), gatewayclient.ErrFrameInspection) {
+			if trial.Verdict == Pass {
+				trial.Code = "wire_inspection_unavailable"
+			}
+			if trial.ExecutionVerdict == Pass {
+				trial.ExecutionCode = "wire_inspection_unavailable"
+			}
+			trial.Verdict = combineVerdicts(trial.Verdict, Inconclusive)
+			trial.ExecutionVerdict = combineVerdicts(trial.ExecutionVerdict, Inconclusive)
+			trial.EvidenceEligible = false
+		}
 		if failure := transport.Failure(); errors.Is(failure, gatewayclient.ErrQueueLimit) ||
 			errors.Is(failure, websocket.ErrReadLimit) {
 			if trial.Verdict == Pass {
 				trial.Code = "transport_limit"
 			}
 			trial.Verdict = combineVerdicts(trial.Verdict, Inconclusive)
+			trial.ExecutionVerdict = combineVerdicts(trial.ExecutionVerdict, Inconclusive)
+			trial.ExecutionCode = "transport_limit"
+			trial.EvidenceEligible = false
 		}
 		trial.DurationMS = time.Since(trial.StartedAt).Milliseconds()
 	}()
 	if item.Case.Validate() != nil || !validDigest(item.Digest) || !validID(agent) ||
 		!validID(sessionID) || workspace == "" {
 		trial.Verdict, trial.Code = Error, "invalid_admission"
+		trial.ExecutionVerdict, trial.ExecutionCode = trial.Verdict, trial.Code
 		return trial
 	}
-	if item.Case.Driver.Mode != "scripted" {
+	if item.Case.Driver.Mode == "llm_user" && roles.user == nil {
 		trial.Verdict, trial.Code = Skipped, "driver_unavailable"
+		trial.ExecutionVerdict, trial.ExecutionCode = trial.Verdict, trial.Code
 		return trial
 	}
 	caseTimeout, _ := time.ParseDuration(item.Case.Limits.CaseTimeout)
 	caseCtx, cancel := context.WithTimeout(ctx, caseTimeout)
 	defer cancel()
-	flow := conversation{transport: transport, trial: &trial, agent: agent, workspace: workspace}
-	verdict, code := flow.turn(caseCtx, item.Case.Limits, Action{Kind: "message", Text: item.Case.Task}, Event{}, 1)
-	if verdict == Pass {
+	flow := conversation{
+		transport: transport, trial: &trial, agent: agent, workspace: workspace, filter: roles.filter, domain: domain,
+		facts: item.Case.Driver.Facts,
+	}
+	task := item.Case.Task
+	if domain != nil {
+		task = domain.initialTask()
+	}
+	verdict, code := flow.turn(caseCtx, item.Case.Limits, Action{Kind: "message", Text: task}, Event{}, 1)
+	if verdict == Pass && item.Case.Driver.Mode == "scripted" {
 		for index, step := range item.Case.Driver.Steps {
 			if flow.last.Kind != step.WaitFor.Kind ||
 				step.WaitFor.Contains != "" && !strings.Contains(flow.last.Content, step.WaitFor.Contains) {
@@ -89,8 +156,20 @@ func runScriptedConversation(
 			}
 		}
 	}
+	if verdict == Pass && item.Case.Driver.Mode == "llm_user" {
+		verdict, code = flow.adaptiveFollowups(caseCtx, item.Case, roles.user)
+	}
 	trial.Checks = gradeConversation(item.Case.Checks, trial.Events, flow.last)
 	trial.Verdict, trial.Code = verdict, code
+	trial.ExecutionVerdict, trial.ExecutionCode = verdict, code
+	if domain != nil {
+		domain.conclude(caseCtx, &trial)
+	}
+	if errors.Is(transport.Failure(), ErrPrivateEvidence) {
+		trial.Verdict, trial.Code = Fail, "private_wire_evidence"
+		trial.ExecutionVerdict, trial.ExecutionCode = Fail, trial.Code
+		trial.EvidenceEligible = false
+	}
 	for _, check := range trial.Checks {
 		combined := combineVerdicts(trial.Verdict, check.Verdict)
 		if combined != trial.Verdict {
@@ -103,10 +182,82 @@ func runScriptedConversation(
 		}
 		trial.Verdict = combined
 	}
-	if len(item.Case.Rubric) > 0 && trial.Verdict == Pass {
-		trial.Verdict, trial.Code = Inconclusive, "judge_required"
+	if _, err := visibleConversation(trial.Events, item.Case.Driver.Facts); verdict == Pass && err == nil &&
+		len(item.Case.Driver.Facts) == 0 && len(item.Case.Fixtures) == 0 {
+		trial.EvidenceEligible = true
+	}
+	if len(item.Case.Rubric) > 0 {
+		judgement := Judgement{
+			Version: Version, Verdict: Inconclusive, Code: "ineligible_judge_evidence",
+			Findings: JudgeFindings{Version: Version, Criteria: []JudgeFinding{}},
+		}
+		if trial.EvidenceEligible {
+			judgement = judgeConversation(caseCtx, roles.judge, item.Case, trial.Events)
+		}
+		if credentialJSONValue(judgement, flow.filter) {
+			judgement.Findings = JudgeFindings{Version: Version, Criteria: []JudgeFinding{}}
+			judgement.Verdict, judgement.Code = Fail, "private_judge_output"
+		}
+		trial.Judge = &judgement
+		if judgement.Code == "private_judge_output" {
+			trial.EvidenceEligible = false
+			trial.ExecutionVerdict, trial.ExecutionCode = Fail, judgement.Code
+		}
+		if requiredRubric(item.Case.Rubric) || judgement.Code == "private_judge_output" {
+			combined := combineVerdicts(trial.Verdict, judgement.Verdict)
+			if combined != trial.Verdict {
+				trial.Code = judgement.Code
+			}
+			trial.Verdict = combined
+		}
 	}
 	return trial
+}
+
+func requiredRubric(rubric []Criterion) bool {
+	for _, criterion := range rubric {
+		if criterion.Required {
+			return true
+		}
+	}
+	return false
+}
+
+func (flow *conversation) adaptiveFollowups(ctx context.Context, item Case, user *ModelRole) (Verdict, string) {
+	for number := 2; number <= item.Limits.MaxUserTurns; number++ {
+		if len(flow.trial.DriverCalls) >= item.Limits.MaxDriverCalls {
+			return Inconclusive, "driver_call_limit"
+		}
+		decision := nextModelAction(ctx, user, item, flow.trial.Events, flow.last.Kind,
+			item.Limits.MaxUserTurns-number+1)
+		if decision.Call != nil {
+			flow.trial.DriverCalls = append(flow.trial.DriverCalls, *decision.Call)
+		}
+		if decision.Code != "user_action_received" {
+			if decision.Call != nil &&
+				(decision.Call.Code == "private_input" || decision.Call.Code == "private_output") {
+				return Fail, "private_user_action"
+			}
+			return Error, decision.Code
+		}
+		if credentialJSONValue(decision.Action, flow.filter) {
+			return Fail, "private_user_action"
+		}
+		if decision.Action.Kind == "stop" {
+			return Inconclusive, "driver_stopped"
+		}
+		verdict, code := flow.turn(ctx, item.Limits, decision.Action, flow.last, number)
+		if verdict != Pass {
+			return verdict, code
+		}
+		if decision.Action.Kind == "finish" || decision.Action.Kind == "allow_once" {
+			if flow.last.Kind != "final" {
+				return Inconclusive, "unfinished_interaction"
+			}
+			return Pass, "adaptive_completed"
+		}
+	}
+	return Inconclusive, "user_turn_limit"
 }
 
 func (flow *conversation) turn(
@@ -121,12 +272,27 @@ func (flow *conversation) turn(
 	defer cancel()
 	request, code := flow.request(turnCtx, action, prompt)
 	if code != "" {
+		if code == "private_native_evidence" {
+			return Fail, code
+		}
 		return Inconclusive, code
+	}
+	if credentialJSONValue(request, flow.filter) || action.Kind != "protected_answer" &&
+		(privateJSONValue(request, flow.facts) ||
+			strings.Contains(payloadString(request.Payload, protocol.PayloadKeyContent), generatePrivateFact)) {
+		return Fail, "private_input"
 	}
 	if err := flow.transport.Send(turnCtx, request); err != nil {
 		return Inconclusive, transportCode(err)
 	}
-	if !flow.append(Event{Turn: number, Kind: "input", RequestID: request.ID, Content: action.Text}) {
+	content := payloadString(request.Payload, protocol.PayloadKeyContent)
+	if action.Kind == "protected_answer" {
+		content = "[protected answer supplied using an admitted fact handle]"
+	}
+	if !flow.append(Event{
+		Turn: number, Kind: "input", RequestID: request.ID,
+		Content: content,
+	}) {
 		return Inconclusive, "event_limit"
 	}
 	for {
@@ -139,6 +305,9 @@ func (flow *conversation) turn(
 		flow.bytes += len(encoded)
 		if encodeErr != nil || flow.frames > 256 || flow.bytes > 2*1024*1024 {
 			return Inconclusive, "event_limit"
+		}
+		if credentialJSONValue(message, flow.filter) || privateJSONValue(message, flow.facts) {
+			return Fail, "private_wire_evidence"
 		}
 		if message.SessionID != "" && message.SessionID != flow.trial.SessionID {
 			continue
@@ -182,11 +351,31 @@ func (flow *conversation) turn(
 		}
 		flow.trial.SessionKey = event.SessionKey
 		flow.last = flow.trial.Events[len(flow.trial.Events)-1]
+		if flow.domain != nil {
+			if err := flow.domain.observe(turnCtx, flow.last); err != nil {
+				if errors.Is(err, ErrPrivateEvidence) {
+					return Fail, "private_native_evidence"
+				}
+				return Inconclusive, "domain_evidence_unavailable"
+			}
+		}
 		return Pass, "script_completed"
 	}
 }
 
 func (flow *conversation) request(ctx context.Context, action Action, prompt Event) (protocol.MintClawMessage, string) {
+	if flow.domain != nil {
+		request, handled, err := flow.domain.request(ctx, action, prompt)
+		if err != nil {
+			if errors.Is(err, ErrPrivateEvidence) {
+				return protocol.MintClawMessage{}, "private_native_evidence"
+			}
+			return protocol.MintClawMessage{}, "domain_input_not_admitted"
+		}
+		if handled {
+			return request, ""
+		}
+	}
 	payload := map[string]any{protocol.PayloadKeyContent: action.Text}
 	switch action.Kind {
 	case "message", "finish":
@@ -308,6 +497,8 @@ func transportCode(err error) string {
 		return "canceled_remote_unknown"
 	case errors.Is(err, gatewayclient.ErrQueueLimit), errors.Is(err, websocket.ErrReadLimit):
 		return "transport_limit"
+	case errors.Is(err, gatewayclient.ErrFrameInspection):
+		return "wire_inspection_unavailable"
 	default:
 		return "disconnected_remote_unknown"
 	}

@@ -2297,6 +2297,33 @@ func TestInteractionEventsDoNotProjectOwningTaskState(t *testing.T) {
 	}
 }
 
+func TestInteractionEventDeliveryIDSelectsBoundIdentity(t *testing.T) {
+	record := interactions.Record{
+		PromptDeliveryID: "delivery-prompt",
+		FinalDeliveryIDs: []string{"delivery-final-1", "delivery-final-2"},
+	}
+	for _, test := range []struct {
+		name  string
+		event interactions.EventType
+		want  string
+	}{
+		{"created uses no later final", interactions.EventCreated, "delivery-prompt"},
+		{"waiting uses prompt", interactions.EventWaiting, "delivery-prompt"},
+		{"answer uses prompt", interactions.EventAnswerClaimed, "delivery-prompt"},
+		{"final binding uses latest final", interactions.EventFinalDelivery, "delivery-final-2"},
+		{"terminal uses latest final", interactions.EventResolved, "delivery-final-2"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := interactionEventDeliveryID(interactions.EventObservation{
+				Event: interactions.Event{Type: test.event}, Record: record,
+			})
+			if got != test.want {
+				t.Fatalf("interactionEventDeliveryID() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestInteractionResolutionCallbackRunsOnceForTerminalHumanOutcome(t *testing.T) {
 	for _, test := range []struct {
 		name    string

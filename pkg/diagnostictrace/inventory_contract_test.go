@@ -177,6 +177,62 @@ func validateCodingDiagnosticPath(
 			t.Fatalf("path %q reintroduced the resolved tool-call generation gap", path.ID)
 		}
 	}
+	if path.ID == "async_task_and_channel_delivery" {
+		for _, identity := range []string{"task_id", "task_generation_id", "completion_id", "delivery_id"} {
+			if !slices.Contains(path.AvailableIDs, identity) {
+				t.Fatalf("path %q lost %s evidence", path.ID, identity)
+			}
+			if _, unresolved := gaps[identity]; unresolved {
+				t.Fatalf("path %q reintroduced the resolved %s gap", path.ID, identity)
+			}
+		}
+	}
+	if path.ID == "human_interaction" {
+		for _, identity := range []string{"interaction_id", "interaction_revision", "task_id", "delivery_id"} {
+			if !slices.Contains(path.AvailableIDs, identity) {
+				t.Fatalf("path %q lost %s evidence", path.ID, identity)
+			}
+			if _, unresolved := gaps[identity]; unresolved {
+				t.Fatalf("path %q reintroduced the resolved %s gap", path.ID, identity)
+			}
+		}
+	}
+	if path.ID == "remote_coding_task" {
+		for _, identity := range []string{
+			"task_id",
+			"task_generation_id",
+			"worker_generation_id",
+			"remote_thread_id",
+			"scope_alias",
+			"profile_alias",
+			"interaction_id",
+			"completion_id",
+			"delivery_id",
+		} {
+			if !slices.Contains(path.AvailableIDs, identity) {
+				t.Fatalf("path %q lost %s evidence", path.ID, identity)
+			}
+			if _, unresolved := gaps[identity]; unresolved {
+				t.Fatalf("path %q reintroduced the resolved %s gap", path.ID, identity)
+			}
+		}
+	}
+	if path.ID == "companion_capability_invocation" {
+		for _, identity := range []string{
+			"invocation_id",
+			"target_alias",
+			"scope_alias",
+			"profile_alias",
+			"policy_revision",
+		} {
+			if !slices.Contains(path.AvailableIDs, identity) {
+				t.Fatalf("path %q lost %s evidence", path.ID, identity)
+			}
+			if _, unresolved := gaps[identity]; unresolved {
+				t.Fatalf("path %q reintroduced the resolved %s gap", path.ID, identity)
+			}
+		}
+	}
 
 	lifecycleGaps := make(map[string]struct{}, len(path.KnownLifecycleGaps))
 	for _, gap := range path.KnownLifecycleGaps {
@@ -228,6 +284,7 @@ func knownDiagnosticRecordKinds() map[string]struct{} {
 		diagnostictrace.RecordDeliveryDecision,
 		diagnostictrace.RecordDeliveryAttempt,
 		diagnostictrace.RecordDeliveryOutcome,
+		diagnostictrace.RecordInteractionLifecycle,
 		diagnostictrace.RecordContextCompaction,
 		diagnostictrace.RecordContextSnapshot,
 		diagnostictrace.RecordSubTurnAdmission,

@@ -286,7 +286,7 @@ func (tool *DocumentTool) ApprovalArguments(
 	if err != nil {
 		return nil, newDocumentFormApprovalError(documentFormToolError(err))
 	}
-	return documentFormApprovalArguments(binding), nil
+	return binding.ApprovalArguments(), nil
 }
 
 func (tool *DocumentTool) commitFormWorkflow(
@@ -325,7 +325,7 @@ func (tool *DocumentTool) commitFormWorkflow(
 			arguments, found := toolshared.ToolApprovalArguments(ctx)
 			if !found || !equalDocumentFormApprovalArguments(
 				arguments,
-				documentFormApprovalArguments(binding),
+				binding.ApprovalArguments(),
 			) {
 				return documentFormToolFailure(
 					"approval_stale",
@@ -2012,32 +2012,6 @@ func safeDocumentFormCommitProjection(
 		commit.CheckedFields = write.CheckedFields
 	}
 	return commit
-}
-
-func documentFormApprovalArguments(binding document.FormCommitBinding) map[string]any {
-	arguments := map[string]any{
-		"schema_version":         "mintclaw.document_form_approval.v1",
-		"job_id":                 binding.JobID,
-		"owner_digest":           binding.OwnerDigest,
-		"approval_revision":      binding.ApprovalRevision,
-		"review_revision":        binding.ReviewRevision,
-		"source_digest":          binding.SourceDigest,
-		"field_schema_digest":    binding.FieldSchemaDigest,
-		"backend_revision":       binding.BackendRevision,
-		"audit_policy_revision":  binding.AuditPolicyRevision,
-		"assignment_digest":      binding.AssignmentDigest,
-		"review_digest":          binding.ReviewDigest,
-		"output_policy_revision": binding.OutputPolicyRevision,
-		"operation_id":           binding.OperationID,
-		"expires_at":             binding.ExpiresAt,
-	}
-	if binding.OutputScope != "" {
-		arguments["output_scope"] = binding.OutputScope
-	}
-	if binding.OutputMode != "" {
-		arguments["output_mode"] = binding.OutputMode
-	}
-	return arguments
 }
 
 func equalDocumentFormApprovalArguments(left, right map[string]any) bool {

@@ -488,7 +488,8 @@ func TestWorkspaceExecEventsExposePlacementWithoutArguments(t *testing.T) {
 	for _, event := range events {
 		payload, ok := event.Payload.(NodeInvocationEventPayload)
 		if !ok || event.Source.Name != "workspace_exec" || payload.Workspace != "project" ||
-			payload.WorkspaceRevision != "project-workspace-v1" || payload.Target != "build" {
+			payload.WorkspaceRevision != "project-workspace-v1" || payload.ScopeAlias != "project" ||
+			payload.PolicyRevision != "policy-v1" || payload.Target != "build" {
 			t.Fatalf("workspace exec event = %#v", event)
 		}
 		encoded, marshalErr := json.Marshal(event)

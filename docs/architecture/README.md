@@ -12,6 +12,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   independent artifact/state checks, LLM user simulation, and separate rubric judging; approved for implementation.
 - [Manual Agent Evals Roadmap](agent-evals-roadmap.md): admitted bounded runner, model roles, PDF/browser suites,
   workspace presets, and baseline comparisons without live evals in CI.
+- [Eval Runtime Admission Probe](agent-evals-runtime-probe.md): authenticated read-only active-config identity for
+  isolated-target preflight; not an isolation certificate or tool authority.
 - [Manual Agent Evals First-Release Goal](agent-evals-goal.md): frozen packets, minimum cases, safety/evidence contracts,
   acceptance matrix, and finite completion gates for E1-E5.
 - [Runtime Capability And Turn-Engine Convergence Roadmap](runtime-capability-convergence-roadmap.md): shared tool
@@ -127,6 +129,18 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Credential Phone Approval Verifier Qualification](credential-phone-approval-qualification.md):
   pinned WebAuthn candidate build evidence, caller timeout and verification
   requirements, and pending Android approval qualification.
+- [Protected Credential Approval Service](credential-approval-service.md):
+  Root configuration, dedicated Linux identity, native phone TLS, protected
+  enrollment socket, shutdown, and disposable qualification limits.
+- [Credential Browser Login Admission](credential-browser-login-admission.md):
+  configured private login flow, sandbox and process requirements, lease
+  retirement, fixed outputs, and actual-host qualification gates.
+- [Private Credential Browser Channel](credential-browser-private-channel.md):
+  bounded broker/worker commands, current lease callbacks, private provider
+  consumption, verified retirement, and synthetic qualification limits.
+- [Private Credential HTTPS Transport](credential-https-transport.md): public
+  DNS answer validation, pinned TLS connections, grant-driven socket retirement,
+  fixed errors, and pending browser-proxy and deployed-host qualification.
 - [Reliable PDF Support Roadmap](pdf-support-roadmap.md): ordered document
   identity, inspection, read/render, AcroForm, durable form, XFA, transformation,
   companion, and production-verification milestones.

@@ -85,7 +85,7 @@ func (store *FormJobStore) PrepareFormCommitApproval(
 			return false, ErrFormApprovalStale
 		}
 		if record.Public.State == FormJobAwaitingApproval {
-			binding, err = formCommitBindingFromRecord(record.Public)
+			binding, err = record.Public.CommitBinding()
 			if err != nil || binding.OutputPolicyRevision != request.OutputPolicyRevision {
 				return false, ErrFormApprovalStale
 			}
@@ -157,7 +157,7 @@ func (store *FormJobStore) CurrentFormCommitBinding(
 	default:
 		return FormJobRecord{}, FormCommitBinding{}, ErrFormApprovalStale
 	}
-	binding, err := formCommitBindingFromRecord(record)
+	binding, err := record.CommitBinding()
 	return record, binding, err
 }
 
@@ -186,7 +186,7 @@ func (store *FormJobStore) BeginFormCommit(
 			return false, ErrFormApprovalStale
 		}
 		if record.Public.State == FormJobCommitting {
-			binding, bindingErr := formCommitBindingFromRecord(record.Public)
+			binding, bindingErr := record.Public.CommitBinding()
 			if bindingErr != nil || binding != approved {
 				return false, ErrFormApprovalStale
 			}
@@ -200,7 +200,7 @@ func (store *FormJobStore) BeginFormCommit(
 		if matchErr := formJobMatchesSchema(record.Public, request.Schema); matchErr != nil {
 			return false, matchErr
 		}
-		binding, bindingErr := formCommitBindingFromRecord(record.Public)
+		binding, bindingErr := record.Public.CommitBinding()
 		if bindingErr != nil || binding != approved || !now.Before(time.UnixMilli(binding.ExpiresAt)) {
 			return false, ErrFormApprovalStale
 		}
@@ -355,7 +355,10 @@ func validateFormCommitRequest(request FormCommitRequest) error {
 	return nil
 }
 
-func formCommitBindingFromRecord(record FormJobRecord) (FormCommitBinding, error) {
+// CommitBinding checks the frozen approval digest of a supplied public record.
+// It does not authenticate the record or establish current owner/source/expiry
+// authority; those checks remain at native store and commit boundaries.
+func (record FormJobRecord) CommitBinding() (FormCommitBinding, error) {
 	binding := FormCommitBinding{
 		JobID: record.JobID, OwnerDigest: record.OwnerDigest, ApprovalRevision: record.ApprovalRevision,
 		ReviewRevision: record.ReviewRevision, SourceDigest: record.SourceDigest,

@@ -61,6 +61,14 @@ jq -r '
     (.scope.turn_id // "-"),
     (.correlation.model_attempt_id // "-"),
     (.correlation.tool_call_id // "-"),
+    (.correlation.tool_call_generation // "-"),
+    (.scope.task_id // "-"),
+    (.correlation.task_generation_id // "-"),
+    (.correlation.completion_id // "-"),
+    (.correlation.interaction_id // "-"),
+    ((.correlation.interaction_revision // 0) | tostring),
+    (.correlation.interaction_event_id // "-"),
+    (.correlation.delivery_id // "-"),
     (.scope.target_hash // "-"),
     (.correlation.event_id // "-")
   ] | @tsv
@@ -68,9 +76,34 @@ jq -r '
 ```
 
 Inspect content only around the first suspicious transition and correlate exact
-IDs with service logs. Current turn traces do not include task or completion
-IDs; obtain those from logs or the durable task registry when needed. The
-bundled `mintclaw-trace-debug` skill provides the full investigation and
+IDs with service logs and durable state. Async delivery decisions retain the
+task ID, exact task generation, and completion ID. Channel attempts and
+outcomes retain their durable delivery ID. An async completion normally lives
+in a separate bounded continuation trace whose
+`metadata.parent_turn_id` is the originating turn. Search both the parent turn
+and continuation instead of assuming the decision was appended to the already
+finalized parent file:
+
+```bash
+jq -r --arg turn_id 'ORIGINATING_TURN_ID' '
+  select(
+    .metadata.root_turn_id == $turn_id
+    or .metadata.parent_turn_id == $turn_id
+  )
+  | [.trace_id, .metadata.root_turn_id, .metadata.parent_turn_id,
+     (.records | length), .truncation.incomplete] | @tsv
+' TRACE_ROOT/*.json
+```
+
+A completion with neither a direct-user nor parent-synthesis route can be a
+valid one-record continuation with no turn outcome. Direct user-only delivery
+has a 30-second settlement window. Parent-only and user-and-parent modes allow
+the bounded 120-second synthesis deadline plus that delivery window; any
+earlier direct user delivery is correlated but non-settling, and the final
+synthesized outbound settles the trace. Historical traces may omit these
+fields or the continuation entirely; never infer an exact generation or
+delivery from timestamps or prose.
+The bundled `mintclaw-trace-debug` skill provides the full investigation and
 reporting workflow.
 
 Runtime-generated `model_attempt_id` joins one logical provider attempt across
@@ -79,6 +112,16 @@ retry decision for a failed attempt, and its eventual `model.response`. An
 outer retry gets a new ID. This is separate from a provider-controlled request
 ID, which remains optional. Historical traces written before this field was
 introduced must be correlated conservatively by turn and sequence.
+
+Human interaction traces contain only lifecycle metadata. Join an
+`interaction.lifecycle` record to the authoritative interaction registry by
+`correlation.interaction_id` and `correlation.interaction_revision`; use
+`correlation.interaction_event_id` for the exact event-log entry,
+`scope.task_id` for task ownership, and `correlation.delivery_id` for the
+prompt or final outbox intent when present. Events emitted after the originating
+turn was finalized are stored as immediate one-record continuation traces whose
+`metadata.parent_turn_id` names that turn. Search parent and continuation
+traces, and never expect question or answer content in passive diagnostics.
 
 A trace is passive, best-effort evidence. A missing or incomplete trace can
 make diagnosis harder, but it does not imply that the agent run failed. Never

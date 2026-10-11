@@ -1,0 +1,49 @@
+{
+  "version": 4,
+  "agents": {
+    "defaults": {
+      "workspace": "REPLACE_WITH_CANONICAL_PRIVATE_WORKSPACE",
+      "model_name": "eval-target",
+      "restrict_to_workspace": true,
+      "allow_read_outside_workspace": false
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "tool_policy": {"default": "deny", "allow": ["request_user_input"]},
+        "mcp_server_policy": {"default": "deny"}
+      }
+    ]
+  },
+  "model_list": [
+    {
+      "model_name": "eval-target",
+      "provider": "openai",
+      "model": "REPLACE_WITH_PROVIDER_NATIVE_MODEL_ID",
+      "enabled": true
+    }
+  ],
+  "channel_list": {
+    "mintclaw": {
+      "type": "mintclaw",
+      "enabled": true,
+      "settings": {"read_timeout": 60}
+    }
+  },
+  "gateway": {"host": "127.0.0.1", "port": 18791, "hot_reload": false, "log_level": "warn"},
+  "hooks": {"enabled": false},
+  "heartbeat": {"enabled": false},
+  "devices": {"enabled": false},
+  "diagnostics": {"trace_capture": {"enabled": false}},
+  "tools": {
+    "approval": {"mode": "required"},
+    "exec": {"enabled": false},
+    "cron": {"enabled": false},
+    "mcp": {"enabled": false},
+    "browser": {"enabled": false},
+    "document": {"enabled": false},
+    "web": {"prefer_native": false},
+    "request_user_input": {"enabled": true}
+  }
+}
