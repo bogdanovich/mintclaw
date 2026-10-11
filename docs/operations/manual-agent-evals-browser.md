@@ -33,7 +33,8 @@ Contradictory or missing checks, unknown fields/facts/colors/accounts and oversi
 field mappings/profile authority and private fact values do not enter the user/judge model input. The adaptive
 submit/followup drivers use fact handles; the negative denial remains scripted.
 
-These expectations are not implemented graders yet. Caption-only evidence remains inconclusive. Canceling an
+Fixture-only effects/read/CSV predicates are implemented, but native browser grading is not. Caption-only
+evidence remains inconclusive. Canceling an
 earlier session-opening prompt does not qualify denial of the intended prepared removal; preserving chat text or
 silently reopening a browser does not qualify native context retention. A missing oracle, unbound approval,
 unfinished work or cleanup uncertainty cannot become pass. No approval policy is widened by these manifests.
@@ -70,6 +71,22 @@ approval and delivery evidence. Fixture state alone cannot prove that a browser 
 the work, that an action was authorized, that a stale target was avoided, or that the response reached the user.
 No-activity witnesses are meaningful only after admitted target work is quiescent, not after a WebSocket closes.
 
+The fixture oracle checks all recorded effects, not only the last one: expected form values must be submitted
+exactly once; ambiguity permits only South removal; read/artifact/denied permit no fixture mutation. Wrong or
+duplicate effects remain failures even after a correct effect or witness failure. Missing expected effects fail
+only with a closed healthy witness; unfinished/failed/overflowed witnesses remain inconclusive. Expectations must
+already contain resolved synthetic facts, not `{{generate}}` placeholders.
+
+Read evidence requires actual fixture access and the fresh reference in the final response. CSV evidence requires
+an observed download plus strictly parsed, exact source bytes from this trial. A filename, caption, golden bytes
+without a download or a different trial's artifact cannot pass. The projection contains recipe-byte hashes,
+counts and predicate outcomes, not submitted values, nonce, origin, reference or raw artifact.
+
+These predicates are scoped to `local_fixture_only`. They do not prove authenticated browser origin, native
+intent/approval, clarification ordering, retained context, logical delivery, privacy or browser cleanup. Closing
+the fixture stops accepting writes; it cannot prove that a still-running browser would never have attempted one.
+Native hard checks remain inconclusive and `eval run` continues to skip browser cases until integration exists.
+
 ## Offline Controls
 
 ```sh
@@ -79,11 +96,13 @@ go test -race -tags goolm,stdjson ./internal/eval -run '^TestBrowserFixture' -co
 The controls cover fresh authority, real local HTTP page/CSV/form access, exact server-observed values, scoped
 ambiguous controls, malformed/foreign/oversized input refusal, snapshot isolation, bounded concurrent witnesses,
 idempotent concurrent closure, late-action refusal and owned-port release. They use no model or native browser.
+Oracle controls additionally cover every frozen scenario, wrong/duplicate effects, unknown/failed witnesses,
+missing/wrong reference and malformed/foreign/missing CSV, plus value-free projections and unqualified native checks.
 
 ## Remaining Admission
 
 The six first-release browser cases have typed contracts but still need native observations, approval binding,
-artifact verification, raw privacy checks and owned cleanup. The pure read-only native browser state decoder
+artifact collection/delivery correlation, raw privacy checks and owned cleanup. The pure read-only native browser state decoder
 merged in #1564 is a prerequisite; parsing state is not authority or page-freshness proof.
 
 The native browser network policy does not treat a loopback fixture as a public `exact_origins` target. Integration
