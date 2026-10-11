@@ -27,7 +27,7 @@ terminal as root, with both real and effective UID zero. Do not grant agents
 permission to run the command. The command is deliberately absent from the
 general MintClaw installer and tool registry.
 
-The only setup argument is `provision`. There is no token flag, token
+The provisioning argument is `provision`. There is no token flag, token
 positional argument, environment-token fallback, pipe input, or model-facing
 setup flow. It reads its controlling `/dev/tty` with echo disabled and a
 five-minute timeout. Paste the token only at that private prompt; keep it out
@@ -53,6 +53,44 @@ Provisioning checks input syntax and storage, not provider authentication or
 the service account's permissions. Successful encryption is not evidence of
 valid vault access. Later protected startup and pilot checks must verify the
 configured bindings. Never print token contents to diagnose a provider error.
+
+## Private phone enrollment
+
+The Linux `mintclaw-credential enroll` command is a separate protected operator
+action. It does not start a service or read the 1Password token. On a future
+qualified deployment it contacts the dedicated credential service's private
+Unix packet socket and prints a five-minute setup URL only to its controlling
+terminal. Keep that URL out of agent chat, command arguments, stdout captures,
+logs, and recordings. Open it directly on the Android phone and create the
+approval passkey in the phone's passkey provider, such as 1Password.
+
+The fixed socket is `/run/mintclaw-credential-owner/setup.sock`. Its parent is
+service-owned mode `0700` with no access ACL; the socket is service-owned mode
+`0600`. Root-owned ancestry is checked without following symlinks. The client
+requires the live socket creator to match the dedicated `mintclaw-credential`
+OS account. The service authenticates both the live root peer and each packet;
+a transferred root-created connection cannot authorize a different sender.
+The listener must be created by the service, after startup qualification.
+Root-created socket activation is not interchangeable with this contract.
+
+The setup token is a registration capability, distinct from ordinary approval
+links. The page removes it from browser history immediately and sends it only
+in same-origin HTTPS JSON. A new private console action invalidates the previous
+setup link and ceremony. Reopening a link preserves its original deadline.
+Registration cannot overwrite an enrolled owner. Neither approval links nor
+the public HTTP handler can issue enrollment capabilities.
+
+After registration, approve the first account request to complete setup.
+Registration is initially stored inactive; it becomes live only after its
+final deadline/cancellation check, and the first signed approval persists
+activation. If the service restarts before that first approval, repeat private
+enrollment. A rejected or interrupted candidate cannot authorize account use
+after reload; only a fresh protected console action may replace it. An already
+active owner cannot be overwritten by this path.
+
+This command currently has no deployed listener to contact. HTTPS startup,
+service-role and complete agent isolation, authorized notifications, physical
+Android qualification, and browser lease enforcement remain rollout gates.
 
 ## Storage and failure behavior
 
@@ -116,6 +154,24 @@ The PR workflow runs this OS check plus normal and race suites for the
 credential packages. This demonstrates provisioning behavior, not broker
 deployment, Android operation, or real account login. Linux is the only
 admitted provisioning platform; other platforms fail closed.
+
+For the private phone console and mobile WebAuthn fixture, install the pinned
+browser dependencies and run:
+
+```sh
+npm ci --ignore-scripts --prefix runtime/browser/playwright-library
+node runtime/browser/playwright-library/node_modules/playwright/cli.js install chromium
+bash scripts/qualify-credential-phone.sh
+```
+
+The disposable Linux fixture verifies real peer credentials, descriptor
+handoff denial, private terminal output, and socket permissions. A new headless
+Chromium profile then uses a virtual user-verifying authenticator to exercise
+the actual phone JavaScript, WebAuthn creation/assertion serialization, scope
+display, approval, replay denial, and revocation against the verifier over
+TLS 1.3. Requests are confined to a synthetic relying-party origin and a
+loopback test server. No real passkey, token, browser profile, or vault is used.
+This does not substitute for the operator's Android phone or deployment checks.
 
 For the private token-loader filesystem and process fixtures, with Go, Docker,
 and Python 3 available:

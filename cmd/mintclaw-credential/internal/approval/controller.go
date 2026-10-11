@@ -88,6 +88,9 @@ type pendingCeremony struct {
 	scope   Scope
 	request string
 	issued  time.Time
+	options []byte
+	// Private console issue time, retained independently of the browser data.
+	enrollmentIssued time.Time
 }
 
 type binding struct {
@@ -117,9 +120,10 @@ type Controller struct {
 }
 
 // OwnerSetup is an unforgeable, controller-bound initial-enrollment capability.
-// New returns it only to trusted startup when no passkey is enrolled. Startup
-// must retain it outside the public approval handler and release ceremonies only
-// after an authenticated protected owner action. Its zero value denies access.
+// New returns it only to trusted startup when no owner is active, including an
+// interrupted initial enrollment. Startup must retain it outside the public
+// approval handler and release ceremonies only after an authenticated protected
+// owner action. Its zero value denies access.
 // It is neither a model tool nor evidence that the holder is a human operator.
 type OwnerSetup struct{ controller *Controller }
 
@@ -174,7 +178,7 @@ func newController(config Config, store ownerStore) (*Controller, *OwnerSetup, e
 		grants: make(map[string]credentialbroker.Grant), now: time.Now, random: rand.Reader,
 	}
 	var setup *OwnerSetup
-	if len(owner.Credentials) == 0 {
+	if controller.enrollmentAllowed() {
 		setup = &OwnerSetup{controller: controller}
 	}
 	return controller, setup, nil
@@ -206,7 +210,11 @@ func (controller *Controller) usable(ctx context.Context) bool {
 }
 
 func (controller *Controller) ready(ctx context.Context) bool {
-	return controller.usable(ctx) && len(controller.owner.Credentials) == 1
+	return controller.usable(ctx) && len(controller.owner.Credentials) == 1 && !controller.owner.EnrollmentPending
+}
+
+func (controller *Controller) enrollmentAllowed() bool {
+	return len(controller.owner.Credentials) == 0 || controller.owner.EnrollmentPending
 }
 
 func (controller *Controller) permits(principal credentialbroker.Principal, aliases []string) bool {
@@ -281,8 +289,15 @@ func (controller *Controller) BeginApproval(ctx context.Context, requestID strin
 	}
 	controller.prune()
 	request := controller.requests[requestID]
-	if !intent.ValidReference(requestID) || request == nil || request.attempted || request.ceremony != "" {
+	if !intent.ValidReference(requestID) || request == nil || request.attempted {
 		return Ceremony{}, ErrDenied
+	}
+	if request.ceremony != "" {
+		pending, exists := controller.ceremonies[request.ceremony]
+		if !exists || !controller.ceremonyLive(pending) {
+			return Ceremony{}, ErrDenied
+		}
+		return publicCeremony(request.ceremony, pending), nil
 	}
 	ceremony, err := controller.begin(approve, request.scope, requestID)
 	if err == nil {
@@ -363,6 +378,11 @@ func (controller *Controller) BeginRevocation(ctx context.Context, grantID strin
 	grant, exists := controller.grants[grantID]
 	if !exists || !intent.ValidReference(grantID) || !controller.grantActive(grantID) {
 		return Ceremony{}, ErrDenied
+	}
+	for id, pending := range controller.ceremonies {
+		if pending.kind == revoke && pending.scope.GrantID == grantID && controller.ceremonyLive(pending) {
+			return publicCeremony(id, pending), nil
+		}
 	}
 	return controller.begin(revoke, Scope{
 		Principal: grant.Principal, Accounts: slices.Clone(grant.Accounts),
@@ -462,7 +482,7 @@ func (controller *Controller) claim(ctx context.Context, id string, kind ceremon
 		request.attempted = true
 	}
 	if ctx == nil || ctx.Err() != nil || !intent.ValidReference(id) || !exists || ceremony.kind != kind ||
-		!controller.ceremonyLive(ceremony) {
+		!controller.ceremonyLive(ceremony) || (kind != enroll && !controller.ready(ctx)) {
 		return pendingCeremony{}, ErrDenied
 	}
 	return ceremony, nil
@@ -472,6 +492,10 @@ func (controller *Controller) ceremonyLive(ceremony pendingCeremony) bool {
 	if ceremony.session == nil || ceremony.session.Expires.IsZero() ||
 		!time.Now().Before(ceremony.session.Expires) || !withinLifetime(controller.now(), ceremony.issued) ||
 		ceremony.scope.PolicyRevision != controller.policy.Revision() {
+		return false
+	}
+	if ceremony.kind == enroll && !ceremony.enrollmentIssued.IsZero() &&
+		!withinLifetime(controller.now(), ceremony.enrollmentIssued) {
 		return false
 	}
 	if ceremony.kind == approve {

@@ -30,6 +30,7 @@ func TestProtectedOwnerStoreFixture(t *testing.T) {
 		os.Getegid() != 65532 {
 		t.Fatal("fixture identity or synthetic marker invalid")
 	}
+	t.Run("rejected-enrollment-reload", testRejectedEnrollmentStore)
 	config := testConfig()
 	config.StateDirectory = "/qual-approval/state"
 	fixture := newFixture(t)
@@ -152,5 +153,84 @@ func TestProtectedOwnerStoreFixture(t *testing.T) {
 	}
 	if _, _, err = New(config); !errors.Is(err, ErrUnavailable) {
 		t.Fatal("shared owner directory accepted")
+	}
+}
+
+// This wrapper invalidates enrollment only after the real file and directory
+// fsyncs complete. It cannot select a production path or change the store code.
+type canceledEnrollmentStore struct {
+	ownerStore
+	cancel context.CancelFunc
+}
+
+func (store canceledEnrollmentStore) commit(owner ownerRecord) error {
+	if err := store.ownerStore.commit(owner); err != nil {
+		return err
+	}
+	store.cancel()
+	return nil
+}
+
+func testRejectedEnrollmentStore(t *testing.T) {
+	config := testConfig()
+	config.StateDirectory = "/qual-approval/rejected"
+	store, err := openOwnerStore(config.StateDirectory)
+	if err != nil {
+		t.Fatal("protected rejection fixture open failed")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	controller, setup, err := newController(config, canceledEnrollmentStore{ownerStore: store, cancel: cancel})
+	if err != nil || setup == nil {
+		_ = store.close()
+		t.Fatal("protected rejection fixture setup failed")
+	}
+	t.Cleanup(func() { _ = controller.Close() })
+	fixture := newFixture(t)
+	fixture.controller, fixture.setup = controller, setup
+	ceremony, err := setup.Begin(ctx)
+	if err != nil {
+		t.Fatal("protected rejection registration begin failed")
+	}
+	if setup.Finish(ctx, ceremony.ID, fixture.registration(t, ceremony, testOrigin,
+		protocol.FlagUserPresent|protocol.FlagUserVerified)) == nil {
+		t.Fatal("canceled filesystem registration was accepted")
+	}
+	assertEnrollmentInactive(t, controller)
+	if controller.Close() != nil {
+		t.Fatal("protected rejection fixture close failed")
+	}
+	restarted, setup, err := New(config)
+	if err != nil || setup == nil {
+		t.Fatal("rejected filesystem registration lost protected recovery")
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	assertEnrollmentInactive(t, restarted)
+	fixture.controller, fixture.setup = restarted, setup
+	fixture.enroll(t)
+	_, ceremony = fixture.approval(t, time.Hour)
+	if _, err = restarted.FinishApproval(
+		context.Background(),
+		ceremony.ID,
+		fixture.assertion(
+			t,
+			ceremony,
+			testOrigin,
+			protocol.FlagUserPresent|protocol.FlagUserVerified,
+			1,
+			false,
+		),
+	); err != nil {
+		t.Fatal("private recovery could not complete first account approval")
+	}
+	if restarted.Close() != nil {
+		t.Fatal("private recovery close failed")
+	}
+	active, setup, err := New(config)
+	if err != nil || setup != nil || !active.ready(context.Background()) || len(active.grants) != 0 {
+		t.Fatal("accepted filesystem activation did not survive without grants")
+	}
+	if active.Close() != nil {
+		t.Fatal("accepted filesystem fixture close failed")
 	}
 }

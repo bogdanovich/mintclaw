@@ -18,7 +18,8 @@ upstream fixture tests, not tests of MintClaw's future approval integration.
 `OP_SERVICE_ACCOUNT_TOKEN` was removed from every build/test environment
 without reading it. No real token, vault, passkey, phone, or approval was
 accessed. The dependency is now pinned for the private approval controller;
-the gateway and the current provision-only executable do not import it.
+the gateway does not import it. The separate credential executable imports the
+private approval package for protected enrollment setup.
 
 ## Required control-service contract
 
@@ -61,7 +62,8 @@ are absent. Browser options are independently encoded public data; the private
 SessionData returned by Begin is retained intact by the controller.
 
 The constructor returns an initial `OwnerSetup` capability only to trusted
-startup when no key is enrolled. Its zero value denies access. The ordinary
+startup when no owner is active, including interrupted initial enrollment.
+Its zero value denies access. The ordinary
 controller cannot begin or finish enrollment. Startup must keep the capability
 outside the public approval handler and admit its use only through an
 authenticated protected owner action. Possession of a Go object does not
@@ -78,12 +80,30 @@ warning is persisted and disables authority, including after restart; recovery
 needs a separate protected operator procedure. Other platforms deny store use.
 These metadata checks do not prove process-role or agent/browser isolation.
 
+Initial registration is persisted as an inactive candidate. The controller
+retains the private console invite's original issue time in its own ceremony
+and checks it and cancellation after the durable write, under the same lock as
+live owner admission. Rejected or uncertain registration remains inactive after
+reload without depending on a rollback write. A fresh protected console action
+may replace a pending candidate, but cannot replace an active owner.
+
+An accepted registration becomes live in the current process. Its first signed
+approval persists activation along with the counter before issuing a grant.
+A restart before that first assertion requires fresh private owner setup; an
+inactive candidate alone cannot start or finish approval. Existing accepted
+records and records activated by a later assertion load normally, with no
+grants restored. The phone prompts completion through the first account request.
+
 Signed synthetic ES256 fixtures exercise enrollment, approval, revocation,
 exact scope binding, malicious origin/UV/key/owner/operation substitution,
 replay, concurrency, request expiration during persistence, cancellation,
-policy transitions, capacity, durable failures, and clone warnings. The
+policy transitions, capacity, durable failures, clone warnings, and rejected
+registration admission after cancellation or original-invite expiration. The
 disposable Linux owner-store fixture exercises actual permissions, ACLs,
-symlinks, hard links, FIFO denial, store locking, and restart state.
+symlinks, hard links, FIFO denial, store locking, and restart state. Its rejected
+registration case cancels after actual file and directory fsyncs, then checks
+that reload denies the candidate and only private re-enrollment followed by a
+signed approval restores durable activation.
 
 Reproduce the filesystem fixture with Go and Docker available:
 
@@ -91,11 +111,53 @@ Reproduce the filesystem fixture with Go and Docker available:
 bash scripts/qualify-credential-approval.sh
 ```
 
-This implements private authorization and persistence. No HTTP listener,
-notification, SDK call, token access, public enrollment endpoint, or model tool
-is activated. CA3 still requires protected startup/enrollment wiring, HTTPS
-approval/revoke UI, authorized notifications, and actual Android remote approval
-and revocation evidence. Credential-browser lease enforcement remains CA4.
+## Phone page and private enrollment console
+
+The embedded mobile page implements explicit passkey enrollment, approval,
+and revocation actions. Approval displays account aliases, owner, actor, agent,
+host, and requested duration; provider bindings and passwords are absent.
+The ordinary `PhoneHandler` holds only the controller and cannot begin or
+finish enrollment. A separate `Enrollment` handler holds the initial setup
+capability, admitted only by a 256-bit, five-minute private console token.
+There is no HTTP route to issue or renew that token.
+
+The service borrows a startup-qualified Unix sequenced-packet console listener
+and admits only live root socket creators whose per-packet identity matches.
+SO_PEERPIDFD is required; numeric-PID fallback and descriptor handoff are
+denied. The protected Linux `enroll` command disables core dumps, marks itself
+non-dumpable, checks the service-owned private socket directory and dedicated
+service identity, and writes a setup URL only to `/dev/tty`. Root access itself
+is not human approval: agent root/sudo/service-control access must be excluded
+on this host before either listener is activated.
+
+The setup URL carries its nonce in a fragment, removed from browser history
+before page operations. Registration begin and finish both require it; the
+ceremony locator alone is insufficient. Reissuing invalidates the previous
+token and ceremony. Reopen returns an independent copy of the original
+challenge without renewing either deadline. A valid finish attempt consumes
+the token, and persistence must finish within the console invite's original
+deadline. Enrollment cannot replace an active owner key.
+
+HTTP handlers require TLS 1.3, exact SNI, Host and POST Origin, no query/fragment
+or encoded-path alternate, same-origin fetches, strict bounded JSON, and
+deadline-capable response writers. They bound concurrent POSTs to eight per
+handler and request work to ten seconds, including body reads and writes.
+Assets are embedded and use a restrictive same-origin CSP, no cookies, no
+external resources, no-referrer, and no-store. Failures contain fixed outcomes,
+never request bodies, setup tokens, assertions or verifier diagnostics.
+
+`scripts/qualify-credential-phone.sh` combines a disposable real-Linux console
+fixture with a new headless Chromium profile and virtual UV authenticator.
+The browser uses actual `navigator.credentials.create/get` against the mobile
+JavaScript and real verifier, verifies the displayed 20-hour scope, and exercises
+approval, revocation and replay denial over synthetic TLS. See
+[operator setup](../security/credential-broker-setup.md#reproducible-qualification)
+for reproduction. This is software evidence, not physical Android evidence.
+
+No production HTTP/console listener, notification, SDK call, token access or
+model tool is activated. CA3 still requires protected startup wiring, authorized
+notifications and actual Android remote approval/revocation. Credential-browser
+lease enforcement remains CA4.
 
 ## Primary sources
 

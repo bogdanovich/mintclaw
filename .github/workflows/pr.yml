@@ -400,6 +400,19 @@ jobs:
       - name: Qualify private passkey approval and protected owner storage
         run: bash ./scripts/qualify-credential-approval.sh
 
+      - name: Setup Node.js for the synthetic phone approval fixture
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install pinned phone approval browser fixture
+        run: |
+          npm ci --ignore-scripts --prefix runtime/browser/playwright-library
+          node runtime/browser/playwright-library/node_modules/playwright/cli.js install --with-deps chromium
+
+      - name: Qualify private enrollment console and browser passkey UI
+        run: bash ./scripts/qualify-credential-phone.sh
+
       - name: Install pinned document runtime
         run: |
           snapshot=20261004T000000Z

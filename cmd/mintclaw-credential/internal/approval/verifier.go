@@ -6,10 +6,13 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/protocol/webauthncose"
 	"github.com/go-webauthn/webauthn/webauthn"
+
+	"github.com/bogdanovich/mintclaw/pkg/credentialbroker"
 )
 
 func newVerifier(origin string) (*webauthn.WebAuthn, error) {
@@ -21,7 +24,7 @@ func newVerifier(origin string) (*webauthn.WebAuthn, error) {
 		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.Path != "" ||
 		parsed.RawPath != "" || parsed.Hostname() == "" || net.ParseIP(parsed.Hostname()) != nil ||
 		strings.ToLower(parsed.Host) != parsed.Host || strings.HasSuffix(parsed.Hostname(), ".") ||
-		parsed.String() != origin || (parsed.Port() != "" && parsed.Port() != "443") {
+		parsed.String() != origin || parsed.Port() != "" {
 		return nil, ErrUnavailable
 	}
 	for _, character := range []byte(parsed.Hostname()) {
@@ -45,13 +48,18 @@ func newVerifier(origin string) (*webauthn.WebAuthn, error) {
 }
 
 func (setup *OwnerSetup) Begin(ctx context.Context) (Ceremony, error) {
+	return setup.begin(ctx, time.Time{})
+}
+
+func (setup *OwnerSetup) begin(ctx context.Context, issued time.Time) (Ceremony, error) {
 	if setup == nil || setup.controller == nil {
 		return Ceremony{}, ErrDenied
 	}
 	controller := setup.controller
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
-	if !controller.usable(ctx) || len(controller.owner.Credentials) != 0 {
+	if !controller.usable(ctx) || !controller.enrollmentAllowed() ||
+		(!issued.IsZero() && !withinLifetime(controller.now(), issued)) {
 		return Ceremony{}, ErrDenied
 	}
 	controller.prune()
@@ -62,7 +70,21 @@ func (setup *OwnerSetup) Begin(ctx context.Context) (Ceremony, error) {
 			return Ceremony{}, ErrDenied
 		}
 	}
-	return controller.begin(enroll, Scope{PolicyRevision: controller.policy.Revision()}, "")
+	ceremony, err := controller.begin(
+		enroll,
+		Scope{
+			Principal:      credentialbroker.Principal{OwnerID: controller.ownerID},
+			PolicyRevision: controller.policy.Revision(),
+		},
+		"",
+	)
+	if err != nil {
+		return Ceremony{}, err
+	}
+	pending := controller.ceremonies[ceremony.ID]
+	pending.enrollmentIssued = issued
+	controller.ceremonies[ceremony.ID] = pending
+	return ceremony, nil
 }
 
 func (setup *OwnerSetup) Finish(ctx context.Context, id string, response []byte) (resultErr error) {
@@ -82,7 +104,7 @@ func (setup *OwnerSetup) Finish(ctx context.Context, id string, response []byte)
 	if err != nil {
 		return err
 	}
-	if len(controller.owner.Credentials) != 0 || len(response) == 0 || len(response) > maxResponseBytes {
+	if !controller.enrollmentAllowed() || len(response) == 0 || len(response) > maxResponseBytes {
 		return ErrDenied
 	}
 	parsed, err := protocol.ParseCredentialCreationResponseBytes(response)
@@ -96,7 +118,17 @@ func (setup *OwnerSetup) Finish(ctx context.Context, id string, response []byte)
 	}
 	owner := controller.owner
 	owner.Credentials = []webauthn.Credential{*credential}
-	return controller.persist(ctx, ceremony, owner)
+	owner.EnrollmentPending = true
+	if err = controller.persist(ctx, ceremony, owner); err != nil {
+		return err
+	}
+	// This decision and the final original-invite/context check occur under
+	// the controller lock. A rejected or uncertain write remains inactive on
+	// disk without relying on a second rollback write that could also fail.
+	// Only a later assertion from this accepted in-memory owner promotes the
+	// durable record. Restart before then requires a fresh protected setup.
+	controller.owner.EnrollmentPending = false
+	return nil
 }
 
 func (controller *Controller) begin(
@@ -140,8 +172,13 @@ func (controller *Controller) begin(
 	}
 	controller.ceremonies[id] = pendingCeremony{
 		kind: kind, session: session, scope: cloneScope(scope), request: requestID, issued: controller.now(),
+		options: encoded,
 	}
-	return Ceremony{ID: id, Options: encoded, Scope: cloneScope(scope)}, nil
+	return publicCeremony(id, controller.ceremonies[id]), nil
+}
+
+func publicCeremony(id string, pending pendingCeremony) Ceremony {
+	return Ceremony{ID: id, Options: append([]byte(nil), pending.options...), Scope: cloneScope(pending.scope)}
 }
 
 func (controller *Controller) verifyAssertion(

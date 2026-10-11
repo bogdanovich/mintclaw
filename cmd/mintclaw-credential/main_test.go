@@ -10,7 +10,7 @@ import (
 
 func TestTokenArgumentsAreRejectedWithoutEcho(t *testing.T) {
 	const canary = "SYNTHETIC_ARG_TOKEN_CANARY"
-	for _, args := range [][]string{nil, {canary}, {"provision", canary}, {"version", canary}, {"--token=" + canary}} {
+	for _, args := range [][]string{nil, {canary}, {"provision", canary}, {"enroll", canary}, {"version", canary}, {"--token=" + canary}} {
 		var output bytes.Buffer
 		err := execute(context.Background(), args, &output)
 		if !errors.Is(err, errUsage) || strings.Contains(err.Error(), canary) || output.Len() != 0 {
