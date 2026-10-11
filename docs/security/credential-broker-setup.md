@@ -117,6 +117,21 @@ credential packages. This demonstrates provisioning behavior, not broker
 deployment, Android operation, or real account login. Linux is the only
 admitted provisioning platform; other platforms fail closed.
 
+For the private token-loader filesystem and process fixtures, with Go, Docker,
+and Python 3 available:
+
+```sh
+bash scripts/qualify-credential-loader.sh
+```
+
+This uses only synthetic values in a disposable Docker volume. It verifies
+the two admitted service-only access forms, read-only mounts, denied unsafe
+roles/paths/data, single-use initialization, and safe output. It creates no
+host token file or encryption key. The loader is currently an unexported
+startup helper; the provision command does not load credentials or activate
+it. See the [loader admission](../architecture/credential-provider-qualification.md#ca2-protected-token-loader)
+for the independent role, namespace, delivery, and consumer-readiness gates.
+
 ## Primary references
 
 - [1Password service-account setup](https://www.1password.dev/service-accounts/get-started)

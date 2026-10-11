@@ -306,3 +306,53 @@ child. The observed host remains unqualified for real token provisioning.
 Require those independent gates and encrypted activation in the next startup
 admission; do not treat these successful file-delivery checks as full CA2
 completion.
+
+## CA2 protected token loader
+
+The unexported loader under `cmd/mintclaw-credential/internal/startup` reads
+only the fixed `op-service-account` basename from a trusted startup directory.
+No command, listener, model tool, environment-token fallback, provider call,
+or service activation is added. The provision-only executable does not invoke
+this helper. Qualified startup must establish its process role, dedicated
+identity, complete agent/browser isolation, actual systemd delivery, and
+consumer readiness before calling it.
+
+The loader requires matching non-root real/effective UID and GID, no unrelated
+supplementary groups, `NoNewPrivileges`, and zero permitted/effective/inherited
+capabilities. It disables core dumps and process dumpability before opening a
+source. These are executing-thread checks: startup must set the inherited
+restrictions before exec so every Go runtime thread receives them. They do
+not establish the complete host boundary or protect against a trusted root.
+
+Directory traversal is bounded, descriptor-relative, and rejects symlinks and
+non-root or writable ancestors. The final directory and file must both be on
+read-only mounts with either the canonical root-owned, named-service-UID ACL
+shape or service-owned private modes without an ACL. Named groups, additional
+users, broader access, special mode bits, ambiguous ACLs, and unexpected
+ownership are denied. The fallback requires qualified systemd delivery and
+denial of writable aliases outside the service namespace; a read-only bind
+mount alone does not prove those properties.
+
+The file is pinned with `O_PATH` before reopening that still-owned inode through
+`/proc/self/fd`. No caller supplies a descriptor or proc path. This avoids
+opening devices or blocking on FIFOs before checking the regular-file type.
+Symlinks, multiple links, empty/oversized files, and invalid single-line ASCII
+are rejected. Read bounds use one allocation; context and metadata are checked
+before/after the read. Local regular-file syscalls are not forcibly interrupted
+by context cancellation. Only a qualified local delivery path is admitted.
+
+The result is a private single-use initialization buffer. Copies share state;
+generic formatting/serialization is redacted. Consumption and destruction
+clear owned bytes, and initializer errors/panics become fixed failures.
+This does not guarantee erasure of SDK/runtime copies or cancel an initializer
+already in flight; future startup must enforce its own cancellation boundary.
+
+`scripts/qualify-credential-loader.sh` cross-builds a test binary and exercises
+synthetic ACL and no-ACL sources in a disposable Docker volume. It tests both
+read-only admission forms and denial for writable mounts, unhardened/root
+processes, broad access, unsafe paths, special files, links, and malformed data.
+Captured fixture output is checked for raw, base64, and hex canaries before
+display. The PR workflow runs this qualification; normal/race package tests
+also cover concurrent consumption, clearing, and safe projection. These checks
+do not qualify encrypted activation, real provider initialization, Android,
+browser isolation, or the operator's eventual host.

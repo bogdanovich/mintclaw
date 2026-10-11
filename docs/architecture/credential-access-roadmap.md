@@ -229,6 +229,11 @@ entire personal vault.
   actual-host plaintext credential-delivery probe; encrypted activation,
   isolated startup, trusted process-role admission, and service wiring remain
   pending. Provisioning and transport alone enable no agent access.
+  The private startup loader validates effective ACL access, read-only mounts,
+  restricted service identity, bounded token data, and single-use consumption.
+  Its synthetic qualification covers both delivery forms and unsafe
+  role/path/data denial; the executable does not invoke it. Full activation
+  and caller/consumer admission remain required before any real token read.
 - CA3: [verifier candidate qualification](credential-phone-approval-qualification.md)
   records build and upstream fixture evidence; control-plane and Android
   end-to-end implementation remain pending.

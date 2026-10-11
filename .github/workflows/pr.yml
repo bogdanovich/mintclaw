@@ -393,6 +393,9 @@ jobs:
       - name: Qualify credential setup with synthetic data and real OS encryption
         run: bash ./scripts/qualify-credential-provisioning.sh
 
+      - name: Qualify private credential loader with synthetic ACL and mount fixtures
+        run: bash ./scripts/qualify-credential-loader.sh
+
       - name: Install pinned document runtime
         run: |
           snapshot=20261004T000000Z
