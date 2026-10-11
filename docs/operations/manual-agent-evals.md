@@ -57,7 +57,8 @@ still apply. Do not put API keys, OAuth stores, chat history, transcripts or run
 Use the same parser and commands for both locations by selecting an explicit `--root /absolute/corpus`.
 Pin the corpus revision with the intended MintClaw version and retain case digests; avoid implicit latest-corpus
 updates or a separate private runner fork. Credentials and result evidence stay in private runtime directories
-outside Git. The [first live pilot](manual-agent-evals-pilot-20261011.md) records current results and limits.
+outside Git. The [first live pilot](manual-agent-evals-pilot-20261011.md) and
+[judge v2 calibration](manual-agent-evals-judge-v2-calibration-20261011.md) record actual results and limits.
 
 ## Prepare The Target
 
