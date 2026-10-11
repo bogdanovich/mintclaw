@@ -252,6 +252,9 @@ the workflow ends in a focused regression test rather than replay.
 
 ### H2 / P8.1 — Performance and startup budgets
 
+Implementation record:
+[P8.1 performance qualification](local-coding-agent-p8-performance.md).
+
 - Measure cold and warm command startup, catalogue listing, runtime creation,
   TUI first paint, first model request/first token, compaction, reconciliation,
   presentation, historical hydration, and full-process memory.

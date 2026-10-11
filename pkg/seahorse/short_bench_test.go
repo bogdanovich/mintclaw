@@ -8,6 +8,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
 // newBenchStore creates a test store for benchmarks.
@@ -351,6 +353,50 @@ func BenchmarkBootstrap_500Messages(b *testing.B) {
 			if err := s.AppendContextMessage(ctx, convID, added.ID); err != nil {
 				b.Fatal(err)
 			}
+		}
+	}
+}
+
+func BenchmarkCompact_LeafFortyMessages(b *testing.B) {
+	level := logger.GetLevel()
+	logger.SetLevel(logger.ERROR)
+	b.Cleanup(func() { logger.SetLevel(level) })
+	s, cleanup := newBenchStore(b)
+	defer cleanup()
+	ctx := context.Background()
+	engine := &CompactionEngine{store: s, config: Config{}, complete: mockCompleteFn}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for iteration := range b.N {
+		b.StopTimer()
+		conv, err := s.GetOrCreateConversation(ctx, fmt.Sprintf("bench:compact-leaf:%d", iteration))
+		if err != nil {
+			b.Fatal(err)
+		}
+		for message := range FreshTailCount + LeafMinFanout {
+			added, addErr := s.AddMessage(
+				ctx,
+				conv.ConversationID,
+				"user",
+				fmt.Sprintf("bounded compaction message %d", message),
+				100,
+			)
+			if addErr != nil {
+				b.Fatal(addErr)
+			}
+			if appendErr := s.AppendContextMessage(ctx, conv.ConversationID, added.ID); appendErr != nil {
+				b.Fatal(appendErr)
+			}
+		}
+		b.StartTimer()
+		result, err := engine.Compact(ctx, conv.ConversationID, CompactInput{})
+		b.StopTimer()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if result.LeafSummaries != 1 {
+			b.Fatalf("leaf summaries = %d, want 1", result.LeafSummaries)
 		}
 	}
 }
