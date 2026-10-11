@@ -56,6 +56,28 @@ func StartIsolatedCommand(
 	command *exec.Cmd,
 	terminateDuration time.Duration,
 ) (IsolatedCommandConnection, error) {
+	return startIsolatedCommand(ctx, name, command, terminateDuration, false)
+}
+
+// StartPrivateIsolatedCommand uses the same process-tree ownership as normal
+// stdio servers, but drains stderr without logging it. Private capture workers
+// can emit protected application text in errors; it must not enter diagnostics.
+func StartPrivateIsolatedCommand(
+	ctx context.Context,
+	name string,
+	command *exec.Cmd,
+	terminateDuration time.Duration,
+) (IsolatedCommandConnection, error) {
+	return startIsolatedCommand(ctx, name, command, terminateDuration, true)
+}
+
+func startIsolatedCommand(
+	ctx context.Context,
+	name string,
+	command *exec.Cmd,
+	terminateDuration time.Duration,
+	private bool,
+) (IsolatedCommandConnection, error) {
 	if command == nil {
 		return nil, errors.New("isolated command is required")
 	}
@@ -114,7 +136,11 @@ func StartIsolatedCommand(
 			"command": command.Path,
 			"pid":     command.Process.Pid,
 		})
-	go logStdioProcessStderr(ctx, name, command.Path, stderr)
+	if private {
+		go func() { _, _ = io.Copy(io.Discard, stderr) }()
+	} else {
+		go logStdioProcessStderr(ctx, name, command.Path, stderr)
+	}
 	return pipe, nil
 }
 
