@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const { test, before, after } = require('node:test');
 const { chromium } = require('../playwright-library/node_modules/playwright');
 const { createSession } = require('./session.cjs');
+const { qualifySandbox } = require('./sandbox.cjs');
 const origin = 'https://login.example.org';
 const flow = { navigation_url: `${origin}/login`, entry_origin: origin, form_id: 'login',
   username_id: 'username', password_id: 'password', username_type: 'email', submit_url: `${origin}/session`,
@@ -21,10 +22,7 @@ before(async () => {
     const context = await browser.newContext({ acceptDownloads: false, serviceWorkers: 'block' });
     try {
       const page = await context.newPage();
-      await page.goto('chrome://sandbox/');
-      const witness = await page.locator('body').innerText();
-      assert.equal(/Namespace sandbox\s+Yes/.test(witness), true, 'namespace sandbox witness absent');
-      assert.equal(/Seccomp-BPF sandbox\s+Yes/.test(witness), true, 'seccomp sandbox witness absent');
+      await qualifySandbox(page);
     } finally { await context.close(); }
   }
 });

@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { createSession } = require('./session.cjs');
 const { launch } = require('./launch.cjs');
+const { qualifySandbox } = require('./sandbox.cjs');
+const vm = require('node:vm');
 const origin = 'https://login.example.org';
 const flow = { navigation_url: `${origin}/login`, entry_origin: origin, form_id: 'login',
   username_id: 'username', password_id: 'password', username_type: 'email', submit_url: `${origin}/session`,
@@ -51,4 +53,26 @@ test('launch rejects arbitrary browser options and unsafe process startup', asyn
     { executablePath: '/tmp/browser', proxyServer: 'http://127.0.0.1:18080' }]) {
     await assert.rejects(launch(config), error => error.message === 'credential browser unavailable');
   }
+});
+
+test('sandbox witness requires exact complete current Chromium rows and verdict', async () => {
+  const baseline = [['Layer 1 Sandbox', 'Namespace'], ['PID namespaces', 'Yes'], ['Network namespaces', 'Yes'],
+    ['Seccomp-BPF sandbox', 'Yes'], ['Seccomp-BPF sandbox supports TSYNC', 'Yes']];
+  const page = (rows, verdict = 'You are adequately sandboxed.', url = 'chrome://sandbox/') => ({
+    goto: async destination => { assert.equal(destination, 'chrome://sandbox/'); },
+    waitForFunction: async () => {}, url: () => url,
+    evaluate: async callback => vm.runInNewContext(`(${callback.toString()})()`, {
+      document: { querySelector: () => ({ textContent: verdict }),
+        querySelectorAll: () => rows.map(row => ({ querySelectorAll: () => row.map(textContent => ({ textContent })) })) },
+    }),
+  });
+  await qualifySandbox(page(baseline));
+  for (let i = 0; i < baseline.length; i++) {
+    const changed = baseline.map(row => [...row]); changed[i][1] = 'No';
+    await assert.rejects(qualifySandbox(page(changed)));
+    await assert.rejects(qualifySandbox(page(baseline.filter((_, index) => index !== i))));
+    await assert.rejects(qualifySandbox(page([...baseline, baseline[i]])));
+  }
+  await assert.rejects(qualifySandbox(page(baseline, 'You are NOT adequately sandboxed.')));
+  await assert.rejects(qualifySandbox(page(baseline, 'You are adequately sandboxed.', 'https://attacker.example/')));
 });

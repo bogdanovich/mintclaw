@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('../playwright-library/node_modules/playwright');
 const { createSession } = require('./session.cjs');
+const { qualifySandbox } = require('./sandbox.cjs');
 
 async function protectedExecutable(filename) {
   if (typeof filename !== 'string' || filename.length > 4096 || !path.isAbsolute(filename) ||
@@ -66,9 +67,7 @@ async function launch(config) {
     const witness = await browser.newContext({ acceptDownloads: false, serviceWorkers: 'block' });
     try {
       const page = await witness.newPage();
-      await page.goto('chrome://sandbox/', { waitUntil: 'domcontentloaded', timeout: 5000 });
-      const status = await page.locator('body').innerText({ timeout: 5000 });
-      if (!/Namespace sandbox\s+Yes/.test(status) || !/Seccomp-BPF sandbox\s+Yes/.test(status)) throw new Error();
+      await qualifySandbox(page);
     } finally { await witness.close(); }
     browser.on('disconnected', () => { stopped = true; });
     return Object.freeze({
