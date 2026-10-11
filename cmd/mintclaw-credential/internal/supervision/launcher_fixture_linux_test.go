@@ -155,7 +155,7 @@ func (image *fixtureRuntimeMount) BorrowRoot(context.Context) (*os.File, error) 
 }
 func (image *fixtureRuntimeMount) Close() error { return image.root.Close() }
 
-func launcherFixtureImage(t *testing.T) *fixtureRuntimeMount {
+func launcherFixtureImage(t *testing.T, invalidNode bool) *fixtureRuntimeMount {
 	t.Helper()
 	path, err := os.MkdirTemp("/run", "mintclaw-launcher-qual-")
 	if err != nil || unix.Mount("none", path, "tmpfs", unix.MS_NODEV|unix.MS_NOSUID, "size=128m") != nil {
@@ -180,6 +180,14 @@ func launcherFixtureImage(t *testing.T) *fixtureRuntimeMount {
 	}
 	copyFile(self, bootstrapPath)
 	copyFile(self, runtimeimage.NodePath)
+	if invalidNode &&
+		os.WriteFile(
+			filepath.Join(path, runtimeimage.NodePath),
+			[]byte("\x7fELFinvalid-synthetic-node"),
+			0o555,
+		) != nil {
+		t.Fatal("synthetic post-exec failure artifact unavailable")
+	}
 	copyFile("/usr/bin/setpriv", "bin/setpriv")
 	libraries, err := exec.Command("/usr/bin/ldd", "/usr/bin/setpriv").Output()
 	if err != nil {
@@ -237,7 +245,7 @@ func TestLauncherFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("fixture Root cgroup admission failed")
 	}
-	launcher := &Launcher{image: launcherFixtureImage(t), supervisor: supervisor, uid: 65532, gid: 65532}
+	launcher := &Launcher{image: launcherFixtureImage(t, false), supervisor: supervisor, uid: 65532, gid: 65532}
 	launcher.nsenter, err = protectedLauncherFile("/usr/bin/nsenter", true)
 	if err != nil {
 		t.Fatal("fixed nsenter was not admitted")
@@ -417,5 +425,65 @@ func exerciseLauncherArtifacts(t *testing.T) {
 	if unsafe, err := protectedLauncherFile(filepath.Join(directory, "link"), false); unsafe != nil ||
 		!errors.Is(err, errUnavailable) {
 		t.Fatal("symlink lock admitted")
+	}
+}
+
+func TestLauncherFailureFixture(t *testing.T) {
+	if os.Getenv("MINTCLAW_SYNTHETIC_WORKER_FOREST_FIXTURE") != "1" {
+		t.Skip("disposable Root Linux systemd fixture only")
+	}
+	if !root() || os.Getenv("OP_SERVICE_ACCOUNT_TOKEN") != "" ||
+		unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{}) != nil {
+		t.Fatal("Root fixture without token/core material required")
+	}
+	supervisor, err := open(fixtureParent(t))
+	if err != nil {
+		t.Fatal("failure fixture supervisor unavailable")
+	}
+	launcher := &Launcher{image: launcherFixtureImage(t, true), supervisor: supervisor, uid: 65532, gid: 65532}
+	launcher.nsenter, err = protectedLauncherFile("/usr/bin/nsenter", true)
+	if err != nil {
+		t.Fatal("failure fixture nsenter unavailable")
+	}
+	launcher.bubblewrap, err = protectedLauncherFile("/usr/bin/bwrap", true)
+	if err != nil {
+		t.Fatal("failure fixture bubblewrap unavailable")
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		closeErr := launcher.Close(ctx)
+		if launcher.quarantined && !errors.Is(closeErr, errUnavailable) || !launcher.quarantined && closeErr != nil {
+			t.Error("failed launcher close outcome incorrect")
+		}
+		if launcher.image != nil || launcher.supervisor != nil || launcher.nsenter != nil ||
+			launcher.bubblewrap != nil {
+			t.Error("failed launcher retained Root startup resources")
+		}
+	})
+	worker, err := launcher.Prepare(t.Context())
+	if err != nil {
+		t.Fatal("post-exec failure fixture allocation unavailable")
+	}
+	listener, control, err := worker.Endpoints(t.Context())
+	if err != nil {
+		t.Fatal("failure fixture endpoint export unavailable")
+	}
+	_ = listener.Close()
+	_ = control.Close()
+	if worker.Start(t.Context()) != nil {
+		t.Fatal("initial helper exec did not succeed")
+	}
+	select {
+	case <-worker.Done():
+	case <-time.After(4 * time.Second):
+		t.Fatal("post-exec bootstrap failure did not retire")
+	}
+	if worker.forest == nil || worker.forest.result != nil || !worker.forest.exitFailed.Load() ||
+		!errors.Is(worker.result, errUnavailable) || !launcher.quarantined {
+		t.Fatal("successful forest cleanup hid unsuccessful bootstrap")
+	}
+	if next, err := launcher.Prepare(t.Context()); next != nil || !errors.Is(err, errUnavailable) {
+		t.Fatal("post-exec failed launcher renewed work")
 	}
 }

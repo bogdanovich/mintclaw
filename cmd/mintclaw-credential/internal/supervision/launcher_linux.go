@@ -274,6 +274,9 @@ func (worker *Worker) retire() {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				worker.result = worker.forest.Retire(ctx)
 				cancel()
+				if worker.forest.exitFailed.Load() {
+					worker.result = errUnavailable
+				}
 			} else if worker.result != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				_ = worker.launcher.supervisor.Close(ctx)

@@ -68,7 +68,11 @@ broker-secret descriptor is in `ExtraFiles`.
 Cancellation, explicit retirement or leader exit permanently retires the
 allocation. Cleanup kills and verifies the complete forest, then closes Root
 control, namespace, listener and image descriptors. Failure quarantines the
-launcher. Exported copies remain broker-owned: the broker must close its proxy,
+launcher. An unsuccessful exit after the initial helper exec is preserved as a
+fixed failure even when whole-forest cleanup succeeds. Only SIGKILL after a
+requested retirement counts as the expected forced stop; nonzero exits and
+other signals remain failures if cancellation races their reaping.
+Exported copies remain broker-owned: the broker must close its proxy,
 accepted connections and copies before acknowledging complete retirement.
 Root closing its descriptors cannot revoke copies in another process.
 A retired worker cannot restart or export endpoints again.
@@ -81,6 +85,9 @@ closed setup pins, denied external IPv4/IPv6, and outside serving of the private
 loopback listener. It exercises retirement before start, explicit stop,
 cancellation and leader exit, plus single-start/export rules. Existing network
 and escaped-descendant forest fixtures retain separate mandatory PASS gates.
+A second launcher fixture execs the initial helper successfully, then makes
+the in-image Node exec fail; successful forest cleanup must still quarantine
+future allocations.
 
 This fixture does not qualify actual vendor Node/Chromium, Chromium's own
 sandbox witness, production roles, Root/broker IPC, proxy/lease wiring, remote

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -42,6 +43,8 @@ type Forest struct {
 	once       sync.Once
 	result     error
 	unwatch    func() bool
+	requested  atomic.Bool
+	exitFailed atomic.Bool
 }
 
 func root() bool {
@@ -180,21 +183,32 @@ func (supervisor *Supervisor) Start(ctx context.Context, command *exec.Cmd) (*Fo
 	command.SysProcAttr = &attributes
 	startErr := command.Start()
 	if startErr == nil {
-		forest.unwatch = context.AfterFunc(ctx, func() { forest.beginRetirement() })
+		forest.unwatch = context.AfterFunc(ctx, forest.requestRetirement)
 	}
 	supervisor.mu.Unlock()
 	if startErr != nil {
+		forest.exitFailed.Store(true)
 		close(forest.exited)
 		forest.beginRetirement()
 		return nil, errUnavailable
 	}
 	go func() {
-		_ = command.Wait() // Raw process diagnostics never leave this boundary.
+		waitErr := command.Wait() // Raw diagnostics never leave this boundary.
+		failed := waitErr != nil
+		if failed && forest.requested.Load() && command.ProcessState != nil {
+			status, ok := command.ProcessState.Sys().(syscall.WaitStatus)
+			// cgroup.kill is our only forced stop. A nonzero exit or another
+			// signal remains unsuccessful even if cancellation races its reap.
+			if ok && status.Signaled() && status.Signal() == syscall.SIGKILL {
+				failed = false
+			}
+		}
+		forest.exitFailed.Store(failed)
 		close(forest.exited)
 		forest.beginRetirement()
 	}()
 	if ctx.Err() != nil {
-		forest.beginRetirement()
+		forest.requestRetirement()
 		return nil, errUnavailable
 	}
 	return forest, nil
@@ -207,7 +221,7 @@ func (forest *Forest) Retire(ctx context.Context) error {
 	if forest == nil || ctx == nil {
 		return errUnavailable
 	}
-	forest.beginRetirement()
+	forest.requestRetirement()
 	select {
 	case <-forest.done:
 		if ctx.Err() == nil {
@@ -216,6 +230,11 @@ func (forest *Forest) Retire(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 	return errUnavailable
+}
+
+func (forest *Forest) requestRetirement() {
+	forest.requested.Store(true)
+	forest.beginRetirement()
 }
 
 func (forest *Forest) beginRetirement() {
