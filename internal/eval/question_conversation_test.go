@@ -59,7 +59,7 @@ func ordinaryQuestionFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	box, err := outbox.Open(domain.home)
+	box, err := outbox.Open(domain.workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +104,18 @@ func runOrdinaryQuestion(t *testing.T, mode string) (Trial, *fakeConversationTra
 		if number == 1 {
 			var response protocol.MintClawMessage
 			registry, record, response = ordinaryQuestionFixture(t, domain, request, mode == "private-outbox")
+			if mode == "home-only-outbox" {
+				directory := outbox.Path(domain.home)
+				if err := os.MkdirAll(directory, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(
+					filepath.Join(outbox.Path(domain.workspace), record.PromptDeliveryID+".json"),
+					filepath.Join(directory, record.PromptDeliveryID+".json"),
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if mode == "foreign-owner" {
 				response.Payload[protocol.PayloadKeySessionKey] = "foreign-session"
 			}
@@ -185,7 +197,7 @@ func runOrdinaryQuestion(t *testing.T, mode string) (Trial, *fakeConversationTra
 func TestOrdinaryQuestionCancellationRequiresNativeTerminalEvidence(t *testing.T) {
 	for _, mode := range []string{
 		"complete", "stale-ack", "waiting-only", "missing-controls", "foreign-owner",
-		"private-registry", "private-outbox", "unsupported-action",
+		"private-registry", "private-outbox", "unsupported-action", "home-only-outbox",
 		"missing-reply-id", "oversized-reply-id", "whitespace-reply-id",
 	} {
 		t.Run(mode, func(t *testing.T) {
@@ -202,7 +214,7 @@ func TestOrdinaryQuestionCancellationRequiresNativeTerminalEvidence(t *testing.T
 			if strings.HasPrefix(mode, "private-") && trial.Code != "private_native_evidence" {
 				t.Fatal("native privacy failure was softened", trial.Verdict, trial.Code)
 			}
-			if mode == "unsupported-action" && len(transport.sent) != 1 {
+			if (mode == "unsupported-action" || mode == "home-only-outbox") && len(transport.sent) != 1 {
 				t.Fatal("unsupported ordinary-question control was dispatched")
 			}
 		})

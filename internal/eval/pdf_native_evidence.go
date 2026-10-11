@@ -121,7 +121,7 @@ func (trial *pdfTrial) observeOutbox(id string) (outbox.Intent, error) {
 	if !validID(id) {
 		return outbox.Intent{}, ErrPDFTrial
 	}
-	root, err := os.OpenRoot(trial.home)
+	root, err := os.OpenRoot(trial.workspace)
 	if err != nil {
 		return outbox.Intent{}, ErrPDFTrial
 	}

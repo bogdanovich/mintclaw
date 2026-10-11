@@ -68,6 +68,8 @@ Pin the corpus revision with the intended MintClaw version and retain case diges
 updates or a separate private runner fork. Credentials and result evidence stay in private runtime directories
 outside Git. The [first live pilot](manual-agent-evals-pilot-20261011.md) and
 [judge v2 calibration](manual-agent-evals-judge-v2-calibration-20261011.md) record actual results and limits.
+The [general v2 pilot](manual-agent-evals-general-pilot-20261011.md) retains a passing context trial and the
+interaction harness failure that identified the incorrect native outbox root.
 
 ## Prepare The Target
 

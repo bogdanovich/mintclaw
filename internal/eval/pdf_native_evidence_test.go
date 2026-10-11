@@ -75,7 +75,7 @@ func nativePDFPromptFixture(t *testing.T, trial *pdfTrial) (interactions.Record,
 	if err != nil {
 		t.Fatal(err)
 	}
-	box, err := outbox.Open(trial.home)
+	box, err := outbox.Open(trial.workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +185,28 @@ func TestPDFPromptSeparatesOutboxIdentityFromWireMessageIdentity(t *testing.T) {
 	prompt.MessageID = "another-wire-message"
 	if _, err := trial.protectedRequest(prompt, "contact-reference"); !errors.Is(err, ErrPDFTrial) {
 		t.Fatal("unbound delivered prompt admitted a private value")
+	}
+}
+
+func TestPDFOutboxRequiresNativeInstanceWorkspace(t *testing.T) {
+	trial := newPDFTrialFixture(t)
+	defer func() { _ = trial.release(true) }()
+	record, prompt, _ := nativePDFPromptFixture(t, trial)
+	if err := trial.observePromptDelivery(record, prompt); err != nil {
+		t.Fatal("native workspace outbox was not admitted", err)
+	}
+	directory := outbox.Path(trial.home)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(
+		filepath.Join(outbox.Path(trial.workspace), record.PromptDeliveryID+".json"),
+		filepath.Join(directory, record.PromptDeliveryID+".json"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := trial.observePromptDelivery(record, prompt); err == nil {
+		t.Fatal("matching receipt in the non-native home outbox was admitted")
 	}
 }
 

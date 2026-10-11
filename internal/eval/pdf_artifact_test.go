@@ -68,7 +68,7 @@ func TestPDFSettlementGraceWaitsForNativeRecoveryWithoutChangingOperation(t *tes
 	domain, settled := settledPDFControl(t)
 	settled.delivery.RecoverySettled = false
 	data, err := json.Marshal(settled.delivery)
-	path := filepath.Join(domain.prepared.home, "state", "outbox", settled.delivery.ID+".json")
+	path := filepath.Join(domain.prepared.workspace, "state", "outbox", settled.delivery.ID+".json")
 	if err != nil || os.WriteFile(path, data, 0o600) != nil {
 		t.Fatal("cannot prepare unfinished native receipt")
 	}
@@ -86,7 +86,7 @@ func TestPDFSettlementGraceWaitsForNativeRecoveryWithoutChangingOperation(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	box, err := outbox.Open(domain.prepared.home)
+	box, err := outbox.Open(domain.prepared.workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -102,7 +102,11 @@ func (domain *questionConversation) matchesPrompt(record interactions.Record, pr
 	if !matchedScope || !validID(record.PromptDeliveryID) {
 		return false, nil
 	}
-	data, err := domain.read(domain.home, "state/outbox/"+record.PromptDeliveryID+".json", outbox.MaxInspectionBytes)
+	data, err := domain.read(
+		domain.workspace,
+		"state/outbox/"+record.PromptDeliveryID+".json",
+		outbox.MaxInspectionBytes,
+	)
 	if err != nil {
 		return false, err
 	}
