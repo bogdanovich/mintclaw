@@ -304,7 +304,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 				}
 			}
 		}
-		assertDocumentFormReviewState(t, workspace, home, privateValues...)
+		assertDocumentFormReviewState(t, fixture, workspace, home, privateValues...)
 	})
 
 	t.Run("protected form commit consumes approval and delivers once", func(t *testing.T) {
@@ -381,7 +381,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			delivered.Parts[0].ContentType != "application/pdf" {
 			t.Fatalf("commit delivery = %#v", delivered)
 		}
-		assertDocumentFormCommitState(t, workspace, home, privateValues...)
+		assertDocumentFormCommitState(t, fixture, workspace, home, privateValues...)
 	})
 
 	t.Run("agent-led form explains navigates and delivers exactly once", func(t *testing.T) {
@@ -527,7 +527,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		if mediaCount != 1 || len(delivered.Parts) != 1 || delivered.Parts[0].Filename != "filled-document.pdf" {
 			t.Fatalf("agent-led form delivery = %#v", delivered)
 		}
-		assertDocumentFormCommitState(t, workspace, home, privateValues...)
+		assertDocumentFormCommitState(t, fixture, workspace, home, privateValues...)
 	})
 
 	for _, scenario := range []struct {
@@ -1952,7 +1952,7 @@ func configureDocumentE2E(cfg *config.Config, model string, vision bool) {
 	cfg.Tools.Document.Enabled = true
 	cfg.Tools.Approval.Mode = config.ToolApprovalModeAllowAll
 	cfg.Diagnostics.TraceCapture = config.DiagnosticTraceCaptureConfig{
-		Enabled: true, ContentMode: "redacted_content", RetentionHours: 1, MaxTraces: 10,
+		Enabled: true, ContentMode: "redacted_content", RetentionHours: 1, MaxTraces: 100,
 	}
 	if vision {
 		cfg.ModelList = []*config.ModelConfig{{
@@ -2720,6 +2720,19 @@ func waitDocumentFormApproval(t *testing.T, channel *fakeMediaChannel) string {
 func waitDocumentFormInteractionResolved(t *testing.T, workspace, shortID string) {
 	t.Helper()
 	path := interactions.WorkspaceStorePath(workspace)
+	var observed interactions.Record
+	defer func() {
+		if t.Failed() {
+			t.Logf(
+				"form interaction status=%s revision=%d resumes=%d final_deliveries=%d outcome=%s",
+				observed.Status,
+				observed.Revision,
+				observed.ResumeTries,
+				len(observed.FinalDeliveryIDs),
+				observed.Outcome,
+			)
+		}
+	}()
 	waitDocumentE2E(t, func() bool {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -2733,6 +2746,7 @@ func waitDocumentFormInteractionResolved(t *testing.T, workspace, shortID string
 		}
 		for _, record := range snapshot.Records {
 			if record.ShortID == shortID {
+				observed = record
 				return record.Status == interactions.StatusResolved && len(record.FinalDeliveryIDs) > 0
 			}
 		}
@@ -2859,8 +2873,13 @@ func assertDocumentSourceDigest(t *testing.T, sourcePath, want string) {
 	}
 }
 
-func assertDocumentFormReviewState(t *testing.T, workspace, home string, forbidden ...string) {
+func assertDocumentFormReviewState(
+	t *testing.T, fixture *agentLoopTestFixture, workspace, home string, forbidden ...string,
+) {
 	t.Helper()
+	// Stop admission and drain persistence before taking the privacy snapshot.
+	// A live trace writer can prune a file between WalkDir and ReadFile.
+	closeDocumentE2EFixtureAfterTraceDrain(t, fixture)
 	paths := []string{
 		interactions.WorkspaceStorePath(workspace),
 		filepath.Join(
@@ -2916,8 +2935,11 @@ func assertDocumentFormReviewState(t *testing.T, workspace, home string, forbidd
 	}
 }
 
-func assertDocumentFormCommitState(t *testing.T, workspace, home string, forbidden ...string) {
+func assertDocumentFormCommitState(
+	t *testing.T, fixture *agentLoopTestFixture, workspace, home string, forbidden ...string,
+) {
 	t.Helper()
+	closeDocumentE2EFixtureAfterTraceDrain(t, fixture)
 	paths := []string{
 		interactions.WorkspaceStorePath(workspace),
 		filepath.Join(
