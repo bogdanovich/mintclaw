@@ -117,6 +117,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   browser milestones for current-specialist hardening, first-party tools,
   artifacts, human handoff, companion placement, profiles, providers, and
   computer fallback.
+- [Credential Access Roadmap](credential-access-roadmap.md): scoped 1Password
+  access, Android passkey approval, 20-hour revocable grants, isolated browser
+  login, and qualification gates for keeping authentication material outside
+  model context.
 - [Reliable PDF Support Roadmap](pdf-support-roadmap.md): ordered document
   identity, inspection, read/render, AcroForm, durable form, XFA, transformation,
   companion, and production-verification milestones.
