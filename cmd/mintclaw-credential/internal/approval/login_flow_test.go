@@ -25,6 +25,7 @@ func TestSignedApprovalSnapshotsCanonicalFlowAndRetiresOnFlowChange(t *testing.T
 	fixture.enroll(t)
 	ctx := context.Background()
 	rules := browserFlowRules()
+	rules[0].Origins[0] = "https://WWW.FACEBOOK.COM:443"
 	if fixture.controller.ReplacePolicy(ctx, rules) != nil {
 		t.Fatal("browser flow configuration failed")
 	}
@@ -41,6 +42,18 @@ func TestSignedApprovalSnapshotsCanonicalFlowAndRetiresOnFlowChange(t *testing.T
 	lease, err := fixture.controller.LeaseLogin(ctx, grant.ID, request)
 	if err != nil {
 		t.Fatal("browser lease failed")
+	}
+	origins, err := lease.Origins(ctx, request)
+	if err != nil || len(origins) != 1 || origins[0] != "https://www.facebook.com" {
+		t.Fatal("browser origins were not canonical")
+	}
+	origins[0] = "https://attacker.example"
+	if copied, copyErr := lease.Origins(ctx, request); copyErr != nil || copied[0] != "https://www.facebook.com" {
+		t.Fatal("caller mutated immutable origins")
+	}
+	if remaining, remainingErr := lease.Remaining(ctx, request); remainingErr != nil || remaining <= 0 ||
+		remaining > credentialbroker.MaxGrantLifetime {
+		t.Fatal("signed browser lease returned an invalid lifetime")
 	}
 	flow, err := lease.Flow(ctx, request)
 	if err != nil || flow != *browserFlowRules()[0].Login {

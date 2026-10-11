@@ -53,6 +53,24 @@ func (authority *Authority) Lease(ctx context.Context, grantID string, request R
 	return GrantLease{authority, grantID, request, authority.grants[grantID]}, nil
 }
 
+// Remaining returns this generation's original remaining lifetime. It never
+// renews the grant and performs the same current-scope admission as Check.
+func (lease GrantLease) Remaining(ctx context.Context, request Request) (time.Duration, error) {
+	if ctx == nil || ctx.Err() != nil || lease.authority == nil || lease.lifetime == nil {
+		return 0, ErrDenied
+	}
+	lease.authority.mu.Lock()
+	defer lease.authority.mu.Unlock()
+	if err := lease.checkLocked(ctx, request); err != nil {
+		return 0, err
+	}
+	remaining := lease.lifetime.grant.ExpiresAt.Sub(lease.authority.now())
+	if remaining <= 0 || remaining > MaxGrantLifetime || ctx.Err() != nil {
+		return 0, ErrDenied
+	}
+	return remaining, nil
+}
+
 // Check compares the current authenticated principal/account/revision to the
 // immutable lease and checks trusted live browser or connector origin. Caller
 // identity and execution state must not come from model-supplied fields.
@@ -67,6 +85,16 @@ func (lease GrantLease) Check(ctx context.Context, request Request) error {
 	authority := lease.authority
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
+	return lease.checkLocked(ctx, request)
+}
+
+// checkLocked requires the authority lock, with non-nil authority/lifetime.
+func (lease GrantLease) checkLocked(ctx context.Context, request Request) error {
+	if request.Principal != lease.request.Principal || request.Account != lease.request.Account ||
+		request.PolicyRevision != lease.request.PolicyRevision {
+		return ErrDenied
+	}
+	authority := lease.authority
 	if ctx.Err() != nil {
 		return ErrDenied
 	}
