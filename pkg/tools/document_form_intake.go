@@ -298,7 +298,7 @@ func (tool *DocumentTool) continueFormIntake(
 	if err != nil || progress == nil || progress.JobID != input.JobID || progress.ModeID != input.ModeID {
 		return documentFormToolFailure("form_job_conflict", "the protected intake receipt is unavailable")
 	}
-	intake := safeDocumentFormIntake{Progress: *progress}
+	intake := safeDocumentFormIntake{Progress: *progress, Intent: input.DialogIntent}
 	references, err := tool.formJobs.FormIntakeReferences(ctx, input.JobID, input.ModeID, owner)
 	if err != nil {
 		return documentFormToolError(err)

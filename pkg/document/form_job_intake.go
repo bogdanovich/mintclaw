@@ -503,10 +503,18 @@ func formIntakeAdmission(
 }
 
 func formIntakeInput(record FormJobRecord, mode *formIntakeStoredMode, input formIntakeStoredInput) FormIntakeInput {
+	var dialogIntent FormIntakeDialogIntent
+	for index := len(input.Reservations) - 1; index >= 0; index-- {
+		if outcome := input.Reservations[index].Outcome; outcome != nil {
+			dialogIntent = outcome.Intent
+			break
+		}
+	}
 	return FormIntakeInput{
 		JobID: record.JobID, ModeID: mode.ID, Reference: formIntakeReceiptPrefix + record.JobID + "." + input.ID,
 		Revision: record.Revision, Passes: len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
-		Intent: input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
+		DialogIntent: dialogIntent,
+		Intent:       input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
 		Accounted: formIntakeAccountedLiterals(input),
 		Findings:  formIntakeCurrentFindings(input),
 	}
