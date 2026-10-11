@@ -3378,7 +3378,7 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 				WithOutboundDelivery(toolshared.OutboundDelivery{Text: "checking services"}).
 				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			if _, outcome, err := al.deliverToolResultToUserWithScopes(
-				t.Context(), ts, result, "message", scopeCase.scopes, bus.OutboundMetadata{},
+				t.Context(), ts, result, "message", scopeCase.scopes, true, bus.OutboundMetadata{},
 			); err != nil || outcome != toolResultDeliveryQueued {
 				t.Fatalf("delivery = (%v, %v)", outcome, err)
 			}
@@ -3404,7 +3404,7 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 				}}}).
 				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			if _, outcome, err := al.deliverToolResultToUserWithScopes(
-				t.Context(), ts, result, "image_generation", scopeCase.scopes, bus.OutboundMetadata{},
+				t.Context(), ts, result, "image_generation", scopeCase.scopes, true, bus.OutboundMetadata{},
 			); err != nil || outcome != toolResultDeliveryQueued {
 				t.Fatalf("delivery = (%v, %v)", outcome, err)
 			}
@@ -3429,7 +3429,7 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 				WithOutboundDelivery(toolshared.OutboundDelivery{Text: "still working"}).
 				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			if _, outcome, err := al.deliverToolResultToUserWithScopes(
-				t.Context(), ts, result, "message", scopeCase.scopes, bus.OutboundMetadata{},
+				t.Context(), ts, result, "message", scopeCase.scopes, true, bus.OutboundMetadata{},
 			); err != nil || outcome != toolResultDeliveryQueued {
 				t.Fatalf("delivery = (%v, %v)", outcome, err)
 			}

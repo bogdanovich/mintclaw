@@ -75,8 +75,31 @@ jq -r '
 Inspect content only around the first suspicious transition and correlate exact
 IDs with service logs and durable state. Async delivery decisions retain the
 task ID, exact task generation, and completion ID. Channel attempts and
-outcomes retain their durable delivery ID. Historical traces may omit these
-fields; never infer an exact generation or delivery from timestamps or prose.
+outcomes retain their durable delivery ID. An async completion normally lives
+in a separate bounded continuation trace whose
+`metadata.parent_turn_id` is the originating turn. Search both the parent turn
+and continuation instead of assuming the decision was appended to the already
+finalized parent file:
+
+```bash
+jq -r --arg turn_id 'ORIGINATING_TURN_ID' '
+  select(
+    .metadata.root_turn_id == $turn_id
+    or .metadata.parent_turn_id == $turn_id
+  )
+  | [.trace_id, .metadata.root_turn_id, .metadata.parent_turn_id,
+     (.records | length), .truncation.incomplete] | @tsv
+' TRACE_ROOT/*.json
+```
+
+A completion with neither a direct-user nor parent-synthesis route can be a
+valid one-record continuation with no turn outcome. Direct user-only delivery
+has a 30-second settlement window. Parent-only and user-and-parent modes allow
+the bounded 120-second synthesis deadline plus that delivery window; any
+earlier direct user delivery is correlated but non-settling, and the final
+synthesized outbound settles the trace. Historical traces may omit these
+fields or the continuation entirely; never infer an exact generation or
+delivery from timestamps or prose.
 The bundled `mintclaw-trace-debug` skill provides the full investigation and
 reporting workflow.
 

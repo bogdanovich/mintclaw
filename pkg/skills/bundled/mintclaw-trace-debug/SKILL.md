@@ -120,10 +120,18 @@ Correlate:
   call ID reused by a later model attempt;
 - async delivery decisions with the authoritative task registry by
   `scope.task_id` plus `correlation.task_generation_id`, and completion
-  deduplication by `correlation.completion_id`;
+  deduplication by `correlation.completion_id`; a completion normally uses a
+  separate bounded continuation trace whose `metadata.parent_turn_id` names
+  the originating turn, so inspect both files instead of expecting a late
+  decision in the finalized parent trace;
 - delivery attempts and outcomes by `correlation.delivery_id`; use their exact
-  turn trace scope to relate them to a retained async decision, then verify the
-  current outcome in the durable outbox rather than inferring it from timing;
+  continuation trace scope to relate them to the retained async decision, then
+  verify the current outcome in the durable outbox rather than inferring it
+  from timing; direct user-only delivery has a 30-second settlement window,
+  while parent synthesis is bounded by its 120-second deadline plus that
+  delivery window; in user-and-parent mode the early direct delivery is
+  correlated but non-settling and only the final synthesized outbound settles
+  the continuation;
 - steering injection or interrupt with the next model/tool decision;
 - context compaction with the model behavior immediately before and after it;
 - turn start/end and the final outcome.

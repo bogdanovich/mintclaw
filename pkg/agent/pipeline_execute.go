@@ -1513,9 +1513,21 @@ func (runner *toolLoopRunner) invokeToolCall(
 	asyncCallback := func(_ context.Context, result *toolshared.ToolResult) {
 		completionID := asyncCompletionID(ts.turnID, toolCallID, asyncToolName)
 		delivery := decideAsyncToolResultDelivery(result)
+		completionTraceScope := runtimeevents.NewTraceScope(
+			ts.workspace,
+			"async-completion-"+uuid.NewString(),
+		)
+		completionMeta := runner.toolCallEventMeta(
+			i,
+			toolCallID,
+			"runTurn",
+			"turn.async.completion",
+		)
+		completionMeta.TraceScope = completionTraceScope
+		completionMeta.ParentTurnID = ts.turnID
 		p.emitEvent(
 			runtimeevents.KindAgentAsyncCompletion,
-			runner.toolCallEventMeta(i, toolCallID, "runTurn", "turn.async.completion"),
+			completionMeta,
 			AsyncCompletionPayload{
 				SourceTool:       asyncToolName,
 				CompletionID:     completionID,
@@ -1537,6 +1549,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 				CompletionID: completionID,
 				Result:       result,
 				Decision:     delivery,
+				TraceScopes:  []runtimeevents.TraceScope{completionTraceScope},
 			})
 			return
 		}
@@ -1546,6 +1559,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 			CompletionID: completionID,
 			Result:       result,
 			Decision:     delivery,
+			TraceScopes:  []runtimeevents.TraceScope{completionTraceScope},
 		})
 	}
 
