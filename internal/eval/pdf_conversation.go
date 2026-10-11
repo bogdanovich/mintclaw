@@ -33,6 +33,7 @@ type pdfConversation struct {
 	approvalRequestID     string
 	operationID           string
 	artifacts             *pdfArtifactCollector
+	censusOwner           *document.Authority
 }
 
 func (domain *pdfConversation) initialTask() string { return domain.prepared.task }
@@ -106,6 +107,9 @@ func (domain *pdfConversation) observe(ctx context.Context, prompt Event) error 
 				return ErrPDFTrial
 			}
 			domain.jobID, domain.owner = job.JobID, owner
+			if writeOwner, ownerErr := pdfWriteOwner(domain.prepared.workspace, record); ownerErr == nil {
+				domain.censusOwner = &writeOwner
+			}
 			return nil
 		}
 		select {
@@ -121,6 +125,7 @@ func (domain *pdfConversation) conclude(ctx context.Context, trial *Trial) {
 		Version: Version, SourceSHA256: domain.prepared.item.Case.Fixtures[0].SHA256,
 		JobID: domain.jobID, State: "unknown", Cleanup: "owned_fixture_retained; native_settlement_unknown",
 	}
+	defer domain.concludeNativeCensus(ctx, trial)
 	if domain.review != nil {
 		trial.PDF.WriteIntent = &PDFWriteIntentEvidence{
 			ReviewRevision: domain.review.ReviewRevision, ConfirmationRequestID: domain.confirmationRequestID,

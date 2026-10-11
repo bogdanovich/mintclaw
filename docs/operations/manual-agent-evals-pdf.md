@@ -39,6 +39,32 @@ input before ordinary history. Private values appear only in an ephemeral reques
 Raw admitted registry, outbox and form-store bytes are scanned before projection; unavailable or unscannable evidence
 does not establish safety. These helpers do not grant approval or settle delivery.
 
+## Bounded Native Census
+
+The runner captures a private baseline before sending the first PDF task and observes native write-journal/outbox
+records again after the conversation. Write journals use the native home-scoped `state/document-writes/journal`;
+the instance outbox uses the configured workspace's `state/outbox`. The observer never creates either store or
+acquires its locks. An absent root is unavailable evidence, not an empty journal.
+
+Each observation is bounded to 2,048 JSON records and 16 MiB of raw bytes, with native per-record limits. Directories,
+files and their hierarchy must match the native private layout without symlink aliases; entries, inode identity,
+size and modification time are rechecked. An unexpected file, partial inventory, concurrent replacement, excessive
+size, invalid native record or duplicate JSON key refuses a complete projection. The known native journal lock
+is inspected only as an empty private control file, never acquired. Raw known facts/credentials are scanned before
+native decoding or owner filtering. Private baseline bytes are cleared when local trial handles are released.
+
+Only validated native prompt/approval authority identifies owned write records. All records are inspected, including
+foreign history: a valid prior foreign record is not an owned write, a malformed foreign record is not ignored,
+and foreign additions/changes/disappearances make isolation uncertain. A baseline cannot be recaptured after task
+effects. Missing owner/record evidence has no fabricated zero counts in retained reports.
+
+Observed preexisting trial effects, changed source bytes, wrong scope, forbidden writes/document-fill deliveries,
+multiple write operations or multiple delivered document-fill receipts fail the trial. Native intent/receipt counts
+do not independently establish file type or artifact correctness. A complete bounded observation still records
+`native_idle_unproven`; it grants no positive no-write, single-delivery, whole-runtime privacy or cleanup check.
+Those require separate native activity/settlement and independent artifact witnesses. This packet is not E3 exit
+or real-model PDF qualification.
+
 ## Dialogue Admission
 
 The prepared profile must declare `pdf` and `interactions`, enable the document tool with an enabled native audit

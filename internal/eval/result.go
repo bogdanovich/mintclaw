@@ -95,6 +95,25 @@ type PDFTrialEvidence struct {
 	WriteIntent  *PDFWriteIntentEvidence `json:"write_intent,omitempty"`
 	Settlement   *PDFSettlementEvidence  `json:"settlement,omitempty"`
 	Artifact     *PDFArtifactEvidence    `json:"artifact,omitempty"`
+	Census       *PDFCensusEvidence      `json:"census,omitempty"`
+}
+
+// This records bounded native observations, not an idle or privacy proof.
+type PDFCensusEvidence struct {
+	Version         int              `json:"version"`
+	Code            string           `json:"code"`
+	BaselineSHA256  string           `json:"baseline_sha256,omitempty"`
+	ObservedSHA256  string           `json:"observed_sha256,omitempty"`
+	Counts          *PDFCensusCounts `json:"counts,omitempty"`
+	SourceUnchanged *bool            `json:"source_unchanged,omitempty"`
+}
+
+type PDFCensusCounts struct {
+	DocumentDeliveries int `json:"document_deliveries"`
+	WriteOperations    int `json:"write_operations"`
+	MediaIntents       int `json:"media_intents"`
+	PendingOperations  int `json:"pending_operations"`
+	ForeignChanges     int `json:"foreign_changes"`
 }
 
 type PDFArtifactEvidence struct {
