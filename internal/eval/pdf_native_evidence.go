@@ -259,11 +259,7 @@ func (trial *pdfTrial) protectedRequest(prompt Event, handle string) (protocol.M
 }
 
 func readPDFNativeFile(root *os.Root, name string, maximum int64) ([]byte, error) {
-	info, err := root.Lstat(name)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		return nil, ErrPDFTrial
-	}
-	data, err := readBoundedFile(root, name, maximum)
+	data, err := readNativeEvidenceFile(root, name, maximum)
 	if err != nil {
 		return nil, ErrPDFTrial
 	}

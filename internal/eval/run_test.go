@@ -76,6 +76,27 @@ func TestPreparedRunRefusesChangedTargetWithoutTask(t *testing.T) {
 	}
 }
 
+func TestPreparedGeneralRunInspectsDuplicateKeyBeforeProjection(t *testing.T) {
+	fixture := newAdmissionFixture(t)
+	fixture.rawResponse = func(response protocol.MintClawMessage) []byte {
+		data, err := json.Marshal(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []byte(strings.Replace(string(data), `"content":"synthetic-marker"`,
+			`"content":"test-channel-token","content":"synthetic-marker"`, 1))
+	}
+	result, err := runAdmissionFixture(t, fixture, loadedTestCase(t, "general.raw-credential"))
+	if !errors.Is(err, ErrNotPassed) || result.Verdict != Fail || len(result.Trials) != 1 ||
+		result.Trials[0].Code != "private_wire_evidence" || fixture.tasks.Load() != 1 {
+		t.Fatal("duplicate-key projection concealed raw credential evidence", err, result.Verdict)
+	}
+	data, err := os.ReadFile(filepath.Join(result.ReportDir, result.Trials[0].File))
+	if err != nil || strings.Contains(string(data), "test-channel-token") {
+		t.Fatal("unsafe frame was retained instead of withheld")
+	}
+}
+
 func TestPreparedRunReportsUnavailableCoverageWithoutPassing(t *testing.T) {
 	for _, unavailable := range []string{"capability", "driver", "domain"} {
 		t.Run(unavailable, func(t *testing.T) {

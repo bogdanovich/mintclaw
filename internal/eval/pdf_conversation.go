@@ -1,11 +1,8 @@
 package eval
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"strings"
 	"time"
 
@@ -17,19 +14,11 @@ import (
 // The callback inspects bytes in the client's sole reader before JSON maps can
 // discard duplicate keys or response projection can discard auxiliary frames.
 func inspectPDFWire(data []byte, facts map[string]string, filter *strings.Replacer) error {
-	scan := privateContentScan{facts: facts, filter: filter, tokens: 32768}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	matched, complete := scan.value(decoder, 0)
-	if matched && !scan.uncertain {
-		return ErrPrivateEvidence
-	}
-	if matched || !complete || scan.uncertain {
+	err := inspectNativeJSON(data, facts, filter)
+	if err != nil && !errors.Is(err, ErrPrivateEvidence) {
 		return ErrPDFTrial
 	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return ErrPDFTrial
-	}
-	return nil
+	return err
 }
 
 type pdfConversation struct {

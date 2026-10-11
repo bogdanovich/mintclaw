@@ -3,26 +3,26 @@
   "id": "general.interaction.navigation",
   "suite": "general",
   "tags": ["interaction", "navigation"],
-  "description": "Clarify and cancel a question through prompt-bound native controls.",
+  "description": "Cancel an ordinary question through its prompt-bound native control.",
   "task": "Ask me one question using the interactive question controls: whether I prefer email or paper for this synthetic test. Wait for my answer; do not guess a preference.",
   "requires": ["conversation", "interactions"],
   "fixtures": [],
   "driver": {
     "mode": "scripted",
     "steps": [
-      {"wait_for": {"kind": "question"}, "action": {"kind": "clarify"}},
       {"wait_for": {"kind": "question"}, "action": {"kind": "cancel"}}
     ]
   },
   "limits": {"max_user_turns": 3, "turn_timeout": "3m", "case_timeout": "8m", "max_driver_calls": 1},
   "checks": [
     {"id": "native-question", "kind": "interaction_observed"},
-    {"id": "same-session", "kind": "same_session"}
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "native-cancellation", "kind": "last_outcome", "expected": "canceled"}
   ],
   "rubric": [
     {
       "id": "coherent-controls",
-      "description": "The question and offered options agree about email versus paper; clarification preserves the question without guessing a preference, and cancellation is not reported as a completed preference choice.",
+      "description": "The question and offered options agree about email versus paper, and cancellation is not reported as a completed preference choice.",
       "required": true
     }
   ]

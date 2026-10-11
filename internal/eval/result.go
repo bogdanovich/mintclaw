@@ -29,6 +29,8 @@ type Event struct {
 	TraceScopes        []events.TraceScope `json:"trace_scopes,omitempty"`
 	InteractionID      string              `json:"interaction_id,omitempty"`
 	InteractionShortID string              `json:"interaction_short_id,omitempty"`
+	Controls           string              `json:"controls,omitempty"`
+	InteractionKind    string              `json:"interaction_kind,omitempty"`
 }
 
 type CheckResult struct {
@@ -39,28 +41,49 @@ type CheckResult struct {
 }
 
 type Trial struct {
-	Version          int               `json:"version"`
-	ID               string            `json:"id"`
-	CaseID           string            `json:"case_id"`
-	CaseSHA256       string            `json:"case_sha256"`
-	Repetition       int               `json:"repetition,omitempty"`
-	SessionID        string            `json:"session_id"`
-	AgentID          string            `json:"agent_id"`
-	SessionKey       string            `json:"session_key,omitempty"`
-	Verdict          Verdict           `json:"verdict"`
-	Code             string            `json:"code"`
-	ExecutionVerdict Verdict           `json:"execution_verdict,omitempty"`
-	ExecutionCode    string            `json:"execution_code,omitempty"`
-	StartedAt        time.Time         `json:"started_at"`
-	DurationMS       int64             `json:"duration_ms"`
-	Events           []Event           `json:"events"`
-	Checks           []CheckResult     `json:"checks"`
-	DriverCalls      []RoleCall        `json:"driver_calls,omitempty"`
-	Judge            *Judgement        `json:"judge,omitempty"`
-	EvidenceEligible bool              `json:"evidence_eligible"`
-	TransportClosed  bool              `json:"transport_closed"`
-	RemoteState      string            `json:"remote_state"`
-	PDF              *PDFTrialEvidence `json:"pdf,omitempty"`
+	Version          int                           `json:"version"`
+	ID               string                        `json:"id"`
+	CaseID           string                        `json:"case_id"`
+	CaseSHA256       string                        `json:"case_sha256"`
+	Repetition       int                           `json:"repetition,omitempty"`
+	SessionID        string                        `json:"session_id"`
+	AgentID          string                        `json:"agent_id"`
+	SessionKey       string                        `json:"session_key,omitempty"`
+	Verdict          Verdict                       `json:"verdict"`
+	Code             string                        `json:"code"`
+	ExecutionVerdict Verdict                       `json:"execution_verdict,omitempty"`
+	ExecutionCode    string                        `json:"execution_code,omitempty"`
+	StartedAt        time.Time                     `json:"started_at"`
+	DurationMS       int64                         `json:"duration_ms"`
+	Events           []Event                       `json:"events"`
+	Checks           []CheckResult                 `json:"checks"`
+	DriverCalls      []RoleCall                    `json:"driver_calls,omitempty"`
+	Judge            *Judgement                    `json:"judge,omitempty"`
+	EvidenceEligible bool                          `json:"evidence_eligible"`
+	TransportClosed  bool                          `json:"transport_closed"`
+	RemoteState      string                        `json:"remote_state"`
+	PDF              *PDFTrialEvidence             `json:"pdf,omitempty"`
+	Cancellation     *QuestionCancellationEvidence `json:"question_cancellation,omitempty"`
+}
+
+// This records one ordinary question's terminal state, not runtime quiescence
+// or cleanup of every resource owned by the session.
+type QuestionCancellationEvidence struct {
+	Version          int    `json:"version"`
+	InteractionID    string `json:"interaction_id"`
+	ShortID          string `json:"short_id"`
+	PromptMessageID  string `json:"prompt_message_id"`
+	PromptRequestID  string `json:"prompt_request_id"`
+	PromptDeliveryID string `json:"prompt_delivery_id"`
+	CancelRequestID  string `json:"cancel_request_id"`
+	ReplyMessageID   string `json:"reply_message_id"`
+	AgentID          string `json:"agent_id"`
+	SessionKey       string `json:"session_key"`
+	Workspace        string `json:"workspace"`
+	OriginTurnID     string `json:"origin_turn_id"`
+	WaitingRevision  int64  `json:"waiting_revision"`
+	TerminalRevision int64  `json:"terminal_revision"`
+	ResolvedAt       int64  `json:"resolved_at"`
 }
 
 type PDFTrialEvidence struct {
