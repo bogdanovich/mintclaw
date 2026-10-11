@@ -288,7 +288,8 @@ func verifyApprovalFixtureConsole(t *testing.T) {
 	}
 	var peer *unix.Ucred
 	if raw.Control(func(fd uintptr) { peer, err = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED) }) != nil ||
-		err != nil || peer == nil || peer.Uid != 65532 ||
+		err != nil || peer == nil ||
+		peer.Uid != 65532 ||
 		peer.Gid != 65532 {
 		t.Fatal("console creator role mismatch")
 	}
