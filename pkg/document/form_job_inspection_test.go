@@ -185,3 +185,89 @@ func TestFormJobOwnerFromProtectedRouteMatchesNativeOwner(t *testing.T) {
 		t.Fatal("invalid owner mapping was admitted")
 	}
 }
+
+func TestInspectFormJobSnapshotDoesNotReopenReplacedStore(t *testing.T) {
+	store, options := newTestFormJobStore(t)
+	owner := testFormJobOwner()
+	record, err := store.Create(t.Context(), testFormJobCreateRequest(owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := os.ReadFile(formJobStatePath(options))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(admitted)
+	request := testFormJobCreateRequest(owner)
+	request.StartIdempotencyKey = "replacement-job"
+	request.BackendRevision = "PUBLIC_INSPECTION_CANARY"
+	other, err := store.Create(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	replaced, err := os.ReadFile(formJobStatePath(options))
+	if err != nil || bytes.Equal(replaced, admitted) ||
+		!bytes.Contains(replaced, []byte("PUBLIC_INSPECTION_CANARY")) {
+		t.Fatal("replacement did not add a public value outside the admitted job")
+	}
+	got, err := InspectFormJobSnapshot(options, admitted, record.JobID, owner)
+	if err != nil || !reflect.DeepEqual(got, record) {
+		t.Fatal("snapshot inspection did not preserve the admitted record", err)
+	}
+	if _, err = InspectFormJobSnapshot(options, admitted, other.JobID, owner); !errors.Is(err, ErrFormJobNotFound) {
+		t.Fatal("inspection silently read the replacement snapshot", err)
+	}
+	if _, err = InspectFormJob(options, other.JobID, owner); err != nil {
+		t.Fatal("replacement is not a valid native snapshot", err)
+	}
+	after, err := os.ReadFile(formJobStatePath(options))
+	if err != nil || !bytes.Equal(after, replaced) {
+		t.Fatal("snapshot inspection rewrote the replaced store")
+	}
+}
+
+func TestInspectFormJobSnapshotKeepsNativeValidationAndBudgets(t *testing.T) {
+	store, options := newTestFormJobStore(t)
+	owner := testFormJobOwner()
+	record, err := store.Create(t.Context(), testFormJobCreateRequest(owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	data, err := os.ReadFile(formJobStatePath(options))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(data)
+	for _, name := range []string{"owner", "integrity", "trailing", "empty", "budget", "key"} {
+		t.Run(name, func(t *testing.T) {
+			candidate, config, currentOwner := data, options, owner
+			want := ErrFormJobRecordCorrupt
+			switch name {
+			case "owner":
+				currentOwner.SenderID = "another-user"
+				want = ErrFormJobUnauthorized
+			case "integrity":
+				candidate = bytes.ReplaceAll(data, []byte(record.SourceDigest), []byte(strings.Repeat("b", 64)))
+			case "trailing":
+				candidate = append(bytes.Clone(data), []byte(` {"trailing":true}`)...)
+			case "empty":
+				candidate = nil
+			case "budget":
+				config.MaxBytes = 4096
+				candidate = bytes.Repeat([]byte(" "), 4097)
+				want = ErrFormJobStoreUnavailable
+			case "key":
+				if err := os.Remove(filepath.Join(options.KeyRoot, formJobKeyFileName)); err != nil {
+					t.Fatal(err)
+				}
+				want = ErrFormJobKeyUnavailable
+			}
+			got, err := InspectFormJobSnapshot(config, candidate, record.JobID, currentOwner)
+			if !errors.Is(err, want) || !reflect.DeepEqual(got, FormJobRecord{}) {
+				t.Fatalf("snapshot validation = %v, want %v; no partial record", err, want)
+			}
+		})
+	}
+}

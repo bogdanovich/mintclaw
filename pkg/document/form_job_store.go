@@ -1,6 +1,7 @@
 package document
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -808,7 +809,16 @@ func (store *FormJobStore) loadLocked() (formJobStoreDocument, error) {
 	if err != nil {
 		return formJobStoreDocument{}, fmt.Errorf("%w: read snapshot: %w", ErrFormJobStoreUnavailable, err)
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	defer clear(data)
+	return store.decodeSnapshot(data)
+}
+
+func (store *FormJobStore) decodeSnapshot(data []byte) (formJobStoreDocument, error) {
+	if len(data) > store.maxBytes {
+		return formJobStoreDocument{}, ErrFormJobStoreUnavailable
+	}
+	var document formJobStoreDocument
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&document); err != nil {
 		return formJobStoreDocument{}, fmt.Errorf("%w: decode snapshot", ErrFormJobRecordCorrupt)

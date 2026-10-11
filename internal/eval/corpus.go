@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -17,6 +18,7 @@ type LoadedCase struct {
 	Case   Case
 	Path   string
 	Digest string
+	Root   string
 }
 
 type Selection struct {
@@ -31,6 +33,14 @@ const (
 )
 
 func LoadCorpus(directory string) ([]LoadedCase, error) {
+	directory, err := filepath.Abs(directory)
+	if err != nil {
+		return nil, ErrInvalidCorpus
+	}
+	directory, err = filepath.EvalSymlinks(directory)
+	if err != nil {
+		return nil, ErrInvalidCorpus
+	}
 	root, err := os.OpenRoot(directory)
 	if err != nil {
 		return nil, ErrInvalidCorpus
@@ -59,7 +69,7 @@ func LoadCorpus(directory string) ([]LoadedCase, error) {
 			}
 		}
 		seen[item.ID] = true
-		items = append(items, LoadedCase{Case: item, Path: name, Digest: digest(data)})
+		items = append(items, LoadedCase{Case: item, Path: name, Digest: digest(data), Root: directory})
 		return nil
 	})
 	if err != nil || len(items) == 0 {

@@ -14,28 +14,11 @@ import (
 // must admit trusted local roots and check freshness separately; this observation
 // is not approval authority or a safe model/transport projection.
 func InspectFormJob(options FormJobStoreOptions, jobID string, owner FormJobOwner) (FormJobRecord, error) {
-	options, err := normalizeFormJobStoreOptions(options)
+	store, err := inspectionFormJobStore(options)
 	if err != nil {
 		return FormJobRecord{}, err
 	}
-	directory := filepath.Join(options.StateRoot, "document_form_jobs")
-	for _, path := range []string{options.StateRoot, options.KeyRoot, directory} {
-		info, statErr := os.Lstat(path)
-		if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
-			runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-			return FormJobRecord{}, ErrFormJobStoreUnavailable
-		}
-	}
-	key, err := readProtectedRegularFile(filepath.Join(options.KeyRoot, formJobKeyFileName), chacha20poly1305.KeySize)
-	if err != nil || len(key) != chacha20poly1305.KeySize {
-		clear(key)
-		return FormJobRecord{}, ErrFormJobKeyUnavailable
-	}
-	defer clear(key)
-	store := &FormJobStore{
-		path: filepath.Join(directory, formJobStoreFileName), profileKey: key,
-		maxJobs: options.MaxJobs, maxEventsPerJob: options.MaxEventsPerJob, maxBytes: options.MaxBytes,
-	}
+	defer clear(store.profileKey)
 	document, err := store.loadLocked()
 	if err != nil {
 		return FormJobRecord{}, err
@@ -45,4 +28,53 @@ func InspectFormJob(options FormJobStoreOptions, jobID string, owner FormJobOwne
 		return FormJobRecord{}, err
 	}
 	return cloneStoredFormJobPublic(record), nil
+}
+
+// InspectFormJobSnapshot authenticates exactly the caller's admitted snapshot,
+// without reopening the state file. Callers must not mutate data during this
+// synchronous call. As with InspectFormJob, this is not approval authority.
+func InspectFormJobSnapshot(
+	options FormJobStoreOptions,
+	data []byte,
+	jobID string,
+	owner FormJobOwner,
+) (FormJobRecord, error) {
+	store, err := inspectionFormJobStore(options)
+	if err != nil {
+		return FormJobRecord{}, err
+	}
+	defer clear(store.profileKey)
+	document, err := store.decodeSnapshot(data)
+	if err != nil {
+		return FormJobRecord{}, err
+	}
+	record, err := store.authorizedPublicRecord(&document, jobID, owner)
+	if err != nil {
+		return FormJobRecord{}, err
+	}
+	return cloneStoredFormJobPublic(record), nil
+}
+
+func inspectionFormJobStore(options FormJobStoreOptions) (*FormJobStore, error) {
+	options, err := normalizeFormJobStoreOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	directory := filepath.Join(options.StateRoot, "document_form_jobs")
+	for _, path := range []string{options.StateRoot, options.KeyRoot, directory} {
+		info, statErr := os.Lstat(path)
+		if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+			runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+			return nil, ErrFormJobStoreUnavailable
+		}
+	}
+	key, err := readProtectedRegularFile(filepath.Join(options.KeyRoot, formJobKeyFileName), chacha20poly1305.KeySize)
+	if err != nil || len(key) != chacha20poly1305.KeySize {
+		clear(key)
+		return nil, ErrFormJobKeyUnavailable
+	}
+	return &FormJobStore{
+		path: filepath.Join(directory, formJobStoreFileName), profileKey: key,
+		maxJobs: options.MaxJobs, maxEventsPerJob: options.MaxEventsPerJob, maxBytes: options.MaxBytes,
+	}, nil
 }

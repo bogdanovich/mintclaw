@@ -16,6 +16,25 @@ predicate. Models receive natural tasks/personas and handles, not golden field m
 `MC_EVAL_GENERATE_PRIVATE_V1` marker is reserved for fresh per-trial private generation by the integration packet;
 it is not an answer and must never be sent literally. `{{fixture}}` is one runner-owned source substitution, not a DSL.
 
+## Native Evidence Preparation
+
+The integration foundation prepares a new private fixture directory per trial, rechecks pinned source bytes, and
+resolves public generation markers to fresh ephemeral values. It never resumes an existing directory. Local release
+retains a potentially active remote source; terminal cleanup removes only the owned source and empty directory,
+not unexpected files recursively. Neither rule certifies native job/resource cleanup on its own.
+
+Protected input requires a fresh native waiting record matching the full interaction ID, short ID, agent, session,
+route/sender and expiry. The native `PromptDeliveryID` is an **outbox ID**, not the platform message ID seen on the
+wire. The observer reads the exact delivered outbox intent and binds its `PlatformMessageIDs` to the observed prompt.
+Pending/ambiguous delivery, stale controls and mismatched routes cannot admit private input.
+
+Opaque protected-answer tokens are read only for a local job locator, never decrypted or treated as authority.
+The native form store authenticates the public job and owner; the fixture source and job digest must match.
+Explicit `/answer` ingress remains responsible for sealed binding validation and consuming stale/wrong-route
+input before ordinary history. Private values appear only in an ephemeral request, not a stored event or role context.
+Raw admitted registry, outbox and form-store bytes are scanned before projection; unavailable or unscannable evidence
+does not establish safety. These helpers do not grant approval, settle delivery, or yet enable `eval run` PDF cases.
+
 ## Optional Dependencies
 
 The oracle uses [pypdf](https://pypdf.readthedocs.io/en/stable/user/forms.html) for structure/value readback and
