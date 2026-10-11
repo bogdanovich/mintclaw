@@ -6,10 +6,13 @@
 on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,
 bootstrap skills, deploy a binary, restart a gateway, grant approval, or retry uncertain task admission.
 
-This packet does not yet implement domain oracles, protected fact answers, artifact downloads, repeats, or comparison.
+The runner does not yet admit domain execution, protected fact answers, artifact downloads, repeats, or comparison.
 Missing capabilities/drivers/domain evidence produce explicit non-passing coverage. A text response never proves
 that a PDF was filled, a browser action happened, or Telegram delivery worked. See the
 [roadmap](../architecture/agent-evals-roadmap.md) for the remaining packets.
+
+PDF corpus/oracle preparation is described in the [PDF guide](manual-agent-evals-pdf.md). It does not yet enable
+PDF execution through `run`; unsupported domain evidence remains non-passing coverage.
 
 The E2 integration adds tools-disabled user/judge roles to `run`, a judge-only `grade` command, versioned prompts,
 strict typed actions/findings, and [six manually labelled calibration examples](../../evals/calibration/judge-v1.json).

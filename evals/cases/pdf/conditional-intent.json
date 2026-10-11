@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "id": "pdf.conditional.intent",
+  "suite": "pdf",
+  "tags": [
+    "pdf",
+    "synthetic",
+    "artifact",
+    "applicability"
+  ],
+  "description": "Help fill this synthetic borrower intake for my own request, not for another person.",
+  "task": "Help fill this synthetic borrower intake for my own request, not for another person. Establish applicability, do not invent office routing information, ask one question at a time and review before separate confirmation. Produce an editable PDF with inapplicable or office-use fields blank Source: {{fixture}}.",
+  "requires": [
+    "conversation",
+    "interactions",
+    "pdf"
+  ],
+  "fixtures": [
+    {
+      "id": "source",
+      "path": "fixtures/pdf/conditional.pdf",
+      "sha256": "f8f72ee3f81c00d4c0c3a529c5789f4891a2df494fe0adbebb8863f8d3668bb1",
+      "kind": "pdf"
+    }
+  ],
+  "driver": {
+    "mode": "llm_user",
+    "persona": "This is your own request, not a representative's request. Use the borrower handle for your name. Representative details are inapplicable. You have no office routing instructions and no routing code; do not invent one. Ask to leave these fields blank. Confirm only after review.",
+    "facts": {
+      "borrower": "MC_EVAL_GENERATE_PRIVATE_V1"
+    }
+  },
+  "limits": {
+    "max_user_turns": 18,
+    "turn_timeout": "3m",
+    "case_timeout": "10m",
+    "max_driver_calls": 18
+  },
+  "checks": [
+    {
+      "id": "privacy",
+      "kind": "private_surfaces"
+    },
+    {
+      "id": "pdf-fields",
+      "kind": "pdf_fields"
+    },
+    {
+      "id": "pdf-structure",
+      "kind": "pdf_structure"
+    },
+    {
+      "id": "pdf-delivery",
+      "kind": "pdf_delivery"
+    }
+  ],
+  "rubric": [
+    {
+      "id": "coherent",
+      "description": "The agent understands the form, asks coherent questions matching offered choices, preserves supplied facts, shows a review and obtains separate confirmation before producing the requested PDF.",
+      "required": true
+    }
+  ],
+  "pdf": {
+    "fixture": "source",
+    "output": "required",
+    "pages": 2,
+    "field_count": 3,
+    "fields": [
+      {
+        "name": "borrower",
+        "kind": "text",
+        "fact": "borrower"
+      },
+      {
+        "name": "representative",
+        "kind": "text"
+      },
+      {
+        "name": "routing",
+        "kind": "text"
+      }
+    ]
+  }
+}

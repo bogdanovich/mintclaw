@@ -40,6 +40,7 @@ type Case struct {
 	Limits      Limits      `json:"limits"`
 	Checks      []Check     `json:"checks"`
 	Rubric      []Criterion `json:"rubric"`
+	PDF         *PDFCase    `json:"pdf,omitempty"`
 }
 
 type Fixture struct {
@@ -144,6 +145,10 @@ func (c Case) Validate() error {
 			if check.Expected != "" {
 				return ErrInvalidCase
 			}
+		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write", "private_surfaces":
+			if c.PDF == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
 		default:
 			return ErrInvalidCase
 		}
@@ -155,6 +160,9 @@ func (c Case) Validate() error {
 			return ErrInvalidCase
 		}
 		criterionIDs[criterion.ID] = true
+	}
+	if c.PDF != nil && c.PDF.validate(c) != nil {
+		return ErrInvalidCase
 	}
 	return nil
 }

@@ -142,8 +142,12 @@ func TestFixtureContract(t *testing.T) {
 
 func TestRepositoryCorpus(t *testing.T) {
 	corpus, err := LoadCorpus("../../evals")
-	if err != nil || len(corpus) != 2 {
+	if err != nil || len(corpus) != 8 {
 		t.Fatal("repository cases invalid", err)
+	}
+	pdf, err := Select(corpus, Selection{Suite: "pdf"})
+	if err != nil || len(pdf) != 6 {
+		t.Fatal("required PDF coverage missing", err)
 	}
 }
 

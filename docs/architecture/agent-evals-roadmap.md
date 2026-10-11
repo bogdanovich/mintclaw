@@ -16,13 +16,18 @@ may run in normal CI without credentials, a live gateway, paid models, or instal
 | --- | --- | --- | --- |
 | E0 | Agree architecture and freeze first-goal acceptance | Operator review | Approved; admission recorded |
 | E1 | Run bounded scripted multi-turn cases and produce honest reports | E0 | Contracts, client, runtime probe, admission, and reports merged; real-model qualification pending |
-| E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation merged; adaptive runner, regrade, and calibration implemented; integration review and real-model qualification pending |
-| E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Media provenance merged; read-only native evidence prerequisites under review; suite/oracles not implemented |
+| E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation and adaptive runner/grade merged (#1531, #1541); live calibration/qualification pending |
+| E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Native read-only/media prerequisites merged; approval contracts in review; fixtures/oracle implementation active; domain execution pending |
 | E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Not started |
 | E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Not started |
 
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
 prerequisites when necessary. Do not reimplement protected intake, browser sessions, approval, or delivery in the harness.
+
+E3 preparation uses native media identity (#1536), bounded read-only interaction snapshots (#1538), and owner/integrity-
+checked public form-job observations (#1540). These do not authorize an answer or approve a write. The
+[PDF fixtures/oracle guide](../operations/manual-agent-evals-pdf.md) records the independent witness and its limits;
+its manual controls are not real-model scenario results.
 
 ## E0: Agree And Admit
 
