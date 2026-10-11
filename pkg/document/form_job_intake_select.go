@@ -9,11 +9,12 @@ import (
 )
 
 type formIntakeSelection struct {
-	Payloads        []formJobValuePayload
-	Accounted       []formIntakeSpan
-	AcceptedIDs     []string
-	AcknowledgedIDs []string
-	Findings        []FormFieldMappingBlocker
+	Payloads          []formJobValuePayload
+	Accounted         []formIntakeSpan
+	AcceptedIDs       []string
+	AcknowledgedIDs   []string
+	Findings          []FormFieldMappingBlocker
+	ScopedInstruction bool
 }
 
 type formIntakeResolvedProposal struct {
@@ -67,11 +68,20 @@ func selectFormIntakeProposals(
 		return result, err
 	}
 	for _, item := range resolved {
+		if item.Proposal.Disposition != "" {
+			result.ScopedInstruction = true
+		}
 		if formIntakeProposalAmbiguous(item, resolved, input.Accounted) {
 			result.Findings = append(
 				result.Findings,
 				FormFieldMappingBlocker{FieldID: item.Field.ID, Code: "field_ambiguous"},
 			)
+			continue
+		}
+		if item.Proposal.Disposition != "" {
+			if err := selectFormIntakeDisposition(&result, record, key, item); err != nil {
+				return result, err
+			}
 			continue
 		}
 		assignment := formIntakeAssignment(item)
@@ -151,16 +161,33 @@ func resolveFormIntakeProposals(
 		}
 		seen[item.FieldID] = true
 		field := request.Schema.Fields[index]
-		if len(item.Literals) != 1 && (field.Kind != FormFieldList || !field.MultiSelect) {
+		if !item.Disposition.valid() ||
+			(len(item.Literals) != 1 && (item.Disposition != "" || field.Kind != FormFieldList || !field.MultiSelect)) {
 			return nil, ErrFormJobAnswerConflict
 		}
 		spans, err := resolveFormIntakeRefs(text, item.Literals, item.FieldID)
 		if err != nil {
 			return nil, err
 		}
+		if item.Disposition != "" {
+			for index := range spans {
+				spans[index].FieldID = ""
+				spans[index].ScopedInstruction = true
+			}
+		}
 		correction, err := resolveFormIntakeRefs(text, item.CorrectionEvidence, "")
 		if err != nil {
 			return nil, err
+		}
+		if item.Disposition != "" {
+			// The same exact blanking instruction can also prove correction.
+			// Keep its scoped accounting once, rather than duplicating it as prose
+			// that would block reuse by another field in the instructed section.
+			correction = slices.DeleteFunc(correction, func(candidate formIntakeSpan) bool {
+				return slices.ContainsFunc(spans, func(instruction formIntakeSpan) bool {
+					return instruction.Start == candidate.Start && instruction.End == candidate.End
+				})
+			})
 		}
 		result = append(result, formIntakeResolvedProposal{item, field, spans, correction})
 	}
@@ -190,7 +217,7 @@ func validateFormIntakeNonData(
 ) error {
 	for _, span := range spans {
 		for _, prior := range accounted {
-			if prior.FieldID != "" && formIntakeSpansOverlap(span, prior) {
+			if (prior.FieldID != "" || prior.ScopedInstruction) && formIntakeSpansOverlap(span, prior) {
 				return ErrFormJobAnswerConflict
 			}
 		}
@@ -219,7 +246,7 @@ func formIntakeProposalAmbiguous(
 				continue
 			}
 			for _, fact := range other.Spans {
-				if formIntakeSpansOverlap(span, fact) {
+				if formIntakeSpansOverlap(span, fact) && (!span.ScopedInstruction || span != fact) {
 					return true
 				}
 			}

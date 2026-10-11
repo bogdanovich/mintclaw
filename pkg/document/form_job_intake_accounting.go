@@ -39,6 +39,7 @@ func formIntakeAccountedLiterals(input formIntakeStoredInput) []FormIntakeAccoun
 		occurrence := formIntakeLiteralOccurrence(input.Text, span)
 		result = append(result, FormIntakeAccountedLiteral{
 			Literal: FormIntakeLiteral{Text: text, Occurrence: occurrence}, FieldID: span.FieldID,
+			ScopedInstruction: span.ScopedInstruction,
 		})
 	}
 	return result
@@ -53,6 +54,7 @@ func validateFormIntakeAccounting(record FormJobRecord, input formIntakeStoredIn
 	}
 	for index, span := range input.Accounted {
 		if span.Start < 0 || span.End <= span.Start || span.End > input.OriginalBytes ||
+			span.ScopedInstruction && span.FieldID != "" ||
 			span.FieldID != "" && !slices.ContainsFunc(record.Fields, func(field FormJobFieldState) bool {
 				return field.FieldID == span.FieldID
 			}) {

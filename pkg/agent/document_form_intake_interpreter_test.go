@@ -234,6 +234,45 @@ func TestDocumentIntakeInterpreterKeepsCorrectionContextPrivateAndBounded(t *tes
 	}
 }
 
+func TestDocumentIntakeInterpreterCarriesExplicitDispositionsAndScopedEvidencePrivately(t *testing.T) {
+	view := privateIntakeTestView()
+	view.Pass.Input.Text = "The representative section does not apply"
+	view.Pass.Input.Accounted = []document.FormIntakeAccountedLiteral{{
+		Literal: document.FormIntakeLiteral{Text: view.Pass.Input.Text, Occurrence: 1}, ScopedInstruction: true,
+	}}
+	payload, err := encodeDocumentIntakeView(view)
+	if err != nil || !strings.Contains(string(payload), `"scoped_instruction":true`) {
+		t.Fatal("private field views lost reusable scoped-instruction evidence")
+	}
+	clear(payload)
+	for _, disposition := range []document.FormIntakeDisposition{
+		document.FormIntakeNotApplicable, document.FormIntakeIntentionallyBlank,
+	} {
+		body := `{"intent":"facts","proposals":[{"field_id":"field_name","disposition":"` +
+			string(
+				disposition,
+			) + `","literals":[{"text":"The representative section does not apply","occurrence":1}]}]}`
+		result, decodeErr := decodeDocumentIntakeInterpretation(body, view.Pass.CandidateIDs)
+		if decodeErr != nil || len(result.Proposals) != 1 || result.Proposals[0].Disposition != disposition ||
+			result.Proposals[0].Literals[0].Text != view.Pass.Input.Text {
+			t.Fatal("typed disposition lost its exact protected instruction")
+		}
+		public, marshalErr := json.Marshal(result)
+		if marshalErr != nil || string(public) != "{}" {
+			t.Fatal("scoped instruction escaped the ephemeral interpretation projection")
+		}
+	}
+	for _, body := range []string{
+		`{"intent":"facts","proposals":[{"field_id":"field_name","disposition":"invent_blank","literals":[{"text":"x","occurrence":1}]}]}`,
+		`{"intent":"facts","proposals":[{"field_id":"field_name","disposition":"not_applicable","literals":[{"text":"x","occurrence":1},{"text":"y","occurrence":1}]}]}`,
+		`{"intent":"facts","proposals":[{"field_id":"unknown","disposition":"not_applicable","literals":[{"text":"x","occurrence":1}]}]}`,
+	} {
+		if _, err = decodeDocumentIntakeInterpretation(body, view.Pass.CandidateIDs); err == nil {
+			t.Fatal("unbound or unsupported disposition was accepted")
+		}
+	}
+}
+
 func TestDocumentIntakeInterpreterRejectsAggregateResponseBounds(t *testing.T) {
 	refs := make([]documentIntakeLiteralWire, document.MaxFormIntakeAccountedSpans+1)
 	for index := range refs {

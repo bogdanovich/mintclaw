@@ -48,16 +48,22 @@ func (auditor *documentFormAuditor) InterpretFormIntake(
 const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance against only the supplied fields. ` +
 	`Return exactly one JSON object, no markdown: {"intent":"facts|clarify|back|pause|resume|cancel|review|finish|draft",` +
 	`"proposals":[{"field_id":"supplied id","literals":[{"text":"exact utterance fragment","occurrence":1}],` +
+	`"disposition":"intentionally_blank|not_applicable (omit for positive facts)",` +
 	`"supersedes_event_id":"current event id when correcting","replace_existing":false,` +
 	`"correction_evidence":[{"text":"exact explicit correction instruction","occurrence":1}]}],` +
 	`"non_data":[{"text":"exact prose fragment containing no supplied fact","occurrence":1}],` +
 	`"findings":[{"field_id":"supplied id","code":"field_ambiguous|field_conflicting|field_confirmation_required"}]}. ` +
 	`Arrays may be empty. Occurrences count exact token-aligned non-overlapping matches, starting at 1. ` +
 	`Use only literal text from the utterance, never generate, rephrase, infer or case-fold a value. ` +
+	`For explicit operator instructions to leave a field blank or mark a section inapplicable, use disposition with ` +
+	`one exact instruction literal, not a generated blank or N/A string. Do not mark missing fields inapplicable by default. ` +
+	`A section instruction can target several supplied fields using the same exact literal. Scoped instruction evidence ` +
+	`may be reused only for explicit dispositions, never as another person's data value. ` +
 	`Associate facts with the explicitly intended person/role. If unclear, emit a finding, not an assignment. ` +
 	`Accounted evidence must not be copied to a different field. Facts outside this field view must NOT be non_data. ` +
 	`Do not overlap non_data, proposed facts or correction evidence. Correct or replace existing data only when the ` +
 	`utterance explicitly requests it; supply exact correction evidence and the supplied current event id. ` +
+	`For dispositions only, the same exact blanking instruction may also serve as correction evidence. ` +
 	`Intent is advisory and cannot approve or commit output. Mixed instructions must not become a PDF field value. ` +
 	`Related inputs may clarify the intended person or meaning, but proposed literals must come from utterance, ` +
 	`not from related inputs or document evidence. Do not copy another person's details. ` +
@@ -70,11 +76,12 @@ type documentIntakeLiteralWire struct {
 }
 
 type documentIntakeProposalWire struct {
-	FieldID            string                      `json:"field_id"`
-	Literals           []documentIntakeLiteralWire `json:"literals"`
-	SupersedesEventID  string                      `json:"supersedes_event_id,omitempty"`
-	ReplaceExisting    bool                        `json:"replace_existing,omitempty"`
-	CorrectionEvidence []documentIntakeLiteralWire `json:"correction_evidence,omitempty"`
+	FieldID            string                         `json:"field_id"`
+	Disposition        document.FormIntakeDisposition `json:"disposition,omitempty"`
+	Literals           []documentIntakeLiteralWire    `json:"literals"`
+	SupersedesEventID  string                         `json:"supersedes_event_id,omitempty"`
+	ReplaceExisting    bool                           `json:"replace_existing,omitempty"`
+	CorrectionEvidence []documentIntakeLiteralWire    `json:"correction_evidence,omitempty"`
 }
 
 type documentIntakeResponseWire struct {
@@ -155,14 +162,16 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 		evidence[index] = evidenceWire{Page: item.Page, Text: item.Text}
 	}
 	type accountedWire struct {
-		Literal documentIntakeLiteralWire `json:"literal"`
-		FieldID string                    `json:"field_id,omitempty"`
+		Literal           documentIntakeLiteralWire `json:"literal"`
+		FieldID           string                    `json:"field_id,omitempty"`
+		ScopedInstruction bool                      `json:"scoped_instruction,omitempty"`
 	}
 	accounted := make([]accountedWire, len(pass.Input.Accounted))
 	for index, item := range pass.Input.Accounted {
 		accounted[index] = accountedWire{
-			Literal: documentIntakeLiteralWire{Text: item.Literal.Text, Occurrence: item.Literal.Occurrence},
-			FieldID: item.FieldID,
+			Literal:           documentIntakeLiteralWire{Text: item.Literal.Text, Occurrence: item.Literal.Occurrence},
+			FieldID:           item.FieldID,
+			ScopedInstruction: item.ScopedInstruction,
 		}
 	}
 	payload, err := json.Marshal(struct {
@@ -229,7 +238,10 @@ func decodeDocumentIntakeInterpretation(
 	}
 	for _, proposal := range wire.Proposals {
 		if !slices.Contains(candidateIDs, proposal.FieldID) || seen[proposal.FieldID] ||
-			len(proposal.Literals) == 0 || len(proposal.CorrectionEvidence) > document.MaxFormIntakeCandidates {
+			len(proposal.Literals) == 0 || len(proposal.CorrectionEvidence) > document.MaxFormIntakeCandidates ||
+			!slices.Contains([]document.FormIntakeDisposition{
+				"", document.FormIntakeIntentionallyBlank, document.FormIntakeNotApplicable,
+			}, proposal.Disposition) || (proposal.Disposition != "" && len(proposal.Literals) != 1) {
 			return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
 		}
 		seen[proposal.FieldID] = true
@@ -243,6 +255,7 @@ func decodeDocumentIntakeInterpretation(
 		}
 		result.Proposals = append(result.Proposals, document.FormIntakeProposal{
 			FieldID: proposal.FieldID, Literals: literals, SupersedesEventID: proposal.SupersedesEventID,
+			Disposition:     proposal.Disposition,
 			ReplaceExisting: proposal.ReplaceExisting, CorrectionEvidence: correction,
 		})
 	}
