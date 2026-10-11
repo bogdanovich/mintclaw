@@ -92,6 +92,11 @@ type ToolResult struct {
 // ToolControl carries runtime execution directives. It is not produced output
 // and must not be interpreted by presentation or delivery code.
 type ToolControl struct {
+	// ResourceDispositionVerified is transient evidence set by the executing
+	// registry after the exact resource tool verifies its terminal receipt.
+	// It is neither producer-declared authority nor durable output.
+	ResourceDispositionVerified bool `json:"-"`
+
 	// Async means the tool will complete later through its callback.
 	Async bool `json:"async,omitempty"`
 

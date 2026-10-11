@@ -67,7 +67,10 @@ type TurnCleanupTool interface {
 	CleanupTurn(context.Context) error
 }
 
-const maxTurnCleanupReceipts = 64
+const (
+	maxTurnCleanupReceipts              = 64
+	maxTurnFinalizationInstructionBytes = 32 * 1024
+)
 
 // TurnCleanupResult contains bounded runtime evidence produced after terminal
 // resource cleanup. Receipts are safe to persist with a task deliverable.
@@ -106,6 +109,14 @@ type TurnFinalizationRequirement struct {
 // and failed recovery remain protected by terminal cleanup.
 type TurnFinalizationRequirementProvider interface {
 	TurnFinalizationRequirement(context.Context) (TurnFinalizationRequirement, bool, error)
+}
+
+// ResourceDispositionVerifier verifies a successful call's terminal resource
+// evidence under its execution identity. Verification must be side-effect free;
+// tool names, model arguments, and receipt strings alone are not runtime proof.
+// The registry invokes the exact tool instance that executed, not a replacement.
+type ResourceDispositionVerifier interface {
+	VerifyResourceDisposition(context.Context, map[string]any, *toolshared.ToolResult) bool
 }
 
 type nodeTargetApprovalBypassProvider interface {
@@ -777,6 +788,12 @@ func (r *ToolRegistry) executeToolWithContext(
 		} else {
 			result = tool.Execute(ctx, args)
 		}
+		if result != nil {
+			// Producer-authored flags are never accepted as verification. The
+			// executing instance must opt in and validate its own bounded evidence.
+			result.Control.ResourceDispositionVerified = false
+			result.Control.ResourceDispositionVerified = verifyToolResourceDisposition(ctx, tool, args, result)
+		}
 	}()
 
 	// Handle nil result (should not happen, but defensive)
@@ -817,6 +834,33 @@ func (r *ToolRegistry) executeToolWithContext(
 	}
 
 	return result
+}
+
+func verifyToolResourceDisposition(
+	ctx context.Context,
+	tool toolshared.Tool,
+	args map[string]any,
+	result *toolshared.ToolResult,
+) bool {
+	if result == nil || result.IsError || result.Err != nil || result.Control.Async ||
+		result.Control.TaskSuspended || result.Control.Suspension != nil || result.Deliverable == nil {
+		return false
+	}
+	verifier, ok := tool.(ResourceDispositionVerifier)
+	if !ok || len(result.Deliverable.LifecycleReceipts) > maxTurnCleanupReceipts {
+		return false
+	}
+	hasEvidence := false
+	for _, receipt := range result.Deliverable.LifecycleReceipts {
+		if receipt.Kind != taskresult.ReceiptKindResourceCleanup || receipt.Tool != tool.Name() {
+			continue
+		}
+		if validateTurnCleanupReceipt(receipt) != nil {
+			return false
+		}
+		hasEvidence = true
+	}
+	return hasEvidence && verifier.VerifyResourceDisposition(ctx, args, result)
 }
 
 // sortedToolNames returns tool names in sorted order for deterministic iteration.
@@ -1135,8 +1179,8 @@ func (r *ToolRegistry) CleanupTurn(ctx context.Context) error {
 	return err
 }
 
-// TurnFinalizationRequirement returns the first deterministic outstanding
-// requirement from registered lifecycle tools. A turn gets one bounded
+// TurnFinalizationRequirement combines deterministic outstanding requirements
+// from registered lifecycle tools. A turn gets one bounded
 // recovery pass before the existing fail-closed cleanup boundary takes over.
 func (r *ToolRegistry) TurnFinalizationRequirement(
 	ctx context.Context,
@@ -1144,6 +1188,7 @@ func (r *ToolRegistry) TurnFinalizationRequirement(
 	if r == nil {
 		return TurnFinalizationRequirement{}, false, nil
 	}
+	var combined TurnFinalizationRequirement
 	for _, tool := range r.registeredToolsSnapshot() {
 		provider, ok := tool.(TurnFinalizationRequirementProvider)
 		if !ok {
@@ -1161,9 +1206,19 @@ func (r *ToolRegistry) TurnFinalizationRequirement(
 			return TurnFinalizationRequirement{}, false,
 				errors.New("turn finalization requirement is incomplete")
 		}
-		return requirement, true, nil
+		if combined.RecoveryKind != "" && combined.RecoveryKind != requirement.RecoveryKind {
+			return TurnFinalizationRequirement{}, false, errors.New("incompatible turn finalization requirements")
+		}
+		combined.RecoveryKind = requirement.RecoveryKind
+		if combined.Instruction != "" {
+			combined.Instruction += "\n\n"
+		}
+		combined.Instruction += requirement.Instruction
+		if len(combined.Instruction) > maxTurnFinalizationInstructionBytes {
+			return TurnFinalizationRequirement{}, false, errors.New("turn finalization instruction limit exceeded")
+		}
 	}
-	return TurnFinalizationRequirement{}, false, nil
+	return combined, combined.RecoveryKind != "", nil
 }
 
 // CleanupTurnWithResult releases turn-scoped resources and returns bounded
