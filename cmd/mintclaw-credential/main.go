@@ -11,11 +11,14 @@ import (
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/approval"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/provisioning"
+	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/startup"
 )
 
 var version = "dev"
 
-var errUsage = errors.New("usage: mintclaw-credential <provision|enroll|version>; token arguments are not accepted")
+var errUsage = errors.New(
+	"usage: mintclaw-credential <provision|enroll|serve-approval|version>; " + "token arguments are not accepted",
+)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -47,6 +50,8 @@ func execute(ctx context.Context, args []string, output io.Writer) error {
 		}
 	case "enroll":
 		return approval.Enroll(ctx)
+	case "serve-approval":
+		return startup.ServeApproval(ctx)
 	default:
 		return errUsage
 	}

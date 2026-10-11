@@ -6,7 +6,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -56,19 +55,6 @@ func loadServiceToken(ctx context.Context, directory string) (serviceToken, erro
 		return serviceToken{}, errUnavailable
 	}
 	return serviceToken{&tokenState{value: value}}, nil
-}
-
-func validDirectoryPath(directory string) bool {
-	if len(directory) < 2 || len(directory) > 4096 || !filepath.IsAbs(directory) ||
-		filepath.Clean(directory) != directory || strings.Count(directory, "/") > 16 {
-		return false
-	}
-	for _, character := range []byte(directory) {
-		if character < 0x21 || character > 0x7e {
-			return false
-		}
-	}
-	return true
 }
 
 func openCredentialDirectory(path string, identity serviceIdentity) (*os.File, error) {

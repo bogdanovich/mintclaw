@@ -400,6 +400,9 @@ jobs:
       - name: Qualify private passkey approval and protected owner storage
         run: bash ./scripts/qualify-credential-approval.sh
 
+      - name: Qualify protected native phone service startup and shutdown
+        run: bash ./scripts/qualify-credential-approval-service.sh
+
       - name: Setup Node.js for the synthetic phone approval fixture
         uses: actions/setup-node@v7
         with:
