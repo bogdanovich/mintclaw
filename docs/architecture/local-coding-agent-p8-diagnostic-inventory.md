@@ -136,6 +136,35 @@ older binary remain authoritative evidence for their own runs. H6 still owns
 the wider final P8 qualification matrix, but terminal and delivery settlement
 truth is production-qualified.
 
+### Model-attempt production qualification
+
+The model-attempt slice merged through PR #1501 and was deployed from merged
+main `9520fd555d5bef1c19ad736b318681be275c9b1b` on 2026-10-11. The direct
+stateless canary retained trace `trace-turn-01809dbcdd7e483554c8161c`; its
+`model.request` and `model.response` records shared one non-empty
+`model_attempt_id`, the completed trace had no delivery records, and it was not
+truncated. The live gateway canary retained
+`trace-turn-ab2be4292b937086b3b35ca4`; one ID joined `model.request`, a
+successful `model.fallback_attempt`, and `model.response`, followed by
+`delivery.attempt` (`queued`) and `delivery.outcome` (`sent`). The trace was
+completed and not truncated.
+
+All expected services remained active after both canaries, no failed or legacy
+processes were present, and the ten-minute error-journal scan was empty. The
+installed core, node, and launcher SHA-256 digests are respectively
+`e2f588644a72fde6a1980a3d90705023011da4a5253d95c03e1899dd6dc03616`,
+`06a2cc4da959e2495682434569122042cdfc5e61bf947ea7ff6119207c6c544a`, and
+`ce292c2405d2b5eed5b7c7902d69ff2b4f16370e78e08eadfc9f5d5b1527e99f`.
+The checksum-verifiable rollback snapshot is
+`/home/server/mintclaw-core-backup-20261011T043410Z`; it records previous core
+revision `756ea80a257bbc298117f3f8b8e41cb1fb0e41c1`, binaries, units and
+drop-ins, affected service states, symlinks, and a SHA-256 manifest.
+
+Both new traces still have an absent `source.commit`. This independently
+confirms that deployment-commit attribution remains an open H1b gap; the
+successful model-attempt qualification does not relabel that missing evidence
+as resolved.
+
 ## Evidence map
 
 | Path | Authoritative evidence | Passive evidence | H1b/H1c action |
