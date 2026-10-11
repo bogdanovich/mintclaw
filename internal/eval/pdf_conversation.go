@@ -33,9 +33,14 @@ func inspectPDFWire(data []byte, facts map[string]string, filter *strings.Replac
 }
 
 type pdfConversation struct {
-	prepared *pdfTrial
-	jobID    string
-	owner    document.FormJobOwner
+	prepared              *pdfTrial
+	jobID                 string
+	owner                 document.FormJobOwner
+	review                *document.FormJobRecord
+	confirmedAt           time.Time
+	confirmationRequestID string
+	approvalPrompt        *Event
+	operationID           string
 }
 
 func (domain *pdfConversation) initialTask() string { return domain.prepared.task }
@@ -43,6 +48,16 @@ func (domain *pdfConversation) initialTask() string { return domain.prepared.tas
 func (domain *pdfConversation) request(
 	ctx context.Context, action Action, prompt Event,
 ) (protocol.MintClawMessage, bool, error) {
+	if action.Kind == "confirm" {
+		request, err := domain.confirmReview(prompt)
+		return request, true, err
+	}
+	if action.Kind == "allow_once" {
+		request, err := domain.approveReviewedWrite(prompt)
+		return request, true, err
+	}
+	domain.review = nil
+	domain.confirmationRequestID = ""
 	if action.Kind == "protected_answer" {
 		request, err := domain.prepared.protectedRequest(prompt, action.Fact)
 		return request, true, err
@@ -59,8 +74,7 @@ func (domain *pdfConversation) request(
 			}
 		}
 	}
-	// Approval stays deny-default. A later reviewed/confirmed write admission
-	// must use the native binding rather than widening this general path.
+	// No other intent can grant permission or preserve an old confirmation.
 	return protocol.MintClawMessage{}, false, nil
 }
 
@@ -114,6 +128,15 @@ func (domain *pdfConversation) conclude(_ context.Context, trial *Trial) {
 	trial.PDF = &PDFTrialEvidence{
 		Version: Version, SourceSHA256: domain.prepared.item.Case.Fixtures[0].SHA256,
 		JobID: domain.jobID, State: "unknown", Cleanup: "owned_fixture_retained; native_settlement_unknown",
+	}
+	if domain.review != nil {
+		trial.PDF.WriteIntent = &PDFWriteIntentEvidence{
+			ReviewRevision: domain.review.ReviewRevision, ConfirmationRequestID: domain.confirmationRequestID,
+			OperationID: domain.operationID,
+		}
+		if domain.approvalPrompt != nil {
+			trial.PDF.WriteIntent.ApprovalInteractionID = domain.approvalPrompt.InteractionID
+		}
 	}
 	if domain.jobID == "" {
 		return

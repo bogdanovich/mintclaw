@@ -127,6 +127,15 @@ func (c Case) Validate() error {
 	if c.Driver.validate(c.Limits) != nil {
 		return ErrInvalidCase
 	}
+	for _, step := range c.Driver.Steps {
+		if step.Action.Kind == "confirm" || step.Action.Kind == "allow_once" {
+			if c.PDF == nil || c.PDF.Output != "required" ||
+				step.Action.Kind == "confirm" && step.WaitFor.Kind != "final" ||
+				step.Action.Kind == "allow_once" && step.WaitFor.Kind != "approval" {
+				return ErrInvalidCase
+			}
+		}
+	}
 	checkIDs := make(map[string]bool)
 	for _, check := range c.Checks {
 		if !validID(check.ID) || checkIDs[check.ID] {
@@ -208,7 +217,7 @@ func (action Action) validate(facts map[string]string) error {
 		if !validID(action.Fact) || facts[action.Fact] == "" || action.Text != "" {
 			return ErrInvalidCase
 		}
-	case "clarify", "back", "skip", "not_applicable", "cancel", "stop":
+	case "clarify", "back", "skip", "not_applicable", "cancel", "stop", "confirm", "allow_once":
 		if action.Text != "" || action.Fact != "" {
 			return ErrInvalidCase
 		}

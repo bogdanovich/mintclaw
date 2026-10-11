@@ -4,8 +4,9 @@
 
 The repository contains six PDF scenarios and four deterministic synthetic AcroForms, with exact SHA-256 checked
 by offline corpus validation. The dialogue packet lets `eval run` attempt PDF conversations on a narrowly admitted
-isolated profile, using protected facts and owned fixtures. Writes, native review/confirmation and exact approval,
-authenticated artifact collection, operation/outbox settlement, and complete private-surface evidence remain pending.
+isolated profile, using protected facts and owned fixtures. The write-intent packet adds native review-bound separate
+confirmation and exact fixture-scoped approval. Authenticated artifact collection, operation/outbox settlement,
+and complete private-surface evidence remain pending.
 Required PDF checks therefore remain inconclusive; a first question, caption, or oracle control is not qualification.
 
 The cases cover loan filling, correction/Back, own-request conditional intent, empty required values, cancel/no-write,
@@ -51,10 +52,34 @@ is a hard failure. Truncated, opaque escaped or otherwise unscannable evidence i
 Only a non-secret protected-input marker enters retained transcript evidence; the actual value travels in the
 ephemeral native `/answer` request. Ordinary scripted slash commands cannot bypass this path.
 
-No approval is granted by this packet. A public native job state is retained as a value-free observation, not as a
+Only the narrowly admitted write-intent path below can send `allow_once`. A public native job state is a value-free
+observation, not a
 claim of artifact correctness, no-write safety, complete privacy coverage or remote cleanup. All attempted PDF
 fixtures are conservatively retained while native settlement is unknown. PDF evidence is not yet eligible for
 judge-only regrading. Later write/delivery witnesses must replace these explicit unknowns before E3 exits.
+
+## Reviewed Write Intent
+
+For a case requiring PDF output, the PDF-specific user prompt may return a typed `confirm` after a visible review,
+then `allow_once` at the native approval prompt. Neither intent supplies job IDs, prompt IDs, arguments or authority.
+General conversation and forbidden-output cases keep the original deny-default parser. Scripted write intents are
+valid only for required-output PDF cases with the corresponding final/approval expectation.
+
+Confirmation requires the current authenticated, source-pinned job to be native review-ready, with a current
+review revision, assignment/review digests, no audit blockers, the requested complete/draft scope, and the same route.
+The runner sends a separate ordinary confirmation request. Approval requires a native waiting/delivered document
+prompt whose original execution context names that exact confirmation request and client session. The current job
+must be awaiting approval, and its frozen native binding must retain the confirmed review, source, owner, assignment,
+schema/backend/audit revisions, output scope/policy and expiry. The native HMAC helper verifies the exact native
+approval argument map using an existing admitted key; no key, arguments, grant or store state is created by observation.
+
+Only one prompt-bound `allow_once` request can be constructed. Any ordinary follow-up invalidates the prior
+confirmation, and a native correction invalidates its review/binding. Permanent and unrelated approvals stay refused.
+Native ingress and the document tool still authorize and consume the grant; the harness does not perform the commit.
+
+Reports retain a value-free `write_intent` with review revision and confirmation/interaction/operation identities.
+This is not evidence of consumed approval, successful write or delivery. Without settled operation/outbox/artifact,
+privacy and cleanup witnesses, required PDF checks remain unknown and the evidence cannot be regraded as qualified.
 
 ## Optional Dependencies
 
