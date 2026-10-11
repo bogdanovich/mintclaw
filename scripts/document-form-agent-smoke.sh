@@ -15,6 +15,7 @@ trap 'rm -rf -- "$smoke_home"' EXIT HUP INT TERM
 cd "$repo_root"
 agent_tests='^('\
 'TestDocumentPDFTelegramVerticalSlice|'\
+'TestGatewayDocumentIntakeUsesProductionCompositionAndOrdinaryTransport|'\
 'TestDocumentLocalPathToolLinuxIntegration|'\
 'TestDocumentFormToolLinuxIntegration'\
 ')$'

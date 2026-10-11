@@ -504,10 +504,17 @@ func registerSharedTools(
 		if cfg.Tools.IsToolEnabled("document") && documentToolAvailable() {
 			formAuditor := newDocumentFormAuditor(cfg, agent)
 			formAuditPolicy := documentFormAuditPolicy(cfg, formAuditor)
+			formInterpreter := formAuditor
+			if formInterpreter == nil {
+				// Keep ingress protection installed even if the configured model is
+				// unavailable after restart. Existing intake must not become chat.
+				formInterpreter = &documentFormAuditor{}
+			}
 			documentTool := tools.NewDocumentTool(
 				tools.WithDocumentExecutionBudget(al.documentBudget),
 				tools.WithDocumentFormJobStore(documentFormJobs),
 				tools.WithDocumentFormAudit(formAuditPolicy, formAuditor),
+				tools.WithDocumentFormIntake(formInterpreter),
 				tools.WithDocumentLocalPathPolicy(
 					agent.Workspace,
 					cfg.Agents.Defaults.RestrictToWorkspace,

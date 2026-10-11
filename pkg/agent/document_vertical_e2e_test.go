@@ -260,6 +260,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		fixture.Loop.SetMediaStore(store)
 		t.Cleanup(func() { closeDocumentE2EFixtureAfterTraceDrain(t, fixture) })
 
+		useLegacyDocumentFormE2ESurface(t, fixture)
 		channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-form-review-e2e"}}
 		stop := startDocumentE2EChannel(t, fixture, store, channel)
 		defer stop()
@@ -327,6 +328,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		fixture.Loop.SetMediaStore(store)
 		t.Cleanup(func() { closeDocumentE2EFixtureAfterTraceDrain(t, fixture) })
 
+		useLegacyDocumentFormE2ESurface(t, fixture)
 		channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-form-commit-e2e"}}
 		stop := startDocumentE2EChannel(t, fixture, store, channel)
 		defer stop()
@@ -403,6 +405,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		fixture.Loop.SetMediaStore(store)
 		t.Cleanup(func() { closeDocumentE2EFixtureAfterTraceDrain(t, fixture) })
 
+		useLegacyDocumentFormE2ESurface(t, fixture)
 		channel := &fakeMediaChannel{
 			fakeChannel: fakeChannel{id: "document-agent-led-form-e2e"}, bindPlatformMessageIDs: true,
 		}
