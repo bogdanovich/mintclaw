@@ -46,20 +46,23 @@ type documentFormQuestionPresentation struct {
 }
 
 type safeDocumentFormJob struct {
-	JobID                string                `json:"job_id"`
-	State                document.FormJobState `json:"state"`
-	Revision             int64                 `json:"revision"`
-	FieldSchemaDigest    string                `json:"field_schema_digest"`
-	AuditPolicyRevision  string                `json:"audit_policy_revision"`
-	ReviewRevision       int64                 `json:"review_revision,omitempty"`
-	ReviewDigest         string                `json:"review_digest,omitempty"`
-	ApprovalRevision     int64                 `json:"approval_revision,omitempty"`
-	OutputPolicyRevision string                `json:"output_policy_revision,omitempty"`
-	OperationID          string                `json:"operation_id,omitempty"`
-	ArtifactRef          string                `json:"artifact_ref,omitempty"`
-	ArtifactDigest       string                `json:"artifact_digest,omitempty"`
-	ExpiresAt            int64                 `json:"expires_at"`
-	NeedsInitialPlan     bool                  `json:"needs_initial_plan"`
+	JobID                   string                   `json:"job_id"`
+	State                   document.FormJobState    `json:"state"`
+	Revision                int64                    `json:"revision"`
+	FieldSchemaDigest       string                   `json:"field_schema_digest"`
+	AuditPolicyRevision     string                   `json:"audit_policy_revision"`
+	ReviewRevision          int64                    `json:"review_revision,omitempty"`
+	ReviewDigest            string                   `json:"review_digest,omitempty"`
+	ApprovalRevision        int64                    `json:"approval_revision,omitempty"`
+	OutputPolicyRevision    string                   `json:"output_policy_revision,omitempty"`
+	OutputScope             document.FormOutputScope `json:"output_scope,omitempty"`
+	OutputMode              document.FormOutputMode  `json:"output_mode,omitempty"`
+	DeferredScopeFieldCount int                      `json:"deferred_scope_field_count,omitempty"`
+	OperationID             string                   `json:"operation_id,omitempty"`
+	ArtifactRef             string                   `json:"artifact_ref,omitempty"`
+	ArtifactDigest          string                   `json:"artifact_digest,omitempty"`
+	ExpiresAt               int64                    `json:"expires_at"`
+	NeedsInitialPlan        bool                     `json:"needs_initial_plan"`
 }
 
 type safeDocumentFormField struct {
@@ -86,6 +89,7 @@ type safeDocumentFormMapping struct {
 	PreservedFieldCount   int                     `json:"preserved_field_count"`
 	ProvidedFieldCount    int                     `json:"provided_field_count"`
 	OptionalBlankCount    int                     `json:"optional_blank_count"`
+	DeferredFieldCount    int                     `json:"deferred_field_count,omitempty"`
 	MissingFieldCount     int                     `json:"missing_field_count"`
 	ConflictingFieldCount int                     `json:"conflicting_field_count"`
 	Window                safeDocumentFormWindow  `json:"field_window"`
@@ -119,6 +123,9 @@ type safeDocumentFormReview struct {
 	AssignmentDigest     string                          `json:"assignment_digest,omitempty"`
 	ReviewDigest         string                          `json:"review_digest,omitempty"`
 	RequestedAction      string                          `json:"requested_action"`
+	OutputScope          document.FormOutputScope        `json:"output_scope,omitempty"`
+	OutputMode           document.FormOutputMode         `json:"output_mode,omitempty"`
+	DeferredFieldCount   int                             `json:"deferred_field_count,omitempty"`
 	WritableFieldCount   int                             `json:"writable_field_count"`
 	ProvidedFieldCount   int                             `json:"provided_field_count"`
 	BlankFieldCount      int                             `json:"blank_field_count"`
@@ -154,13 +161,15 @@ type safeDocumentFormResult struct {
 }
 
 type safeDocumentFormCommit struct {
-	OperationID          string `json:"operation_id"`
-	ArtifactRef          string `json:"artifact_ref,omitempty"`
-	ArtifactDigest       string `json:"artifact_digest,omitempty"`
-	SourceUnchanged      bool   `json:"source_unchanged"`
-	StructuralAssertions int    `json:"structural_assertions,omitempty"`
-	VisualAssertions     int    `json:"visual_assertions,omitempty"`
-	CheckedFields        int    `json:"checked_fields,omitempty"`
+	OutputScope          document.FormOutputScope `json:"output_scope,omitempty"`
+	OutputMode           document.FormOutputMode  `json:"output_mode,omitempty"`
+	OperationID          string                   `json:"operation_id"`
+	ArtifactRef          string                   `json:"artifact_ref,omitempty"`
+	ArtifactDigest       string                   `json:"artifact_digest,omitempty"`
+	SourceUnchanged      bool                     `json:"source_unchanged"`
+	StructuralAssertions int                      `json:"structural_assertions,omitempty"`
+	VisualAssertions     int                      `json:"visual_assertions,omitempty"`
+	CheckedFields        int                      `json:"checked_fields,omitempty"`
 }
 
 func (tool *DocumentTool) formWorkflow(
@@ -366,7 +375,8 @@ func (tool *DocumentTool) commitFormWorkflow(
 		defer func() { _ = snapshot.Close() }()
 	}
 	if report.State != document.StateSucceeded || snapshot == nil || report.Input == nil || report.Write == nil ||
-		report.OperationID != materialized.OperationID || report.Input.SHA256 != materialized.SourceDigest {
+		report.OperationID != materialized.OperationID || report.Input.SHA256 != materialized.SourceDigest ||
+		(materialized.OutputMode != "" && report.Write.Output.Mode != materialized.OutputMode) {
 		failureCode := "document_commit_failed"
 		if report.Failure != nil && validDocumentFormFailureCode(string(report.Failure.Code)) {
 			failureCode = string(report.Failure.Code)
@@ -401,6 +411,7 @@ func (tool *DocumentTool) commitFormWorkflow(
 		JobID: materialized.JobID, ExpectedRevision: materialized.Revision, Owner: owner,
 		OperationID: materialized.OperationID, ArtifactRef: registeredRef,
 		ArtifactDigest: report.Write.OutputSHA256,
+		OutputMode:     report.Write.Output.Mode,
 	})
 	if err != nil {
 		return documentFormToolError(err)
@@ -471,7 +482,7 @@ func (tool *DocumentTool) documentFormDeliveryResult(
 ) *toolshared.ToolResult {
 	result := documentFormCommitResult(formRecord, write)
 	result.Media = []string{formRecord.ArtifactRef}
-	result.ForUser = "Filled and verified PDF."
+	result.ForUser = documentFormDeliveryDescription(formRecord)
 	result.Deliverable = documentFormWorkflowDeliverable(formRecord, writeRecord)
 	result.WithWriteAudit(toolshared.WriteAuditEntry{
 		Kind: "document", Target: formRecord.ArtifactRef, Action: "form_commit", Tool: "document",
@@ -527,7 +538,7 @@ func documentFormWorkflowDeliverable(
 	writeRecord document.WriteOperationRecord,
 ) *taskresult.Deliverable {
 	return &taskresult.Deliverable{
-		Text: "Filled and verified PDF.",
+		Text: documentFormDeliveryDescription(record),
 		Artifacts: []taskresult.Artifact{{
 			Ref: record.ArtifactRef, Kind: "file", Filename: "filled-document.pdf",
 			ContentType: "application/pdf",
@@ -537,6 +548,16 @@ func documentFormWorkflowDeliverable(
 			"document_delivery_id": writeRecord.DeliveryID, "output_sha256": record.ArtifactDigest,
 		},
 	}
+}
+
+func documentFormDeliveryDescription(record document.FormJobRecord) string {
+	if record.OutputScope == document.FormOutputEditableDraft {
+		return "Partially filled, verified editable PDF draft. Deferred fields remain unchanged; not a complete form."
+	}
+	if record.OutputMode == document.FormOutputFlattenedPrint {
+		return "Filled and verified print-ready PDF. The hybrid form output is flattened, not editable."
+	}
+	return "Filled and verified PDF."
 }
 
 func documentFormTerminalFailure(record document.FormJobRecord) *toolshared.ToolResult {
@@ -571,7 +592,7 @@ func (tool *DocumentTool) prepareFormCommit(
 	request := document.FormCommitRequest{
 		JobID: record.JobID, ExpectedRevision: record.Revision, Owner: owner, Schema: schema,
 		AuditPolicyRevision:  policyRevision,
-		OutputPolicyRevision: document.FormCommitOutputPolicyRevision,
+		OutputPolicyRevision: record.FormOutputPolicy(),
 	}
 	var binding document.FormCommitBinding
 	if record.State == document.FormJobReviewReady {
@@ -600,6 +621,9 @@ func (tool *DocumentTool) formCommitApprovalResult(
 		Kind:          interactions.KindApproval,
 		PromptSummary: "Fill and verify the exact reviewed PDF form",
 		Timeout:       documentFormQuestionTimeout,
+	}
+	if record.OutputScope == document.FormOutputEditableDraft {
+		result.Control.Suspension.PromptSummary = "Create the reviewed editable PDF draft with deferred fields unchanged"
 	}
 	result.Delivery.Intent = toolshared.DeliverySilent
 	return result
@@ -652,7 +676,7 @@ func (tool *DocumentTool) startFormWorkflow(
 	if err != nil {
 		return documentFormToolFailure("source_not_authorized", "document source is unavailable for this authority")
 	}
-	schema, err := tool.formWorkflowSchema(ctx, store, ref, mediaOwner)
+	schema, outputMode, err := tool.formWorkflowDiscovery(ctx, store, ref, mediaOwner)
 	if err != nil {
 		return documentFormToolError(err)
 	}
@@ -698,6 +722,7 @@ func (tool *DocumentTool) startFormWorkflow(
 		Owner: owner, StartIdempotencyKey: startKey, SourceRef: preparedSource.ref,
 		SourceDigest: schema.SourceSHA256, FieldSchemaDigest: schemaDigest,
 		BackendRevision: backendRevision, AuditPolicyRevision: policyRevision,
+		OutputMode: outputMode,
 	})
 	if err != nil {
 		_ = os.Remove(preparedSource.path)
@@ -1266,8 +1291,21 @@ func (tool *DocumentTool) formWorkflowSchema(
 	ref string,
 	owner media.MediaOwner,
 ) (document.FormFieldsFacts, error) {
+	schema, _, err := tool.formWorkflowDiscovery(ctx, store, ref, owner)
+	return schema, err
+}
+
+func (tool *DocumentTool) formWorkflowDiscovery(
+	ctx context.Context,
+	store ownedDocumentMediaStore,
+	ref string,
+	owner media.MediaOwner,
+) (document.FormFieldsFacts, document.FormOutputMode, error) {
 	if tool.formSchema != nil {
-		return tool.formSchema(ctx, store, ref, owner)
+		// A facts-only test hook cannot prove output capability. Never infer it
+		// from the field backend, which is also used for hybrid normalization.
+		schema, err := tool.formSchema(ctx, store, ref, owner)
+		return schema, "", err
 	}
 	snapshot, report := document.FieldsMedia(
 		ctx,
@@ -1281,11 +1319,26 @@ func (tool *DocumentTool) formWorkflowSchema(
 	}
 	if report.State != document.StateSucceeded || report.Fields == nil {
 		if report.Failure != nil {
-			return document.FormFieldsFacts{}, errors.New(string(report.Failure.Code))
+			return document.FormFieldsFacts{}, "", errors.New(string(report.Failure.Code))
 		}
-		return document.FormFieldsFacts{}, errors.New("form_unsupported")
+		return document.FormFieldsFacts{}, "", errors.New("form_unsupported")
 	}
-	return *report.Fields, nil
+	mode := documentFormDiscoveryOutputMode(report.FormEligibility)
+	return *report.Fields, mode, nil
+}
+
+func documentFormDiscoveryOutputMode(eligibility *document.FormEligibilityFacts) document.FormOutputMode {
+	if eligibility == nil || eligibility.State != document.FormEligible || len(eligibility.Blockers) != 0 {
+		return ""
+	}
+	switch eligibility.Mode {
+	case document.FormEligibilityOrdinary:
+		return document.FormOutputEditableAcroForm
+	case document.FormEligibilityHybridPrintReady:
+		return document.FormOutputFlattenedPrint
+	default:
+		return ""
+	}
 }
 
 type preparedDocumentFormSource struct {
@@ -1599,6 +1652,7 @@ func documentFormMappingWindow(
 		Revision: summary.Revision, ConfirmedFieldCount: len(summary.ConfirmedFieldIDs),
 		UnresolvedFieldCount: len(summary.Unresolved), ReadyForReview: summary.ReadyForReview,
 		WritableFieldCount: summary.WritableFieldCount,
+		DeferredFieldCount: len(summary.DeferredFieldIDs),
 		Window: safeDocumentFormWindow{
 			Pages: append([]int(nil), window.pages...), Offset: window.offset, Limit: documentFormCandidateLimit,
 			Selected: window.explicit,
@@ -1626,7 +1680,7 @@ func documentFormMappingWindow(
 	for index, field := range schema.Fields {
 		blocker, unresolved := blockers[field.ID]
 		_, isConfirmed := confirmed[field.ID]
-		if field.ReadOnly || (!unresolved && !isConfirmed) {
+		if field.ReadOnly || (!unresolved && !isConfirmed && statuses[field.ID] != "deferred") {
 			continue
 		}
 		status := statuses[field.ID]
@@ -1769,6 +1823,7 @@ func documentFormReviewProjection(review document.FormReview) *safeDocumentFormR
 		FieldSchemaDigest: review.FieldSchemaDigest, AuditPolicyRevision: review.AuditPolicyRevision,
 		AuditModel: review.AuditModel, AssignmentDigest: review.AssignmentDigest,
 		ReviewDigest: review.ReviewDigest, RequestedAction: review.RequestedAction,
+		OutputScope: review.OutputScope, OutputMode: review.OutputMode,
 		WritableFieldCount: len(review.Fields), BlockerCount: len(review.Blockers), Ready: review.Ready,
 	}
 	blockers := make(map[string]string, len(review.Blockers))
@@ -1793,6 +1848,8 @@ func documentFormReviewProjection(review document.FormReview) *safeDocumentFormR
 			projection.ExistingFieldCount++
 		case "unresolved":
 			projection.UnresolvedFieldCount++
+		case "deferred":
+			projection.DeferredFieldCount++
 		}
 	}
 	slices.SortStableFunc(fields, func(left, right document.FormReviewField) int {
@@ -1921,7 +1978,9 @@ func safeDocumentFormJobProjection(record document.FormJobRecord) *safeDocumentF
 		FieldSchemaDigest: record.FieldSchemaDigest, AuditPolicyRevision: record.AuditPolicyRevision,
 		ReviewRevision: record.ReviewRevision, ReviewDigest: record.ReviewDigest,
 		ApprovalRevision: record.ApprovalRevision, OutputPolicyRevision: record.OutputPolicyRevision,
-		OperationID: record.OperationID, ArtifactRef: record.ArtifactRef,
+		OutputScope: record.OutputScope, OutputMode: record.OutputMode,
+		DeferredScopeFieldCount: len(record.DeferredFieldIDs),
+		OperationID:             record.OperationID, ArtifactRef: record.ArtifactRef,
 		ArtifactDigest: record.ArtifactDigest, ExpiresAt: record.ExpiresAt,
 		NeedsInitialPlan: len(record.Fields) == 0 && !documentFormTerminalState(record.State),
 	}
@@ -1942,6 +2001,7 @@ func safeDocumentFormCommitProjection(
 	write *document.FormWriteFacts,
 ) *safeDocumentFormCommit {
 	commit := &safeDocumentFormCommit{
+		OutputScope: record.OutputScope, OutputMode: record.OutputMode,
 		OperationID: record.OperationID, ArtifactRef: record.ArtifactRef,
 		ArtifactDigest: record.ArtifactDigest, SourceUnchanged: record.ArtifactDigest != "",
 	}
@@ -1955,7 +2015,7 @@ func safeDocumentFormCommitProjection(
 }
 
 func documentFormApprovalArguments(binding document.FormCommitBinding) map[string]any {
-	return map[string]any{
+	arguments := map[string]any{
 		"schema_version":         "mintclaw.document_form_approval.v1",
 		"job_id":                 binding.JobID,
 		"owner_digest":           binding.OwnerDigest,
@@ -1971,6 +2031,13 @@ func documentFormApprovalArguments(binding document.FormCommitBinding) map[strin
 		"operation_id":           binding.OperationID,
 		"expires_at":             binding.ExpiresAt,
 	}
+	if binding.OutputScope != "" {
+		arguments["output_scope"] = binding.OutputScope
+	}
+	if binding.OutputMode != "" {
+		arguments["output_mode"] = binding.OutputMode
+	}
+	return arguments
 }
 
 func equalDocumentFormApprovalArguments(left, right map[string]any) bool {

@@ -55,6 +55,9 @@ type FormJobMappingSummary struct {
 	Revision           int64                     `json:"revision"`
 	FieldSchemaDigest  string                    `json:"field_schema_digest"`
 	ConfirmedFieldIDs  []string                  `json:"confirmed_field_ids,omitempty"`
+	DeferredFieldIDs   []string                  `json:"deferred_field_ids,omitempty"`
+	OutputScope        FormOutputScope           `json:"output_scope,omitempty"`
+	OutputMode         FormOutputMode            `json:"output_mode,omitempty"`
 	Unresolved         []FormFieldMappingBlocker `json:"unresolved,omitempty"`
 	NextUnresolvedID   string                    `json:"next_unresolved_id,omitempty"`
 	ReadyForReview     bool                      `json:"ready_for_review"`
@@ -243,6 +246,7 @@ func (store *FormJobStore) FormMappingSummary(
 	}
 	summary := FormJobMappingSummary{
 		JobID: record.JobID, Revision: record.Revision, FieldSchemaDigest: record.FieldSchemaDigest,
+		OutputScope: record.OutputScope, OutputMode: record.OutputMode,
 	}
 	for _, field := range schema.Fields {
 		if field.ReadOnly {
@@ -261,8 +265,14 @@ func (store *FormJobStore) FormMappingSummary(
 			progress.Status = formFieldBlockerCode(state, field)
 		case field.HasValue:
 			progress.Status = "preserved"
+		case formFieldDeferred(record, field, found):
+			progress.Status = "deferred"
 		}
 		summary.FieldProgress = append(summary.FieldProgress, progress)
+		if progress.Status == "deferred" {
+			summary.DeferredFieldIDs = append(summary.DeferredFieldIDs, field.ID)
+			continue
+		}
 		if !found {
 			if field.HasValue {
 				summary.ConfirmedFieldIDs = append(summary.ConfirmedFieldIDs, field.ID)

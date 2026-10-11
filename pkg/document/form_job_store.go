@@ -260,6 +260,7 @@ func (store *FormJobStore) Create(ctx context.Context, request FormJobCreateRequ
 			if existing.Public.SourceDigest != request.SourceDigest ||
 				existing.Public.FieldSchemaDigest != request.FieldSchemaDigest ||
 				existing.Public.BackendRevision != request.BackendRevision ||
+				(existing.Public.OutputMode != "" && existing.Public.OutputMode != request.OutputMode) ||
 				existing.Public.AuditPolicyRevision != request.AuditPolicyRevision {
 				return false, ErrFormJobConflict
 			}
@@ -297,6 +298,7 @@ func (store *FormJobStore) Create(ctx context.Context, request FormJobCreateRequ
 			SourceDigest:        strings.TrimSpace(request.SourceDigest),
 			FieldSchemaDigest:   strings.TrimSpace(request.FieldSchemaDigest),
 			BackendRevision:     strings.TrimSpace(request.BackendRevision),
+			OutputMode:          request.OutputMode,
 			AuditPolicyRevision: strings.TrimSpace(request.AuditPolicyRevision),
 			CreatedAt:           nowMillis,
 			UpdatedAt:           nowMillis,
@@ -1137,6 +1139,9 @@ func publicFormJobValueEvent(payload formJobValuePayload) FormJobValueEvent {
 }
 
 func validateFormJobCreateRequest(request FormJobCreateRequest, maxRetention time.Duration) error {
+	if !validFormJobOutputMode(request.OutputMode) {
+		return errors.New("document form output mode is invalid")
+	}
 	if _, err := request.Owner.canonical(); err != nil {
 		return err
 	}

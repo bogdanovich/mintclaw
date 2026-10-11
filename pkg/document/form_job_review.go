@@ -81,6 +81,7 @@ func (policy FormAuditPolicy) normalized() ([]formAuditCandidate, string, error)
 type FormAuditField struct {
 	Schema   FormField
 	Existing bool
+	Deferred bool
 	State    FormJobFieldState
 	Value    FormProtectedValue
 }
@@ -90,6 +91,8 @@ type FormAuditField struct {
 type FormAuditView struct {
 	PolicyRevision string
 	SchemaDigest   string
+	OutputScope    FormOutputScope
+	OutputMode     FormOutputMode
 	Fields         []FormAuditField
 }
 
@@ -126,6 +129,7 @@ type FormReviewField struct {
 	Confidence FormValueConfidence `json:"confidence,omitempty"`
 	Validation FormValueValidation `json:"validation,omitempty"`
 	Summary    string              `json:"summary"`
+	Deferred   bool                `json:"deferred,omitempty"`
 }
 
 // FormReview is safe for ordinary history: it contains schema labels and
@@ -142,6 +146,9 @@ type FormReview struct {
 	AssignmentDigest    string                 `json:"assignment_digest,omitempty"`
 	ReviewDigest        string                 `json:"review_digest,omitempty"`
 	RequestedAction     string                 `json:"requested_action"`
+	OutputScope         FormOutputScope        `json:"output_scope,omitempty"`
+	OutputMode          FormOutputMode         `json:"output_mode,omitempty"`
+	DeferredFieldIDs    []string               `json:"deferred_field_ids,omitempty"`
 	Fields              []FormReviewField      `json:"fields"`
 	Blockers            []FormJobReviewBlocker `json:"blockers,omitempty"`
 	Ready               bool                   `json:"ready"`
@@ -300,6 +307,8 @@ func (store *FormJobStore) prepareFormAudit(
 			view: FormAuditView{
 				PolicyRevision: policyRevision,
 				SchemaDigest:   record.Public.FieldSchemaDigest,
+				OutputScope:    record.Public.OutputScope,
+				OutputMode:     record.Public.OutputMode,
 				Fields:         fields,
 			},
 			assignmentDigest: assignmentDigest,
@@ -312,6 +321,7 @@ func (store *FormJobStore) prepareFormAudit(
 type formAuditAssignment struct {
 	FieldID  string             `json:"field_id"`
 	Existing bool               `json:"existing,omitempty"`
+	Deferred bool               `json:"deferred,omitempty"`
 	EventID  string             `json:"event_id,omitempty"`
 	Value    FormProtectedValue `json:"value,omitempty"`
 }
@@ -336,6 +346,11 @@ func protectedFormAuditFields(
 			continue
 		}
 		state, found := current[field.ID]
+		if formFieldDeferred(record.Public, field, found) {
+			fields = append(fields, FormAuditField{Schema: cloneFormField(field), Deferred: true})
+			assignments = append(assignments, formAuditAssignment{FieldID: field.ID, Deferred: true})
+			continue
+		}
 		if !found {
 			if !field.HasValue {
 				clearFormAuditFields(fields)
@@ -531,8 +546,13 @@ func formReviewFromRecord(record FormJobRecord, schema FormFieldsFacts) (FormRev
 		FieldSchemaDigest: record.FieldSchemaDigest, AuditPolicyRevision: record.AuditPolicyRevision,
 		AuditModel: record.AuditModel, AssignmentDigest: record.AssignmentDigest,
 		ReviewDigest: record.ReviewDigest, RequestedAction: "fill_and_deliver_verified_pdf",
-		Blockers: append([]FormJobReviewBlocker(nil), record.AuditBlockers...),
-		Ready:    reviewReady && len(record.AuditBlockers) == 0,
+		OutputScope: record.OutputScope, OutputMode: record.OutputMode,
+		DeferredFieldIDs: append([]string(nil), record.DeferredFieldIDs...),
+		Blockers:         append([]FormJobReviewBlocker(nil), record.AuditBlockers...),
+		Ready:            reviewReady && len(record.AuditBlockers) == 0,
+	}
+	if record.OutputScope == FormOutputEditableDraft {
+		review.RequestedAction = "fill_and_deliver_editable_draft"
 	}
 	for _, field := range schema.Fields {
 		if field.ReadOnly {
@@ -558,6 +578,9 @@ func formReviewFromRecord(record FormJobRecord, schema FormFieldsFacts) (FormRev
 			if state.ValueKind == ProtectedValueBlank {
 				projected.Summary = "blank"
 			}
+		} else if formFieldDeferred(record, field, false) {
+			projected.Summary = "deferred"
+			projected.Deferred = true
 		} else if !field.HasValue {
 			projected.Summary = "unresolved"
 		}
