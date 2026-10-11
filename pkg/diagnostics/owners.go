@@ -56,11 +56,22 @@ type OwnerReport struct {
 	Availability      string                  `json:"availability"`
 	IdentityTruncated bool                    `json:"identity_truncated,omitempty"`
 	Stores            []OwnerStoreHealth      `json:"stores,omitempty"`
+	Lookups           []OwnerLookupOutcome    `json:"lookups,omitempty"`
 	Tasks             []TaskInspection        `json:"tasks,omitempty"`
 	Interactions      []InteractionInspection `json:"interactions,omitempty"`
 	Deliveries        []DeliveryInspection    `json:"deliveries,omitempty"`
 	Invocations       []InvocationInspection  `json:"invocations,omitempty"`
 	Threads           []thread.Inspection     `json:"threads,omitempty"`
+}
+
+// OwnerLookupOutcome accounts for one admitted identity without copying owner
+// content. An unavailable outcome means at least one selected authoritative
+// store could not prove whether the identity exists.
+type OwnerLookupOutcome struct {
+	Kind      string `json:"kind"`
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	ErrorCode string `json:"error_code,omitempty"`
 }
 
 type TaskInspection struct {
@@ -218,7 +229,6 @@ func InspectOwners(options OwnerOptions) (OwnerReport, error) {
 		return OwnerReport{}, fmt.Errorf("diagnostics owners: workspaces exceed limit %d", HardMaxStores)
 	}
 	ids := ownerIDsFromQuery(options.Query)
-	report.IdentityTruncated = ids.truncated
 	seenWorkspaceIDs := make(map[string]struct{}, len(options.Workspaces))
 	for _, spec := range options.Workspaces {
 		if err := validateOwnerWorkspace(spec); err != nil {
@@ -250,6 +260,8 @@ func InspectOwners(options OwnerOptions) (OwnerReport, error) {
 		}
 	}
 	inspectCodingThreadOwners(options.CodingRoot, &ids, &report)
+	report.IdentityTruncated = ids.truncated
+	report.Lookups = ownerLookupOutcomes(ids, report)
 	sortOwnerReport(&report)
 	if len(report.Stores) == 0 {
 		report.Availability = "not_selected"
@@ -421,6 +433,12 @@ func inspectInteractionOwners(spec OwnerWorkspaceSpec, ids *ownerIDs, report *Ow
 		if !direct && !byTask {
 			continue
 		}
+		if !direct {
+			addOwnerID(ids.interactions, record.ID, &ids.truncated)
+			if _, admitted := ids.interactions[record.ID]; !admitted {
+				continue
+			}
+		}
 		inspection := projectInteractionInspection(spec.ID, record)
 		for _, event := range snapshot.Events {
 			if event.InteractionID == record.ID {
@@ -435,7 +453,6 @@ func inspectInteractionOwners(spec OwnerWorkspaceSpec, ids *ownerIDs, report *Ow
 			inspection.EventsTruncated = true
 		}
 		report.Interactions = append(report.Interactions, inspection)
-		addOwnerID(ids.interactions, record.ID, &ids.truncated)
 		addOwnerID(ids.deliveries, record.PromptDeliveryID, &ids.truncated)
 		for _, deliveryID := range record.FinalDeliveryIDs {
 			addOwnerID(ids.deliveries, deliveryID, &ids.truncated)
@@ -547,6 +564,20 @@ func inspectCodingThreadOwners(root string, ids *ownerIDs, report *OwnerReport) 
 		return
 	}
 	health.RootHash = pathHash(filepath.Clean(root))
+	for _, candidate := range []string{root, filepath.Join(root, "threads")} {
+		info, err := os.Lstat(candidate)
+		if errors.Is(err, os.ErrNotExist) {
+			health.Status = "not_found"
+			health.ErrorCode = "not_found"
+			report.Stores = append(report.Stores, health)
+			return
+		}
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			health.Status, health.ErrorCode = "unavailable", "invalid_root"
+			report.Stores = append(report.Stores, health)
+			return
+		}
+	}
 	store, err := thread.NewStore(root)
 	if err != nil {
 		health.Status, health.ErrorCode = "unavailable", "invalid_root"
@@ -566,6 +597,76 @@ func inspectCodingThreadOwners(root string, ids *ownerIDs, report *OwnerReport) 
 		report.Threads = append(report.Threads, inspection)
 	}
 	report.Stores = append(report.Stores, health)
+}
+
+func ownerLookupOutcomes(ids ownerIDs, report OwnerReport) []OwnerLookupOutcome {
+	found := map[string]map[string]struct{}{
+		"task":        {},
+		"interaction": {},
+		"delivery":    {},
+		"invocation":  {},
+		"thread":      {},
+	}
+	for _, item := range report.Tasks {
+		found["task"][item.TaskID] = struct{}{}
+	}
+	for _, item := range report.Interactions {
+		found["interaction"][item.InteractionID] = struct{}{}
+	}
+	for _, item := range report.Deliveries {
+		found["delivery"][item.DeliveryID] = struct{}{}
+	}
+	for _, item := range report.Invocations {
+		found["invocation"][item.InvocationID] = struct{}{}
+	}
+	for _, item := range report.Threads {
+		found["thread"][item.ThreadID] = struct{}{}
+	}
+
+	storeKinds := map[string]string{
+		"task":        "task_registry",
+		"interaction": "interaction_registry",
+		"delivery":    "outbox",
+		"invocation":  "gateway_invocations",
+		"thread":      "coding_threads",
+	}
+	selected := map[string]map[string]struct{}{
+		"task":        ids.tasks,
+		"interaction": ids.interactions,
+		"delivery":    ids.deliveries,
+		"invocation":  ids.invocations,
+		"thread":      ids.threads,
+	}
+	result := make([]OwnerLookupOutcome, 0)
+	for _, kind := range []string{"task", "interaction", "delivery", "invocation", "thread"} {
+		status, errorCode := missingOwnerLookupStatus(report.Stores, storeKinds[kind])
+		for _, id := range sortedOwnerIDs(selected[kind]) {
+			outcome := OwnerLookupOutcome{Kind: kind, ID: id, Status: status, ErrorCode: errorCode}
+			if _, exists := found[kind][id]; exists {
+				outcome.Status = "found"
+				outcome.ErrorCode = ""
+			}
+			result = append(result, outcome)
+		}
+	}
+	return result
+}
+
+func missingOwnerLookupStatus(stores []OwnerStoreHealth, storeKind string) (string, string) {
+	selected := false
+	for _, store := range stores {
+		if store.Kind != storeKind {
+			continue
+		}
+		selected = true
+		if store.Status == "unavailable" || store.Status == "partial" {
+			return "unavailable", "store_unavailable"
+		}
+	}
+	if !selected {
+		return "unavailable", "store_not_configured"
+	}
+	return "not_found", ""
 }
 
 func ownerHealth(spec OwnerWorkspaceSpec, kind, root string) OwnerStoreHealth {
@@ -640,6 +741,12 @@ func sortedOwnerIDs(values map[string]struct{}) []string {
 
 func sortOwnerReport(report *OwnerReport) {
 	slices.SortFunc(report.Stores, func(a, b OwnerStoreHealth) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(report.Lookups, func(a, b OwnerLookupOutcome) int {
+		if compared := strings.Compare(a.Kind, b.Kind); compared != 0 {
+			return compared
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
 	slices.SortFunc(report.Tasks, func(a, b TaskInspection) int {
 		if compared := strings.Compare(a.TaskID, b.TaskID); compared != 0 {
 			return compared

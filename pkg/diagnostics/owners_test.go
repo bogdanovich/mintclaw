@@ -3,6 +3,7 @@ package diagnostics
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,5 +165,109 @@ func TestOwnerProjectionDropsFreeFormIdentifierFields(t *testing.T) {
 	})
 	if inspection.GenerationID != "" || inspection.ParentTaskID != "" || inspection.LastCompletionID != "" {
 		t.Fatalf("unsafe owner tokens survived = %#v", inspection)
+	}
+}
+
+func TestInspectOwnersBoundsTaskRelatedInteractionExpansion(t *testing.T) {
+	workspace := t.TempDir()
+	const taskID = "task-owner-bounded"
+	taskRegistry := tasks.NewRegistry(tasks.WorkspaceStorePath(workspace))
+	if err := taskRegistry.Create(tasks.Record{TaskID: taskID, Status: tasks.StatusRunning}); err != nil {
+		t.Fatal(err)
+	}
+	registry := interactions.NewRegistry(interactions.WorkspaceStorePath(workspace))
+	for index := 0; index < HardOwnerIDs+5; index++ {
+		record, err := registry.Create(interactions.CreateRequest{
+			ID:   fmt.Sprintf("interaction_%016x", index),
+			Kind: interactions.KindQuestion,
+			Route: interactions.Route{
+				AgentID: "main", SessionKey: fmt.Sprintf("private-session-%d", index), Channel: "telegram",
+				ChatID: "private-chat", SenderID: "private-sender",
+			},
+			Origin: interactions.Origin{
+				TurnID: fmt.Sprintf("turn-%d", index), ToolCallID: fmt.Sprintf("call-%d", index),
+				ToolName: "request_user_input", TaskID: taskID,
+			},
+			Questions: []interactions.Question{{ID: "choice", Question: "private"}},
+			ExpiresAt: time.Now().Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = registry.Cancel(record.ID, record.Revision, "test_fixture"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, err := InspectOwners(OwnerOptions{
+		Query:      QueryResult{Selector: Selector{TaskID: taskID}},
+		Workspaces: []OwnerWorkspaceSpec{{ID: "profile-main", Workspace: workspace}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.IdentityTruncated || len(report.Interactions) != HardOwnerIDs {
+		t.Fatalf("bounded related interactions = %d truncated=%v", len(report.Interactions), report.IdentityTruncated)
+	}
+	interactionLookups := 0
+	for _, outcome := range report.Lookups {
+		if outcome.Kind == "interaction" {
+			interactionLookups++
+			if outcome.Status != "found" {
+				t.Fatalf("interaction lookup = %#v", outcome)
+			}
+		}
+	}
+	if interactionLookups != HardOwnerIDs {
+		t.Fatalf("interaction lookup count = %d", interactionLookups)
+	}
+}
+
+func TestInspectOwnersAccountsForMissingAndUnavailableSelectedOwners(t *testing.T) {
+	workspace := t.TempDir()
+	codingRoot := filepath.Join(t.TempDir(), "missing-coding")
+	report, err := InspectOwners(OwnerOptions{
+		Query: QueryResult{Selector: Selector{
+			TaskID: "task-missing", InteractionID: "interaction-missing",
+			DeliveryID: "delivery-missing", InvocationID: "invocation-missing",
+			ThreadID: "00000000-0000-4000-8000-000000000001",
+		}},
+		Workspaces: []OwnerWorkspaceSpec{{ID: "profile-main", Workspace: workspace}},
+		CodingRoot: codingRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Lookups) != 5 {
+		t.Fatalf("missing lookup outcomes = %#v", report.Lookups)
+	}
+	for _, outcome := range report.Lookups {
+		if outcome.Status != "not_found" {
+			t.Fatalf("missing owner outcome = %#v", outcome)
+		}
+	}
+	for _, health := range report.Stores {
+		if health.Kind == "coding_threads" && health.Status != "not_found" {
+			t.Fatalf("missing coding store health = %#v", health)
+		}
+	}
+
+	taskPath := tasks.WorkspaceStorePath(workspace)
+	if err := os.MkdirAll(filepath.Dir(taskPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(taskPath, []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report, err = InspectOwners(OwnerOptions{
+		Query:      QueryResult{Selector: Selector{TaskID: "task-unavailable"}},
+		Workspaces: []OwnerWorkspaceSpec{{ID: "profile-main", Workspace: workspace}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Lookups) != 1 || report.Lookups[0].Status != "unavailable" ||
+		report.Lookups[0].ErrorCode != "store_unavailable" {
+		t.Fatalf("unavailable owner outcome = %#v", report.Lookups)
 	}
 }
