@@ -6,8 +6,9 @@ The repository contains six PDF scenarios and four deterministic synthetic AcroF
 by offline corpus validation. The dialogue packet lets `eval run` attempt PDF conversations on a narrowly admitted
 isolated profile, using protected facts and owned fixtures. The write-intent packet adds native review-bound separate
 confirmation and exact fixture-scoped approval. Read-only native receipts bind consumed approval to a completed
-form job, delivered write operation, and recovered outbox intent. Authenticated artifact collection, delivery
-uniqueness, and complete private-surface evidence remain pending.
+form job, delivered write operation, and recovered outbox intent. Authenticated artifact collection retains the exact
+downloaded PDF for independent field/structure/appearance checks. Delivery uniqueness, complete private-surface
+coverage, and owned-resource cleanup remain pending.
 Required PDF checks therefore remain inconclusive; a first question, caption, or oracle control is not qualification.
 
 The cases cover loan filling, correction/Back, own-request conditional intent, empty required values, cancel/no-write,
@@ -99,6 +100,29 @@ proof that another outbox intent did not duplicate delivery, that PDF bytes matc
 surfaces/resources are private and closed. No required PDF check becomes passing from metadata alone. A one-shot
 observation that races unfinished native settlement remains inconclusive; it never replays input or cancels a job.
 The test controls drive the native registry/store/journal/outbox state machines but do not run a PDF worker or model.
+
+## Authenticated Artifact Checks
+
+The runner derives the download endpoint from its admitted local gateway and native media reference, never a URL
+in an assistant reply. It sends the channel token only in an Authorization header. No proxy, redirect, compression,
+retry or wire-supplied filename/path is accepted. The body is limited to the admitted native size plus one byte,
+at most 64 MiB, and must match the native SHA-256, size and PDF content type. An observed metadata mismatch is a
+hard failure; unavailable, interrupted or unauthorized download remains unknown.
+
+The exact PDF is retained as a private `artifact-<trial-id>.pdf` alongside private evidence, without overwriting an
+existing file. Binary artifacts have a separate 64 MiB bound; JSON reports remain limited to 8 MiB. PDF bytes can
+contain synthetic private answers and must never be published or supplied to the user/judge models. JSON evidence
+contains only a relative file reference and the value-free oracle projection. Retention failure cannot pass.
+
+Pass `--pdf-oracle-python /absolute/private-eval-oracle/bin/python` to `eval run`, or set
+`MINTCLAW_EVAL_PDF_ORACLE_PYTHON`. The pinned independent oracle consumes source/artifact bytes and ephemeral field
+expectations over stdin. Its predicates determine `pdf_fields` and `pdf_structure`, including visible appearance
+and preserved background. Unavailable oracle evidence remains inconclusive, even after successful delivery.
+
+A one-second read-only grace handles native receipt transitions that finish just after a final response. This
+does not resend an input, grant permission, infer cancellation, or make a timeout successful. Native receipts and
+artifact checks still do not establish delivery uniqueness, whole-runtime privacy or cleanup. Those required
+checks remain unknown, and this packet does not enable PDF judge-only regrading or claim live-model qualification.
 
 ## Optional Dependencies
 

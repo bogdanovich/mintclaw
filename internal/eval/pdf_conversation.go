@@ -43,6 +43,7 @@ type pdfConversation struct {
 	approvalRecord        *interactions.Record
 	approvalRequestID     string
 	operationID           string
+	artifacts             *pdfArtifactCollector
 }
 
 func (domain *pdfConversation) initialTask() string { return domain.prepared.task }
@@ -126,7 +127,7 @@ func (domain *pdfConversation) observe(ctx context.Context, prompt Event) error 
 	}
 }
 
-func (domain *pdfConversation) conclude(_ context.Context, trial *Trial) {
+func (domain *pdfConversation) conclude(ctx context.Context, trial *Trial) {
 	trial.PDF = &PDFTrialEvidence{
 		Version: Version, SourceSHA256: domain.prepared.item.Case.Fixtures[0].SHA256,
 		JobID: domain.jobID, State: "unknown", Cleanup: "owned_fixture_retained; native_settlement_unknown",
@@ -153,7 +154,7 @@ func (domain *pdfConversation) conclude(_ context.Context, trial *Trial) {
 		trial.PDF.State = string(job.State)
 	}
 	if domain.approvalPrompt != nil {
-		settlement, settledErr := domain.observeSettlement()
+		settlement, settledErr := domain.waitSettlement(ctx)
 		if errors.Is(settledErr, ErrPrivateEvidence) {
 			trial.Verdict, trial.Code = Fail, "private_native_evidence"
 			trial.ExecutionVerdict, trial.ExecutionCode = Fail, trial.Code
@@ -169,6 +170,9 @@ func (domain *pdfConversation) conclude(_ context.Context, trial *Trial) {
 				PlatformMessageIDs: settlement.delivery.PlatformMessageIDs,
 				ArtifactRef:        operation.ArtifactRef, ArtifactSHA256: operation.Artifact.SHA256,
 				ArtifactSize: operation.Artifact.Size,
+			}
+			if domain.artifacts != nil {
+				domain.artifacts.collect(ctx, domain.prepared, settlement, trial)
 			}
 		}
 	}

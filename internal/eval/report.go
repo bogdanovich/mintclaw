@@ -80,7 +80,23 @@ func (report *privateReport) write(name string, value any) error {
 }
 
 func (report *privateReport) writeBytes(name string, data []byte) error {
-	if !safeRelativePath(name) || len(data) > 8*1024*1024 {
+	return report.writeBoundedFile(name, data, 8*1024*1024)
+}
+
+// Binary artifacts are private evidence, not model or JSON report contents.
+func (report *privateReport) retainPDFArtifact(trialID string, data []byte) (string, error) {
+	if !validID(trialID) || len(data) == 0 {
+		return "", ErrReport
+	}
+	name := "artifact-" + trialID + ".pdf"
+	if err := report.writeBoundedFile(name, data, maxPDFBytes); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func (report *privateReport) writeBoundedFile(name string, data []byte, maximum int) error {
+	if !safeRelativePath(name) || len(data) > maximum {
 		return ErrReport
 	}
 	file, err := report.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)

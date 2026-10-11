@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -42,6 +43,36 @@ func TestPrivateReportRefusesUnsafeLocationAndOverwrite(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(fixture.home, "outside")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("report escaped its owned directory")
+	}
+}
+
+func TestPrivateArtifactBoundDoesNotWidenJSONOrOverwriteEvidence(t *testing.T) {
+	fixture := newAdmissionFixture(t)
+	report, err := newPrivateReport(fixture.output, fixture.home, fixture.workspace, uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = report.root.Close() }()
+	data := bytes.Repeat([]byte("x"), 8*1024*1024+1)
+	if !errors.Is(report.writeBytes("too-large.json", data), ErrReport) {
+		t.Fatal("binary retention widened the JSON report limit")
+	}
+	id := uuid.NewString()
+	name, err := report.retainPDFArtifact(id, data)
+	if err != nil || name != "artifact-"+id+".pdf" {
+		t.Fatal("admitted private artifact above JSON bound was refused")
+	}
+	info, err := report.root.Stat(name)
+	if err != nil || info.Mode().Perm() != 0o600 || info.Size() != int64(len(data)) {
+		t.Fatal("private artifact lost bytes or private permissions")
+	}
+	for _, invalid := range []string{id, "../../escape", ""} {
+		if _, err = report.retainPDFArtifact(invalid, data); !errors.Is(err, ErrReport) {
+			t.Fatal("retained artifact was overwritten or escaped the report")
+		}
+	}
+	if !errors.Is(report.writeBoundedFile("over-bound.pdf", data, len(data)-1), ErrReport) {
+		t.Fatal("private binary bound was ignored")
 	}
 }
 

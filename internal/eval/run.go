@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,9 +18,10 @@ var (
 )
 
 type RunOptions struct {
-	Home         string
-	OutputParent string
-	SuiteTimeout time.Duration
+	Home            string
+	OutputParent    string
+	SuiteTimeout    time.Duration
+	PDFOraclePython string
 }
 
 // Run attaches only after prepared-target admission. It never provisions or
@@ -31,7 +33,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	if options.SuiteTimeout == 0 {
 		options.SuiteTimeout = time.Hour
 	}
-	if options.SuiteTimeout <= 0 || options.SuiteTimeout > 4*time.Hour {
+	if options.SuiteTimeout <= 0 || options.SuiteTimeout > 4*time.Hour ||
+		options.PDFOraclePython != "" && !filepath.IsAbs(options.PDFOraclePython) {
 		return RunReport{}, ErrRunOptions
 	}
 	seen := make(map[string]bool)
@@ -88,7 +91,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		case suiteCtx.Err() != nil:
 			trial.Verdict, trial.Code = Inconclusive, "suite_interrupted"
 		default:
-			trial = runAdmittedTrial(suiteCtx, target, item, trial.SessionID, roles)
+			trial = runAdmittedTrial(suiteCtx, target, item, trial.SessionID, roles, options, writer)
 		}
 		name := "trial-" + trial.ID + ".json"
 		roleCalls = append(roleCalls, trial.DriverCalls...)
@@ -150,6 +153,7 @@ func prepareConversationRoles(target admittedTarget, cases []LoadedCase) convers
 
 func runAdmittedTrial(
 	ctx context.Context, target admittedTarget, item LoadedCase, sessionID string, roles conversationRoles,
+	runOptions RunOptions, report *privateReport,
 ) (trial Trial) {
 	trial = newUnattemptedTrial(item, target.preset.ExpectedAgent)
 	trial.SessionID = sessionID
@@ -176,7 +180,9 @@ func runAdmittedTrial(
 			trial.Verdict, trial.Code = Inconclusive, "pdf_preparation_unavailable"
 			return trial
 		}
-		domain = &pdfConversation{prepared: prepared}
+		domain = &pdfConversation{prepared: prepared, artifacts: &pdfArtifactCollector{
+			config: target.config, python: runOptions.PDFOraclePython, retain: report.retainPDFArtifact,
+		}}
 		prepared.filter = roles.filter
 		item = prepared.item
 		options.InspectFrame = func(data []byte) error {
