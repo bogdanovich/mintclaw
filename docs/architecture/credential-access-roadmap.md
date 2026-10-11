@@ -175,6 +175,12 @@ the protected fill contract. Prefer a typed login operation using a fresh
 semantic password-field reference and trusted account mapping. Return only
 status, approved alias, safe handoff state, and allowed page observations.
 
+The first [credential browser login admission](credential-browser-login-admission.md)
+limits the consumer to a configured private login and fixed outcomes. General
+page observations and subsequent account operations retain separate admission
+gates. It also records the failed actual-server sandbox launch; that host is
+not qualified for real credentials.
+
 Review all live and durable output paths: accessibility/DOM projections,
 screenshots, console/network diagnostics, browser artifacts, session history,
 coding context, interaction records, provider requests, Seahorse state,
