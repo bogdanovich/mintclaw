@@ -1,0 +1,226 @@
+package eval
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/bogdanovich/mintclaw/pkg/config"
+)
+
+var ErrGrade = errors.New("eval: retained evidence or judge profile not eligible for grading")
+
+// Grade reads eligible private evidence and calls only a tools-disabled judge.
+// It does not connect to a gateway, probe a process, send tasks or rerun tools.
+func Grade(
+	ctx context.Context, preset Preset, cases []LoadedCase, sourceDirectory string, options RunOptions,
+) (RunReport, error) {
+	cfg, err := gradeConfig(preset, options.Home)
+	if err != nil || preset.JudgeModel == "" || len(cases) == 0 || len(cases) > MaxCorpusCases {
+		return RunReport{}, ErrGrade
+	}
+	if options.SuiteTimeout == 0 {
+		options.SuiteTimeout = time.Hour
+	}
+	if options.SuiteTimeout <= 0 || options.SuiteTimeout > 4*time.Hour {
+		return RunReport{}, ErrGrade
+	}
+	ctx, cancel := context.WithTimeout(ctx, options.SuiteTimeout)
+	defer cancel()
+	filter := cfg.SensitiveDataReplacer()
+	selected := make(map[string]LoadedCase, len(cases))
+	for _, item := range cases {
+		if item.Case.Validate() != nil || !validDigest(item.Digest) || selected[item.Case.ID].Digest != "" ||
+			credentialJSONValue(item.Case, filter) {
+			return RunReport{}, ErrGrade
+		}
+		selected[item.Case.ID] = item
+	}
+	home, _ := privateHome(options.Home)
+	source, err := privateHome(sourceDirectory)
+	workspace, workspaceErr := filepath.EvalSymlinks(preset.ExpectedWorkspace)
+	if err != nil || workspaceErr != nil || !pathWithin(home, source) ||
+		source == workspace || pathWithin(workspace, source) || pathWithin(source, workspace) {
+		return RunReport{}, ErrGrade
+	}
+	root, err := os.OpenRoot(source)
+	if err != nil {
+		return RunReport{}, ErrGrade
+	}
+	defer func() { _ = root.Close() }()
+	data, err := readPrivateReportFile(root, "run.json")
+	if err != nil {
+		return RunReport{}, ErrGrade
+	}
+	original, err := decodeDocument[RunReport](data, 8*1024*1024)
+	if err != nil || original.Version != Version || !original.Complete || original.Mode != "run" ||
+		!validID(original.ID) || original.PresetID != preset.ID || len(original.Trials) == 0 ||
+		len(original.Trials) > MaxCorpusCases || credentialJSONValue(original, filter) {
+		return RunReport{}, ErrGrade
+	}
+	// Admit every selected source before making a billable judge call.
+	trials := make([]Trial, 0, len(original.Trials))
+	seen := make(map[string]bool)
+	for _, summary := range original.Trials {
+		item, wanted := selected[summary.CaseID]
+		if !wanted {
+			continue
+		}
+		if seen[summary.CaseID] || !validID(summary.ID) || summary.CaseSHA256 != item.Digest ||
+			summary.File != "trial-"+summary.ID+".json" {
+			return RunReport{}, ErrGrade
+		}
+		data, err = readPrivateReportFile(root, summary.File)
+		if err != nil {
+			return RunReport{}, ErrGrade
+		}
+		trial, decodeErr := decodeDocument[Trial](data, 8*1024*1024)
+		if decodeErr != nil || !gradeEligible(trial, item, summary, preset, workspace) ||
+			credentialJSONValue(trial, filter) {
+			return RunReport{}, ErrGrade
+		}
+		trials = append(trials, trial)
+		seen[summary.CaseID] = true
+	}
+	if len(seen) != len(selected) {
+		return RunReport{}, ErrGrade
+	}
+	judge, err := NewModelRole(cfg, preset.JudgeModel, "judge")
+	if err != nil {
+		return RunReport{}, ErrGrade
+	}
+	defer judge.Close()
+	if credentialJSONValue(judge.identity, filter) {
+		return RunReport{}, ErrGrade
+	}
+	result := RunReport{
+		Version: Version, ID: uuid.NewString(), PresetID: preset.ID, Runtime: original.Runtime,
+		Mode: "grade", SourceRun: original.ID, Verdict: Pass, StartedAt: time.Now().UTC(),
+		Trials: []TrialSummary{}, Coverage: map[Verdict]int{}, Usage: "unknown", Cleanup: "no_target_or_tool_work",
+	}
+	writer, err := newPrivateReport(options.OutputParent, home, workspace, result.ID)
+	if err != nil {
+		return RunReport{}, ErrReport
+	}
+	defer func() { _ = writer.root.Close() }()
+	result.ReportDir = writer.dir
+	calls := []RoleCall{}
+	for _, trial := range trials {
+		item := selected[trial.CaseID]
+		last := lastOutcome(trial.Events)
+		trial.Checks = gradeConversation(item.Case.Checks, trial.Events, last)
+		trial.Verdict, trial.Code = trial.ExecutionVerdict, trial.ExecutionCode
+		for _, check := range trial.Checks {
+			trial.Verdict = combineVerdicts(trial.Verdict, check.Verdict)
+		}
+		judgement := judgeConversation(ctx, judge, item.Case, trial.Events)
+		if credentialJSONValue(judgement, filter) {
+			judgement.Findings = JudgeFindings{Version: Version, Criteria: []JudgeFinding{}}
+			judgement.Verdict, judgement.Code = Fail, "private_judge_output"
+		}
+		trial.Judge = &judgement
+		if judgement.Code == "private_judge_output" {
+			trial.EvidenceEligible = false
+			trial.ExecutionVerdict, trial.ExecutionCode = Fail, judgement.Code
+		}
+		if requiredRubric(item.Case.Rubric) || judgement.Code == "private_judge_output" {
+			trial.Verdict = combineVerdicts(trial.Verdict, judgement.Verdict)
+		}
+		if trial.Verdict == Fail {
+			trial.Code = "required_assessment_failed"
+		} else {
+			trial.Code = judgement.Code
+		}
+		if judgement.Call != nil {
+			calls = append(calls, *judgement.Call)
+		}
+		result.RoleUsage = []RoleUsage{summarizeRoleCalls("judge", calls)}
+		name := "trial-" + trial.ID + ".json"
+		result.Trials = append(result.Trials, TrialSummary{
+			ID: trial.ID, CaseID: trial.CaseID, CaseSHA256: trial.CaseSHA256, Verdict: trial.Verdict,
+			Code: trial.Code, DurationMS: trial.DurationMS, File: name,
+		})
+		result.Coverage[trial.Verdict]++
+		result.Verdict = combineVerdicts(result.Verdict, trial.Verdict)
+		if writer.write(name, trial) != nil {
+			result.Trials[len(result.Trials)-1].File = ""
+			result.Verdict = combineVerdicts(result.Verdict, Error)
+			return result, ErrReport
+		}
+	}
+	result.DurationMS = time.Since(result.StartedAt).Milliseconds()
+	result.Complete = true
+	if writer.finish(result) != nil {
+		result.Complete = false
+		result.Verdict = combineVerdicts(result.Verdict, Error)
+		return result, ErrReport
+	}
+	if result.Verdict != Pass {
+		return result, ErrNotPassed
+	}
+	return result, nil
+}
+
+func gradeConfig(preset Preset, home string) (*config.Config, error) {
+	profile, err := readPreparedProfile(preset, home)
+	if err != nil {
+		return nil, ErrGrade
+	}
+	return profile.config, nil
+}
+
+func readPrivateReportFile(root *os.Root, name string) ([]byte, error) {
+	info, err := root.Lstat(name)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return nil, ErrGrade
+	}
+	return readBoundedFile(root, name, 8*1024*1024)
+}
+
+func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Preset, workspace string) bool {
+	if trial.Version != Version || trial.ID != summary.ID || trial.CaseID != item.Case.ID ||
+		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
+		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||
+		!trial.TransportClosed || !trial.EvidenceEligible || trial.ExecutionVerdict != Pass ||
+		len(item.Case.Driver.Facts) != 0 || len(item.Case.Fixtures) != 0 || len(item.Case.Rubric) == 0 ||
+		len(trial.Events) == 0 || len(trial.Events) > 256 {
+		return false
+	}
+	if trial.Judge != nil && trial.Judge.Code == "private_judge_output" {
+		return false
+	}
+	if _, err := visibleConversation(trial.Events, nil); err != nil {
+		return false
+	}
+	for _, event := range trial.Events {
+		if event.Kind == "input" {
+			continue
+		}
+		if event.AgentID != "" && event.AgentID != preset.ExpectedAgent ||
+			event.SessionKey != "" && event.SessionKey != trial.SessionKey {
+			return false
+		}
+		for _, scope := range event.TraceScopes {
+			if !scope.Complete() || scope.Workspace != workspace {
+				return false
+			}
+		}
+		if event.Kind != "stream" && (event.AgentID == "" || event.SessionKey == "" || len(event.TraceScopes) == 0) {
+			return false
+		}
+	}
+	return lastOutcome(trial.Events).ID != ""
+}
+
+func lastOutcome(events []Event) Event {
+	for index := len(events) - 1; index >= 0; index-- {
+		if events[index].Kind == "final" || events[index].Kind == "question" || events[index].Kind == "approval" {
+			return events[index]
+		}
+	}
+	return Event{}
+}

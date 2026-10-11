@@ -36,13 +36,12 @@ func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admit
 	if preset.Validate() != nil || runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return target, ErrUnsafeTarget
 	}
-	physicalHome, err := privateHome(preset.IsolationRoot)
-	if err != nil || !samePhysicalPath(home, physicalHome) || !samePhysicalPath(config.GetHome(), physicalHome) ||
-		!samePhysicalPath(preset.ConfigPath, filepath.Join(physicalHome, "config.json")) {
+	profile, err := readPreparedProfile(preset, home)
+	if err != nil {
 		return target, ErrUnsafeTarget
 	}
-	workspace, err := filepath.EvalSymlinks(preset.ExpectedWorkspace)
-	if err != nil || !pathWithin(physicalHome, workspace) {
+	cfg, physicalHome := profile.config, profile.home
+	if validateConversationProfile(cfg, preset, profile.workspace) != nil {
 		return target, ErrUnsafeTarget
 	}
 	root, err := os.OpenRoot(physicalHome)
@@ -50,30 +49,6 @@ func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admit
 		return target, ErrUnsafeTarget
 	}
 	defer func() { _ = root.Close() }()
-	data, err := readBoundedFile(root, "config.json", MaxManifestBytes)
-	if err != nil {
-		return target, ErrUnsafeTarget
-	}
-	// Validate with the native byte decoder first, without its file loader's
-	// diagnostic logging. The prepared profile is operator-owned and immutable
-	// for a run; concurrent hostile filesystem mutation is not certified here.
-	var preview config.Config
-	if config.DecodeCurrentConfig(data, &preview) != nil {
-		return target, ErrUnsafeTarget
-	}
-	for _, model := range preview.ModelList {
-		if model == nil {
-			return target, ErrUnsafeTarget
-		}
-	}
-	cfg, err := config.LoadConfigReadOnly(preset.ConfigPath)
-	if err != nil || validateConversationProfile(cfg, preset, workspace) != nil {
-		return target, ErrUnsafeTarget
-	}
-	after, err := readBoundedFile(root, "config.json", MaxManifestBytes)
-	if err != nil || digest(data) != digest(after) {
-		return target, ErrUnsafeTarget
-	}
 	pidData, err := readBoundedFile(root, ".mintclaw.pid", 4096)
 	if err != nil {
 		return target, ErrUnsafeTarget

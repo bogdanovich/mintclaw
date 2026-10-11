@@ -32,10 +32,14 @@ type CalibrationFinding struct {
 
 type CalibrationReport struct {
 	Version       int                  `json:"version"`
+	ID            string               `json:"id,omitempty"`
+	ReportDir     string               `json:"-"`
+	Complete      bool                 `json:"complete"`
 	PromptVersion string               `json:"prompt_version"`
 	SHA256        string               `json:"sha256"`
 	Verdict       Verdict              `json:"verdict"`
 	Examples      []CalibrationFinding `json:"examples"`
+	RoleUsage     []RoleUsage          `json:"role_usage,omitempty"`
 }
 
 func LoadCalibration(name string) (Calibration, string, error) {
@@ -127,6 +131,7 @@ func Calibrate(
 		})
 		result.Verdict = combineVerdicts(result.Verdict, verdict)
 	}
+	result.Complete = true
 	if result.Verdict != Pass {
 		return result, ErrNotPassed
 	}

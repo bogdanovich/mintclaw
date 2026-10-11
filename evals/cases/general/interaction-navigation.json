@@ -19,5 +19,11 @@
     {"id": "native-question", "kind": "interaction_observed"},
     {"id": "same-session", "kind": "same_session"}
   ],
-  "rubric": []
+  "rubric": [
+    {
+      "id": "coherent-controls",
+      "description": "The question and offered options agree about email versus paper; clarification preserves the question without guessing a preference, and cancellation is not reported as a completed preference choice.",
+      "required": true
+    }
+  ]
 }

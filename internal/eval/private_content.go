@@ -12,16 +12,20 @@ import (
 // trailing content and exhausted bounds refuse projection, not safety proof.
 type privateContentScan struct {
 	facts  map[string]string
+	filter *strings.Replacer
 	tokens int
 }
 
 func (scan *privateContentScan) text(text string, layer int) bool {
+	if scan.filter != nil && scan.filter.Replace(text) != text {
+		return true
+	}
 	for _, value := range scan.facts {
 		if value == "" || strings.Contains(text, value) {
 			return true
 		}
 	}
-	if len(scan.facts) == 0 || !strings.ContainsRune(text, '\\') {
+	if len(scan.facts) == 0 && scan.filter == nil || !strings.ContainsRune(text, '\\') {
 		return false
 	}
 	if layer >= 8 || len(text) > MaxInputBytes {

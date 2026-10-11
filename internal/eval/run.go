@@ -47,8 +47,17 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	if err != nil {
 		return RunReport{}, err
 	}
+	filter := target.config.SensitiveDataReplacer()
+	if credentialJSONValue(preset, filter) || credentialJSONValue(target.probe, filter) {
+		return RunReport{}, ErrUnsafeTarget
+	}
+	for _, item := range cases {
+		if credentialJSONValue(item.Case, filter) {
+			return RunReport{}, ErrPrivateEvidence
+		}
+	}
 	result := RunReport{
-		Version: Version, ID: uuid.NewString(), PresetID: preset.ID, Runtime: target.probe,
+		Version: Version, ID: uuid.NewString(), PresetID: preset.ID, Runtime: target.probe, Mode: "run",
 		Verdict: Pass, StartedAt: time.Now().UTC(), Trials: []TrialSummary{}, Coverage: map[Verdict]int{},
 		Usage: "unknown", Cleanup: "local_transports_closed; remote_state_unknown",
 	}
@@ -59,21 +68,34 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	defer func() { _ = writer.root.Close() }()
 	result.ReportDir = writer.dir
+	roles := prepareConversationRoles(target, cases)
+	if roles.user != nil {
+		defer roles.user.Close()
+	}
+	if roles.judge != nil {
+		defer roles.judge.Close()
+	}
+	roleCalls := []RoleCall{}
 	for _, item := range cases {
 		trial := newUnattemptedTrial(item, preset.ExpectedAgent)
 		switch {
 		case !containsAll(preset.Capabilities, item.Case.Requires):
 			trial.Verdict, trial.Code = Skipped, "capability_unavailable"
-		case item.Case.Driver.Mode != "scripted":
+		case item.Case.Driver.Mode == "llm_user" && roles.user == nil:
 			trial.Verdict, trial.Code = Skipped, "driver_unavailable"
 		case len(item.Case.Fixtures) != 0 || len(item.Case.Driver.Facts) != 0:
 			trial.Verdict, trial.Code = Skipped, "domain_evidence_unavailable"
 		case suiteCtx.Err() != nil:
 			trial.Verdict, trial.Code = Inconclusive, "suite_interrupted"
 		default:
-			trial = runAdmittedTrial(suiteCtx, target, item, trial.SessionID)
+			trial = runAdmittedTrial(suiteCtx, target, item, trial.SessionID, roles)
 		}
 		name := "trial-" + trial.ID + ".json"
+		roleCalls = append(roleCalls, trial.DriverCalls...)
+		if trial.Judge != nil && trial.Judge.Call != nil {
+			roleCalls = append(roleCalls, *trial.Judge.Call)
+		}
+		result.RoleUsage = []RoleUsage{summarizeRoleCalls("user", roleCalls), summarizeRoleCalls("judge", roleCalls)}
 		result.Trials = append(result.Trials, TrialSummary{
 			ID: trial.ID, CaseID: trial.CaseID, CaseSHA256: trial.CaseSHA256,
 			Verdict: trial.Verdict, Code: trial.Code, DurationMS: trial.DurationMS, File: name,
@@ -100,7 +122,35 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	return result, nil
 }
 
-func runAdmittedTrial(ctx context.Context, target admittedTarget, item LoadedCase, sessionID string) (trial Trial) {
+func prepareConversationRoles(target admittedTarget, cases []LoadedCase) conversationRoles {
+	roles := conversationRoles{filter: target.config.SensitiveDataReplacer()}
+	needsUser, needsJudge := false, false
+	for _, item := range cases {
+		needsUser = needsUser || item.Case.Driver.Mode == "llm_user"
+		needsJudge = needsJudge || len(item.Case.Rubric) > 0
+	}
+	if needsUser && target.preset.UserModel != "" {
+		roles.user, _ = NewModelRole(target.config, target.preset.UserModel, "user")
+	}
+	if needsJudge && target.preset.JudgeModel != "" {
+		roles.judge, _ = NewModelRole(target.config, target.preset.JudgeModel, "judge")
+	}
+	for _, role := range []*ModelRole{roles.user, roles.judge} {
+		if role != nil && credentialJSONValue(role.identity, roles.filter) {
+			role.Close()
+			if role == roles.user {
+				roles.user = nil
+			} else {
+				roles.judge = nil
+			}
+		}
+	}
+	return roles
+}
+
+func runAdmittedTrial(
+	ctx context.Context, target admittedTarget, item LoadedCase, sessionID string, roles conversationRoles,
+) (trial Trial) {
 	trial = newUnattemptedTrial(item, target.preset.ExpectedAgent)
 	trial.SessionID = sessionID
 	started := trial.StartedAt
@@ -123,8 +173,8 @@ func runAdmittedTrial(ctx context.Context, target admittedTarget, item LoadedCas
 		trial.DurationMS = time.Since(trial.StartedAt).Milliseconds()
 		return trial
 	}
-	return runScriptedConversation(caseCtx, client, item, sessionID,
-		target.preset.ExpectedAgent, target.preset.ExpectedWorkspace)
+	return runConversation(caseCtx, client, item, sessionID,
+		target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles)
 }
 
 func newUnattemptedTrial(item LoadedCase, agent string) Trial {

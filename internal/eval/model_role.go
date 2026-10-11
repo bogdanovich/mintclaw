@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +44,7 @@ type RoleCall struct {
 type ModelRole struct {
 	identity RoleIdentity
 	provider providers.LLMProvider
+	filter   *strings.Replacer
 	close    sync.Once
 }
 
@@ -91,7 +93,7 @@ func NewModelRole(cfg *config.Config, alias, role string) (*ModelRole, error) {
 			Role: role, Alias: alias, Provider: model.Provider, Model: nativeModel,
 			ModelSource: "configured_request", ConfigSHA256: digest(data), Generation: "eval-role-generation-v1",
 		},
-		provider: provider,
+		provider: provider, filter: cfg.SensitiveDataReplacer(),
 	}, nil
 }
 
@@ -119,6 +121,10 @@ func (role *ModelRole) Call(
 		!boundedText(input, MaxInputBytes) || len(system)+len(input) > MaxInputBytes || ctx.Err() != nil ||
 		!providers.Capabilities(role.provider).CallerMediatedTools {
 		return "", call, ErrModelRole
+	}
+	if credentialJSONValue([]string{system, input}, role.filter) {
+		call.Code = "private_input"
+		return "", call, ErrPrivateEvidence
 	}
 	messages := []providers.Message{{Role: "system", Content: system}, {Role: "user", Content: input}}
 	data, err := json.Marshal(messages)
@@ -152,6 +158,10 @@ func (role *ModelRole) Call(
 		response.FinishReason != "stop" && response.FinishReason != "end_turn" {
 		call.Code = "invalid_output"
 		return "", call, ErrModelRole
+	}
+	if credentialJSONValue(response.Content, role.filter) {
+		call.Code = "private_output"
+		return "", call, ErrPrivateEvidence
 	}
 	call.Code = "response_received"
 	return response.Content, call, nil
