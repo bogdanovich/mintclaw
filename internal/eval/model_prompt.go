@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
-	"strings"
 )
 
 const (
@@ -82,12 +81,8 @@ func visibleConversation(events []Event, facts map[string]string) ([]visibleEven
 }
 
 func containsPrivate(text string, facts map[string]string) bool {
-	for _, value := range facts {
-		if value == "" || strings.Contains(text, value) {
-			return true
-		}
-	}
-	return false
+	scan := privateContentScan{facts: facts, tokens: 4096, candidates: 64}
+	return scan.text(text, 0)
 }
 
 func boundedRoleInput(value any, system string, facts map[string]string) (string, error) {
