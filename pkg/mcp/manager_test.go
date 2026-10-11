@@ -1121,26 +1121,60 @@ func (writer *abortOrderWriteCloser) Close() error {
 	return nil
 }
 
+type abortOrderReadCloser struct{ closed bool }
+
+func (*abortOrderReadCloser) Read([]byte) (int, error) { return 0, io.EOF }
+func (reader *abortOrderReadCloser) Close() error {
+	reader.closed = true
+	return nil
+}
+
 func TestIsolatedPipeAbortKillsBeforeClosingProtocolInput(t *testing.T) {
 	stdin := &abortOrderWriteCloser{}
+	stdout := &abortOrderReadCloser{}
 	waitCh := make(chan error, 1)
 	waitCh <- nil
 	abortCalls := 0
 	pipe := &isolatedPipeRWC{
-		stdin: stdin, stdout: io.NopCloser(strings.NewReader("")), waitCh: waitCh,
+		stdin: stdin, stdout: stdout, waitCh: waitCh,
 		terminateDuration: time.Second,
-		abortProcessTree: func(time.Duration) error {
+		abortProcessTree: func(_ time.Duration, afterKill func()) error {
 			abortCalls++
-			if stdin.closed {
-				t.Fatal("protocol input closed before process-tree abort")
+			if stdin.closed || stdout.closed {
+				t.Fatal("stdio closed before process-tree abort")
+			}
+			afterKill()
+			if !stdout.closed {
+				t.Fatal("stdout remained open after process-tree abort was issued")
 			}
 			return nil
 		},
 	}
-	if err := pipe.Abort(); err != nil || abortCalls != 1 || !stdin.closed || !pipe.closed {
+	if err := pipe.Abort(); err != nil || abortCalls != 1 || !stdin.closed || !stdout.closed || !pipe.closed {
 		t.Fatalf(
-			"Abort() error=%v aborts=%d input_closed=%t closed=%t",
-			err, abortCalls, stdin.closed, pipe.closed,
+			"Abort() error=%v aborts=%d input_closed=%t output_closed=%t closed=%t",
+			err, abortCalls, stdin.closed, stdout.closed, pipe.closed,
+		)
+	}
+}
+
+func TestIsolatedPipeAbortLeavesStdioOpenWhenKillFails(t *testing.T) {
+	stdin := &abortOrderWriteCloser{}
+	stdout := &abortOrderReadCloser{}
+	pipe := &isolatedPipeRWC{
+		stdin: stdin, stdout: stdout,
+		terminateDuration: time.Second,
+		abortProcessTree: func(time.Duration, func()) error {
+			return errors.New("kill admission failed")
+		},
+	}
+	if err := pipe.Abort(); err == nil {
+		t.Fatal("Abort() error = nil")
+	}
+	if stdin.closed || stdout.closed || pipe.closed {
+		t.Fatalf(
+			"failed Abort() closed resources: input=%t output=%t pipe=%t",
+			stdin.closed, stdout.closed, pipe.closed,
 		)
 	}
 }

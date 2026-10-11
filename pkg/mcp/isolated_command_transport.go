@@ -189,7 +189,7 @@ type isolatedPipeRWC struct {
 	stdinOnce         sync.Once
 	closed            bool
 	stopProcessTree   func(time.Duration) error
-	abortProcessTree  func(time.Duration) error
+	abortProcessTree  func(time.Duration, func()) error
 	stdout            io.ReadCloser
 	stdin             io.WriteCloser
 	waitCh            <-chan error
@@ -250,8 +250,9 @@ func (s *isolatedPipeRWC) Abort() error {
 	if s.abortProcessTree == nil {
 		return errors.New("abrupt process-tree cleanup is unavailable")
 	}
-	_ = s.stdout.Close()
-	if err := s.abortProcessTree(s.terminateDuration); err != nil {
+	if err := s.abortProcessTree(s.terminateDuration, func() {
+		_ = s.stdout.Close()
+	}); err != nil {
 		return err
 	}
 	s.stdinOnce.Do(func() { _ = s.stdin.Close() })

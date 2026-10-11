@@ -116,8 +116,36 @@ func (t *isolatedCommandProcessTree) stop(timeout time.Duration) error {
 
 // Windows Job Object termination is already immediate and does not deliver a
 // cooperative process signal, so abort has the same process-tree operation.
-func (t *isolatedCommandProcessTree) abort(timeout time.Duration) error {
-	return t.stop(timeout)
+func (t *isolatedCommandProcessTree) abort(timeout time.Duration, afterKill func()) error {
+	if t == nil || t.job == 0 {
+		if afterKill != nil {
+			afterKill()
+		}
+		return nil
+	}
+	if timeout <= 0 {
+		timeout = isolatedCommandTerminateDuration
+	}
+	if err := windows.TerminateJobObject(t.job, 1); err != nil {
+		return fmt.Errorf("terminate MCP process-tree job: %w", err)
+	}
+	if afterKill != nil {
+		afterKill()
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		active, err := t.activeProcesses()
+		if err != nil {
+			return err
+		}
+		if active == 0 {
+			return t.closeJobIfEmpty()
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("MCP process tree remained alive after abort")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (t *isolatedCommandProcessTree) activeProcesses() (uint32, error) {
