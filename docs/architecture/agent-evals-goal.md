@@ -82,16 +82,20 @@ Cleanup removes only runner-owned resources; failure or unresolved mutation cann
 | --- | --- | --- |
 | Admission | Design, roadmap, this goal, architecture index | None |
 | E1A | Strict corpus/preset contracts, selection, offline CLI and unit tests | Admission |
-| E1B | Shared live client, scripted runner, result contracts, bounded events/evidence and reports; general cases | E1A |
-| E2 | Tools-disabled model roles, action/rubric validation, calibration, offline grading | E1B |
-| E3 | Pinned PDF fixtures and independent document/delivery/privacy graders, six PDF cases | E1B, E2 for adaptive cases |
-| E4 | Safe browser fixture/state/artifact graders, six browser cases | E1B, E2 for adaptive cases |
+| E1B1 | Shared live client, scripted turn engine, result/check contracts and bounded conversation evidence | E1A |
+| E1B2 | Target preflight, public scripted run command, private reports and general-case qualification | E1B1 |
+| E2 | Tools-disabled model roles, action/rubric validation, calibration, offline grading | E1B2 |
+| E3 | Pinned PDF fixtures and independent document/delivery/privacy graders, six PDF cases | E1B2, E2 for adaptive cases |
+| E4 | Safe browser fixture/state/artifact graders, six browser cases | E1B2, E2 for adaptive cases |
 | E5 | Allowlisted presets/private corpus, repeats/comparison, role usage and operator guide | E3, E4 |
 | Qualification/exit | Actual merged-revision runs, retained redacted results, limits, roadmap status | E1-E5 |
 
 Split a packet further when it is not a coherent review unit; keep dependencies explicit. Do not silently expand into
 runtime replacement, generic orchestration, or domain-state duplication. A shared client is justified by the actual
 existing `agent live` and new eval consumers, not a speculative export surface.
+
+E1B1 was started as a stack on E1A while its full CI queued/reran, to avoid blocking implementation progress. It must
+be retargeted onto current `main` after E1A merges, and does not expose a live eval command without E1B2 admission.
 
 Code PRs require exact-head green required CI, actual review, no actionable unresolved feedback, authorized PR-level
 rocket approval, and confirmed merge. Query the issue-reactions endpoint and monitor on the autonomous PR skill's

@@ -8,8 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,11 +16,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
+	"github.com/bogdanovich/mintclaw/internal/gatewayclient"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	channelmintclaw "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
-	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
@@ -197,37 +195,18 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 		return result, &liveRunError{cause: fmt.Errorf("load config: %w", loadErr)}
 	}
 	result.AgentID = configuredDefaultAgentID(cfg)
-	settings, credentialsErr := liveChannelSettings(cfg)
-	if credentialsErr != nil {
-		result.Outcome = "unavailable"
-		return result, &liveRunError{cause: credentialsErr}
-	}
-	endpoint, endpointErr := liveGatewayURL(cfg, result.SessionID)
-	if endpointErr != nil {
-		result.Outcome = "unavailable"
-		return result, &liveRunError{cause: endpointErr}
-	}
 	progress("Connecting to the running MintClaw gateway...")
 
 	ctx, cancel := context.WithTimeout(parent, options.Timeout)
 	defer cancel()
-	header := http.Header{"Authorization": []string{"Bearer " + settings.Token.String()}}
-	connection, response, dialErr := websocket.DefaultDialer.DialContext(ctx, endpoint.String(), header)
-	if response != nil && response.Body != nil {
-		_ = response.Body.Close()
-	}
+	connection, dialErr := gatewayclient.Connect(ctx, cfg, result.SessionID, gatewayclient.Options{
+		MaxFrameBytes: liveMaxOutputBytes + 64*1024,
+	})
 	if dialErr != nil {
-		result.Outcome = classifyLiveDialError(ctx, response)
+		result.Outcome = classifyLiveDialError(ctx, dialErr)
 		return result, &liveRunError{cause: fmt.Errorf("connect to live gateway: %w", dialErr)}
 	}
-	defer func() { _ = connection.Close() }()
-	stopCloseOnCancel := context.AfterFunc(ctx, func() { _ = connection.Close() })
-	defer stopCloseOnCancel()
-	connection.SetReadLimit(liveMaxOutputBytes + 64*1024)
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = connection.SetReadDeadline(deadline)
-		_ = connection.SetWriteDeadline(deadline)
-	}
+	defer connection.Close()
 
 	request := channelmintclaw.MintClawMessage{
 		Type:      channelmintclaw.TypeMessageSend,
@@ -238,7 +217,7 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 			channelmintclaw.PayloadKeyContent: message,
 		},
 	}
-	if writeErr := connection.WriteJSON(request); writeErr != nil {
+	if writeErr := connection.Send(ctx, request); writeErr != nil {
 		result.Outcome = classifyLiveIOError(ctx, writeErr)
 		return result, &liveRunError{cause: fmt.Errorf("send live request: %w", writeErr)}
 	}
@@ -247,8 +226,8 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 	autoAnswerUsed := false
 	autoChoiceUsed := false
 	for {
-		var incoming channelmintclaw.MintClawMessage
-		if readErr := connection.ReadJSON(&incoming); readErr != nil {
+		incoming, readErr := connection.Receive(ctx)
+		if readErr != nil {
 			result.Outcome = classifyLiveIOError(ctx, readErr)
 			return result, &liveRunError{cause: fmt.Errorf("read live response: %w", readErr)}
 		}
@@ -334,7 +313,7 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 					channelmintclaw.PayloadKeyContent: "/answer " + shortID + " " + autoAnswer,
 				},
 			}
-			if writeErr := connection.WriteJSON(answer); writeErr != nil {
+			if writeErr := connection.Send(ctx, answer); writeErr != nil {
 				result.Outcome = classifyLiveIOError(ctx, writeErr)
 				return result, &liveRunError{cause: fmt.Errorf("answer live question: %w", writeErr)}
 			}
@@ -394,7 +373,7 @@ func liveInteractionChoice(raw string) (bus.InboundInteractionChoice, string, er
 
 func activateLiveInteractionChoice(
 	ctx context.Context,
-	connection *websocket.Conn,
+	connection *gatewayclient.Client,
 	result *liveResult,
 	content string,
 	choice bus.InboundInteractionChoice,
@@ -432,7 +411,7 @@ func activateLiveInteractionChoice(
 			channelmintclaw.PayloadKeyInteractionPrompt:  promptID,
 		},
 	}
-	if writeErr := connection.WriteJSON(request); writeErr != nil {
+	if writeErr := connection.Send(ctx, request); writeErr != nil {
 		result.Outcome = classifyLiveIOError(ctx, writeErr)
 		return false, &liveRunError{cause: fmt.Errorf("activate live interaction choice: %w", writeErr)}
 	}
@@ -487,44 +466,6 @@ func liveResultOutput(payload map[string]any) (*taskresult.ObjectiveOutput, erro
 		return nil, errors.New("live result output is invalid")
 	}
 	return normalized, nil
-}
-
-func liveChannelSettings(cfg *config.Config) (*config.MintClawSettings, error) {
-	channel := cfg.Channels.GetByType(config.ChannelMintClaw)
-	if channel == nil || !channel.Enabled {
-		return nil, errors.New("enabled MintClaw channel is required for live agent smoke")
-	}
-	decoded, err := channel.GetDecoded()
-	if err != nil {
-		return nil, fmt.Errorf("decode MintClaw channel: %w", err)
-	}
-	settings, ok := decoded.(*config.MintClawSettings)
-	if !ok || strings.TrimSpace(settings.Token.String()) == "" {
-		return nil, errors.New("MintClaw channel token is required for live agent smoke")
-	}
-	return settings, nil
-}
-
-func liveGatewayURL(cfg *config.Config, sessionID string) (*url.URL, error) {
-	plan, err := netbind.BuildPlan(cfg.Gateway.Host, netbind.DefaultLoopback)
-	if err != nil {
-		return nil, fmt.Errorf("resolve gateway host: %w", err)
-	}
-	if !netbind.IsLoopbackHost(plan.ProbeHost) {
-		return nil, errors.New("live agent smoke must run on the gateway host through loopback")
-	}
-	if cfg.Gateway.Port <= 0 {
-		return nil, errors.New("gateway port is required for live agent smoke")
-	}
-	endpoint := &url.URL{
-		Scheme: "ws",
-		Host:   net.JoinHostPort(plan.ProbeHost, strconv.Itoa(cfg.Gateway.Port)),
-		Path:   "/mintclaw/ws",
-	}
-	query := endpoint.Query()
-	query.Set("session_id", sessionID)
-	endpoint.RawQuery = query.Encode()
-	return endpoint, nil
 }
 
 func configuredDefaultAgentID(cfg *config.Config) string {
@@ -596,22 +537,23 @@ func liveFinal(payload map[string]any) bool {
 	return final || kind == channelmintclaw.MessageKindFinalReply || outbound == "final"
 }
 
-func classifyLiveDialError(ctx context.Context, response *http.Response) string {
+func classifyLiveDialError(ctx context.Context, err error) string {
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return "canceled"
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return "timeout"
 	}
-	if response != nil &&
-		(response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
+	var dial *gatewayclient.DialError
+	if errors.As(err, &dial) &&
+		(dial.StatusCode == http.StatusUnauthorized || dial.StatusCode == http.StatusForbidden) {
 		return "authentication_failed"
 	}
 	return "unavailable"
 }
 
 func classifyLiveIOError(ctx context.Context, err error) string {
-	if errors.Is(err, websocket.ErrReadLimit) {
+	if errors.Is(err, websocket.ErrReadLimit) || errors.Is(err, gatewayclient.ErrQueueLimit) {
 		return "output_limit"
 	}
 	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
