@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/approval"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/provisioning"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/startup"
+	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/supervision"
 )
 
 var version = "dev"
@@ -52,6 +53,8 @@ func execute(ctx context.Context, args []string, output io.Writer) error {
 		return approval.Enroll(ctx)
 	case "serve-approval":
 		return startup.ServeApproval(ctx)
+	case "bootstrap-browser":
+		return supervision.BootstrapBrowser(ctx)
 	default:
 		return errUsage
 	}

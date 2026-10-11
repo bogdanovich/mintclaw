@@ -20,11 +20,15 @@ env -u OP_SERVICE_ACCOUNT_TOKEN go test -c -race -tags goolm,stdjson \
 sudo chown root:root "$qualification_dir" "$qualification_dir/supervision.test"
 sudo chmod 755 "$qualification_dir" "$qualification_dir/supervision.test"
 sudo systemd-run --quiet --wait --pipe --collect --service-type=exec \
-  --unit "$qualification_unit" --property=Delegate=yes --property=PrivateNetwork=yes --property=TasksMax=256 \
+  --unit "$qualification_unit" --property=Delegate=yes --property=PrivateNetwork=yes --property=PrivateMounts=yes \
+  --property=TasksMax=256 \
   --property=MemoryMax=512M --property=RuntimeMaxSec=40s --property=LimitCORE=0 \
   /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 \
   MINTCLAW_SYNTHETIC_WORKER_FOREST_FIXTURE=1 \
-  "$qualification_dir/supervision.test" -test.run '^Test(Forest|Network)Fixture$' -test.timeout 30s -test.v \
+  "$qualification_dir/supervision.test" -test.run '^Test(Forest|Network|Launcher|LauncherFailure)Fixture$' \
+  -test.timeout 30s -test.v \
   | tee "$qualification_result"
 grep -Fq -- '--- PASS: TestForestFixture (' "$qualification_result"
 grep -Fq -- '--- PASS: TestNetworkFixture (' "$qualification_result"
+grep -Fq -- '--- PASS: TestLauncherFixture (' "$qualification_result"
+grep -Fq -- '--- PASS: TestLauncherFailureFixture (' "$qualification_result"

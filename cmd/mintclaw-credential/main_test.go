@@ -16,6 +16,7 @@ func TestTokenArgumentsAreRejectedWithoutEcho(t *testing.T) {
 		{"provision", canary},
 		{"enroll", canary},
 		{"serve-approval", canary},
+		{"bootstrap-browser", canary},
 		{"version", canary},
 		{"--token=" + canary},
 	} {
