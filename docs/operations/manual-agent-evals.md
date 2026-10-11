@@ -17,6 +17,10 @@ and [six manually labelled calibration examples](../../evals/calibration/judge-v
 persona from judge input, and private fact values; fact handles alone are available to the user role. Admission of
 protected wire answers and domain evidence remains a later packet. Private values observed in raw events, even an
 excluded streaming revision, refuse model projection. JSON escaping is not treated as redaction.
+When private facts exist, escape-bearing content must be one complete, bounded JSON value whose decoded tokens
+can all be checked. Escaped opaque prose, trailing fragments, malformed input, and exhausted bounds are ineligible,
+even when they look harmless. This conservative refusal avoids heuristic decoding of arbitrary prose; it is not
+a guarantee against all possible encodings.
 
 Role calls use the existing scoped HTTP providers with no tools/native search, at most 4,096 requested output
 tokens, 16 KiB retained output, 64 KiB total prompt context, and a three-minute deadline. Only caller-mediated

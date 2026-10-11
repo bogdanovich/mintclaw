@@ -81,7 +81,7 @@ func visibleConversation(events []Event, facts map[string]string) ([]visibleEven
 }
 
 func containsPrivate(text string, facts map[string]string) bool {
-	scan := privateContentScan{facts: facts, tokens: 4096, candidates: 64}
+	scan := privateContentScan{facts: facts, tokens: 4096}
 	return scan.text(text, 0)
 }
 

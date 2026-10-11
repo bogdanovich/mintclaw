@@ -16,6 +16,10 @@ func TestPrivateJSONContentCannotReachEitherRole(t *testing.T) {
 		"```json\n{\"name\":\"private\\u002dfact-canary\"}\n```",
 		`private\u002dfact-canary`,
 		`{"content":"{\"name\":\"private\\u002dfact-canary\"}"}`,
+		"Name: private\\u002dfact-canary\nOrdinary prose follows.",
+		"Name: private\\u002dfact-canary\r\nOrdinary prose follows.",
+		"Name: private\\u002dfact-canary\tOrdinary prose follows.",
+		`{"safe":"public\u002dname"} private\u002dfact-canary`,
 	} {
 		for _, kind := range []string{"question", "stream"} {
 			item, events := rolePromptCase(), rolePromptEvents()
@@ -36,7 +40,7 @@ func TestPrivateContentScannerAllowsSafeJSONAndRefusesBounds(t *testing.T) {
 	for _, text := range []string{
 		`Choose yourself or another person.`,
 		`{"name":"public\u002dname","empty":null,"options":["Self","Other"]}`,
-		`Prefix: {"name":"public\u002dname"} suffix.`,
+		"{\n\"name\":\"public\\u002dname\",\n\"empty\":null\n}",
 	} {
 		if containsPrivate(text, facts) {
 			t.Fatal("safe content was refused")
@@ -49,6 +53,10 @@ func TestPrivateContentScannerAllowsSafeJSONAndRefusesBounds(t *testing.T) {
 	}
 	for _, unsafe := range []string{
 		text,
+		`Prefix: {"name":"public\u002dname"} suffix.`,
+		"Name: public\\u002dname\nOrdinary prose follows.",
+		`{"name":"public\u002dname"} trailing prose`,
+		`{"name":"public\u002dname"} {"name":"public"}`,
 		`{"name":"private\u002dfact-canary"`,
 		strings.Repeat(`[`, 25) + `"public\u002dname"` + strings.Repeat(`]`, 25),
 		`[` + strings.Repeat(`"\u0078",`, 4100) + `null]`,
@@ -57,6 +65,24 @@ func TestPrivateContentScannerAllowsSafeJSONAndRefusesBounds(t *testing.T) {
 	} {
 		if !containsPrivate(unsafe, facts) {
 			t.Fatal("unscannable encoded content was admitted")
+		}
+	}
+}
+
+func TestEscapedMultilineEvidenceNeverCallsEitherModel(t *testing.T) {
+	for _, kind := range []string{"question", "stream"} {
+		item, events := rolePromptCase(), rolePromptEvents()
+		item.Driver.Facts = map[string]string{"name": "private-fact-canary"}
+		events[1].Kind = kind
+		events[1].Content = "Name: private\\u002dfact-canary\nOrdinary prose follows."
+		provider := &roleTestProvider{mediated: true}
+		user := &ModelRole{provider: provider, identity: RoleIdentity{Role: "user"}}
+		judge := &ModelRole{provider: provider, identity: RoleIdentity{Role: "judge"}}
+		decision := nextModelAction(t.Context(), user, item, events, "question", 2)
+		judgement := judgeConversation(t.Context(), judge, item, events)
+		if decision.Code != "ineligible_user_evidence" || judgement.Code != "ineligible_judge_evidence" ||
+			decision.Call != nil || judgement.Call != nil || provider.calls != 0 {
+			t.Fatal("unscannable escaped evidence reached a provider", kind)
 		}
 	}
 }

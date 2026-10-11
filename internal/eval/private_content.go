@@ -2,16 +2,17 @@ package eval
 
 import (
 	"encoding/json"
+	"io"
 	"strings"
 )
 
 // Scan decoded JSON tokens rather than maps, so duplicate object keys cannot
 // discard a leaked value. Encoded strings can contain another JSON fragment.
-// Exhaustion or malformed escaped content refuses projection, not safety proof.
+// Escape-bearing content must be one complete JSON value. Opaque prose,
+// trailing content and exhausted bounds refuse projection, not safety proof.
 type privateContentScan struct {
-	facts      map[string]string
-	tokens     int
-	candidates int
+	facts  map[string]string
+	tokens int
 }
 
 func (scan *privateContentScan) text(text string, layer int) bool {
@@ -26,27 +27,13 @@ func (scan *privateContentScan) text(text string, layer int) bool {
 	if layer >= 8 || len(text) > MaxInputBytes {
 		return true
 	}
-	// Opaque prose can itself contain JSON string escapes without outer quotes.
-	var decoded string
-	if json.Unmarshal([]byte(`"`+text+`"`), &decoded) == nil && decoded != text && scan.text(decoded, layer+1) {
+	decoder := json.NewDecoder(strings.NewReader(text))
+	matched, valid := scan.value(decoder, layer)
+	if matched || !valid {
 		return true
 	}
-	for index := 0; index < len(text); index++ {
-		if text[index] != '{' && text[index] != '[' && text[index] != '"' {
-			continue
-		}
-		scan.candidates--
-		if scan.candidates < 0 {
-			return true
-		}
-		decoder := json.NewDecoder(strings.NewReader(text[index:]))
-		matched, valid := scan.value(decoder, layer)
-		if matched || !valid {
-			return true
-		}
-		index += int(decoder.InputOffset()) - 1
-	}
-	return false
+	_, err := decoder.Token()
+	return err != io.EOF
 }
 
 func (scan *privateContentScan) value(decoder *json.Decoder, layer int) (bool, bool) {
