@@ -452,6 +452,10 @@ func (proxy *LoginProxy) forward(writer http.ResponseWriter, request *http.Reque
 		proxy.deny(writer)
 		return
 	}
+	// Admission and forwarding use the same sanitized header set. Connection
+	// tokens cannot remove an admission-critical header after it was checked.
+	headers := request.Header.Clone()
+	stripProxyHeaders(headers)
 	target := origin + request.URL.RequestURI()
 	proxy.mu.Lock()
 	phase := proxy.phase
@@ -461,7 +465,8 @@ func (proxy *LoginProxy) forward(writer http.ResponseWriter, request *http.Reque
 		allowed = request.Method == http.MethodGet && request.ContentLength == 0 && len(request.TransferEncoding) == 0
 	case proxySubmitReady:
 		allowed = request.Method == http.MethodPost && target == proxy.flow.SubmitURL &&
-			request.Header.Get("Content-Type") == "application/x-www-form-urlencoded" && request.ContentLength > 0 &&
+			len(headers.Values("Content-Type")) == 1 &&
+			headers.Get("Content-Type") == "application/x-www-form-urlencoded" && request.ContentLength > 0 &&
 			request.ContentLength <= 16384 && len(request.TransferEncoding) == 0
 		if allowed {
 			proxy.phase = proxyPostPending
@@ -519,8 +524,7 @@ func (proxy *LoginProxy) forward(writer http.ResponseWriter, request *http.Reque
 		proxy.deny(writer)
 		return
 	}
-	upstream.Header = request.Header.Clone()
-	stripProxyHeaders(upstream.Header)
+	upstream.Header = headers
 	response, err := transport.RoundTrip(upstream)
 	if err != nil {
 		proxy.deny(writer)

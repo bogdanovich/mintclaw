@@ -80,6 +80,10 @@ func newProxyFixture(t *testing.T, handler http.HandlerFunc, witness ...func(str
 			if request.Method != http.MethodPost {
 				t.Error("synthetic submission method changed")
 			}
+			if len(request.Header.Values("Content-Type")) != 1 ||
+				request.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+				t.Error("synthetic submission content type changed upstream")
+			}
 			data, err := io.ReadAll(request.Body)
 			if err != nil || string(data) != "username=synthetic&password=SYNTHETIC_PRIVATE_PASSWORD" {
 				t.Error("synthetic form changed")
@@ -381,7 +385,9 @@ func TestEnforcingProxyLocksExistingConnectionAndAllNewNetwork(t *testing.T) {
 }
 
 func TestEnforcingProxyRejectsEarlySubmissionAndChangedForm(t *testing.T) {
-	for _, mutation := range []string{"early", "path", "method", "type", "empty", "oversized"} {
+	for _, mutation := range []string{
+		"early", "path", "method", "type", "empty", "oversized", "connection-type", "connection-type-list", "duplicate-type",
+	} {
 		f := newProxyFixture(t, nil)
 		if mutation != "early" {
 			if f.proxy.LockForInjection(context.Background()) != nil ||
@@ -413,9 +419,16 @@ func TestEnforcingProxyRejectsEarlySubmissionAndChangedForm(t *testing.T) {
 			request.Method = http.MethodPut
 		case "type":
 			request.Header.Set("Content-Type", "text/plain")
+		case "connection-type":
+			request.Header.Set("Connection", "Content-Type")
+		case "connection-type-list":
+			request.Header.Add("Connection", "keep-alive")
+			request.Header.Add("Connection", "cookie, cOnTeNt-TyPe")
+		case "duplicate-type":
+			request.Header.Add("Content-Type", "text/plain")
 		}
 		requireProxyDenied(t, f, request)
-		if f.postCount.Load() != 0 || f.base.dials.Load() != 0 {
+		if f.postCount.Load() != 0 || f.base.dials.Load() != 0 || f.base.lookups.Load() != 0 {
 			t.Fatal("changed submission reached upstream")
 		}
 	}
