@@ -242,12 +242,19 @@ entire personal vault.
   verification, scope binding, bounded single-use challenges, policy-transition
   invalidation, and durable counter updates. They have no executable entry
   point that activates listeners. The embedded mobile enrollment/approval/revoke
-  page and private root-authenticated enrollment console are now implemented,
+  page and private root-authenticated enrollment console are merged in
+  [PR #1543](https://github.com/bogdanovich/mintclaw/pull/1543),
   with bounded exact-origin HTTPS handlers and the protected `enroll` command.
   Synthetic Linux and actual browser WebAuthn fixtures qualify the software
   boundary. Protected service/listener startup, authorized notifications, and
   physical Android end-to-end qualification remain pending.
-- CA4–CA6: pending their dependencies and admission/qualification gates.
+- CA4: the consumer lease foundation now binds a private login binding to one
+  live grant generation. Consumers share the original expiry signal; revocation,
+  effective policy change, controller failure and shutdown retire the lease.
+  Every use still checks live origin and current authority. This supplies no
+  browser worker, vault retrieval or model tool. Browser/host startup admission,
+  injection, output restrictions and session quarantine remain pending.
+- CA5–CA6: pending their dependencies and admission/qualification gates.
   Runtime credential access remains disabled and no real token is provisioned.
 
 Update this record with PRs, validation, and any narrowed admissions as work
