@@ -12,6 +12,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/isolation"
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
@@ -37,6 +38,9 @@ func NewCodexCliProvider(workspace string) *CodexCliProvider {
 func (p *CodexCliProvider) Chat(
 	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) (*LLMResponse, error) {
+	if protocoltypes.IsSensitiveRequest(ctx) {
+		return nil, protocoltypes.ErrSensitiveRequestUnsupported
+	}
 	if p.command == "" {
 		return nil, fmt.Errorf("codex command not configured")
 	}

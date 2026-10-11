@@ -11,6 +11,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/isolation"
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
 // ClaudeCliProvider implements LLMProvider using the claude CLI as a subprocess.
@@ -35,6 +36,9 @@ func NewClaudeCliProvider(workspace string) *ClaudeCliProvider {
 func (p *ClaudeCliProvider) Chat(
 	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) (*LLMResponse, error) {
+	if protocoltypes.IsSensitiveRequest(ctx) {
+		return nil, protocoltypes.ErrSensitiveRequestUnsupported
+	}
 	systemPrompt := p.buildSystemPrompt(messages, tools)
 	prompt := p.messagesToPrompt(messages)
 
