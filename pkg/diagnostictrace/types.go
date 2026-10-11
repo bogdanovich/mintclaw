@@ -76,6 +76,7 @@ type Metadata struct {
 	SessionHash  string `json:"session_hash,omitempty"`
 	AgentID      string `json:"agent_id,omitempty"`
 	RuntimeID    string `json:"runtime_id,omitempty"`
+	ProjectHash  string `json:"project_hash,omitempty"`
 }
 
 type Record struct {

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
+	"unicode/utf8"
 )
 
 var safeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -32,6 +34,16 @@ func Validate(trace Trace) error {
 	}
 	if trace.CreatedAt.IsZero() {
 		return errors.New("created_at is required")
+	}
+	if trace.Source.MintClawVersion != strings.TrimSpace(trace.Source.MintClawVersion) ||
+		!utf8.ValidString(trace.Source.MintClawVersion) || len(trace.Source.MintClawVersion) > 128 {
+		return errors.New("source mintclaw_version must be trimmed valid UTF-8 within 128 bytes")
+	}
+	if trace.Source.Commit != "" && !validHexRange(trace.Source.Commit, 7, 64) {
+		return errors.New("source commit must be a lowercase 7- to 64-character hex revision")
+	}
+	if trace.Metadata.ProjectHash != "" && !validHexRange(trace.Metadata.ProjectHash, 64, 64) {
+		return errors.New("metadata project_hash must be a lowercase SHA-256 value")
 	}
 	switch trace.Policy.ContentMode {
 	case ContentMetadataOnly, ContentRedacted:
@@ -107,6 +119,20 @@ func Validate(trace Trace) error {
 }
 
 const sha256HexLength = 64
+
+func validHexRange(value string, minimum, maximum int) bool {
+	if value != strings.ToLower(value) || len(value) < minimum || len(value) > maximum {
+		return false
+	}
+	for index := range value {
+		if value[index] < '0' || value[index] > '9' {
+			if value[index] < 'a' || value[index] > 'f' {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 func isJSONObject(data json.RawMessage) bool {
 	decoder := json.NewDecoder(bytes.NewReader(data))

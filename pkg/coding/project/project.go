@@ -338,6 +338,14 @@ func ProjectKey(kind ProjectKind, root string) string {
 	return string(kind) + ":" + hex.EncodeToString(sum[:])
 }
 
+// ProjectHash returns a privacy-safe correlation value for an already
+// canonical project key. Diagnostic output can use this value without
+// disclosing the project kind, root, or durable project key.
+func ProjectHash(projectKey string) string {
+	sum := sha256.Sum256([]byte(projectKey))
+	return hex.EncodeToString(sum[:])
+}
+
 func resolveGitPath(cwd, value string) string {
 	if filepath.IsAbs(value) {
 		return value

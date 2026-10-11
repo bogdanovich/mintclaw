@@ -1220,6 +1220,7 @@ func (ts *turnState) eventMeta(source, tracePath string) HookMeta {
 		TraceScope:   runtimeevents.NewTraceScope(ts.workspace, snap.TurnID),
 		AgentID:      snap.AgentID,
 		SessionKey:   snap.SessionKey,
+		ProjectHash:  codingProjectHash(ts.agent),
 		ParentTurnID: snap.ParentTurnID,
 		ChildTurnID:  childTurnID,
 		Iteration:    snap.Iteration,
@@ -1227,6 +1228,13 @@ func (ts *turnState) eventMeta(source, tracePath string) HookMeta {
 		TracePath:    tracePath,
 		turnContext:  cloneTurnContext(ts.turnCtx),
 	}
+}
+
+func codingProjectHash(agent *AgentInstance) string {
+	if agent == nil {
+		return ""
+	}
+	return agent.CodingLayout.ProjectHash()
 }
 
 func (ts *turnState) captureCanonicalRestorePoint(history []providers.Message, summary string) {

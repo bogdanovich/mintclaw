@@ -300,3 +300,102 @@ func TestCodingRuntimeLayoutAllowsExternalStateRoot(t *testing.T) {
 		t.Fatalf("Validate() created state root unexpectedly: %v", err)
 	}
 }
+
+func TestCodingRuntimeLayoutBindsProjectHash(t *testing.T) {
+	root := t.TempDir()
+	layout, err := NewCodingRuntimeLayout(
+		"thread-1",
+		filepath.Join(root, "project"),
+		filepath.Join(root, "state", "thread-1"),
+		[]string{filepath.Join(root, "project")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectHash := strings.Repeat("a", 64)
+	layout, err = layout.WithProjectHash(projectHash)
+	if err != nil || layout.ProjectHash() != projectHash {
+		t.Fatalf("WithProjectHash() = %#v, %v", layout, err)
+	}
+	if _, err := layout.WithProjectHash(strings.Repeat("A", 64)); err == nil {
+		t.Fatal("expected uppercase project hash rejection")
+	}
+}
+
+func TestCodingRuntimeLayoutResolvesDiagnosticStateOutsideCheckout(t *testing.T) {
+	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(root, "project")
+	stateRoot := filepath.Join(root, "state", "thread-1")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := NewCodingRuntimeLayout("thread-1", project, stateRoot, []string{project})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name       string
+		configured string
+		want       string
+	}{
+		{name: "default", want: filepath.Join(stateRoot, "diagnostics")},
+		{name: "relative", configured: "custom-traces", want: filepath.Join(stateRoot, "custom-traces")},
+		{name: "absolute", configured: filepath.Join(root, "central-traces"), want: filepath.Join(root, "central-traces")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, resolveErr := layout.ResolveExternalStatePath(test.configured, "diagnostics")
+			if resolveErr != nil || got != test.want {
+				t.Fatalf("ResolveExternalStatePath() = %q, %v; want %q", got, resolveErr, test.want)
+			}
+		})
+	}
+	if _, err := layout.ResolveExternalStatePath("../escape", "diagnostics"); err == nil {
+		t.Fatal("expected relative escape rejection")
+	}
+	if _, err := layout.ResolveExternalStatePath(filepath.Join(project, "state"), "diagnostics"); err == nil {
+		t.Fatal("expected checkout-owned absolute state rejection")
+	}
+}
+
+func TestCodingRuntimeLayoutRejectsThreadStateSymlinkEscape(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		configured string
+		linkName   string
+	}{
+		{name: "default", linkName: "diagnostics"},
+		{name: "relative", configured: "custom-traces", linkName: "custom-traces"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			root, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			project := filepath.Join(root, "project")
+			stateRoot := filepath.Join(root, "state", "thread-1")
+			siblingDiagnostics := filepath.Join(root, "state", "thread-2", "diagnostics")
+			for _, directory := range []string{project, stateRoot, siblingDiagnostics} {
+				if err := os.MkdirAll(directory, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(siblingDiagnostics, filepath.Join(stateRoot, test.linkName)); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+			layout, err := NewCodingRuntimeLayout("thread-1", project, stateRoot, []string{project})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = layout.ResolveExternalStatePath(test.configured, "diagnostics")
+			if err == nil || !strings.Contains(err.Error(), "within the thread state root") {
+				t.Fatalf("ResolveExternalStatePath() error = %v", err)
+			}
+		})
+	}
+}

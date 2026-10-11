@@ -597,6 +597,11 @@ func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
+	projectHash := strings.Repeat("a", 64)
+	layout, err = layout.WithProjectHash(projectHash)
+	if err != nil {
+		t.Fatalf("WithProjectHash() error = %v", err)
+	}
 	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
 		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
@@ -645,8 +650,14 @@ func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 	if agent.Workspace != layout.ExecutionRoot() {
 		t.Fatalf("Workspace = %q, want execution root %q", agent.Workspace, layout.ExecutionRoot())
 	}
-	if agent.CodingLayout.StateRoot() != layout.StateRoot() {
-		t.Fatalf("CodingLayout.StateRoot() = %q, want %q", agent.CodingLayout.StateRoot(), layout.StateRoot())
+	if agent.CodingLayout.StateRoot() != layout.StateRoot() ||
+		agent.CodingLayout.ProjectHash() != projectHash {
+		t.Fatalf(
+			"CodingLayout = %#v, want state root %q and project hash %q",
+			agent.CodingLayout,
+			layout.StateRoot(),
+			projectHash,
+		)
 	}
 	wantCodingTools := append([]string(nil), codingRuntimeToolNames...)
 	wantCodingTools = append(wantCodingTools, "coding_attachment")

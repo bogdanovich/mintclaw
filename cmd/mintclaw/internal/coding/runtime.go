@@ -305,6 +305,16 @@ func openNativeCodingRuntime(
 	if err != nil {
 		return nil, err
 	}
+	if runtimeCfg.Diagnostics.TraceCapture.Enabled {
+		traceStateDir, traceStateErr := layout.ResolveExternalStatePath(
+			runtimeCfg.Diagnostics.TraceCapture.StateDir,
+			"diagnostics",
+		)
+		if traceStateErr != nil {
+			return nil, fmt.Errorf("coding runtime: resolve diagnostic trace state: %w", traceStateErr)
+		}
+		runtimeCfg.Diagnostics.TraceCapture.StateDir = traceStateDir
+	}
 	remoteBootstrap := bootstrapCodingRemote(cfg, request, r.newCodingRemoteClient)
 	provider, providerModel, err := r.createProvider(runtimeCfg)
 	if err != nil {

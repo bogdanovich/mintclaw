@@ -13,6 +13,7 @@ type HookMeta struct {
 	ToolCallID         string
 	ToolCallGeneration string
 	SessionKey         string
+	ProjectHash        string
 	Iteration          int
 	TracePath          string
 	Source             string

@@ -9,11 +9,8 @@
       "runtime_events": ["agent.turn.start", "agent.llm.request", "agent.llm.response", "agent.tool.exec_start", "agent.tool.exec_end", "agent.context.snapshot", "agent.turn.end", "agent.error"],
       "trace_records": ["turn.start", "model.request", "model.response", "tool.call", "tool.result", "context.snapshot", "turn.end", "runtime.error"],
       "required_ids": ["deployment_commit", "project_hash", "thread_id", "session_hash", "turn_id", "model_attempt_id", "tool_call_id", "event_id", "repository_commit"],
-      "available_ids": ["thread_id", "session_hash", "turn_id", "model_attempt_id", "tool_call_id", "event_id", "repository_commit"],
-      "missing_trace_joins": [
-        {"id": "deployment_commit", "disposition": "close_h1b", "observation": "Trace source commit is optional and not proven for every coding runtime."},
-        {"id": "project_hash", "disposition": "close_h1b", "observation": "Project identity is authoritative in coding metadata but absent from the trace envelope."}
-      ],
+      "available_ids": ["deployment_commit", "project_hash", "thread_id", "session_hash", "turn_id", "model_attempt_id", "tool_call_id", "event_id", "repository_commit"],
+      "missing_trace_joins": [],
       "terminal_facts": ["agent.turn.end", "trace.outcome"],
       "retention_owner": "coding_thread_and_diagnostic_store",
       "export_class": "metadata_safe"

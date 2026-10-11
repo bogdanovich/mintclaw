@@ -307,11 +307,12 @@ func (al *AgentLoop) CloseContext(ctx context.Context) error {
 // UnmountHook removes a previously registered in-process hook.
 
 type turnEventScope struct {
-	agentID    string
-	workspace  string
-	sessionKey string
-	turnID     string
-	context    *TurnContext
+	agentID     string
+	workspace   string
+	sessionKey  string
+	projectHash string
+	turnID      string
+	context     *TurnContext
 }
 
 // ValidateConfigReload reports restart-only changes without mutating live runtime state.

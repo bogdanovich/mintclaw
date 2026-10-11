@@ -4,9 +4,10 @@ import runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 
 func runtimeScopeFromHookMeta(meta HookMeta, eventCtx *TurnContext) runtimeevents.Scope {
 	scope := runtimeevents.Scope{
-		TraceScope: meta.TraceScope,
-		AgentID:    meta.AgentID,
-		SessionKey: meta.SessionKey,
+		TraceScope:  meta.TraceScope,
+		AgentID:     meta.AgentID,
+		SessionKey:  meta.SessionKey,
+		ProjectHash: meta.ProjectHash,
 	}
 
 	if eventCtx == nil || eventCtx.Inbound == nil {

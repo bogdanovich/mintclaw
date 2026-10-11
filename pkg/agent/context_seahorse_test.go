@@ -1475,6 +1475,32 @@ func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
 	)
 }
 
+func TestSeahorseCompactEventCarriesCodingProjectHash(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	state := filepath.Join(root, "state")
+	layout, err := NewCodingRuntimeLayout("thread-1", project, state, []string{project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectHash := strings.Repeat("a", 64)
+	layout, err = layout.WithProjectHash(projectHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &seahorseContextManager{}
+	meta := manager.compactEventMeta(&CompactRequest{
+		Agent: &AgentInstance{
+			ID: "main", Workspace: project, CodingLayout: layout,
+		},
+		SessionKey: "coding:thread-1",
+	}, "turn.context.compress.start")
+	scope := runtimeScopeFromHookMeta(meta, nil)
+	if scope.ProjectHash != projectHash {
+		t.Fatalf("compaction project hash = %q, want %q", scope.ProjectHash, projectHash)
+	}
+}
+
 func TestSeahorseCompactTerminalPrecedesNextSessionStart(t *testing.T) {
 	providerStarted := make(chan struct{})
 	releaseProvider := make(chan struct{})

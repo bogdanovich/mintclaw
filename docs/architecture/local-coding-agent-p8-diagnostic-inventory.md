@@ -8,7 +8,9 @@ generation, async task/delivery, and human-interaction slices implemented and
 production-qualified. Companion-invocation correlation is also implemented and
 production-qualified. Remote-coding correlation is implemented; its production
 qualification is pending. Compaction-attempt and repository-snapshot
-correlation are implemented; production qualification is pending.
+correlation are production-qualified. Local-coding trace-store ownership,
+deployment attribution, and privacy-safe project correlation are implemented;
+their production qualification is pending.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -108,7 +110,7 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    so task plus generation is the exact parent/terminal join; correlation does
    not depend on time matching or an invented parent-turn identity.
 7. **Compaction and repository observations (correlation semantics
-   production-qualified; coding trace-store ownership correction pending).**
+   production-qualified; trace-store correction implemented).**
    Active-turn and standalone compaction lifecycle records retain the
    runtime-owned attempt ID, safe status, revision, counts,
    duration, and terminal outcome. A manual or background compaction outside an
@@ -118,12 +120,21 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    filenames, warnings, diff content, and raw errors remain external.
 
    The production canaries proved those bounded records and joins. They also
-   exposed that an empty trace `state_dir` currently resolves a local coding
-   trace beneath the execution root instead of the thread-owned diagnostics
-   root. The next H1b slice must correct that placement before H1c support
-   export relies on coding trace discovery. The checkout remained clean only
-   because its existing ignore policy covered the generated `state/` path;
-   ignore rules are not an acceptable state-ownership boundary.
+   exposed that an empty trace `state_dir` resolved a local coding trace
+   beneath the execution root instead of the thread-owned diagnostics root.
+   The follow-up H1b slice now anchors empty and relative trace state below the
+   thread-owned state root and rejects any resolved trace state inside the
+   execution checkout. An explicit absolute path remains supported only when
+   it is outside the checkout. Production qualification is pending.
+8. **Deployment and project attribution (implemented; production
+   qualification pending).** Every trace envelope now receives the bounded
+   MintClaw version and prefers the full VCS revision embedded by the Go
+   toolchain over the shorter ldflag commit. A local coding runtime also
+   carries a lowercase SHA-256 of its canonical project key through runtime
+   scope into trace metadata. The raw key, project kind, and filesystem path
+   are not retained. A build marked modified by Go omits its commit rather
+   than claiming the clean revision; other invalid attribution is omitted or
+   rejected instead of entering the diagnostic store.
 
 These are additive passive joins. None may make the runtime wait for or depend
 on trace persistence.
@@ -473,19 +484,29 @@ owned diagnostics root. Correlation and privacy semantics are therefore
 production-qualified, while coding trace-store ownership remains an explicit
 H1b fix rather than being mislabeled as complete.
 
+The follow-up H1b implementation routes default coding traces to
+`<thread-state>/diagnostics/traces`, anchors relative overrides beneath the
+thread state root, and rejects resolved paths within the execution checkout.
+It also fills `source.mintclaw_version`, prefers the full Go-embedded VCS
+revision for `source.commit`, and adds a privacy-safe `metadata.project_hash`.
+Focused tests cover coding turns, standalone compaction, invalid attribution,
+raw project-identity omission, and default/relative/absolute state placement.
+This paragraph records implementation status only; a merged-main deployment
+canary must still prove the exact commit, project hash, and on-disk location.
+
 ## Evidence map
 
 | Path | Authoritative evidence | Passive evidence | H1b/H1c action |
 | --- | --- | --- | --- |
-| Local coding turn | Coding JSONL, metadata, Git/filesystem | Turn/model/tool/context/error records | Model-attempt join complete; add thread/project joins |
+| Local coding turn | Coding JSONL, metadata, Git/filesystem | Turn/model/tool/context/error records | Model-attempt, deployment-commit, and privacy-safe project joins implemented; latest attribution slice awaits production qualification |
 | Provider retry/fallback | Runtime provider outcome | Model retry/fallback records | Model-attempt join complete; retain optional provider request ID separately |
 | Tool/process lifecycle | Tool record, process owner | Tool call/result/skip/loop records | Call/generation join complete; keep PID/process details external |
-| Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Attempt/status correlation is production-qualified; move default local-coding traces to thread-owned diagnostics state |
+| Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Attempt/status correlation is production-qualified; thread-owned coding trace placement is implemented and awaits production qualification |
 | Human interaction | Interaction registry/events | Bounded lifecycle records in the parent trace or immediate late-event continuation | Interaction/event ID, revision, task, tool-call, and delivery joins implemented and production-qualified |
 | Channel/async delivery | Task registry, outbox, channel receipt | Bounded completion continuation with delivery decision/attempt/outcome | Task/generation, completion, tool-generation, parent-turn, and delivery joins implemented and production-qualified |
 | Remote coding task | Task registry, worker ledger/thread | Parent tool result plus bounded terminal completion/delivery continuation | Task/generation/worker/thread, safe scope/profile, terminal uncertainty, completion, and delivery joins implemented; production qualification pending |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Invocation ID and safe policy/target aliases implemented and production-qualified |
-| Repository/worktree | Git/filesystem, worktree owner | Bounded repository context snapshot | Commit/snapshot projection is production-qualified without paths or diffs; correct default coding trace-store ownership |
+| Repository/worktree | Git/filesystem, worktree owner | Bounded repository context snapshot | Commit/snapshot projection is production-qualified without paths or diffs; project-hash and trace-store corrections await production qualification |
 | TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c exports bounded current-view/version facts, not cell history |
 | Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c summarizes disabled/drop/expiry/corruption truth |
 

@@ -13,12 +13,19 @@ func (al *AgentLoop) newTurnEventScope(
 	turnCtx *TurnContext,
 ) turnEventScope {
 	seq := al.turns.nextSequence()
+	projectHash := ""
+	if al.registry != nil {
+		if agent, ok := al.registry.GetAgent(agentID); ok && agent != nil {
+			projectHash = agent.CodingLayout.ProjectHash()
+		}
+	}
 	return turnEventScope{
-		agentID:    agentID,
-		workspace:  workspace,
-		sessionKey: sessionKey,
-		turnID:     fmt.Sprintf("%s-turn-%d", agentID, seq),
-		context:    cloneTurnContext(turnCtx),
+		agentID:     agentID,
+		workspace:   workspace,
+		sessionKey:  sessionKey,
+		projectHash: projectHash,
+		turnID:      fmt.Sprintf("%s-turn-%d", agentID, seq),
+		context:     cloneTurnContext(turnCtx),
 	}
 }
 
@@ -27,6 +34,7 @@ func (ts turnEventScope) meta(iteration int, source, tracePath string) HookMeta 
 		TraceScope:  ts.traceScope(),
 		AgentID:     ts.agentID,
 		SessionKey:  ts.sessionKey,
+		ProjectHash: ts.projectHash,
 		Iteration:   iteration,
 		Source:      source,
 		TracePath:   tracePath,

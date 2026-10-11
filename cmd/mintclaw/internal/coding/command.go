@@ -982,6 +982,10 @@ func runtimeLayoutForExecutionRoot(
 	if err != nil {
 		return agent.CodingRuntimeLayout{}, fmt.Errorf("coding command: validate external runtime state: %w", err)
 	}
+	layout, err = layout.WithProjectHash(thread.ProjectHash(metadata.Project.ProjectKey))
+	if err != nil {
+		return agent.CodingRuntimeLayout{}, fmt.Errorf("coding command: bind project diagnostics: %w", err)
+	}
 	return layout, nil
 }
 

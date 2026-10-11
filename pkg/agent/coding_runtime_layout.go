@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ type CodingRuntimeLayout struct {
 	threadID         string
 	executionRoot    string
 	stateRoot        string
+	projectHash      string
 	instructionRoots []string
 }
 
@@ -111,6 +113,24 @@ func (l CodingRuntimeLayout) StateRoot() string {
 	return l.stateRoot
 }
 
+// ProjectHash returns an irreversible project correlation value suitable for
+// diagnostics. It never exposes the canonical project key or filesystem path.
+func (l CodingRuntimeLayout) ProjectHash() string {
+	return l.projectHash
+}
+
+// WithProjectHash binds privacy-safe project correlation to this layout.
+func (l CodingRuntimeLayout) WithProjectHash(projectHash string) (CodingRuntimeLayout, error) {
+	if !validCodingProjectHash(projectHash) {
+		return CodingRuntimeLayout{}, fmt.Errorf("coding runtime layout: project hash is invalid")
+	}
+	l.projectHash = projectHash
+	if err := l.Validate(); err != nil {
+		return CodingRuntimeLayout{}, err
+	}
+	return l, nil
+}
+
 // InstructionRoots returns an ordered copy of the instruction search roots.
 func (l CodingRuntimeLayout) InstructionRoots() []string {
 	return append([]string(nil), l.instructionRoots...)
@@ -152,6 +172,9 @@ func (l CodingRuntimeLayout) Validate() error {
 	if len(l.instructionRoots) == 0 {
 		return fmt.Errorf("coding runtime layout: at least one instruction root is required")
 	}
+	if l.projectHash != "" && !validCodingProjectHash(l.projectHash) {
+		return fmt.Errorf("coding runtime layout: project hash is invalid")
+	}
 	for index, root := range l.instructionRoots {
 		if strings.TrimSpace(root) == "" {
 			return fmt.Errorf("coding runtime layout: instruction root %d is empty", index)
@@ -165,6 +188,64 @@ func (l CodingRuntimeLayout) Validate() error {
 		return fmt.Errorf("coding runtime layout: state root must be outside the execution root")
 	}
 	return nil
+}
+
+// ResolveExternalStatePath resolves a coding-runtime state override without
+// allowing MintClaw-owned state to land in the execution checkout. Relative
+// overrides are anchored below the thread-owned StateRoot.
+func (l CodingRuntimeLayout) ResolveExternalStatePath(
+	configured string,
+	defaultElements ...string,
+) (string, error) {
+	if err := l.Validate(); err != nil {
+		return "", err
+	}
+	configured = strings.TrimSpace(configured)
+	requireThreadOwnership := configured == "" || !filepath.IsAbs(configured)
+	var candidate string
+	switch {
+	case configured == "":
+		candidate = runtimeLayoutJoin(l.stateRoot, defaultElements...)
+	case filepath.IsAbs(configured):
+		candidate = configured
+	default:
+		clean := filepath.Clean(configured)
+		if !filepath.IsLocal(clean) {
+			return "", fmt.Errorf("coding runtime layout: relative state path escapes state root")
+		}
+		candidate = filepath.Join(l.stateRoot, clean)
+	}
+	resolved, err := resolveCodingRuntimeLayoutPath(candidate)
+	if err != nil {
+		return "", fmt.Errorf("coding runtime layout: resolve external state path: %w", err)
+	}
+	insideExecution, err := runtimeLayoutPathWithin(resolved, l.executionRoot)
+	if err != nil {
+		return "", fmt.Errorf("coding runtime layout: check external state containment: %w", err)
+	}
+	if insideExecution {
+		return "", fmt.Errorf("coding runtime layout: external state path must be outside the execution root")
+	}
+	if requireThreadOwnership {
+		insideStateRoot, containmentErr := runtimeLayoutPathWithin(resolved, l.stateRoot)
+		if containmentErr != nil {
+			return "", fmt.Errorf("coding runtime layout: check thread state containment: %w", containmentErr)
+		}
+		if !insideStateRoot {
+			return "", fmt.Errorf(
+				"coding runtime layout: default or relative state path must remain within the thread state root",
+			)
+		}
+	}
+	return resolved, nil
+}
+
+func validCodingProjectHash(value string) bool {
+	if len(value) != 64 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func runtimeLayoutJoin(root string, elements ...string) string {

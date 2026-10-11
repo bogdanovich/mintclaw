@@ -523,6 +523,16 @@ func (p CodingRuntimeProfile) preflightStatePaths(agentIDs []string) error {
 				err,
 			)
 		}
+		if layout.ProjectHash() != "" {
+			refreshedLayout, err = refreshedLayout.WithProjectHash(layout.ProjectHash())
+			if err != nil {
+				return fmt.Errorf(
+					"coding runtime profile: refresh project diagnostics for agent %q: %w",
+					routing.NormalizeAgentID(agentID),
+					err,
+				)
+			}
+		}
 		readOnly, _ := p.AgentReadOnly(agentID)
 		executionProfile, _ := p.AgentExecutionProfile(agentID)
 		privilegedExecutor, _ := p.AgentPrivilegedExecutor(agentID)

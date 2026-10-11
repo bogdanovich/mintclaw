@@ -90,3 +90,41 @@ func TestVersion_DefaultIsDev(t *testing.T) {
 
 	assert.Equal(t, "dev", Version)
 }
+
+func TestNormalizeRuntimeBuildIdentityPrefersFullVCSRevision(t *testing.T) {
+	version, commit := normalizeRuntimeBuildIdentity(
+		" v1.2.3 ",
+		"ABCDEF12",
+		"0123456789ABCDEF0123456789ABCDEF01234567",
+		false,
+	)
+	if version != "v1.2.3" || commit != "0123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("identity = (%q, %q)", version, commit)
+	}
+}
+
+func TestNormalizeRuntimeBuildIdentityFallsBackToLDFlags(t *testing.T) {
+	version, commit := normalizeRuntimeBuildIdentity("dev", "ABCDEF1", "not-a-revision", false)
+	if version != "dev" || commit != "abcdef1" {
+		t.Fatalf("identity = (%q, %q)", version, commit)
+	}
+}
+
+func TestNormalizeRuntimeBuildIdentityOmitsInvalidValues(t *testing.T) {
+	version, commit := normalizeRuntimeBuildIdentity(string([]byte{0xff}), "xyz", "short", false)
+	if version != "" || commit != "" {
+		t.Fatalf("identity = (%q, %q), want empty", version, commit)
+	}
+}
+
+func TestNormalizeRuntimeBuildIdentityOmitsCommitForModifiedBuild(t *testing.T) {
+	version, commit := normalizeRuntimeBuildIdentity(
+		"dev",
+		"ABCDEF12",
+		"0123456789abcdef0123456789abcdef01234567",
+		true,
+	)
+	if version != "dev" || commit != "" {
+		t.Fatalf("identity = (%q, %q), want dirty commit omitted", version, commit)
+	}
+}
