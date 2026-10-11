@@ -4,7 +4,8 @@ Roadmap packet:
 [H1a — Evidence inventory and correlation tests](local-coding-agent-p8-hardening.md#h1a--evidence-inventory-and-correlation-tests).
 
 Status: H1a baseline with the H1b terminal-truth, model-attempt, tool-call
-generation, and async task/delivery slices implemented.
+generation, and async task/delivery slices implemented. The async
+task/delivery slice is production-qualified.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -60,18 +61,19 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    loop-decision events retain that generation together with the provider call
    ID and originating model-attempt ID. Reuse of a provider call ID therefore
    cannot join records from separate attempts, and no argument text is needed.
-3. **Async task and delivery (implemented; production requalification
-   pending).** `AsyncCompletionPayload` retains the task ID, runtime-owned task
-   generation, and completion ID, while `ChannelOutboundPayload` retains the
-   durable delivery ID. Because a background task can finish after its parent
-   turn trace is finalized, each completion now starts a bounded continuation
-   trace. Its envelope points to the original turn through `parent_turn_id`,
-   and its decision record retains the originating model attempt and exact tool
-   call/generation. A direct user-only continuation waits at most 30 seconds
-   for its correlated channel outcome. A completion that requires parent
-   synthesis remains bounded by the 120-second synthesis deadline plus the
-   30-second delivery window; any earlier direct user message is correlated but
-   only the final synthesized outbound settles the trace.
+3. **Async task and delivery (implemented and production-qualified).**
+   `AsyncCompletionPayload` retains the task ID, runtime-owned task
+   generation, and completion ID, while `ChannelOutboundPayload` retains a
+   durable delivery ID when an outbound transaction assigns one. Because a
+   background task can finish after its parent turn trace is finalized, each
+   completion now starts a bounded continuation trace. Its envelope points to
+   the original turn through `parent_turn_id`, and its decision record retains
+   the originating model attempt and exact tool call/generation. A direct
+   user-only continuation waits at most 30 seconds for its correlated channel
+   outcome. A completion that requires parent synthesis remains bounded by the
+   120-second synthesis deadline plus the 30-second delivery window; any
+   earlier direct user message is correlated but only the final synthesized
+   outbound settles the trace.
 4. **Interactions.** Existing interaction runtime events carry interaction ID,
    revision, event, status, outcome, code, and success, but the turn projector
    currently ignores them. H1b needs bounded lifecycle records and joins, not a
@@ -214,7 +216,7 @@ commit attribution therefore remains an independent open H1b gap; the tool
 call, generation, model-attempt, and loop-decision joins are qualified without
 claiming that the source-commit gap is resolved.
 
-### Async-completion production finding
+### Async-completion production qualification
 
 The first async-correlation deployment merged through PR #1524 as merge commit
 `f753c03dd55c1eb5cdc202e38172d2342ff6e5cc`. A harmless live `spawn` canary
@@ -227,10 +229,63 @@ was a trace-lifecycle gap, not an execution or delivery failure.
 The follow-up implementation gives every async completion its own bounded
 continuation trace instead of retaining the parent trace indefinitely. This
 preserves passive one-way capture, bounds user-delivery settlement, and remains
-valid when a background task outlives its originating turn. Production
-requalification must prove the continuation envelope and decision record; a
-parent-synthesized canary must additionally prove the matching final delivery
-attempt and outcome before this slice is marked production-qualified.
+valid when a background task outlives its originating turn.
+
+The continuation fix merged through PR #1532 as merge commit
+`2baad0f755c0fc1ac3de48a76b4a25be887cd602` and was deployed from that exact
+merged-main revision on 2026-10-11. The deployment advanced production from
+`f753c03dd55c1eb5cdc202e38172d2342ff6e5cc`. The checksum-verifiable rollback
+snapshot is `/home/server/mintclaw-core-backup-20261011T084555Z`; its manifest
+contains 27 files and verifies with SHA-256 digest
+`12c2750c9b9a2c3d8be6fced01a338645ed2bdd57ff62de4e718216cec434bd2`.
+
+The installed core/CLI, node, and launcher SHA-256 digests are respectively
+`247375a2c54e4b180f53924ad98ee2b941633faa3cb1eae48aba7b863fc9eaa6`,
+`c104729b6b470711b7c2637dcf4784b3fb00ae2c3f4b40fd81cd6e8795224a6a`, and
+`2af9e3073801955948640eda382335763e1265f93d4bf3fe3ad857b08f14bd6b`.
+All five active profile configurations loaded successfully; their doctor exit
+code `2` represented existing policy findings rather than a load or schema
+failure. All ten expected services were active, no failed or legacy processes
+were present, launcher and reviewer-webhook probes returned their expected 302
+and 404 responses, and the final ten-minute error-journal scan was empty.
+
+The direct stateless deployment canary retained completed trace
+`trace-turn-f304b5c1e684500dcd47ea65` with six records, redacted-content policy,
+and no truncation. Two live async canaries then qualified the continuation
+lifecycle:
+
+- Parent-only task `subagent-a30fcbe8-649e-472b-9869-acb0dcf3ce05`, generation
+  `2d34edd8-6c17-40e9-bdb4-4a8e64bf964e`, completed successfully and queued its
+  result for parent synthesis. Continuation trace
+  `trace-async-completion-bc67595f3108469414827bb5` links
+  `async-completion-2601563b-03c4-4990-bcf5-036ca1e48fae` back to
+  `main-turn-6`, retains the exact model attempt, tool call/generation, task
+  generation, and completion ID, then records the synthesized final delivery
+  as `queued` and `sent`.
+- User-and-parent task `subagent-b0c6b93e-7baf-4de1-a6b1-2b1b8743ed2f`,
+  generation `b691c92f-c13d-482b-ab02-d5ef3cc2695f`, completed successfully
+  with durable delivery status `delivered`. Continuation trace
+  `trace-async-completion-eabcb05d80d64acd2482ff85` links
+  `async-completion-40f75514-e557-49f7-a885-48e059f7059d` back to
+  `main-turn-12` and contains five ordered records: the correlated decision,
+  the direct user `queued`/`sent` pair, and the synthesized final
+  `queued`/`sent` pair. Persisting both pairs proves that the intermediate user
+  delivery did not settle the continuation before final parent synthesis.
+
+The live channel did not assign outbox delivery IDs to these post-turn sends.
+Their stable join is the continuation scope plus each outbound event ID, while
+the task, generation, and completion IDs select the authoritative task record.
+The trace still retains a durable delivery ID when one is supplied by an
+outbound transaction; the qualification does not claim that every transport
+creates one.
+
+The one-shot live client normally disconnects after the initiating turn's
+terminal response. An initial parent-only probe therefore produced a truthful
+final `failed` delivery outcome because no client remained connected. The two
+qualifying canaries kept a second non-mutating live turn attached to the same
+session while the child completed, allowing both final deliveries to reach a
+real client. This negative probe is retained as expected transport evidence;
+it was not counted as a successful-delivery qualification.
 
 ## Evidence map
 
@@ -241,7 +296,7 @@ attempt and outcome before this slice is marked production-qualified.
 | Tool/process lifecycle | Tool record, process owner | Tool call/result/skip/loop records | Call/generation join complete; keep PID/process details external |
 | Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Add attempt/status and bounded repository re-anchor identity |
 | Human interaction | Interaction registry/events | No interaction trace records today | Project bounded lifecycle and interaction/revision correlation |
-| Channel/async delivery | Task registry, outbox, channel receipt | Bounded completion continuation with delivery decision/attempt/outcome | Task/generation, completion, tool-generation, parent-turn, and delivery joins implemented; production requalification pending |
+| Channel/async delivery | Task registry, outbox, channel receipt | Bounded completion continuation with delivery decision/attempt/outcome | Task/generation, completion, tool-generation, parent-turn, and delivery joins implemented and production-qualified |
 | Remote coding task | Task registry, worker ledger/thread | Parent async/delivery evidence | Add task/generation/worker/thread references and terminal uncertainty |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Retain invocation ID and safe policy/target aliases |
 | Repository/worktree | Git/filesystem, worktree owner | Context snapshot only | Add commit/worktree/snapshot digests and counts; no paths or diffs |
