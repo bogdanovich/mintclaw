@@ -7,6 +7,11 @@ The [design](agent-evals-design.md) records source findings, alternatives, and o
 implementation; an admission document alone is not a functioning eval engine.
 
 The roadmap builds a small manual quality harness, not a replacement runtime or an automatic self-improvement system.
+
+The [first live pilot](../operations/manual-agent-evals-pilot-20261011.md) has now run on isolated Linux profiles:
+one general context case passed, interaction navigation remained inconclusive, and judge calibration agreed on
+4/6 labels. The goal remains active; this partial diagnostic result is not PDF/browser or full-suite qualification.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 

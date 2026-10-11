@@ -41,6 +41,21 @@ calibration pass means agreement on these examples, not a passing target task. D
 verify contracts, privacy boundaries, and reduction only. They are not live LLM calibration or domain qualification.
 The macOS portability job runs these deterministic harness tests, never the manual paid scenario suite.
 
+## Corpus Storage
+
+Keep the runner, schema, deterministic harness tests and wholly synthetic shared regression cases in `mintclaw`.
+Those cases should evolve with their feature contracts; this does not make live/paid eval runs part of CI.
+
+Keep workspace-specific scenarios, internal workflows and non-public fixture documents in the existing private
+workspace repository. A separate new evals repository is not needed unless ownership or access requirements diverge.
+Private storage is not permission to run against production or real accounts: target and write-surface admission
+still apply. Do not put API keys, OAuth stores, chat history, transcripts or run artifacts in either repository.
+
+Use the same parser and commands for both locations by selecting an explicit `--root /absolute/corpus`.
+Pin the corpus revision with the intended MintClaw version and retain case digests; avoid implicit latest-corpus
+updates or a separate private runner fork. Credentials and result evidence stay in private runtime directories
+outside Git. The [first live pilot](manual-agent-evals-pilot-20261011.md) records current results and limits.
+
 ## Prepare The Target
 
 Use a new private profile, not the production profile or a copy of its sessions, memory, ledgers, or auth store.
