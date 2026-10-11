@@ -9,8 +9,8 @@ production-qualified. Companion-invocation correlation is also implemented and
 production-qualified. Remote-coding correlation is implemented; its production
 qualification is pending. Compaction-attempt and repository-snapshot
 correlation are production-qualified. Local-coding trace-store ownership,
-deployment attribution, and privacy-safe project correlation are implemented;
-their production qualification is pending.
+deployment attribution, and privacy-safe project correlation are implemented
+and production-qualified.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -109,8 +109,7 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    remote monitor may outlive or recover independently of its initiating turn,
    so task plus generation is the exact parent/terminal join; correlation does
    not depend on time matching or an invented parent-turn identity.
-7. **Compaction and repository observations (correlation semantics
-   production-qualified; trace-store correction implemented).**
+7. **Compaction and repository observations (production-qualified).**
    Active-turn and standalone compaction lifecycle records retain the
    runtime-owned attempt ID, safe status, revision, counts,
    duration, and terminal outcome. A manual or background compaction outside an
@@ -125,9 +124,9 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    The follow-up H1b slice now anchors empty and relative trace state below the
    thread-owned state root and rejects any resolved trace state inside the
    execution checkout. An explicit absolute path remains supported only when
-   it is outside the checkout. Production qualification is pending.
-8. **Deployment and project attribution (implemented; production
-   qualification pending).** Every trace envelope now receives the bounded
+   it is outside the checkout. The corrected placement is production-qualified.
+8. **Deployment and project attribution (production-qualified).** Every trace
+   envelope now receives the bounded
    MintClaw version and prefers the full VCS revision embedded by the Go
    toolchain over the shorter ldflag commit. A local coding runtime also
    carries a lowercase SHA-256 of its canonical project key through runtime
@@ -491,22 +490,69 @@ It also fills `source.mintclaw_version`, prefers the full Go-embedded VCS
 revision for `source.commit`, and adds a privacy-safe `metadata.project_hash`.
 Focused tests cover coding turns, standalone compaction, invalid attribution,
 raw project-identity omission, and default/relative/absolute state placement.
-This paragraph records implementation status only; a merged-main deployment
-canary must still prove the exact commit, project hash, and on-disk location.
+
+### Trace ownership and source/project attribution production qualification
+
+PR #1569 merged as `70e8f8b45163ff75cdf32244430c791adf835e56` and was
+deployed from that exact merged-main revision on 2026-10-11. The
+checksum-verifiable rollback snapshot is
+`/home/server/mintclaw-core-backup-20261011T173850Z`; its 62-entry SHA-256
+manifest verifies and has digest
+`f9147c51cd81e3fc9c414d53d188381b41954166e8083ec00af222628ac1bdab`.
+The installed core/CLI, node, and launcher SHA-256 digests are respectively
+`a339b73a6d5ee1a1dbeca75da82dab36eb2e11ae99cf7186605d85dc742d7054`,
+`4f09c68e4680e4b31d3f850b9dcc5f4c5354078af41aa78c73c1f8b7ef02834a`, and
+`6f9e1557e865dee5c91d9eba5f751d3b51bb000d192ff131187bf5f54ca5f347`.
+All five active profile doctor outputs and exit codes were byte-identical to
+the previous binary's existing policy findings. All ten expected services were
+active, no failed or legacy processes were present, launcher and
+reviewer-webhook probes returned their expected 302 and 404 responses, and the
+final ten-minute service error-journal scan was empty.
+
+A direct stateless deployment smoke returned exactly
+`P8_H1B_SOURCE_PROJECT_DEPLOY_OK`. Completed trace
+`trace-turn-6e3b83c852c2d1e3f279283d` contains six records, reports no
+truncation, and identifies the full deployed commit plus bounded version
+`v0.1.0-p8a.2-2886-g70e8f8b45`.
+
+The local coding canary then created thread
+`ed5fe5f4-a541-4684-89ee-6d2ea7cce291` against the clean production checkout.
+Its exact response was `P8_H1B_CODING_TRACE_OK`. Trace
+`trace-turn-14f031c5a8e2e625c490a73e` lives beneath that thread's
+`diagnostics/traces` directory, completed with six records and no truncation,
+and carries the same full deployed commit and version. Its
+`metadata.project_hash` exactly equals SHA-256 of the canonical project key;
+the raw key is absent. The checkout's pre-existing ignored trace set remained
+byte-for-byte unchanged and `git status` remained clean, proving that default
+coding traces no longer write into the source checkout.
+
+A real resumed TUI `/compact` on the same thread reported `Context already
+compact` and produced
+`trace-compaction-5d81b7c54eb369b9ab50af1b`. Its ordered lifecycle is
+`started` followed by terminal `no_progress`; the envelope agrees, has no
+truncation, and retains the same project hash, version, and full source commit.
+
+An initial unscoped CLI probe created thread
+`12065a60-2010-4264-8bec-250efdf7ad4c` but failed closed before a model response
+because its provider credential refresh was unavailable. It created no trace
+and made no repository change. Re-running with the profile-scoped
+`MINTCLAW_HOME` and shared `MINTCLAW_AUTH_FILE` used by the gateway produced
+the qualifying result above. Operators should preserve both overrides when a
+coding canary is intended to use a deployed profile's authenticated provider.
 
 ## Evidence map
 
 | Path | Authoritative evidence | Passive evidence | H1b/H1c action |
 | --- | --- | --- | --- |
-| Local coding turn | Coding JSONL, metadata, Git/filesystem | Turn/model/tool/context/error records | Model-attempt, deployment-commit, and privacy-safe project joins implemented; latest attribution slice awaits production qualification |
+| Local coding turn | Coding JSONL, metadata, Git/filesystem | Turn/model/tool/context/error records | Model-attempt, deployment-commit, privacy-safe project joins, and thread-owned trace placement are implemented and production-qualified |
 | Provider retry/fallback | Runtime provider outcome | Model retry/fallback records | Model-attempt join complete; retain optional provider request ID separately |
 | Tool/process lifecycle | Tool record, process owner | Tool call/result/skip/loop records | Call/generation join complete; keep PID/process details external |
-| Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Attempt/status correlation is production-qualified; thread-owned coding trace placement is implemented and awaits production qualification |
+| Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Attempt/status correlation and thread-owned coding trace placement are production-qualified |
 | Human interaction | Interaction registry/events | Bounded lifecycle records in the parent trace or immediate late-event continuation | Interaction/event ID, revision, task, tool-call, and delivery joins implemented and production-qualified |
 | Channel/async delivery | Task registry, outbox, channel receipt | Bounded completion continuation with delivery decision/attempt/outcome | Task/generation, completion, tool-generation, parent-turn, and delivery joins implemented and production-qualified |
 | Remote coding task | Task registry, worker ledger/thread | Parent tool result plus bounded terminal completion/delivery continuation | Task/generation/worker/thread, safe scope/profile, terminal uncertainty, completion, and delivery joins implemented; production qualification pending |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Invocation ID and safe policy/target aliases implemented and production-qualified |
-| Repository/worktree | Git/filesystem, worktree owner | Bounded repository context snapshot | Commit/snapshot projection is production-qualified without paths or diffs; project-hash and trace-store corrections await production qualification |
+| Repository/worktree | Git/filesystem, worktree owner | Bounded repository context snapshot | Commit/snapshot projection, privacy-safe project hash, and trace-store corrections are production-qualified without paths or diffs |
 | TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c exports bounded current-view/version facts, not cell history |
 | Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c summarizes disabled/drop/expiry/corruption truth |
 
