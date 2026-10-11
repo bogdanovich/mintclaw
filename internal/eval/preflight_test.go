@@ -243,6 +243,16 @@ func TestPreparedAdmissionRefusesMismatchedProbe(t *testing.T) {
 	}
 }
 
+func TestPreparedAdmissionRefusesNullModelBeforeNativeLoader(t *testing.T) {
+	fixture := newAdmissionFixture(t)
+	fixture.cfg.ModelList = config.SecureModelList{nil}
+	fixture.writeConfig(t)
+	_, err := admitPreparedTarget(t.Context(), fixture.preset, fixture.home)
+	if !errors.Is(err, ErrUnsafeTarget) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+		t.Fatal("null model reached the native runtime or task admission", err)
+	}
+}
+
 func TestPreparedFingerprintOnlyMirrorsNativeStartup(t *testing.T) {
 	fixture := newAdmissionFixture(t)
 	before, err := config.PublicFingerprint(fixture.cfg)

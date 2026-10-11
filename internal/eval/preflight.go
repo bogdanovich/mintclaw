@@ -61,6 +61,11 @@ func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admit
 	if config.DecodeCurrentConfig(data, &preview) != nil {
 		return target, ErrUnsafeTarget
 	}
+	for _, model := range preview.ModelList {
+		if model == nil {
+			return target, ErrUnsafeTarget
+		}
+	}
 	cfg, err := config.LoadConfigReadOnly(preset.ConfigPath)
 	if err != nil || validateConversationProfile(cfg, preset, workspace) != nil {
 		return target, ErrUnsafeTarget
