@@ -119,8 +119,8 @@ func codingFrontendRequested(args []string) bool {
 	return false
 }
 
-// Document workers must contain only declared artifacts; offline eval commands
-// must not bootstrap or modify a runtime home just to validate a corpus.
+// Document workers must contain only declared artifacts. Eval commands attach
+// to an explicitly prepared profile; they must never bootstrap its runtime home.
 func systemSkillBundleRequired(args []string) bool {
 	positionals := make([]string, 0, 2)
 	for _, arg := range args {
@@ -132,8 +132,7 @@ func systemSkillBundleRequired(args []string) bool {
 			break
 		}
 	}
-	if len(positionals) == 2 && positionals[0] == "eval" &&
-		(positionals[1] == "list" || positionals[1] == "validate") {
+	if len(positionals) >= 1 && positionals[0] == "eval" {
 		return false
 	}
 	return len(positionals) != 2 || positionals[0] != "document" || positionals[1] != "_worker"

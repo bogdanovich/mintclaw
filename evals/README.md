@@ -18,7 +18,9 @@ mintclaw eval validate --root ./evals --preset ./evals/presets/local.template.js
 These commands are offline. They validate every case in the corpus, select a nonempty set, check referenced fixture
 digests, and optionally validate the preset manifest. They do not load MintClaw runtime credentials, contact models,
 prove target isolation, or run a task. JSON explicitly reports `runtime_run: false`.
-`run`, model roles, domain suites, regrading, and baseline comparison are later implementation packets.
+`run` executes bounded scripted conversations against an admitted, prepared isolated profile. Setup, admission,
+private report permissions, and limitations are in the [operator guide](../docs/operations/manual-agent-evals.md).
+Model roles, domain suites, regrading, and baseline comparison are later implementation packets.
 
 Preset paths resolve relative to the preset file, not the shell's working directory. The included preset is a
 template, not a configured or safe running gateway. Runtime preflight must separately verify actual policy,

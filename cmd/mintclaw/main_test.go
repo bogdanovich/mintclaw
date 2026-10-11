@@ -131,7 +131,7 @@ func TestSystemSkillBundleRequired(t *testing.T) {
 		{name: "document command", args: []string{"document", "fill"}, want: true},
 		{name: "eval list", args: []string{"eval", "list", "--json"}, want: false},
 		{name: "eval validate", args: []string{"--no-color", "eval", "validate"}, want: false},
-		{name: "eval runtime", args: []string{"eval", "run"}, want: true},
+		{name: "eval runtime", args: []string{"eval", "run"}, want: false},
 		{name: "agent prompt words", args: []string{"agent", "-m", "document _worker"}, want: true},
 		{name: "missing subcommand", args: []string{"document"}, want: true},
 	}

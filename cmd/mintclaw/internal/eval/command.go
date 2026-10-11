@@ -40,6 +40,7 @@ func NewEvalCommand() *cobra.Command {
 	for _, name := range []string{"list", "validate"} {
 		command.AddCommand(newCorpusCommand(name))
 	}
+	command.AddCommand(newRunCommand())
 	return command
 }
 
@@ -86,12 +87,16 @@ func newCorpusCommand(name string) *cobra.Command {
 			return nil
 		},
 	}
+	bindCorpusFlags(command, &options)
+	return command
+}
+
+func bindCorpusFlags(command *cobra.Command, options *corpusOptions) {
 	command.Flags().StringVar(&options.root, "root", options.root, "Corpus directory containing cases/ and fixtures/")
 	command.Flags().StringVar(&options.selection.Suite, "suite", "all", "Select a suite (default all)")
 	command.Flags().StringArrayVar(&options.selection.Tags, "tag", nil, "Require a tag (repeatable; all must match)")
 	command.Flags().StringArrayVar(&options.selection.IDs, "case", nil, "Select a case ID (repeatable)")
 	command.Flags().
-		StringVar(&options.preset, "preset", "", "Validate a target preset without loading runtime credentials")
+		StringVar(&options.preset, "preset", "", "Target preset manifest (offline for list/validate)")
 	command.Flags().BoolVar(&options.json, "json", false, "Emit versioned JSON")
-	return command
 }
