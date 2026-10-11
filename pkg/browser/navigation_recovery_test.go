@@ -14,7 +14,9 @@ type navigationRecoveryFactory struct {
 	requests []WorkerOpenRequest
 	local    *actionTestWorker
 	cloud    *actionTestWorker
+	proxy    *actionTestWorker
 	cloudErr error
+	proxyErr error
 }
 
 func (factory *navigationRecoveryFactory) Open(_ context.Context, request WorkerOpenRequest) (WorkerOpenResult, error) {
@@ -25,6 +27,12 @@ func (factory *navigationRecoveryFactory) Open(_ context.Context, request Worker
 			return WorkerOpenResult{}, factory.cloudErr
 		}
 		worker = factory.cloud
+		if request.SteelProxy {
+			if factory.proxyErr != nil {
+				return WorkerOpenResult{}, factory.proxyErr
+			}
+			worker = factory.proxy
+		}
 	}
 	return WorkerOpenResult{Owner: worker, Capabilities: WorkerCapabilityActions}, nil
 }

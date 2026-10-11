@@ -34,11 +34,13 @@ type NavigationRecovery struct {
 	SessionID     string       `json:"browser_session_id,omitempty"`
 	Target        string       `json:"target,omitempty"`
 	Profile       string       `json:"profile,omitempty"`
+	UseProxy      bool         `json:"use_proxy,omitempty"`
 	InvocationID  string       `json:"invocation_id,omitempty"`
 	Observation   *Observation `json:"-"`
 }
 
-// RecoverNavigation admits at most one new navigation after a completed GET.
+// RecoverNavigation admits at most one recovery per completed source session:
+// local to Steel, then optionally direct Steel to proxied Steel on a fresh block.
 // It never redispatches the original invocation or transfers cookies, approvals,
 // element refs, or controller authority between targets.
 func (broker *Broker) RecoverNavigation(
@@ -59,6 +61,7 @@ func (broker *Broker) RecoverNavigation(
 		return recovery, nil
 	}
 	recovery.SessionID, recovery.Target, recovery.Profile = session.ID, session.Target, session.Profile
+	recovery.UseProxy = session.SteelProxy
 	fail := func(cause error) (NavigationRecovery, error) {
 		recovery.Status, recovery.Reason = "unavailable", navigationRecoveryFailure(cause)
 		_, closeErr := broker.Close(context.WithoutCancel(ctx), owner, session.ID)
@@ -116,6 +119,16 @@ func (broker *Broker) RecoverNavigation(
 	recovery.Status = "recovered"
 	if observation.AntiBotBlock != "" {
 		recovery.Status, recovery.Reason = "blocked", observation.AntiBotBlock
+		if broker.config.Targets[session.Target].Steel.ProxyOnBlock && !session.SteelProxy {
+			proxied, proxyErr := broker.RecoverNavigation(ctx, owner, invocation.ID, observation.SnapshotID)
+			if proxied.Status != "" {
+				proxied.FromSessionID = recovery.FromSessionID
+				return proxied, proxyErr
+			}
+			if proxyErr != nil {
+				return recovery, proxyErr
+			}
+		}
 		return recovery, nil
 	}
 	if observation.HTTPStatus >= 400 {
@@ -159,12 +172,16 @@ func (broker *Broker) prepareNavigationRecoveryLocked(
 		AntiBotBlock: slot.navigationEvidence.AntiBotBlock,
 	}
 	target := broker.config.Targets[session.Target]
-	if target.EffectiveProvider() == config.BrowserProviderSteel {
+	steelSource := target.EffectiveProvider() == config.BrowserProviderSteel
+	if steelSource && (!target.Steel.ProxyOnBlock || session.SteelProxy || observation.AntiBotBlock == "") {
 		return NavigationRecovery{}, OpenRequest{}, "", broker.rememberSuccessfulNavigationLocked(
 			ctx, owner, session.ID, observation, prepared.Action.URL,
 		)
 	}
 	fallback := target.Fallback
+	if steelSource {
+		fallback = config.BrowserFallbackConfig{Target: session.Target, Profile: session.Profile}
+	}
 	if fallback.Target == "" {
 		return NavigationRecovery{}, OpenRequest{}, "", nil
 	}
@@ -186,7 +203,12 @@ func (broker *Broker) prepareNavigationRecoveryLocked(
 	if observation.AntiBotBlock == "" && !remembered {
 		return NavigationRecovery{}, OpenRequest{}, "", nil
 	}
-	destination := OpenRequest{Owner: owner, Target: fallback.Target, Profile: fallback.Profile}
+	destination := OpenRequest{
+		Owner:      owner,
+		Target:     fallback.Target,
+		Profile:    fallback.Profile,
+		steelProxy: steelSource,
+	}
 	_, profile, grantErr := broker.authorize(destination)
 	granted := grantErr == nil
 	if !granted || profile.CapabilityMode != config.BrowserCapabilityFullAccess ||

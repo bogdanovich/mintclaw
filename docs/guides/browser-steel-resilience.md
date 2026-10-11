@@ -17,7 +17,8 @@ object:
   "session_timeout_seconds": 300,
   "inactivity_timeout_seconds": 60,
   "max_billable_seconds": 180,
-  "use_proxy": true,
+  "use_proxy": false,
+  "proxy_on_block": true,
   "proxy_country": "US",
   "solve_captcha": true,
   "budget": {
@@ -46,6 +47,21 @@ existing actor/agent grants, network policy, driver configuration, and profiles.
 Changing Steel options requires a new managed profile revision on a live reload.
 An API key alone does not grant access to a cloud profile: both source and
 destination must authorize the requesting actor and agent.
+
+With `proxy_on_block: true`, Steel starts without a proxy. Only a fresh,
+confirmed anti-bot block on that direct Steel navigation permits one new Steel
+session with a residential proxy. Supported CAPTCHA solving gets its bounded
+passive wait before this transition. The direct session closes and its profile
+must finish persisting before the proxied session starts. Both modes share the
+same cookie profile, exclusive lease, daily ledger, and cost thresholds; they
+consume two session reservations when both are used. A remembered successful
+domain still tries direct Steel first in a later task.
+
+`use_proxy: true` selects always-on proxies instead. These two modes are mutually
+exclusive. `proxy_country` applies to whichever proxy mode is enabled. Without
+either mode, Steel uses its datacenter IP, not the local machine's home IP.
+The recovery result reports `use_proxy: true` when the final session uses a
+proxy. A proxy requires a new session; a live session's IP is not changed.
 
 The initial recovery implementation admits full-access profiles only and
 excludes attached user browsers. A restricted profile must continue using its
@@ -91,8 +107,10 @@ and CAPTCHA service; free credits alone do not enable those features. See
 - Only `browser_act` with `action.kind=navigate` participates. Clicks, forms,
   uploads, downloads, privileged `browser_execute` scripts, and uncertain
   outcomes are never replayed. Prefer `browser_act` for initial site access.
-- The broker records the attempt before closing the local session and creates
-  at most one Steel recovery. Its result includes `recovery` and a fresh
+- The broker records each attempt before closing its source session and creates
+  at most one direct Steel recovery, followed by at most one proxied recovery
+  when conditional proxies are configured and direct Steel is still blocked.
+  Its result includes `recovery` and a fresh
   observation with a new `browser_session_id`. Use those new identities.
 - A domain preference is recorded only after a successful HTTP navigation with
   no detected challenge. It is scoped to the exact hostname, actor, agent,

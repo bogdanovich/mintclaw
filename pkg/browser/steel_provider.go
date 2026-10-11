@@ -330,11 +330,14 @@ func normalizeSteelPrivateFile(path string, label string) (string, error) {
 
 func (provider *steelPlaywrightRuntimeProvider) Provision(
 	ctx context.Context,
-	_ WorkerOpenRequest,
+	request WorkerOpenRequest,
 ) (playwrightRuntime, error) {
 	if provider == nil || provider.factory == nil || provider.client == nil ||
 		cap(provider.concurrency) == 0 {
 		return nil, errors.Join(ErrProviderUnavailable, ErrWorkerUnavailable)
+	}
+	if request.SteelProxy && !provider.provider.UseProxy && !provider.provider.ProxyOnBlock {
+		return nil, ErrDenied
 	}
 	select {
 	case provider.concurrency <- struct{}{}:
@@ -401,7 +404,7 @@ func (provider *steelPlaywrightRuntimeProvider) Provision(
 		ProfileID: profileID, Timeout: time.Duration(maximum) * time.Second,
 		Inactivity:     time.Duration(provider.provider.InactivityTimeoutSeconds) * time.Second,
 		PersistProfile: true, InteractiveDebug: true,
-		UseProxy: provider.provider.UseProxy, ProxyCountry: provider.provider.ProxyCountry,
+		UseProxy: provider.provider.UseProxy || request.SteelProxy, ProxyCountry: provider.provider.ProxyCountry,
 		SolveCaptcha: provider.provider.SolveCaptcha,
 	})
 	if err != nil {
