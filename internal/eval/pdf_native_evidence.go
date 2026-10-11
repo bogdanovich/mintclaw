@@ -23,6 +23,13 @@ import (
 // observePrompt admits native local evidence, not text-extracted IDs. It is a
 // read-only observation; the native ingress/sink still authorizes consumption.
 func (trial *pdfTrial) observePrompt(prompt Event) (interactions.Record, error) {
+	return trial.observePromptOrigin(prompt, "document")
+}
+
+func (trial *pdfTrial) observePromptOrigin(prompt Event, tool string) (interactions.Record, error) {
+	if tool != "document" && tool != "request_user_input" {
+		return interactions.Record{}, ErrPDFTrial
+	}
 	root, err := os.OpenRoot(trial.workspace)
 	if err != nil {
 		return interactions.Record{}, ErrPDFTrial
@@ -47,7 +54,7 @@ func (trial *pdfTrial) observePrompt(prompt Event) (interactions.Record, error) 
 			break
 		}
 	}
-	if !trial.promptMatches(record, prompt, time.Now()) {
+	if !trial.promptMatchesOrigin(record, prompt, time.Now(), tool) {
 		return interactions.Record{}, ErrPDFTrial
 	}
 	if err = trial.observePromptDelivery(record, prompt); err != nil {
@@ -57,6 +64,10 @@ func (trial *pdfTrial) observePrompt(prompt Event) (interactions.Record, error) 
 }
 
 func (trial *pdfTrial) promptMatches(record interactions.Record, prompt Event, now time.Time) bool {
+	return trial.promptMatchesOrigin(record, prompt, now, "document")
+}
+
+func (trial *pdfTrial) promptMatchesOrigin(record interactions.Record, prompt Event, now time.Time, tool string) bool {
 	if !slices.Contains([]string{"question", "approval"}, prompt.Kind) ||
 		prompt.AgentID != trial.agent || prompt.SessionKey == "" ||
 		record.ID == "" || record.ID != prompt.InteractionID ||
@@ -65,7 +76,7 @@ func (trial *pdfTrial) promptMatches(record interactions.Record, prompt Event, n
 		string(record.Kind) != prompt.Kind || record.Status != interactions.StatusWaiting ||
 		record.CreatedAt < trial.started.UnixMilli() || record.CreatedAt > now.UnixMilli() ||
 		record.UpdatedAt > now.UnixMilli() || record.ExpiresAt <= now.UnixMilli() ||
-		record.Origin.ToolName != "document" ||
+		record.Origin.ToolName != tool ||
 		record.Route.AgentID != prompt.AgentID || record.Route.SessionKey != prompt.SessionKey ||
 		record.Route.RouteSessionKey != "" && record.Route.RouteSessionKey != prompt.SessionKey ||
 		record.Route.Channel != "mintclaw" || record.Route.ChatID != "mintclaw:"+trial.sessionID ||
@@ -136,35 +147,45 @@ func (trial *pdfTrial) observeProtectedJob(
 	if err != nil {
 		return document.FormJobRecord{}, document.FormJobOwner{}, ErrPDFTrial
 	}
+	job, err := trial.observeExistingJob(jobID, owner)
+	if err != nil {
+		return document.FormJobRecord{}, document.FormJobOwner{}, err
+	}
+	if !slices.Contains([]document.FormJobState{document.FormJobPrepared, document.FormJobCollecting}, job.State) {
+		return document.FormJobRecord{}, document.FormJobOwner{}, ErrPDFTrial
+	}
+	return job, owner, nil
+}
+
+func (trial *pdfTrial) observeExistingJob(jobID string, owner document.FormJobOwner) (document.FormJobRecord, error) {
 	currentSource, err := readPDFNativeFile(trial.scratch, "source.pdf", maxPDFBytes)
 	if err != nil || digest(currentSource) != trial.item.Case.Fixtures[0].SHA256 {
 		clear(currentSource)
-		return document.FormJobRecord{}, document.FormJobOwner{}, ErrPDFTrial
+		return document.FormJobRecord{}, ErrPDFTrial
 	}
 	clear(currentSource)
 	root, err := os.OpenRoot(trial.home)
 	if err != nil {
-		return document.FormJobRecord{}, document.FormJobOwner{}, ErrPDFTrial
+		return document.FormJobRecord{}, ErrPDFTrial
 	}
 	data, err := readPDFNativeFile(root,
 		"state/document-form-jobs/document_form_jobs/form_jobs.v1.json", document.DefaultFormJobMaxBytes)
 	_ = root.Close()
 	if err != nil {
-		return document.FormJobRecord{}, document.FormJobOwner{}, err
+		return document.FormJobRecord{}, err
 	}
 	defer clear(data)
 	err = trial.scanNativeSurface(data)
 	if err != nil {
-		return document.FormJobRecord{}, document.FormJobOwner{}, err
+		return document.FormJobRecord{}, err
 	}
 	job, err := document.InspectFormJobSnapshot(trial.formStoreOptions(), data, jobID, owner)
 	now := time.Now().UnixMilli()
 	if err != nil || job.SourceDigest != trial.item.Case.Fixtures[0].SHA256 ||
-		job.CreatedAt < trial.started.UnixMilli() || job.CreatedAt > now || job.ExpiresAt <= now ||
-		!slices.Contains([]document.FormJobState{document.FormJobPrepared, document.FormJobCollecting}, job.State) {
-		return document.FormJobRecord{}, document.FormJobOwner{}, ErrPDFTrial
+		job.CreatedAt < trial.started.UnixMilli() || job.CreatedAt > now || job.ExpiresAt <= now {
+		return document.FormJobRecord{}, ErrPDFTrial
 	}
-	return job, owner, nil
+	return job, nil
 }
 
 func (trial *pdfTrial) formStoreOptions() document.FormJobStoreOptions {
@@ -241,14 +262,5 @@ func readPDFNativeFile(root *os.Root, name string, maximum int64) ([]byte, error
 }
 
 func (trial *pdfTrial) scanNativeSurface(data []byte) error {
-	scan := privateContentScan{facts: trial.item.Case.Driver.Facts, tokens: 32768}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	matched, complete := scan.value(decoder, 0)
-	if matched || !complete {
-		return ErrPrivateEvidence
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return ErrPrivateEvidence
-	}
-	return nil
+	return inspectPDFWire(data, trial.item.Case.Driver.Facts, trial.filter)
 }

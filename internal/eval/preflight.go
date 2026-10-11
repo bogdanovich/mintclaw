@@ -77,6 +77,7 @@ func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admit
 }
 
 func validateConversationProfile(cfg *config.Config, preset Preset, workspace string) error {
+	pdfEnabled := slices.Contains(preset.Capabilities, "pdf")
 	if cfg == nil || cfg.ValidateModelList() != nil || cfg.ValidateAgents() != nil || len(cfg.Agents.List) != 1 ||
 		!cfg.Agents.Defaults.RestrictToWorkspace || cfg.Agents.Defaults.AllowReadOutsideWorkspace ||
 		cfg.WorkspacePath() != workspace || preset.ExpectedWorkspace != workspace ||
@@ -84,7 +85,7 @@ func validateConversationProfile(cfg *config.Config, preset Preset, workspace st
 		cfg.Gateway.CodingRemote.Enabled || cfg.Coding.Remote.Enabled || cfg.Nodes.Enabled ||
 		cfg.Nodes.TerminalEnabled || cfg.Heartbeat.Enabled || cfg.Devices.Enabled || cfg.Hooks.Enabled ||
 		cfg.Tools.Cron.Enabled || cfg.Tools.Exec.Enabled || cfg.Tools.MCP.Enabled ||
-		cfg.Tools.Browser.Enabled || cfg.Tools.Document.Enabled ||
+		cfg.Tools.Browser.Enabled || cfg.Tools.Document.Enabled != pdfEnabled ||
 		cfg.Diagnostics.TraceCapture.Enabled ||
 		cfg.Tools.Approval.EffectiveMode() != config.ToolApprovalModeRequired ||
 		len(cfg.Tools.Approval.BypassNodeTargets) != 0 || len(cfg.Tools.AllowReadPaths) != 0 ||
@@ -112,12 +113,12 @@ func validateConversationProfile(cfg *config.Config, preset Preset, workspace st
 		return ErrUnsafeTarget
 	}
 	for _, tool := range agent.ToolPolicy.Allow {
-		if tool != "request_user_input" {
+		if tool != "request_user_input" && (tool != "document" || !pdfEnabled) {
 			return ErrUnsafeTarget
 		}
 	}
 	for _, capability := range preset.Capabilities {
-		if capability != "conversation" && capability != "interactions" ||
+		if capability != "conversation" && capability != "interactions" && capability != "pdf" ||
 			capability == "interactions" && (!cfg.Tools.RequestUserInput.Enabled ||
 				!slices.Contains(agent.ToolPolicy.Allow, "request_user_input") || len(agent.ToolPolicy.Deny) != 0) {
 			return ErrUnsafeTarget
@@ -134,6 +135,11 @@ func validateConversationProfile(cfg *config.Config, preset Preset, workspace st
 		}
 	}
 	if !names[cfg.Agents.Defaults.GetModelName()] {
+		return ErrUnsafeTarget
+	}
+	if pdfEnabled && (!slices.Contains(preset.Capabilities, "interactions") ||
+		!slices.Contains(agent.ToolPolicy.Allow, "document") || !names[cfg.Tools.Document.AuditModel] ||
+		len(cfg.Tools.Document.AuditEquivalentFallbacks) != 0) {
 		return ErrUnsafeTarget
 	}
 	if cfg.Tools.Web.PreferNative {

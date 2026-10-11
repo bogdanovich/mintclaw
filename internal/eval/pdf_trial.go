@@ -30,6 +30,7 @@ type pdfTrial struct {
 	scratch   *os.Root
 	parent    *os.Root
 	directory string
+	filter    *strings.Replacer
 }
 
 func preparePDFTrial(item LoadedCase, home, workspace, sessionID, agent string) (*pdfTrial, error) {

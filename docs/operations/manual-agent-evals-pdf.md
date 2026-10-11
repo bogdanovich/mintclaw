@@ -3,9 +3,10 @@
 ## Current Status
 
 The repository contains six PDF scenarios and four deterministic synthetic AcroForms, with exact SHA-256 checked
-by offline corpus validation. Domain execution remains unavailable until E3 admits document tools, protected facts,
-native review/confirmation and exact approval, authenticated media, operation/outbox delivery, and private-surface
-evidence. Listing a case or passing oracle controls does not qualify a real agent task.
+by offline corpus validation. The dialogue packet lets `eval run` attempt PDF conversations on a narrowly admitted
+isolated profile, using protected facts and owned fixtures. Writes, native review/confirmation and exact approval,
+authenticated artifact collection, operation/outbox settlement, and complete private-surface evidence remain pending.
+Required PDF checks therefore remain inconclusive; a first question, caption, or oracle control is not qualification.
 
 The cases cover loan filling, correction/Back, own-request conditional intent, empty required values, cancel/no-write,
 and a bounded large-form section. Four use an adaptive user. The large case requests two Safety findings in an editable
@@ -33,7 +34,27 @@ The native form store authenticates the public job and owner; the fixture source
 Explicit `/answer` ingress remains responsible for sealed binding validation and consuming stale/wrong-route
 input before ordinary history. Private values appear only in an ephemeral request, not a stored event or role context.
 Raw admitted registry, outbox and form-store bytes are scanned before projection; unavailable or unscannable evidence
-does not establish safety. These helpers do not grant approval, settle delivery, or yet enable `eval run` PDF cases.
+does not establish safety. These helpers do not grant approval or settle delivery.
+
+## Dialogue Admission
+
+The prepared profile must declare `pdf` and `interactions`, enable the document tool with an enabled native audit
+model, and allow only `document` and `request_user_input` under a deny-default tool policy. Exec, MCP, browser,
+hooks, trace capture, external channels, reload/deploy, broad path permissions, and approval bypass remain refused.
+Undeclared document access and unadmitted audit fallbacks are refused before sending a task.
+
+The common conversation runner owns streaming, request correlation and follow-ups. The PDF adapter substitutes
+the owned source path, admits native public or protected question prompts, and binds all protected answers to one
+source-pinned, authenticated job and owner. Raw WebSocket frames, including discarded heartbeats/auxiliary frames,
+are inspected before map decoding; duplicate keys cannot hide an earlier private value. A confirmed private value
+is a hard failure. Truncated, opaque escaped or otherwise unscannable evidence is unknown, not proof of a leak.
+Only a non-secret protected-input marker enters retained transcript evidence; the actual value travels in the
+ephemeral native `/answer` request. Ordinary scripted slash commands cannot bypass this path.
+
+No approval is granted by this packet. A public native job state is retained as a value-free observation, not as a
+claim of artifact correctness, no-write safety, complete privacy coverage or remote cleanup. All attempted PDF
+fixtures are conservatively retained while native settlement is unknown. PDF evidence is not yet eligible for
+judge-only regrading. Later write/delivery witnesses must replace these explicit unknowns before E3 exits.
 
 ## Optional Dependencies
 

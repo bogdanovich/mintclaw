@@ -32,6 +32,17 @@ type conversation struct {
 	bytes     int
 	last      Event
 	filter    *strings.Replacer
+	domain    conversationDomain
+	facts     map[string]string
+}
+
+// Domain adapters bind inputs to native evidence and add independent checks.
+// They do not own transport, turn correlation, grading, or runtime authority.
+type conversationDomain interface {
+	initialTask() string
+	request(context.Context, Action, Event) (protocol.MintClawMessage, bool, error)
+	observe(context.Context, Event) error
+	conclude(context.Context, *Trial)
 }
 
 type conversationRoles struct {
@@ -58,6 +69,17 @@ func runConversation(
 	sessionID, agent, workspace string,
 	roles conversationRoles,
 ) (trial Trial) {
+	return runDomainConversation(ctx, transport, item, sessionID, agent, workspace, roles, nil)
+}
+
+func runDomainConversation(
+	ctx context.Context,
+	transport conversationTransport,
+	item LoadedCase,
+	sessionID, agent, workspace string,
+	roles conversationRoles,
+	domain conversationDomain,
+) (trial Trial) {
 	trial = Trial{
 		Version: Version, ID: uuid.NewString(), CaseID: item.Case.ID, CaseSHA256: item.Digest,
 		SessionID: sessionID, AgentID: agent, Verdict: Inconclusive, Code: "not_completed",
@@ -67,6 +89,21 @@ func runConversation(
 	defer func() {
 		transport.Close()
 		trial.TransportClosed = true
+		if errors.Is(transport.Failure(), ErrPrivateEvidence) {
+			trial.Verdict, trial.Code = Fail, "private_wire_evidence"
+			trial.ExecutionVerdict, trial.ExecutionCode = Fail, trial.Code
+			trial.EvidenceEligible = false
+		} else if errors.Is(transport.Failure(), gatewayclient.ErrFrameInspection) {
+			if trial.Verdict == Pass {
+				trial.Code = "wire_inspection_unavailable"
+			}
+			if trial.ExecutionVerdict == Pass {
+				trial.ExecutionCode = "wire_inspection_unavailable"
+			}
+			trial.Verdict = combineVerdicts(trial.Verdict, Inconclusive)
+			trial.ExecutionVerdict = combineVerdicts(trial.ExecutionVerdict, Inconclusive)
+			trial.EvidenceEligible = false
+		}
 		if failure := transport.Failure(); errors.Is(failure, gatewayclient.ErrQueueLimit) ||
 			errors.Is(failure, websocket.ErrReadLimit) {
 			if trial.Verdict == Pass {
@@ -93,8 +130,15 @@ func runConversation(
 	caseTimeout, _ := time.ParseDuration(item.Case.Limits.CaseTimeout)
 	caseCtx, cancel := context.WithTimeout(ctx, caseTimeout)
 	defer cancel()
-	flow := conversation{transport: transport, trial: &trial, agent: agent, workspace: workspace, filter: roles.filter}
-	verdict, code := flow.turn(caseCtx, item.Case.Limits, Action{Kind: "message", Text: item.Case.Task}, Event{}, 1)
+	flow := conversation{
+		transport: transport, trial: &trial, agent: agent, workspace: workspace, filter: roles.filter, domain: domain,
+		facts: item.Case.Driver.Facts,
+	}
+	task := item.Case.Task
+	if domain != nil {
+		task = domain.initialTask()
+	}
+	verdict, code := flow.turn(caseCtx, item.Case.Limits, Action{Kind: "message", Text: task}, Event{}, 1)
 	if verdict == Pass && item.Case.Driver.Mode == "scripted" {
 		for index, step := range item.Case.Driver.Steps {
 			if flow.last.Kind != step.WaitFor.Kind ||
@@ -118,6 +162,14 @@ func runConversation(
 	trial.Checks = gradeConversation(item.Case.Checks, trial.Events, flow.last)
 	trial.Verdict, trial.Code = verdict, code
 	trial.ExecutionVerdict, trial.ExecutionCode = verdict, code
+	if domain != nil {
+		domain.conclude(caseCtx, &trial)
+	}
+	if errors.Is(transport.Failure(), ErrPrivateEvidence) {
+		trial.Verdict, trial.Code = Fail, "private_wire_evidence"
+		trial.ExecutionVerdict, trial.ExecutionCode = Fail, trial.Code
+		trial.EvidenceEligible = false
+	}
 	for _, check := range trial.Checks {
 		combined := combineVerdicts(trial.Verdict, check.Verdict)
 		if combined != trial.Verdict {
@@ -220,17 +272,26 @@ func (flow *conversation) turn(
 	defer cancel()
 	request, code := flow.request(turnCtx, action, prompt)
 	if code != "" {
+		if code == "private_native_evidence" {
+			return Fail, code
+		}
 		return Inconclusive, code
 	}
-	if credentialJSONValue(request, flow.filter) {
+	if credentialJSONValue(request, flow.filter) || action.Kind != "protected_answer" &&
+		(privateJSONValue(request, flow.facts) ||
+			strings.Contains(payloadString(request.Payload, protocol.PayloadKeyContent), generatePrivateFact)) {
 		return Fail, "private_input"
 	}
 	if err := flow.transport.Send(turnCtx, request); err != nil {
 		return Inconclusive, transportCode(err)
 	}
+	content := payloadString(request.Payload, protocol.PayloadKeyContent)
+	if action.Kind == "protected_answer" {
+		content = "[protected answer supplied using an admitted fact handle]"
+	}
 	if !flow.append(Event{
 		Turn: number, Kind: "input", RequestID: request.ID,
-		Content: payloadString(request.Payload, protocol.PayloadKeyContent),
+		Content: content,
 	}) {
 		return Inconclusive, "event_limit"
 	}
@@ -245,7 +306,7 @@ func (flow *conversation) turn(
 		if encodeErr != nil || flow.frames > 256 || flow.bytes > 2*1024*1024 {
 			return Inconclusive, "event_limit"
 		}
-		if credentialJSONValue(message, flow.filter) {
+		if credentialJSONValue(message, flow.filter) || privateJSONValue(message, flow.facts) {
 			return Fail, "private_wire_evidence"
 		}
 		if message.SessionID != "" && message.SessionID != flow.trial.SessionID {
@@ -290,11 +351,31 @@ func (flow *conversation) turn(
 		}
 		flow.trial.SessionKey = event.SessionKey
 		flow.last = flow.trial.Events[len(flow.trial.Events)-1]
+		if flow.domain != nil {
+			if err := flow.domain.observe(turnCtx, flow.last); err != nil {
+				if errors.Is(err, ErrPrivateEvidence) {
+					return Fail, "private_native_evidence"
+				}
+				return Inconclusive, "domain_evidence_unavailable"
+			}
+		}
 		return Pass, "script_completed"
 	}
 }
 
 func (flow *conversation) request(ctx context.Context, action Action, prompt Event) (protocol.MintClawMessage, string) {
+	if flow.domain != nil {
+		request, handled, err := flow.domain.request(ctx, action, prompt)
+		if err != nil {
+			if errors.Is(err, ErrPrivateEvidence) {
+				return protocol.MintClawMessage{}, "private_native_evidence"
+			}
+			return protocol.MintClawMessage{}, "domain_input_not_admitted"
+		}
+		if handled {
+			return request, ""
+		}
+	}
 	payload := map[string]any{protocol.PayloadKeyContent: action.Text}
 	switch action.Kind {
 	case "message", "finish":
@@ -416,6 +497,8 @@ func transportCode(err error) string {
 		return "canceled_remote_unknown"
 	case errors.Is(err, gatewayclient.ErrQueueLimit), errors.Is(err, websocket.ErrReadLimit):
 		return "transport_limit"
+	case errors.Is(err, gatewayclient.ErrFrameInspection):
+		return "wire_inspection_unavailable"
 	default:
 		return "disconnected_remote_unknown"
 	}

@@ -4,6 +4,7 @@ package gatewayclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -22,9 +23,15 @@ import (
 )
 
 var (
-	ErrUnavailable = errors.New("gateway client: local authenticated gateway unavailable")
-	ErrQueueLimit  = errors.New("gateway client: receive queue limit exceeded")
+	ErrUnavailable     = errors.New("gateway client: local authenticated gateway unavailable")
+	ErrQueueLimit      = errors.New("gateway client: receive queue limit exceeded")
+	ErrFrameInspection = errors.New("gateway client: frame inspection refused")
 )
+
+type frameInspectionError struct{ cause error }
+
+func (err *frameInspectionError) Error() string   { return ErrFrameInspection.Error() }
+func (err *frameInspectionError) Unwrap() []error { return []error{ErrFrameInspection, err.cause} }
 
 type DialError struct {
 	StatusCode int
@@ -38,19 +45,24 @@ type Options struct {
 	MaxFrameBytes     int64
 	HeartbeatInterval time.Duration
 	QueueCapacity     int
+	// InspectFrame runs in the sole reader before decoding, including ignored
+	// heartbeats. It must not retain the bytes or mutate caller-owned state.
+	// Returning an error closes the connection without replay or raw diagnostics.
+	InspectFrame func([]byte) error
 }
 
 type Client struct {
-	connection *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	stopCancel func() bool
-	events     chan protocol.MintClawMessage
-	workers    sync.WaitGroup
-	closeOnce  sync.Once
-	writes     chan struct{}
-	errorMu    sync.Mutex
-	failure    error
+	connection   *websocket.Conn
+	ctx          context.Context
+	cancel       context.CancelFunc
+	stopCancel   func() bool
+	events       chan protocol.MintClawMessage
+	workers      sync.WaitGroup
+	closeOnce    sync.Once
+	writes       chan struct{}
+	errorMu      sync.Mutex
+	failure      error
+	inspectFrame func([]byte) error
 }
 
 func ChannelSettings(cfg *config.Config) (*config.MintClawSettings, error) {
@@ -134,8 +146,9 @@ func Connect(ctx context.Context, cfg *config.Config, sessionID string, options 
 	child, cancel := context.WithCancel(ctx)
 	client := &Client{
 		connection: connection, ctx: child, cancel: cancel,
-		events: make(chan protocol.MintClawMessage, options.QueueCapacity),
-		writes: make(chan struct{}, 1),
+		events:       make(chan protocol.MintClawMessage, options.QueueCapacity),
+		writes:       make(chan struct{}, 1),
+		inspectFrame: options.InspectFrame,
 	}
 	client.stopCancel = context.AfterFunc(child, func() { _ = connection.Close() })
 	client.workers.Add(2)
@@ -227,7 +240,7 @@ func (client *Client) readLoop() {
 	defer client.cancel()
 	for {
 		var message protocol.MintClawMessage
-		if err := client.connection.ReadJSON(&message); err != nil {
+		if err := client.readMessage(&message); err != nil {
 			if client.ctx.Err() == nil {
 				client.fail(err)
 			}
@@ -247,6 +260,24 @@ func (client *Client) readLoop() {
 			return
 		}
 	}
+}
+
+func (client *Client) readMessage(message *protocol.MintClawMessage) error {
+	if client.inspectFrame == nil {
+		return client.connection.ReadJSON(message)
+	}
+	_, data, err := client.connection.ReadMessage()
+	if err != nil {
+		return err
+	}
+	defer clear(data)
+	if err = client.inspectFrame(data); err != nil {
+		return &frameInspectionError{cause: err}
+	}
+	if json.Unmarshal(data, message) != nil {
+		return ErrFrameInspection
+	}
+	return nil
 }
 
 func (client *Client) fail(err error) {

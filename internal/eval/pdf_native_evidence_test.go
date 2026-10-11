@@ -253,12 +253,13 @@ func TestPDFNativeSurfaceScannerCannotHidePrivateDuplicateJSONValue(t *testing.T
 	defer func() { _ = trial.release(true) }()
 	value := trial.item.Case.Driver.Facts["contact-reference"]
 	encoded, _ := json.Marshal(value)
-	for _, data := range [][]byte{
-		[]byte(`{"value":` + string(encoded) + `,"value":"safe"}`),
-		[]byte(`{"safe":true} trailing`), []byte(`{"truncated":`),
-	} {
-		if !errors.Is(trial.scanNativeSurface(data), ErrPrivateEvidence) {
-			t.Fatal("private, trailing or truncated raw native surface admitted")
+	if !errors.Is(trial.scanNativeSurface(
+		[]byte(`{"value":`+string(encoded)+`,"value":"safe"}`)), ErrPrivateEvidence) {
+		t.Fatal("duplicate key hid a private value")
+	}
+	for _, data := range [][]byte{[]byte(`{"safe":true} trailing`), []byte(`{"truncated":`)} {
+		if !errors.Is(trial.scanNativeSurface(data), ErrPDFTrial) {
+			t.Fatal("unscannable surface was admitted or labeled a confirmed leak")
 		}
 	}
 	if trial.scanNativeSurface([]byte(`{"value":"ordinary-safe-text"}`)) != nil {

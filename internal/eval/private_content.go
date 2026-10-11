@@ -11,9 +11,10 @@ import (
 // Escape-bearing content must be one complete JSON value. Opaque prose,
 // trailing content and exhausted bounds refuse projection, not safety proof.
 type privateContentScan struct {
-	facts  map[string]string
-	filter *strings.Replacer
-	tokens int
+	facts     map[string]string
+	filter    *strings.Replacer
+	tokens    int
+	uncertain bool
 }
 
 func (scan *privateContentScan) text(text string, layer int) bool {
@@ -29,14 +30,21 @@ func (scan *privateContentScan) text(text string, layer int) bool {
 		return false
 	}
 	if layer >= 8 || len(text) > MaxInputBytes {
+		scan.uncertain = true
 		return true
 	}
 	decoder := json.NewDecoder(strings.NewReader(text))
 	matched, valid := scan.value(decoder, layer)
 	if matched || !valid {
+		if !valid {
+			scan.uncertain = true
+		}
 		return true
 	}
 	_, err := decoder.Token()
+	if err != io.EOF {
+		scan.uncertain = true
+	}
 	return err != io.EOF
 }
 
@@ -45,10 +53,12 @@ func (scan *privateContentScan) value(decoder *json.Decoder, layer int) (bool, b
 	for {
 		scan.tokens--
 		if scan.tokens < 0 {
+			scan.uncertain = true
 			return true, false
 		}
 		token, err := decoder.Token()
 		if err != nil {
+			scan.uncertain = true
 			return false, false
 		}
 		if text, ok := token.(string); ok && scan.text(text, layer+1) {
@@ -59,6 +69,7 @@ func (scan *privateContentScan) value(decoder *json.Decoder, layer int) (bool, b
 			case '{', '[':
 				depth++
 				if depth > 24 {
+					scan.uncertain = true
 					return true, false
 				}
 			case '}', ']':
