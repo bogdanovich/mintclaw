@@ -33,8 +33,10 @@ qualified flow deny login. The initial flow excludes embedded frames and
 multi-step credential entry; admit them separately after concrete fixtures.
 
 Before retrieval, the worker proves that the configured form and inputs are
-current, unique, connected, enabled, and in the live top-frame document at the
+current, unique, connected, effectively enabled, and in the live top-frame document at the
 exact entry origin. Capture document/element authority in the private driver.
+Native `:disabled` semantics include ancestor fieldsets and their first-legend
+exception. Recheck them before readiness, injection, and submission.
 
 The initial component requires visible inputs and a same-origin POST form with
 URL-encoded submission, an empty target, and query/fragment-free unescaped paths.
@@ -52,6 +54,15 @@ lease. Recheck the lease after provider access and before private injection.
 Destroy an unconsumed login on denial. Submit only the configured form after
 the independent browser action policy permits login submission. The credential
 grant does not approve purchases, posts, messages, or account changes.
+Once injection begins, the driver denies other network requests. It admits one
+actual top-frame request to the configured submission URL with method POST and
+exact URL-encoded content type, then one GET navigation to the configured
+success or handoff URL. Submit-event changes to the action, method, or encoding
+retire the attempt before the changed request reaches the destination. Outcome
+markers must be unique, laid out, and have computed visibility `visible`.
+These constraints also exclude extra page resources after injection; flows
+requiring them need separately qualified admission. Real HTTP redirect
+enforcement remains the proxy's qualification responsibility.
 
 ## Browser and process boundary
 
@@ -86,6 +97,9 @@ caller death, service shutdown, or lost control transport stops admission,
 cancels work, and closes the context. A fixed failure is not proof of cleanup:
 acknowledge destruction or quarantine/terminate the worker before admitting
 another operation. Do not replay an uncertain login after restart or failure.
+After a confirmed login or MFA outcome, any further top-frame navigation,
+including reload and same-document history navigation, retires the context.
+No subsequent network or account operation is admitted by this component.
 
 Return only service-owned opaque references and validated fixed outcomes.
 Never forward driver exceptions, page text, accessibility/DOM values,

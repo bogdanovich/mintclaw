@@ -31,16 +31,22 @@ after(async () => { if (browser) await browser.close(); });
 async function fixture(t, options = {}) {
   const context = await browser.newContext({ acceptDownloads: false, serviceWorkers: 'block' });
   const abort = new AbortController(), calls = [], outcomes = [];
-  let submissions = 0, denied = false;
+  let submissions = 0, requests = 0, denied = false;
   await context.route('**/*', async route => {
+    requests++;
     const url = new URL(route.request().url());
     assert.equal(url.origin === origin, true, 'fixture escaped configured origin');
     if (url.pathname === '/login') {
       await route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html>' +
-        '<form id="login" method="post" action="/session"><input id="username" name="username" type="email">' +
-        '<input id="password" name="password" type="password"></form>' + (options.extraHTML || '') });
+        '<form id="login" method="post" action="/session">' + (options.disabledFieldset ? '<fieldset disabled>' : '') +
+        (options.legend ? '<legend>' : '') + '<input id="username" name="username" type="email">' +
+        '<input id="password" name="password" type="password">' + (options.legend ? '</legend>' : '') +
+        (options.disabledFieldset ? '</fieldset>' : '') + '</form>' + (options.extraHTML || '') });
     } else if (url.pathname === '/session') {
       submissions++;
+      assert.equal(route.request().method() === 'POST', true, 'unexpected submission method');
+      assert.equal(route.request().headers()['content-type'] === 'application/x-www-form-urlencoded', true,
+        'unexpected submission encoding');
       const body = new URLSearchParams(route.request().postData());
       assert.equal(body.get('username') === username.toString(), true, 'username injection mismatch');
       assert.equal(body.get('password') === password.toString(), true, 'password injection mismatch');
@@ -52,7 +58,8 @@ async function fixture(t, options = {}) {
         headers: { 'set-cookie': `auth=${cookie}; Secure; HttpOnly; SameSite=Strict` },
         body: `<script>location.replace(${JSON.stringify(destination)})</script>` });
     } else {
-      const marker = options.missingMarker ? '' : `<div id="${options.handoff ? 'mfa-required' : 'authenticated'}">State</div>`;
+      const marker = options.missingMarker ? '' : `<div id="${options.handoff ? 'mfa-required' : 'authenticated'}"` +
+        `${options.hiddenMarker ? ' style="visibility:hidden"' : ''}>State</div>`;
       await route.fulfill({ status: 200, contentType: 'text/html', body:
         marker + `<p>Private echo ${password.toString()} ${password.toString('base64')} ${cookie}</p>` });
     }
@@ -79,7 +86,7 @@ async function fixture(t, options = {}) {
     assert.equal(Object.isFrozen(result), true);
     return result.code;
   };
-  return { context, session, abort, calls, lease, safe, submissions: () => submissions,
+  return { context, session, abort, calls, lease, safe, submissions: () => submissions, requests: () => requests,
     deny: () => { denied = true; } };
 }
 
@@ -116,6 +123,79 @@ test('success URL alone cannot claim authenticated state', async t => {
   assert.equal(f.safe(await f.session.inject(username, password)), 'filled');
   assert.equal(f.safe(await f.session.submit()), 'outcome_unknown');
   assert.equal(f.safe(await f.session.close()), 'closed');
+});
+
+for (const handoff of [false, true]) {
+  test(`hidden ${handoff ? 'MFA' : 'success'} marker cannot confirm an outcome`, async t => {
+    const f = await fixture(t, { handoff, hiddenMarker: true });
+    assert.equal(f.safe(await f.session.prepare()), 'prepared');
+    assert.equal(f.safe(await f.session.inject(username, password)), 'filled');
+    assert.equal(f.safe(await f.session.submit()), 'outcome_unknown');
+    assert.equal(f.safe(await f.session.close()), 'closed');
+  });
+  for (const navigation of ['reload', 'same-document']) {
+    test(`authenticated ${handoff ? 'MFA' : 'login'} context retires on ${navigation}`, async t => {
+      const f = await fixture(t, { handoff });
+      assert.equal(f.safe(await f.session.prepare()), 'prepared');
+      assert.equal(f.safe(await f.session.inject(username, password)), 'filled');
+      assert.equal(f.safe(await f.session.submit()), handoff ? 'handoff_required' : 'logged_in');
+      const page = f.context.pages()[0], closed = page.waitForEvent('close', { timeout: 3000 });
+      if (navigation === 'reload') await page.reload().catch(() => {});
+      else await page.evaluate(() => history.pushState({}, '', '/later')).catch(() => {});
+      await closed;
+      assert.equal(f.safe(await f.session.close()), 'closed');
+      assert.equal(f.safe(await f.session.ready()), 'denied');
+      assert.equal(f.submissions(), 1);
+    });
+  }
+}
+
+for (const mutation of ['action', 'method', 'enctype', 'bypass']) {
+  test(`actual outgoing submission rejects submit-handler ${mutation} mutation`, async t => {
+    const f = await fixture(t);
+    assert.equal(f.safe(await f.session.prepare()), 'prepared');
+    assert.equal(f.safe(await f.session.inject(username, password)), 'filled');
+    await f.context.pages()[0].evaluate(mutation => {
+      document.getElementById('login').addEventListener('submit', event => {
+        if (mutation === 'action') event.target.action = '/changed-session';
+        else if (mutation === 'method') event.target.method = 'get';
+        else if (mutation === 'enctype') event.target.enctype = 'text/plain';
+        else { event.preventDefault(); location.href = '/home'; }
+      });
+    }, mutation);
+    assert.equal(f.safe(await f.session.submit()), 'outcome_unknown');
+    assert.equal(f.safe(await f.session.close()), 'closed');
+    assert.equal(f.requests(), 1, 'changed submission reached the destination');
+    assert.equal(f.submissions(), 0);
+  });
+}
+
+for (const phase of ['prepare', 'ready', 'inject', 'submit']) {
+  test(`inherited fieldset disabling is rejected before ${phase}`, async t => {
+    const f = await fixture(t, { disabledFieldset: phase === 'prepare' });
+    if (phase !== 'prepare') {
+      assert.equal(f.safe(await f.session.prepare()), 'prepared');
+      if (phase === 'submit') assert.equal(f.safe(await f.session.inject(username, password)), 'filled');
+      await f.context.pages()[0].evaluate(() => {
+        const fieldset = document.createElement('fieldset'); fieldset.disabled = true;
+        fieldset.append(document.getElementById('username'), document.getElementById('password'));
+        document.getElementById('login').append(fieldset);
+      });
+    }
+    const result = phase === 'inject' ? await f.session.inject(username, password) : await f.session[phase]();
+    assert.equal(f.safe(result), 'outcome_unknown');
+    assert.equal(f.safe(await f.session.close()), 'closed');
+    assert.equal(f.submissions(), 0);
+  });
+}
+
+test('first-legend inputs retain native enabled semantics in a disabled fieldset', async t => {
+  const f = await fixture(t, { disabledFieldset: true, legend: true });
+  assert.equal(f.safe(await f.session.prepare()), 'prepared');
+  assert.equal(f.safe(await f.session.ready()), 'prepared');
+  assert.equal(f.safe(await f.session.inject(username, password)), 'filled');
+  assert.equal(f.safe(await f.session.submit()), 'logged_in');
+  assert.equal(f.submissions(), 1);
 });
 
 for (const [name, change] of [

@@ -55,7 +55,7 @@ function createSession(context, lease, input, origins) {
   } catch (_) { throw new Error('credential browser unavailable'); }
   const permittedOrigins = new Set(origins), started = performance.now(), remaining = lease.remainingMS;
   const signal = lease.signal, check = lease.check;
-  let page, authority, stage = 'new', busy = false, closing;
+  let page, authority, stage = 'new', busy = false, closing, submissionRequest = false, outcomeRequest = false;
   const retired = () => !!closing || signal.aborted || performance.now() - started >= remaining;
   const close = () => {
     if (closing) return closing;
@@ -106,8 +106,23 @@ function createSession(context, lease, input, origins) {
       await admit('navigate', flow.entry_origin);
       await context.route('**/*', async route => {
         try {
-          const target = new URL(route.request().url());
+          const request = route.request(), target = new URL(request.url());
           if (target.protocol !== 'https:' || target.username || target.password) throw new Error();
+          // Once values enter the page, admit one native form POST and one
+          // outcome navigation only. A submit listener can change DOM policy
+          // after requestSubmit's precheck; enforce the actual request here.
+          if (!['new', 'prepared'].includes(stage)) {
+            if (stage !== 'submitting' || !request.isNavigationRequest() || request.frame() !== page.mainFrame()) throw new Error();
+            if (!submissionRequest) {
+              if (target.href !== flow.submit_url || request.method() !== 'POST' ||
+                  request.headers()['content-type'] !== 'application/x-www-form-urlencoded') throw new Error();
+              submissionRequest = true;
+            } else {
+              if (outcomeRequest || request.method() !== 'GET' || request.postData() !== null ||
+                  (target.href !== flow.success_url && target.href !== flow.handoff_url)) throw new Error();
+              outcomeRequest = true;
+            }
+          }
           await admit('network', target.origin);
           await route.fallback();
         } catch (_) { await route.abort('blockedbyclient').catch(() => {}); void close(); }
@@ -123,7 +138,7 @@ function createSession(context, lease, input, origins) {
       page.on('crash', onAbort);
       page.on('frameattached', onAbort);
       page.on('framenavigated', frame => {
-        if (frame === page.mainFrame() && (stage === 'prepared' || stage === 'filled')) onAbort();
+        if (frame === page.mainFrame() && ['prepared', 'injecting', 'filled', 'active'].includes(stage)) onAbort();
       });
       page.on('download', onAbort);
       page.on('dialog', dialog => { void dialog.dismiss().catch(() => {}); });
@@ -145,7 +160,7 @@ function createSession(context, lease, input, origins) {
             username.form === form && password.form === form && form.method.toLowerCase() === 'post' &&
             form.action === flow.submit_url && form.target === '' && form.enctype === 'application/x-www-form-urlencoded' &&
             username.type === flow.username_type && password.type === 'password' &&
-            !username.disabled && !password.disabled && !username.readOnly && !password.readOnly &&
+            !username.matches(':disabled') && !password.matches(':disabled') && !username.readOnly && !password.readOnly &&
             !username.hidden && !password.hidden && username.getClientRects().length > 0 && password.getClientRects().length > 0 &&
             getComputedStyle(username).visibility !== 'hidden' && getComputedStyle(password).visibility !== 'hidden';
         };
@@ -174,6 +189,7 @@ function createSession(context, lease, input, origins) {
         const credentials = { username: decoder.decode(user), password: decoder.decode(pass) };
         if (/[\x00\r\n]/.test(credentials.username + credentials.password)) throw new Error();
         await admit('inject', new URL(page.url()).origin);
+        stage = 'injecting';
         const filled = await page.evaluate(({ refs, credentials }) => {
           if (!refs.valid()) return false;
           const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
@@ -207,13 +223,14 @@ function createSession(context, lease, input, origins) {
         (flow.handoff_url && url.href === flow.handoff_url), { waitUntil: 'domcontentloaded', timeout: 10000 });
       const current = page.url();
       await admit('outcome', new URL(current).origin);
-      if (current !== flow.success_url && current !== flow.handoff_url) throw new Error();
+      if (!submissionRequest || (current !== flow.success_url && current !== flow.handoff_url)) throw new Error();
       const confirmed = await page.evaluate(flow => {
         const id = location.href === flow.success_url ? flow.success_marker_id :
           location.href === flow.handoff_url ? flow.handoff_marker_id : '';
         const matches = [...document.querySelectorAll('[id]')].filter(node => node.id === id);
         return id !== '' && matches.length === 1 && matches[0] instanceof HTMLElement &&
-          matches[0].isConnected && matches[0].getClientRects().length > 0;
+          matches[0].isConnected && matches[0].getClientRects().length > 0 &&
+          getComputedStyle(matches[0]).visibility === 'visible';
       }, flow);
       if (!confirmed || page.url() !== current) throw new Error();
       await admit('outcome', new URL(page.url()).origin);
