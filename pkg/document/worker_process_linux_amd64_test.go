@@ -174,7 +174,11 @@ func TestDocumentNativeBoundaryDeniesHostFileAndNetwork(t *testing.T) {
 	snapshot, input := processWorkerFixture(t)
 	worker := testProcessWorker("boundary-probe", secretPath, listener.Addr().String())
 	request := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFillCandidate)
-	result := worker.run(t.Context(), snapshot.path, t.TempDir(), request)
+	scratch := directTempDir(t)
+	if err := os.Chmod(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := worker.run(t.Context(), snapshot.path, scratch, request)
 	assertWorkerFailure(t, result, StateUnavailable, FailureBackendUnavailable)
 	if result.Failure.Message != "document boundary probe passed" {
 		t.Fatalf("boundary probe result = %#v", result)
