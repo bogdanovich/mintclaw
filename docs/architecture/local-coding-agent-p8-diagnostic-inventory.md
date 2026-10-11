@@ -168,6 +168,43 @@ confirms that deployment-commit attribution remains an open H1b gap; the
 successful model-attempt qualification does not relabel that missing evidence
 as resolved.
 
+### Tool-call generation production qualification
+
+The tool-call generation slice merged through PR #1517 as merge commit
+`422300d7c5401651da945ff5fcd11ceffa987b77` and was deployed from merged main
+on 2026-10-11. The deployment advanced the production checkout from
+`c43e4b7cde9fdde44bf938226ad8de969f103b8e` to that merge commit. Before the
+update, the checksum-verifiable rollback snapshot
+`/home/server/mintclaw-core-backup-20261011T055004Z` captured 42 files,
+including the prior binaries, user units and drop-ins, service states,
+symlinks, and source revision; every entry in its SHA-256 manifest verifies.
+
+The installed gateway/CLI, node, and launcher SHA-256 digests are respectively
+`d7c73684a5423dd28907331df8f81c047df6aa7a9e9d39e86ff73649381fda2c`,
+`3f492408bb9638d757f327d80b30faac52268f1cf97d4c4594c4105f646c4990`, and
+`da4c76f789d88a939da41338bbd9589af86abfea01daca84009a382c93c7211d`.
+The gateway build and CLI installation have the same digest. All ten expected
+services remained active, no failed or legacy processes were present, launcher
+and reviewer-webhook probes returned their expected 302 and 404 responses, and
+the final ten-minute error-journal scan was empty.
+
+The basic stateless canary retained completed trace
+`trace-turn-f506594effe76e7e2c2a9d7e` with six records, redacted-content policy,
+and no truncation. A separate harmless read-only repeated-tool canary retained
+completed trace `trace-turn-d03727df4cc92724f1960c84` with 22 records,
+redacted-content policy, and no truncation. In the latter trace, the second
+relevant tool call at sequence 15, its `identical_call_success_warning`
+loop-decision record at sequence 16, and its result at sequence 17 share the
+exact provider call ID, runtime-owned tool-call generation, and originating
+model-attempt ID. The preceding repeated call at sequences 10 and 11 has a
+different generation and model-attempt ID, proving that repeated successful
+calls cannot be joined merely because they invoke the same tool.
+
+Both qualification traces still have an absent `source.commit`. Deployment
+commit attribution therefore remains an independent open H1b gap; the tool
+call, generation, model-attempt, and loop-decision joins are qualified without
+claiming that the source-commit gap is resolved.
+
 ## Evidence map
 
 | Path | Authoritative evidence | Passive evidence | H1b/H1c action |
