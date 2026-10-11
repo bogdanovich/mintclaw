@@ -135,6 +135,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Credential Browser Login Admission](credential-browser-login-admission.md):
   configured private login flow, sandbox and process requirements, lease
   retirement, fixed outputs, and actual-host qualification gates.
+- [Protected Credential Browser Runtime](credential-browser-runtime.md):
+  fixed Root-owned read-only artifact inventory, pinned mount descriptors,
+  integrity checks, synthetic Linux qualification, and remaining launch gates.
 - [Private Credential Browser Channel](credential-browser-private-channel.md):
   bounded broker/worker commands, current lease callbacks, private provider
   consumption, verified retirement, and synthetic qualification limits.
