@@ -69,6 +69,22 @@ type PDFTrialEvidence struct {
 	State        string                  `json:"state"`
 	Cleanup      string                  `json:"cleanup"`
 	WriteIntent  *PDFWriteIntentEvidence `json:"write_intent,omitempty"`
+	Settlement   *PDFSettlementEvidence  `json:"settlement,omitempty"`
+}
+
+// Native metadata is not an independent artifact, privacy or cleanup oracle.
+type PDFSettlementEvidence struct {
+	ApprovalInteractionID string   `json:"approval_interaction_id"`
+	ApprovalRequestID     string   `json:"approval_request_id"`
+	ApprovalConsumedAt    int64    `json:"approval_consumed_at"`
+	OperationID           string   `json:"operation_id"`
+	OperationRevision     uint64   `json:"operation_revision"`
+	BackendGeneration     string   `json:"backend_generation"`
+	OutboxDeliveryID      string   `json:"outbox_delivery_id"`
+	PlatformMessageIDs    []string `json:"platform_message_ids"`
+	ArtifactRef           string   `json:"artifact_ref"`
+	ArtifactSHA256        string   `json:"artifact_sha256"`
+	ArtifactSize          int64    `json:"artifact_size"`
 }
 
 // An intent is not a consumed native grant, settled write or delivery receipt.

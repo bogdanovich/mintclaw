@@ -56,13 +56,7 @@ func (domain *pdfConversation) approveReviewedWrite(prompt Event) (protocol.Mint
 	if err != nil {
 		return protocol.MintClawMessage{}, err
 	}
-	origin := record.Origin.ExecutionContext
-	if origin == nil || origin.MessageID != domain.confirmationRequestID ||
-		origin.ClientSessionID != domain.prepared.sessionID || origin.Channel != record.Route.Channel ||
-		origin.ChatID != record.Route.ChatID || origin.ChatType != record.Route.ChatType ||
-		origin.SenderID != record.Route.SenderID || origin.Account != record.Route.AccountID ||
-		origin.TopicID != record.Route.TopicID || origin.SpaceID != record.Route.SpaceID ||
-		origin.SpaceType != record.Route.SpaceType {
+	if !domain.confirmationMatches(record) {
 		return protocol.MintClawMessage{}, ErrPDFTrial
 	}
 	job, err := domain.prepared.observeExistingJob(domain.jobID, domain.owner)
@@ -75,22 +69,10 @@ func (domain *pdfConversation) approveReviewedWrite(prompt Event) (protocol.Mint
 		record.CreatedAt < domain.confirmedAt.UnixMilli() || job.UpdatedAt < domain.confirmedAt.UnixMilli() {
 		return protocol.MintClawMessage{}, ErrPDFTrial
 	}
-	root, err := os.OpenRoot(domain.prepared.workspace)
-	if err != nil {
-		return protocol.MintClawMessage{}, ErrPDFTrial
+	if err = domain.prepared.verifyApprovalBinding(binding, record.Origin.ArgumentHash); err != nil {
+		return protocol.MintClawMessage{}, err
 	}
-	key, err := readPDFNativeFile(root, "state/interaction_hmac.key", 32)
-	_ = root.Close()
-	defer clear(key)
-	if err != nil {
-		return protocol.MintClawMessage{}, ErrPDFTrial
-	}
-	matched, err := interactions.VerifyArgumentHash(key, binding.ApprovalArguments(), record.Origin.ArgumentHash)
-	if err != nil || !matched {
-		return protocol.MintClawMessage{}, ErrPDFTrial
-	}
-	domain.approvalPrompt, domain.operationID = &prompt, binding.OperationID
-	return protocol.MintClawMessage{
+	request := protocol.MintClawMessage{
 		Type: protocol.TypeMessageSend, ID: uuid.NewString(), SessionID: domain.prepared.sessionID,
 		Timestamp: time.Now().UnixMilli(), Payload: map[string]any{
 			protocol.PayloadKeyContent:            "Allow once",
@@ -98,7 +80,38 @@ func (domain *pdfConversation) approveReviewedWrite(prompt Event) (protocol.Mint
 			protocol.PayloadKeyInteractionShortID: prompt.InteractionShortID,
 			protocol.PayloadKeyInteractionPrompt:  prompt.MessageID,
 		},
-	}, nil
+	}
+	domain.approvalPrompt, domain.approvalRecord, domain.operationID = &prompt, &record, binding.OperationID
+	domain.approvalRequestID = request.ID
+	return request, nil
+}
+
+func (domain *pdfConversation) confirmationMatches(record interactions.Record) bool {
+	origin := record.Origin.ExecutionContext
+	return origin != nil && origin.MessageID == domain.confirmationRequestID &&
+		origin.ClientSessionID == domain.prepared.sessionID && origin.Channel == record.Route.Channel &&
+		origin.ChatID == record.Route.ChatID && origin.ChatType == record.Route.ChatType &&
+		origin.SenderID == record.Route.SenderID && origin.Account == record.Route.AccountID &&
+		origin.TopicID == record.Route.TopicID && origin.SpaceID == record.Route.SpaceID &&
+		origin.SpaceType == record.Route.SpaceType
+}
+
+func (trial *pdfTrial) verifyApprovalBinding(binding document.FormCommitBinding, argumentHash string) error {
+	root, err := os.OpenRoot(trial.workspace)
+	if err != nil {
+		return ErrPDFTrial
+	}
+	key, err := readPDFNativeFile(root, "state/interaction_hmac.key", 32)
+	_ = root.Close()
+	defer clear(key)
+	if err != nil {
+		return ErrPDFTrial
+	}
+	matched, err := interactions.VerifyArgumentHash(key, binding.ApprovalArguments(), argumentHash)
+	if err != nil || !matched {
+		return ErrPDFTrial
+	}
+	return nil
 }
 
 // The native binding owns approval shape/digest. This comparison only requires

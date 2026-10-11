@@ -30,6 +30,23 @@ func (trial *pdfTrial) observePromptOrigin(prompt Event, tool string) (interacti
 	if tool != "document" && tool != "request_user_input" {
 		return interactions.Record{}, ErrPDFTrial
 	}
+	record, err := trial.observeInteraction(prompt.InteractionID)
+	if err != nil {
+		return interactions.Record{}, err
+	}
+	if !trial.promptMatchesOrigin(record, prompt, time.Now(), tool) {
+		return interactions.Record{}, ErrPDFTrial
+	}
+	if err = trial.observePromptDelivery(record, prompt); err != nil {
+		return interactions.Record{}, err
+	}
+	return record, nil
+}
+
+func (trial *pdfTrial) observeInteraction(id string) (interactions.Record, error) {
+	if !validID(id) {
+		return interactions.Record{}, ErrPDFTrial
+	}
 	root, err := os.OpenRoot(trial.workspace)
 	if err != nil {
 		return interactions.Record{}, ErrPDFTrial
@@ -47,20 +64,12 @@ func (trial *pdfTrial) observePromptOrigin(prompt Event, tool string) (interacti
 	if err != nil {
 		return interactions.Record{}, ErrPDFTrial
 	}
-	var record interactions.Record
 	for _, candidate := range snapshot.Records {
-		if candidate.ID == prompt.InteractionID {
-			record = candidate
-			break
+		if candidate.ID == id {
+			return candidate, nil
 		}
 	}
-	if !trial.promptMatchesOrigin(record, prompt, time.Now(), tool) {
-		return interactions.Record{}, ErrPDFTrial
-	}
-	if err = trial.observePromptDelivery(record, prompt); err != nil {
-		return interactions.Record{}, err
-	}
-	return record, nil
+	return interactions.Record{}, ErrPDFTrial
 }
 
 func (trial *pdfTrial) promptMatches(record interactions.Record, prompt Event, now time.Time) bool {
