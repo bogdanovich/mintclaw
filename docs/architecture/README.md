@@ -124,6 +124,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Credential Provider And Isolation Qualification](credential-provider-qualification.md):
   pinned official 1Password SDK build evidence, private service and caller
   isolation requirements, protected provisioning, and planned CA2 merge units.
+- [Credential Phone Approval Verifier Qualification](credential-phone-approval-qualification.md):
+  pinned WebAuthn candidate build evidence, caller timeout and verification
+  requirements, and pending Android approval qualification.
 - [Reliable PDF Support Roadmap](pdf-support-roadmap.md): ordered document
   identity, inspection, read/render, AcroForm, durable form, XFA, transformation,
   companion, and production-verification milestones.

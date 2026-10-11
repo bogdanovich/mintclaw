@@ -144,6 +144,16 @@ Phone approval and credential-browser execution retain their CA3/CA4
 admissions. A transport with no qualified consumer returns unavailable rather
 than exporting a secret to make a partial implementation appear functional.
 
+## SDK initialization rejection probe
+
+A temporary qualification test exercised the private adapter's real SDK
+initialization with a deliberately invalid synthetic token. It returned the
+fixed unavailable error. Captured stderr was empty, and neither captured stream
+contained the raw, base64, or hex canary. The probe file was removed after the
+run; no real token, vault, or item retrieval was used. This is evidence for one
+rejection path, not qualification of successful SDK retrieval or all diagnostic
+paths. Service isolation and CA6 output tests remain required.
+
 ## CA2a adapter implementation
 
 The first independent CA2 slice lives under
