@@ -38,6 +38,7 @@ const (
 	PayloadKeyInteractionChoice  = "interaction_choice"
 	PayloadKeyInteractionPrompt  = "interaction_prompt_message_id"
 	PayloadKeyRequestID          = "request_id"
+	PayloadKeyDeliveryID         = "delivery_id"
 	PayloadKeyResultOutput       = "result_output"
 
 	MessageKindThought    = "thought"
