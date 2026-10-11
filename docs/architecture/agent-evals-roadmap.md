@@ -15,8 +15,8 @@ may run in normal CI without credentials, a live gateway, paid models, or instal
 | Stage | Outcome | Dependency | Status |
 | --- | --- | --- | --- |
 | E0 | Agree architecture and freeze first-goal acceptance | Operator review | Approved; admission recorded |
-| E1 | Run bounded scripted multi-turn cases and produce honest reports | E0 | Offline contracts and shared client merged; admission/reporting in progress |
-| E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Not started |
+| E1 | Run bounded scripted multi-turn cases and produce honest reports | E0 | Contracts, client, runtime probe, admission, and reports merged; real-model qualification pending |
+| E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Tools-disabled role contracts and calibration foundation in progress; runner/grade integration pending |
 | E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Not started |
 | E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Not started |
 | E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Not started |

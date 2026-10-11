@@ -253,6 +253,7 @@ jobs:
           ./cmd/mintclaw-node
           ./pkg/updater
           ./pkg/workspace
+          ./internal/eval
 
       - name: Run workspace identity recovery tests
         shell: bash

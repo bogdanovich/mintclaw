@@ -11,6 +11,26 @@ Missing capabilities/drivers/domain evidence produce explicit non-passing covera
 that a PDF was filled, a browser action happened, or Telegram delivery worked. See the
 [roadmap](../architecture/agent-evals-roadmap.md) for the remaining packets.
 
+The E2 foundation adds internal tools-disabled user/judge roles, versioned prompts, strict typed actions/findings,
+and [six manually labelled calibration examples](../../evals/calibration/judge-v1.json). These are not yet wired to
+`run` or a `grade` command. Model context excludes runtime authority, hidden hard-check expectations, simulator
+persona from judge input, and private fact values; fact handles alone are available to the user role. Admission of
+protected wire answers and domain evidence remains a later packet. Private values observed in raw events, even an
+excluded streaming revision, refuse model projection. JSON escaping is not treated as redaction.
+
+Role calls use the existing scoped HTTP providers with no tools/native search, at most 4,096 requested output
+tokens, 16 KiB retained output, 64 KiB total prompt context, and a three-minute deadline. Only caller-mediated
+`openai`, `anthropic`, and `gemini` providers are admitted; CLI agents and custom provider bodies are refused before
+construction. Generation version identifies these settings; unspecified generation parameters use the native
+provider defaults of the recorded code revision. The recorded model is the configured request model, not an
+independently observed effective model. Returned usage is preserved as raw integers per call; missing usage and
+unobservable provider-internal attempts remain unknown.
+
+Calibration compares judge findings to labels only after the call; it does not expose labels to the judge. A
+calibration pass means agreement on these examples, not a passing target task. Deterministic stub-provider tests
+verify contracts, privacy boundaries, and reduction only. They are not live LLM calibration or domain qualification.
+The macOS portability job runs these deterministic harness tests, never the manual paid scenario suite.
+
 ## Prepare The Target
 
 Use a new private profile, not the production profile or a copy of its sessions, memory, ledgers, or auth store.
