@@ -121,54 +121,9 @@ func (store *FileStore) load() error {
 	if err != nil {
 		return fmt.Errorf("read browser state store: %w", err)
 	}
-	if len(raw) > store.maxBytes {
-		return ErrStoreFull
-	}
-	if err = rejectDuplicateJSONMembers(raw); err != nil {
-		return fmt.Errorf("decode browser state store: %w", err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	var document fileStoreDocument
-	if err = decoder.Decode(&document); err != nil {
-		return fmt.Errorf("decode browser state store: %w", err)
-	}
-	if err = ensureJSONEOF(decoder); err != nil {
-		return fmt.Errorf("decode browser state store: %w", err)
-	}
-	if document.Version != fileStoreVersion || document.Sessions == nil || document.PreparedActions == nil ||
-		document.Invocations == nil ||
-		len(document.Sessions)+len(document.PreparedActions)+len(document.Invocations) > store.maxRecords {
-		return fmt.Errorf("%w: invalid browser state document", ErrInvalid)
-	}
-	for id, prepared := range document.PreparedActions {
-		if id != prepared.ID || prepared.Validate(config.BrowserMaxTextInputBytes) != nil {
-			return fmt.Errorf("%w: invalid persisted prepared browser action", ErrInvalid)
-		}
-		if _, ok := document.Sessions[prepared.SessionID]; !ok {
-			return fmt.Errorf("%w: prepared action references a missing session", ErrInvalid)
-		}
-	}
-	for id, session := range document.Sessions {
-		if id != session.ID || session.Validate() != nil {
-			return fmt.Errorf("%w: invalid persisted browser session", ErrInvalid)
-		}
-	}
-	for id, invocation := range document.Invocations {
-		if id != invocation.ID || invocation.Validate() != nil {
-			return fmt.Errorf("%w: invalid persisted browser invocation", ErrInvalid)
-		}
-		if _, ok := document.Sessions[invocation.SessionID]; !ok {
-			return fmt.Errorf("%w: invocation references a missing session", ErrInvalid)
-		}
-		if invocation.PreparedActionID != "" {
-			if _, ok := document.PreparedActions[invocation.PreparedActionID]; !ok {
-				return fmt.Errorf("%w: invocation references a missing prepared action", ErrInvalid)
-			}
-		}
-		invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
-		cloneInvocationExecution(&invocation)
-		document.Invocations[id] = invocation
+	document, err := decodeStateDocument(raw, store.maxRecords, store.maxBytes)
+	if err != nil {
+		return err
 	}
 	store.sessions = make(map[string]Session, len(document.Sessions))
 	for id, session := range document.Sessions {
@@ -177,6 +132,62 @@ func (store *FileStore) load() error {
 	store.prepared = document.PreparedActions
 	store.invocations = document.Invocations
 	return nil
+}
+
+func decodeStateDocument(raw []byte, maxRecords, maxBytes int) (fileStoreDocument, error) {
+	if len(raw) > maxBytes {
+		return fileStoreDocument{}, ErrStoreFull
+	}
+	if err := rejectDuplicateJSONMembers(raw); err != nil {
+		return fileStoreDocument{}, fmt.Errorf("decode browser state store: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var document fileStoreDocument
+	if err := decoder.Decode(&document); err != nil {
+		return fileStoreDocument{}, fmt.Errorf("decode browser state store: %w", err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return fileStoreDocument{}, fmt.Errorf("decode browser state store: %w", err)
+	}
+	if document.Version != fileStoreVersion || document.Sessions == nil || document.PreparedActions == nil ||
+		document.Invocations == nil ||
+		len(document.Sessions)+len(document.PreparedActions)+len(document.Invocations) > maxRecords {
+		return fileStoreDocument{}, fmt.Errorf("%w: invalid browser state document", ErrInvalid)
+	}
+	for id, prepared := range document.PreparedActions {
+		if id != prepared.ID || prepared.Validate(config.BrowserMaxTextInputBytes) != nil {
+			return fileStoreDocument{}, fmt.Errorf("%w: invalid persisted prepared browser action", ErrInvalid)
+		}
+		if _, ok := document.Sessions[prepared.SessionID]; !ok {
+			return fileStoreDocument{}, fmt.Errorf("%w: prepared action references a missing session", ErrInvalid)
+		}
+	}
+	for id, session := range document.Sessions {
+		if id != session.ID || session.Validate() != nil {
+			return fileStoreDocument{}, fmt.Errorf("%w: invalid persisted browser session", ErrInvalid)
+		}
+	}
+	for id, invocation := range document.Invocations {
+		if id != invocation.ID || invocation.Validate() != nil {
+			return fileStoreDocument{}, fmt.Errorf("%w: invalid persisted browser invocation", ErrInvalid)
+		}
+		if _, ok := document.Sessions[invocation.SessionID]; !ok {
+			return fileStoreDocument{}, fmt.Errorf("%w: invocation references a missing session", ErrInvalid)
+		}
+		if invocation.PreparedActionID != "" {
+			if _, ok := document.PreparedActions[invocation.PreparedActionID]; !ok {
+				return fileStoreDocument{}, fmt.Errorf(
+					"%w: invocation references a missing prepared action",
+					ErrInvalid,
+				)
+			}
+		}
+		invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
+		cloneInvocationExecution(&invocation)
+		document.Invocations[id] = invocation
+	}
+	return document, nil
 }
 
 func rejectDuplicateJSONMembers(raw []byte) error {
