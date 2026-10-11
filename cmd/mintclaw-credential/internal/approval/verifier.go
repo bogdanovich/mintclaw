@@ -10,6 +10,8 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/protocol/webauthncose"
 	"github.com/go-webauthn/webauthn/webauthn"
+
+	"github.com/bogdanovich/mintclaw/pkg/credentialbroker"
 )
 
 func newVerifier(origin string) (*webauthn.WebAuthn, error) {
@@ -21,7 +23,7 @@ func newVerifier(origin string) (*webauthn.WebAuthn, error) {
 		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.Path != "" ||
 		parsed.RawPath != "" || parsed.Hostname() == "" || net.ParseIP(parsed.Hostname()) != nil ||
 		strings.ToLower(parsed.Host) != parsed.Host || strings.HasSuffix(parsed.Hostname(), ".") ||
-		parsed.String() != origin || (parsed.Port() != "" && parsed.Port() != "443") {
+		parsed.String() != origin || parsed.Port() != "" {
 		return nil, ErrUnavailable
 	}
 	for _, character := range []byte(parsed.Hostname()) {
@@ -62,7 +64,14 @@ func (setup *OwnerSetup) Begin(ctx context.Context) (Ceremony, error) {
 			return Ceremony{}, ErrDenied
 		}
 	}
-	return controller.begin(enroll, Scope{PolicyRevision: controller.policy.Revision()}, "")
+	return controller.begin(
+		enroll,
+		Scope{
+			Principal:      credentialbroker.Principal{OwnerID: controller.ownerID},
+			PolicyRevision: controller.policy.Revision(),
+		},
+		"",
+	)
 }
 
 func (setup *OwnerSetup) Finish(ctx context.Context, id string, response []byte) (resultErr error) {
@@ -140,8 +149,13 @@ func (controller *Controller) begin(
 	}
 	controller.ceremonies[id] = pendingCeremony{
 		kind: kind, session: session, scope: cloneScope(scope), request: requestID, issued: controller.now(),
+		options: encoded,
 	}
-	return Ceremony{ID: id, Options: encoded, Scope: cloneScope(scope)}, nil
+	return publicCeremony(id, controller.ceremonies[id]), nil
+}
+
+func publicCeremony(id string, pending pendingCeremony) Ceremony {
+	return Ceremony{ID: id, Options: append([]byte(nil), pending.options...), Scope: cloneScope(pending.scope)}
 }
 
 func (controller *Controller) verifyAssertion(

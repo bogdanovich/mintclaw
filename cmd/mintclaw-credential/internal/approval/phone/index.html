@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MintClaw · Account access</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <p class="brand">MINTCLAW</p>
+    <h1 id="title">Account access</h1>
+    <p id="intro">Open an approval notification or a private enrollment link to continue.</p>
+    <section id="scope" hidden aria-label="Requested access">
+      <h2>Accounts</h2><ul id="accounts"></ul>
+      <dl>
+        <dt>Agent</dt><dd id="agent"></dd>
+        <dt>Host</dt><dd id="host"></dd>
+        <dt>Requested by</dt><dd id="actor"></dd>
+        <dt>Owner</dt><dd id="owner"></dd>
+        <dt>Access lasts</dt><dd id="duration"></dd>
+      </dl>
+      <p class="note">This permits account login and use. Purchases, posts, messages, and account changes need their own approval.</p>
+    </section>
+    <button id="action" hidden>Continue with passkey</button>
+    <button id="revoke" class="secondary" hidden>Revoke access</button>
+    <p id="status" role="status" aria-live="polite"></p>
+    <p class="footer">Your passwords stay in the private credential service. This page never asks for them.</p>
+  </main>
+</body>
+</html>

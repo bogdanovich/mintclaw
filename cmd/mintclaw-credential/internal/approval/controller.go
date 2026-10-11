@@ -88,6 +88,7 @@ type pendingCeremony struct {
 	scope   Scope
 	request string
 	issued  time.Time
+	options []byte
 }
 
 type binding struct {
@@ -281,8 +282,15 @@ func (controller *Controller) BeginApproval(ctx context.Context, requestID strin
 	}
 	controller.prune()
 	request := controller.requests[requestID]
-	if !intent.ValidReference(requestID) || request == nil || request.attempted || request.ceremony != "" {
+	if !intent.ValidReference(requestID) || request == nil || request.attempted {
 		return Ceremony{}, ErrDenied
+	}
+	if request.ceremony != "" {
+		pending, exists := controller.ceremonies[request.ceremony]
+		if !exists || !controller.ceremonyLive(pending) {
+			return Ceremony{}, ErrDenied
+		}
+		return publicCeremony(request.ceremony, pending), nil
 	}
 	ceremony, err := controller.begin(approve, request.scope, requestID)
 	if err == nil {
@@ -363,6 +371,11 @@ func (controller *Controller) BeginRevocation(ctx context.Context, grantID strin
 	grant, exists := controller.grants[grantID]
 	if !exists || !intent.ValidReference(grantID) || !controller.grantActive(grantID) {
 		return Ceremony{}, ErrDenied
+	}
+	for id, pending := range controller.ceremonies {
+		if pending.kind == revoke && pending.scope.GrantID == grantID && controller.ceremonyLive(pending) {
+			return publicCeremony(id, pending), nil
+		}
 	}
 	return controller.begin(revoke, Scope{
 		Principal: grant.Principal, Accounts: slices.Clone(grant.Accounts),

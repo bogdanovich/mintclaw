@@ -229,18 +229,24 @@ entire personal vault.
   actual-host plaintext credential-delivery probe; encrypted activation,
   isolated startup, trusted process-role admission, and service wiring remain
   pending. Provisioning and transport alone enable no agent access.
-  The private startup loader validates effective ACL access, read-only mounts,
+  The private startup loader, merged in
+  [PR #1534](https://github.com/bogdanovich/mintclaw/pull/1534), validates effective ACL access, read-only mounts,
   restricted service identity, bounded token data, and single-use consumption.
   Its synthetic qualification covers both delivery forms and unsafe
   role/path/data denial; the executable does not invoke it. Full activation
   and caller/consumer admission remain required before any real token read.
 - CA3: [verifier candidate qualification](credential-phone-approval-qualification.md)
   records build and upstream fixture evidence. The private passkey controller
-  and protected owner-key store now implement signed enrollment/approval/revoke
+  and protected owner-key store, merged in
+  [PR #1539](https://github.com/bogdanovich/mintclaw/pull/1539), implement signed enrollment/approval/revoke
   verification, scope binding, bounded single-use challenges, policy-transition
   invalidation, and durable counter updates. They have no executable entry
-  point. Protected setup/control wiring, the HTTPS UI, notifications, and
-  actual Android end-to-end qualification remain pending.
+  point that activates listeners. The embedded mobile enrollment/approval/revoke
+  page and private root-authenticated enrollment console are now implemented,
+  with bounded exact-origin HTTPS handlers and the protected `enroll` command.
+  Synthetic Linux and actual browser WebAuthn fixtures qualify the software
+  boundary. Protected service/listener startup, authorized notifications, and
+  physical Android end-to-end qualification remain pending.
 - CA4–CA6: pending their dependencies and admission/qualification gates.
   Runtime credential access remains disabled and no real token is provisioned.
 

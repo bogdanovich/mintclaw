@@ -611,6 +611,7 @@ func TestPolicyAndVerifierConfigurationFailClosed(t *testing.T) {
 		"http://approval.example.org", testOrigin + "/", testOrigin + "?x=1", testOrigin + "#x",
 		"https://user@approval.example.org", "https://approval.example.org.", "https://127.0.0.1", "https://APPROVAL.example.org",
 		"android:apk-key-hash:synthetic", "https://approval.example.org:8443", "https://*.example.org",
+		"https://approval.example.org:443", // Browser origin serialization omits the default port.
 	} {
 		config := testConfig()
 		config.Origin = origin
