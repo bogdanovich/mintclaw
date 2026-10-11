@@ -228,6 +228,25 @@ func (p *turnTraceProjector) observeRuntimeEvent(event runtimeevents.Event) {
 			)
 		}
 	}
+	if isInteractionRuntimeEvent(event.Kind) && len(traceScopes) == 1 && p.turns[traceScopes[0]] == nil {
+		continuationEvent, continuationScope, ok := interactionContinuationEvent(event)
+		if ok && p.startTraceLocked(settings, continuationScope, continuationEvent, "interaction") {
+			trace := p.turns[continuationScope]
+			if record, critical, projected := runtimeEventRecord(
+				settings,
+				trace,
+				continuationEvent,
+			); projected {
+				appendCaptureRecord(trace, record, critical)
+			}
+			p.removeTurnLocked(continuationScope, trace)
+			p.mu.Unlock()
+			if p.submit != nil {
+				_ = p.submit(settings, trace)
+			}
+			return
+		}
+	}
 	for _, traceScope := range traceScopes {
 		trace := p.turns[traceScope]
 		if trace == nil {
@@ -349,6 +368,44 @@ func isTerminalChannelDeliveryEvent(kind runtimeevents.Kind) bool {
 		kind == runtimeevents.KindChannelMessageOutboundFailed
 }
 
+func isInteractionRuntimeEvent(kind runtimeevents.Kind) bool {
+	switch kind {
+	case runtimeevents.KindAgentInteractionCreated,
+		runtimeevents.KindAgentInteractionDelivery,
+		runtimeevents.KindAgentInteractionWaiting,
+		runtimeevents.KindAgentInteractionAnswer,
+		runtimeevents.KindAgentInteractionResume,
+		runtimeevents.KindAgentInteractionEnd:
+		return true
+	default:
+		return false
+	}
+}
+
+func interactionContinuationEvent(
+	event runtimeevents.Event,
+) (runtimeevents.Event, runtimeevents.TraceScope, bool) {
+	payload, ok := event.Payload.(InteractionEventPayload)
+	parentScope := event.Scope.TurnTraceScope()
+	if !ok || !parentScope.Complete() || strings.TrimSpace(payload.InteractionID) == "" {
+		return runtimeevents.Event{}, runtimeevents.TraceScope{}, false
+	}
+	eventID := strings.TrimSpace(payload.InteractionEventID)
+	if eventID == "" {
+		eventID = strings.TrimSpace(event.ID)
+	}
+	sum := sha256.Sum256([]byte(
+		payload.InteractionID + "\x00" + eventID + "\x00" + strconv.FormatInt(payload.Revision, 10),
+	))
+	continuationScope := runtimeevents.NewTraceScope(
+		parentScope.Workspace,
+		"interaction-"+hex.EncodeToString(sum[:12]),
+	)
+	event.Scope.TraceScope = continuationScope
+	event.Correlation.ParentTurnID = parentScope.TurnID
+	return event, continuationScope, true
+}
+
 func (p *turnTraceProjector) startTraceLocked(
 	settings traceCaptureSettings,
 	traceScope runtimeevents.TraceScope,
@@ -453,6 +510,9 @@ func runtimeEventRecord(
 	taskID := ""
 	taskGenerationID := ""
 	completionID := ""
+	interactionID := ""
+	interactionEventID := ""
+	interactionRevision := int64(0)
 	deliveryID := ""
 	switch event.Kind {
 	case runtimeevents.KindAgentTurnStart:
@@ -802,6 +862,27 @@ func runtimeEventRecord(
 			WillParent: value.WillParent,
 			ContentLen: value.ContentLen,
 		}
+	case runtimeevents.KindAgentInteractionCreated,
+		runtimeevents.KindAgentInteractionDelivery,
+		runtimeevents.KindAgentInteractionWaiting,
+		runtimeevents.KindAgentInteractionAnswer,
+		runtimeevents.KindAgentInteractionResume,
+		runtimeevents.KindAgentInteractionEnd:
+		value, ok := event.Payload.(InteractionEventPayload)
+		if !ok {
+			return diagnostictrace.Record{}, false, false
+		}
+		taskID = strings.TrimSpace(value.TaskID)
+		interactionID = strings.TrimSpace(value.InteractionID)
+		interactionEventID = strings.TrimSpace(value.InteractionEventID)
+		interactionRevision = value.Revision
+		deliveryID = strings.TrimSpace(value.DeliveryID)
+		kind, critical = diagnostictrace.RecordInteractionLifecycle, true
+		payload = diagnostictrace.InteractionPayload{
+			Kind: string(value.Kind), Event: string(value.Event), Status: string(value.Status),
+			Outcome: string(value.Outcome), Sequence: value.Sequence,
+			Code: safeCode(value.Code), Success: value.Success,
+		}
 	case runtimeevents.KindAgentError:
 		value, ok := event.Payload.(ErrorPayload)
 		if !ok {
@@ -834,15 +915,18 @@ func runtimeEventRecord(
 			TargetHash:  safeHash(settings, targetKey(event.Scope.Channel, event.Scope.ChatID)),
 		},
 		Correlation: diagnostictrace.Correlation{
-			ParentTurnID:       event.Correlation.ParentTurnID,
-			ModelAttemptID:     event.Correlation.ModelAttemptID,
-			RequestID:          event.Correlation.RequestID,
-			ToolCallID:         toolCallID,
-			ToolCallGeneration: toolCallGeneration,
-			TaskGenerationID:   taskGenerationID,
-			CompletionID:       completionID,
-			DeliveryID:         deliveryID,
-			EventID:            event.ID,
+			ParentTurnID:        event.Correlation.ParentTurnID,
+			ModelAttemptID:      event.Correlation.ModelAttemptID,
+			RequestID:           event.Correlation.RequestID,
+			ToolCallID:          toolCallID,
+			ToolCallGeneration:  toolCallGeneration,
+			TaskGenerationID:    taskGenerationID,
+			CompletionID:        completionID,
+			InteractionID:       interactionID,
+			InteractionRevision: interactionRevision,
+			InteractionEventID:  interactionEventID,
+			DeliveryID:          deliveryID,
+			EventID:             event.ID,
 		},
 		Data: data,
 	}, critical, true

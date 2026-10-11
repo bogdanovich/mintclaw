@@ -63,9 +63,12 @@ func (t *isolatedCommandProcessTree) stop(timeout time.Duration) error {
 	return errors.New("MCP process tree remained alive after termination")
 }
 
-func (t *isolatedCommandProcessTree) abort(timeout time.Duration) error {
+func (t *isolatedCommandProcessTree) abort(timeout time.Duration, afterKill func()) error {
 	command := t.command
 	if command == nil || command.Process == nil || command.Process.Pid <= 0 {
+		if afterKill != nil {
+			afterKill()
+		}
 		return nil
 	}
 	if timeout <= 0 {
@@ -77,6 +80,9 @@ func (t *isolatedCommandProcessTree) abort(timeout time.Duration) error {
 		return fmt.Errorf("abort MCP process group: %w", err)
 	}
 	_ = command.Process.Kill()
+	if afterKill != nil {
+		afterKill()
+	}
 	if waitForProcessGroupExit(processGroup, deadline) {
 		return nil
 	}

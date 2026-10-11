@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
@@ -101,6 +103,55 @@ func TestAgentLoop_PublishesRuntimeEvents(t *testing.T) {
 	}
 	if payload.Tool != "mock_custom" {
 		t.Fatalf("runtime payload tool = %q, want mock_custom", payload.Tool)
+	}
+}
+
+func TestInteractionRuntimeEventCarriesDurableIdentityWithoutContent(t *testing.T) {
+	runtimeBus := runtimeevents.NewBus()
+	al := &AgentLoop{cfg: config.DefaultConfig(), runtimeEvents: runtimeBus}
+	t.Cleanup(func() { _ = runtimeBus.Close() })
+
+	sub, events, err := runtimeBus.Channel().OfKind(runtimeevents.KindAgentInteractionDelivery).SubscribeChan(
+		context.Background(),
+		runtimeevents.SubscribeOptions{Name: "interaction-identity", Buffer: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sub.Close() })
+
+	const secret = "private question and answer must not enter the runtime event"
+	record := interactions.Record{
+		ID: "interaction-identity", ShortID: "identity", Kind: interactions.KindQuestion,
+		Status: interactions.StatusCreated, Revision: 2,
+		Route: interactions.Route{AgentID: "main", SessionKey: "session-1"},
+		Origin: interactions.Origin{
+			TurnID: "turn-1", ToolCallID: "tool-call-1", ToolName: "request_user_input", TaskID: "task-1",
+		},
+		Questions:        []interactions.Question{{ID: "choice", Question: secret}},
+		Answer:           &interactions.Answer{Text: secret},
+		PromptDeliveryID: "delivery-prompt-1",
+	}
+	al.observeInteractionEvent("/workspace/main", interactions.EventObservation{
+		Event: interactions.Event{
+			EventID: "interaction-identity:000002:interaction.prompt_delivery_bound",
+			Type:    interactions.EventPromptDelivery, Revision: 2, Sequence: 2,
+		},
+		Record: record,
+	})
+
+	event := receiveRuntimeEvent(t, events)
+	payload, ok := event.Payload.(InteractionEventPayload)
+	if !ok {
+		t.Fatalf("interaction payload = %T", event.Payload)
+	}
+	if event.Scope.TurnID != "turn-1" || event.Correlation.ToolCallID != "tool-call-1" ||
+		payload.InteractionID != record.ID || payload.TaskID != "task-1" ||
+		payload.DeliveryID != record.PromptDeliveryID || payload.Revision != 2 || payload.Sequence != 2 {
+		t.Fatalf("interaction event = scope %#v correlation %#v payload %#v", event.Scope, event.Correlation, payload)
+	}
+	if encoded := runtimeEventLogFields(event); strings.Contains(fmt.Sprint(encoded), secret) {
+		t.Fatalf("interaction event summary leaked content: %#v", encoded)
 	}
 }
 

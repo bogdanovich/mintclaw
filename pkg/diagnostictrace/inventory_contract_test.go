@@ -187,6 +187,16 @@ func validateCodingDiagnosticPath(
 			}
 		}
 	}
+	if path.ID == "human_interaction" {
+		for _, identity := range []string{"interaction_id", "interaction_revision", "task_id", "delivery_id"} {
+			if !slices.Contains(path.AvailableIDs, identity) {
+				t.Fatalf("path %q lost %s evidence", path.ID, identity)
+			}
+			if _, unresolved := gaps[identity]; unresolved {
+				t.Fatalf("path %q reintroduced the resolved %s gap", path.ID, identity)
+			}
+		}
+	}
 
 	lifecycleGaps := make(map[string]struct{}, len(path.KnownLifecycleGaps))
 	for _, gap := range path.KnownLifecycleGaps {
@@ -238,6 +248,7 @@ func knownDiagnosticRecordKinds() map[string]struct{} {
 		diagnostictrace.RecordDeliveryDecision,
 		diagnostictrace.RecordDeliveryAttempt,
 		diagnostictrace.RecordDeliveryOutcome,
+		diagnostictrace.RecordInteractionLifecycle,
 		diagnostictrace.RecordContextCompaction,
 		diagnostictrace.RecordContextSnapshot,
 		diagnostictrace.RecordSubTurnAdmission,

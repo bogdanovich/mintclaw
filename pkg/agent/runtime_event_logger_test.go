@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -140,6 +141,39 @@ func TestRuntimeEventLogFieldsRetainAsyncCompletionCorrelation(t *testing.T) {
 	if fields["content_len"] != 12 || fields["for_user_len"] != 8 || fields["media_count"] != 1 ||
 		fields["will_user"] != true {
 		t.Fatalf("async completion facts = %#v", fields)
+	}
+}
+
+func TestRuntimeEventLogFieldsRetainInteractionCorrelation(t *testing.T) {
+	success := false
+	fields := runtimeEventLogFields(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentInteractionAnswer,
+		Payload: InteractionEventPayload{
+			InteractionID: "interaction-1", InteractionEventID: "interaction-1:004:answer",
+			TaskID: "task-1", DeliveryID: "delivery-prompt-1",
+			Kind: interactions.KindQuestion, Event: interactions.EventAnswerClaimed,
+			Status: interactions.StatusClaimed, Outcome: interactions.OutcomeAnswered,
+			Revision: 4, Sequence: 4, Code: "accepted", Success: &success,
+		},
+	})
+
+	for field, want := range map[string]any{
+		"interaction_id":       "interaction-1",
+		"interaction_event_id": "interaction-1:004:answer",
+		"task_id":              "task-1",
+		"delivery_id":          "delivery-prompt-1",
+		"interaction_kind":     string(interactions.KindQuestion),
+		"interaction_event":    string(interactions.EventAnswerClaimed),
+		"status":               string(interactions.StatusClaimed),
+		"outcome":              string(interactions.OutcomeAnswered),
+		"revision":             int64(4),
+		"sequence":             int64(4),
+		"code":                 "accepted",
+		"success":              false,
+	} {
+		if fields[field] != want {
+			t.Fatalf("interaction field %q = %#v, want %#v; fields=%#v", field, fields[field], want, fields)
+		}
 	}
 }
 

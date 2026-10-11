@@ -15,6 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -191,6 +192,173 @@ func TestTraceCaptureRetainsLateAsyncCompletionAndDeliveryCorrelation(t *testing
 	}
 	if attempt.Correlation.DeliveryID != "delivery-1" || outcome.Correlation.DeliveryID != "delivery-1" {
 		t.Fatalf("delivery attempt/outcome correlation = %#v / %#v", attempt.Correlation, outcome.Correlation)
+	}
+}
+
+func TestTraceCaptureProjectsInteractionLifecycleAndLateContinuations(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	parentScope := runtimeevents.NewTraceScope(workspace, "turn-interaction-parent")
+	scope := runtimeevents.Scope{
+		TraceScope: parentScope, AgentID: "main", SessionKey: "session-interaction",
+		Channel: "telegram", ChatID: "chat-interaction",
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "turn-start", Kind: runtimeevents.KindAgentTurnStart, Time: startedAt,
+		Scope: scope, Payload: TurnStartPayload{Workspace: workspace},
+	})
+
+	interactionID := "interaction-1"
+	toolCorrelation := runtimeevents.Correlation{ToolCallID: "tool-call-question"}
+	early := []struct {
+		id       string
+		kind     runtimeevents.Kind
+		event    interactions.EventType
+		status   interactions.Status
+		revision int64
+		delivery string
+	}{
+		{
+			"interaction-created", runtimeevents.KindAgentInteractionCreated,
+			interactions.EventCreated, interactions.StatusCreated, 1, "",
+		},
+		{
+			"interaction-prompt", runtimeevents.KindAgentInteractionDelivery,
+			interactions.EventPromptDelivery, interactions.StatusCreated, 2, "delivery-prompt",
+		},
+		{
+			"interaction-waiting", runtimeevents.KindAgentInteractionWaiting,
+			interactions.EventWaiting, interactions.StatusWaiting, 3, "delivery-prompt",
+		},
+	}
+	for index, fixture := range early {
+		publishCaptureEvent(t, eventBus, runtimeevents.Event{
+			ID: fixture.id, Kind: fixture.kind, Time: startedAt.Add(time.Duration(index+1) * time.Millisecond),
+			Scope: scope, Correlation: toolCorrelation,
+			Payload: InteractionEventPayload{
+				InteractionID: interactionID, InteractionEventID: fixture.id,
+				TaskID: "task-1", DeliveryID: fixture.delivery,
+				Kind: interactions.KindQuestion, Event: fixture.event, Status: fixture.status,
+				Revision: fixture.revision, Sequence: fixture.revision,
+			},
+		})
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "turn-end", Kind: runtimeevents.KindAgentTurnEnd, Time: startedAt.Add(4 * time.Millisecond),
+		Scope: scope, Payload: TurnEndPayload{Workspace: workspace, Status: TurnEndStatusCompleted},
+	})
+	parentPath := waitForTraceFile(t, workspace)
+
+	success := true
+	late := []struct {
+		id       string
+		kind     runtimeevents.Kind
+		event    interactions.EventType
+		status   interactions.Status
+		outcome  interactions.Outcome
+		revision int64
+		delivery string
+		code     string
+	}{
+		{
+			"interaction-answer", runtimeevents.KindAgentInteractionAnswer,
+			interactions.EventAnswerClaimed, interactions.StatusClaimed,
+			interactions.OutcomeAnswered, 4, "delivery-prompt", "answer_accepted",
+		},
+		{
+			"interaction-resume", runtimeevents.KindAgentInteractionResume,
+			interactions.EventResumeStarted, interactions.StatusResuming,
+			interactions.OutcomeAnswered, 5, "delivery-prompt", "resume_started",
+		},
+		{
+			"interaction-final-delivery", runtimeevents.KindAgentInteractionDelivery,
+			interactions.EventFinalDelivery, interactions.StatusResuming,
+			interactions.OutcomeAnswered, 6, "delivery-final", "final_bound",
+		},
+		{
+			"interaction-end", runtimeevents.KindAgentInteractionEnd,
+			interactions.EventResolved, interactions.StatusResolved,
+			interactions.OutcomeAnswered, 7, "delivery-final", "completed",
+		},
+	}
+	for index, fixture := range late {
+		publishCaptureEvent(t, eventBus, runtimeevents.Event{
+			ID: fixture.id, Kind: fixture.kind, Time: startedAt.Add(time.Duration(index+5) * time.Millisecond),
+			Scope: scope, Correlation: toolCorrelation,
+			Payload: InteractionEventPayload{
+				InteractionID: interactionID, InteractionEventID: fixture.id,
+				TaskID: "task-1", DeliveryID: fixture.delivery,
+				Kind: interactions.KindQuestion, Event: fixture.event, Status: fixture.status,
+				Outcome: fixture.outcome, Revision: fixture.revision, Sequence: fixture.revision,
+				Code: fixture.code, Success: &success,
+			},
+		})
+	}
+
+	paths := waitForTraceFiles(t, workspace, 1+len(late))
+	parentTrace := readCapturedTrace(t, parentPath)
+	if err := diagnostictrace.Validate(parentTrace); err != nil {
+		t.Fatalf("validate parent trace: %v", err)
+	}
+	interactionRecords := make([]diagnostictrace.Record, 0, len(early))
+	for _, record := range parentTrace.Records {
+		if record.Kind == diagnostictrace.RecordInteractionLifecycle {
+			interactionRecords = append(interactionRecords, record)
+		}
+	}
+	if len(interactionRecords) != len(early) {
+		t.Fatalf("parent interaction records = %#v", interactionRecords)
+	}
+	if interactionRecords[1].Correlation.InteractionID != interactionID ||
+		interactionRecords[1].Correlation.InteractionRevision != 2 ||
+		interactionRecords[1].Correlation.InteractionEventID != "interaction-prompt" ||
+		interactionRecords[1].Correlation.DeliveryID != "delivery-prompt" ||
+		interactionRecords[1].Correlation.ToolCallID != "tool-call-question" ||
+		interactionRecords[1].Scope.TaskID != "task-1" {
+		t.Fatalf("parent interaction correlation = scope %#v correlation %#v",
+			interactionRecords[1].Scope, interactionRecords[1].Correlation)
+	}
+
+	lateEvents := make(map[string]diagnostictrace.Trace, len(late))
+	for _, path := range paths {
+		trace := readCapturedTrace(t, path)
+		if path == parentPath {
+			continue
+		}
+		if err := diagnostictrace.Validate(trace); err != nil {
+			t.Fatalf("validate interaction continuation %s: %v", path, err)
+		}
+		if !strings.HasPrefix(trace.Metadata.RootTurnID, "interaction-") ||
+			trace.Metadata.ParentTurnID != parentScope.TurnID || len(trace.Records) != 1 ||
+			trace.Records[0].Kind != diagnostictrace.RecordInteractionLifecycle ||
+			trace.Truncation.Incomplete {
+			t.Fatalf("interaction continuation = %#v", trace)
+		}
+		var payload diagnostictrace.InteractionPayload
+		if err := json.Unmarshal(trace.Records[0].Data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		lateEvents[payload.Event] = trace
+	}
+	if len(lateEvents) != len(late) {
+		t.Fatalf("late interaction events = %#v", lateEvents)
+	}
+	terminal := lateEvents[string(interactions.EventResolved)].Records[0]
+	if terminal.Correlation.InteractionID != interactionID ||
+		terminal.Correlation.InteractionRevision != 7 ||
+		terminal.Correlation.InteractionEventID != "interaction-end" ||
+		terminal.Correlation.DeliveryID != "delivery-final" ||
+		terminal.Correlation.ParentTurnID != parentScope.TurnID ||
+		terminal.Scope.TaskID != "task-1" {
+		t.Fatalf("terminal interaction correlation = scope %#v correlation %#v",
+			terminal.Scope, terminal.Correlation)
 	}
 }
 

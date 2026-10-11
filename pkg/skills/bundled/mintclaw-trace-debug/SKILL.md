@@ -89,6 +89,9 @@ jq -r '
     (.scope.task_id // "-"),
     (.correlation.task_generation_id // "-"),
     (.correlation.completion_id // "-"),
+    (.correlation.interaction_id // "-"),
+    ((.correlation.interaction_revision // 0) | tostring),
+    (.correlation.interaction_event_id // "-"),
     (.correlation.delivery_id // "-"),
     (.correlation.event_id // "-")
   ] | @tsv
@@ -132,6 +135,15 @@ Correlate:
   delivery window; in user-and-parent mode the early direct delivery is
   correlated but non-settling and only the final synthesized outbound settles
   the continuation;
+- `interaction.lifecycle` records with the authoritative interaction registry
+  by `correlation.interaction_id` and exact
+  `correlation.interaction_revision`; use
+  `correlation.interaction_event_id` for the event log, `scope.task_id` for task
+  ownership, and `correlation.delivery_id` for a bound prompt/final outbox
+  intent. Late answer, resume, delivery, cancel, timeout, failure, and terminal
+  events use immediate one-record continuation traces whose
+  `metadata.parent_turn_id` names the originating turn; no question, answer,
+  approval, or failure-detail content is copied into the trace;
 - steering injection or interrupt with the next model/tool decision;
 - context compaction with the model behavior immediately before and after it;
 - turn start/end and the final outcome.
@@ -140,7 +152,9 @@ Provider-controlled request IDs remain optional and separate from the
 runtime-generated model-attempt ID. Historical traces may lack
 `scope.task_id`, `correlation.task_generation_id`,
 `correlation.completion_id`, `correlation.delivery_id`,
-`correlation.model_attempt_id`, or `correlation.tool_call_generation`; for
+`correlation.interaction_id`, `correlation.interaction_revision`,
+`correlation.interaction_event_id`, `correlation.model_attempt_id`, or
+`correlation.tool_call_generation`; for
 those traces, correlate records conservatively by turn and sequence and state
 the limitation. Older loop-decision records may also lack
 `correlation.tool_call_id`; use their tool and argument hash only as bounded

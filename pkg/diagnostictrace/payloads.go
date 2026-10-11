@@ -98,6 +98,19 @@ type DeliveryPayload struct {
 	ErrorPreview string `json:"error_preview,omitempty"`
 }
 
+// InteractionPayload retains only bounded lifecycle metadata. Question,
+// answer, approval, failure-detail, and execution-context content remain in
+// the authoritative interaction registry and are never copied into a trace.
+type InteractionPayload struct {
+	Kind     string `json:"kind"`
+	Event    string `json:"event"`
+	Status   string `json:"status"`
+	Outcome  string `json:"outcome,omitempty"`
+	Sequence int64  `json:"sequence"`
+	Code     string `json:"code,omitempty"`
+	Success  *bool  `json:"success,omitempty"`
+}
+
 type ContextPayload struct {
 	Reason            string   `json:"reason,omitempty"`
 	BeforeMessages    int      `json:"before_messages,omitempty"`
