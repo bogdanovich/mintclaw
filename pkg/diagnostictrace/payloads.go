@@ -89,6 +89,9 @@ type SteeringPayload struct {
 type DeliveryPayload struct {
 	Mode         string `json:"mode,omitempty"`
 	Status       string `json:"status,omitempty"`
+	TaskStatus   string `json:"task_status,omitempty"`
+	RemoteState  string `json:"remote_state,omitempty"`
+	FailureCode  string `json:"failure_code,omitempty"`
 	TargetHash   string `json:"target_hash,omitempty"`
 	Attempt      int    `json:"attempt,omitempty"`
 	WillUser     bool   `json:"will_user,omitempty"`

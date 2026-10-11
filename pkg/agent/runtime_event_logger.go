@@ -487,6 +487,8 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["tool"] = payload.Tool
 	case ToolExecEndPayload:
 		fields["tool"] = payload.Tool
+		setStringField(fields, "task_id", payload.TaskID)
+		setStringField(fields, "task_generation_id", payload.TaskGenerationID)
 		fields["duration_ms"] = payload.Duration.Milliseconds()
 		fields["for_llm_len"] = payload.ForLLMLen
 		fields["for_user_len"] = payload.ForUserLen
@@ -520,6 +522,15 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["is_error"] = payload.IsError
 		fields["will_user"] = payload.WillUser
 		fields["will_parent"] = payload.WillParent
+		if payload.RemoteCoding != nil {
+			setStringField(fields, "worker_generation_id", payload.RemoteCoding.WorkerGenerationID)
+			setStringField(fields, "remote_thread_id", payload.RemoteCoding.RemoteThreadID)
+			setStringField(fields, "scope_alias", payload.RemoteCoding.ScopeAlias)
+			setStringField(fields, "profile_alias", payload.RemoteCoding.ProfileAlias)
+			setStringField(fields, "task_status", payload.RemoteCoding.TaskStatus)
+			setStringField(fields, "remote_state", payload.RemoteCoding.RemoteState)
+			setStringField(fields, "failure_code", payload.RemoteCoding.FailureCode)
+		}
 	case InteractionEventPayload:
 		setStringField(fields, "interaction_id", payload.InteractionID)
 		setStringField(fields, "interaction_event_id", payload.InteractionEventID)

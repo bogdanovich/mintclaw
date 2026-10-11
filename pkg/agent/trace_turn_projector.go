@@ -510,6 +510,10 @@ func runtimeEventRecord(
 	taskID := ""
 	taskGenerationID := ""
 	completionID := ""
+	workerGenerationID := ""
+	remoteThreadID := ""
+	scopeAlias := ""
+	profileAlias := ""
 	interactionID := ""
 	interactionEventID := ""
 	interactionRevision := int64(0)
@@ -676,6 +680,8 @@ func runtimeEventRecord(
 			return diagnostictrace.Record{}, false, false
 		}
 		kind = diagnostictrace.RecordToolResult
+		taskID = strings.TrimSpace(value.TaskID)
+		taskGenerationID = strings.TrimSpace(value.TaskGenerationID)
 		resultPreview := ""
 		if diagnosticToolPreviewAllowed(value.Tool) {
 			resultPreview = captureTextPreview(
@@ -862,6 +868,20 @@ func runtimeEventRecord(
 			WillParent: value.WillParent,
 			ContentLen: value.ContentLen,
 		}
+		if value.RemoteCoding != nil {
+			workerGenerationID = strings.TrimSpace(value.RemoteCoding.WorkerGenerationID)
+			remoteThreadID = strings.TrimSpace(value.RemoteCoding.RemoteThreadID)
+			scopeAlias = safeCode(value.RemoteCoding.ScopeAlias)
+			profileAlias = safeCode(value.RemoteCoding.ProfileAlias)
+			payload = diagnostictrace.DeliveryPayload{
+				Mode: value.DeliveryMode, Status: "decided",
+				TaskStatus:  safeCode(value.RemoteCoding.TaskStatus),
+				RemoteState: safeCode(value.RemoteCoding.RemoteState),
+				FailureCode: safeCode(value.RemoteCoding.FailureCode),
+				WillUser:    value.WillUser, WillParent: value.WillParent,
+				ContentLen: value.ContentLen,
+			}
+		}
 	case runtimeevents.KindAgentInteractionCreated,
 		runtimeevents.KindAgentInteractionDelivery,
 		runtimeevents.KindAgentInteractionWaiting,
@@ -907,12 +927,14 @@ func runtimeEventRecord(
 		OffsetNanos: max(0, event.Time.Sub(trace.startedAt).Nanoseconds()), Kind: kind,
 		Origin: diagnostictrace.Origin{Kind: "runtime_event", ID: event.ID},
 		Scope: diagnostictrace.Scope{
-			AgentID:     event.Scope.AgentID,
-			SessionHash: safeHash(settings, event.Scope.SessionKey),
-			TurnID:      firstNonEmptyString(event.Scope.TurnID, trace.turnID),
-			TaskID:      taskID,
-			Channel:     event.Scope.Channel,
-			TargetHash:  safeHash(settings, targetKey(event.Scope.Channel, event.Scope.ChatID)),
+			AgentID:      event.Scope.AgentID,
+			SessionHash:  safeHash(settings, event.Scope.SessionKey),
+			TurnID:       firstNonEmptyString(event.Scope.TurnID, trace.turnID),
+			TaskID:       taskID,
+			Channel:      event.Scope.Channel,
+			TargetHash:   safeHash(settings, targetKey(event.Scope.Channel, event.Scope.ChatID)),
+			ScopeAlias:   scopeAlias,
+			ProfileAlias: profileAlias,
 		},
 		Correlation: diagnostictrace.Correlation{
 			ParentTurnID:        event.Correlation.ParentTurnID,
@@ -922,6 +944,8 @@ func runtimeEventRecord(
 			ToolCallGeneration:  toolCallGeneration,
 			TaskGenerationID:    taskGenerationID,
 			CompletionID:        completionID,
+			WorkerGenerationID:  workerGenerationID,
+			RemoteThreadID:      remoteThreadID,
 			InteractionID:       interactionID,
 			InteractionRevision: interactionRevision,
 			InteractionEventID:  interactionEventID,
@@ -940,7 +964,7 @@ func diagnosticToolPreviewAllowed(tool string) bool {
 	switch tool {
 	case "nodes", "nodes_invoke", "nodes_file_info", "nodes_upload", "nodes_download", "nodes_status", "nodes_cancel",
 		"request_user_input", "workspace_exec", "browser_observe", "browser_capture", "browser_diagnostics",
-		"browser_act", "browser_contexts", "browser_execute":
+		"browser_act", "browser_contexts", "browser_execute", "coding_task":
 		return false
 	default:
 		return true

@@ -17,6 +17,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -115,8 +116,13 @@ func TestTraceCaptureRetainsLateAsyncCompletionAndDeliveryCorrelation(t *testing
 			ToolCallGeneration: "tool-call-generation-1",
 		},
 		Payload: AsyncCompletionPayload{
-			SourceTool: "spawn", TaskID: "task-1", TaskGenerationID: "task-generation-1",
+			SourceTool: "coding_task", TaskID: "task-1", TaskGenerationID: "task-generation-1",
 			CompletionID: "completion-1", DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
+			RemoteCoding: &RemoteCodingCompletionEvidence{
+				WorkerGenerationID: "worker-generation-1", RemoteThreadID: "remote-thread-1",
+				ScopeAlias: "mintclaw-dev", ProfileAlias: "project-yolo",
+				TaskStatus: "succeeded", RemoteState: "completed",
+			},
 			WillUser: true, ContentLen: 12,
 		},
 	})
@@ -182,16 +188,163 @@ func TestTraceCaptureRetainsLateAsyncCompletionAndDeliveryCorrelation(t *testing
 		t.Fatalf("async-delivery records = %#v", trace.Records)
 	}
 	if decision.Scope.TaskID != "task-1" ||
+		decision.Scope.ScopeAlias != "mintclaw-dev" ||
+		decision.Scope.ProfileAlias != "project-yolo" ||
 		decision.Correlation.TaskGenerationID != "task-generation-1" ||
 		decision.Correlation.CompletionID != "completion-1" ||
+		decision.Correlation.WorkerGenerationID != "worker-generation-1" ||
+		decision.Correlation.RemoteThreadID != "remote-thread-1" ||
 		decision.Correlation.ParentTurnID != parentTraceScope.TurnID ||
 		decision.Correlation.ModelAttemptID != "model-attempt-1" ||
 		decision.Correlation.ToolCallID != "tool-call-1" ||
 		decision.Correlation.ToolCallGeneration != "tool-call-generation-1" {
 		t.Fatalf("delivery decision correlation = scope %#v correlation %#v", decision.Scope, decision.Correlation)
 	}
+	var decisionPayload diagnostictrace.DeliveryPayload
+	if err := json.Unmarshal(decision.Data, &decisionPayload); err != nil {
+		t.Fatal(err)
+	}
+	if decisionPayload.TaskStatus != "succeeded" || decisionPayload.RemoteState != "completed" ||
+		decisionPayload.FailureCode != "" {
+		t.Fatalf("remote coding delivery decision = %#v", decisionPayload)
+	}
 	if attempt.Correlation.DeliveryID != "delivery-1" || outcome.Correlation.DeliveryID != "delivery-1" {
 		t.Fatalf("delivery attempt/outcome correlation = %#v / %#v", attempt.Correlation, outcome.Correlation)
+	}
+}
+
+func TestToolResultTraceRetainsDurableTaskIdentity(t *testing.T) {
+	started := time.Now()
+	record, _, ok := runtimeEventRecord(
+		traceCaptureSettings{contentMode: diagnostictrace.ContentMetadataOnly},
+		&activeTraceCapture{startedAt: started, turnID: "turn-coding-task"},
+		runtimeevents.Event{
+			ID: "event-coding-task", Kind: runtimeevents.KindAgentToolExecEnd,
+			Time: started.Add(time.Millisecond),
+			Payload: ToolExecEndPayload{
+				ToolCallID: "tool-call-1", ToolCallGeneration: "tool-generation-1",
+				TaskID: "coding-task-1", TaskGenerationID: "task-generation-1",
+				Tool: "coding_task",
+			},
+		},
+	)
+	if !ok || record.Kind != diagnostictrace.RecordToolResult {
+		t.Fatalf("coding task result produced kind %q, ok=%v", record.Kind, ok)
+	}
+	if record.Scope.TaskID != "coding-task-1" ||
+		record.Correlation.TaskGenerationID != "task-generation-1" ||
+		record.Correlation.ToolCallID != "tool-call-1" ||
+		record.Correlation.ToolCallGeneration != "tool-generation-1" {
+		t.Fatalf("coding task result correlation = scope %#v correlation %#v", record.Scope, record.Correlation)
+	}
+}
+
+func TestRemoteCodingTraceExcludesTaskContentPreviews(t *testing.T) {
+	const (
+		argumentCanary = "private-remote-objective-6f4e90"
+		resultCanary   = "private-remote-summary-4102ad"
+	)
+	settings := traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted}
+	started := time.Now()
+	trace := &activeTraceCapture{startedAt: started, turnID: "turn-coding-task"}
+
+	call, _, ok := runtimeEventRecord(
+		settings,
+		trace,
+		runtimeevents.Event{
+			ID: "event-coding-task-call", Kind: runtimeevents.KindAgentToolExecStart,
+			Time: started.Add(time.Millisecond),
+			Payload: ToolExecStartPayload{
+				ToolCallID: "tool-call-1", ToolCallGeneration: "tool-generation-1",
+				Tool: "coding_task", Arguments: map[string]any{
+					"action": "start", "objective": argumentCanary,
+				},
+			},
+		},
+	)
+	if !ok || call.Kind != diagnostictrace.RecordToolCall || bytes.Contains(call.Data, []byte(argumentCanary)) {
+		t.Fatalf("coding task call retained protected content: ok=%v record=%#v", ok, call)
+	}
+	var callPayload diagnostictrace.ToolPayload
+	if err := json.Unmarshal(call.Data, &callPayload); err != nil {
+		t.Fatal(err)
+	}
+	if callPayload.ArgumentsPreview != "" || callPayload.ArgsHash == "" {
+		t.Fatalf("coding task call projection = %#v", callPayload)
+	}
+
+	result, _, ok := runtimeEventRecord(
+		settings,
+		trace,
+		runtimeevents.Event{
+			ID: "event-coding-task-result", Kind: runtimeevents.KindAgentToolExecEnd,
+			Time: started.Add(2 * time.Millisecond),
+			Payload: ToolExecEndPayload{
+				ToolCallID: "tool-call-1", ToolCallGeneration: "tool-generation-1",
+				TaskID: "coding-task-1", TaskGenerationID: "task-generation-1",
+				Tool: "coding_task", DiagnosticResult: resultCanary, ResultHash: "result-hash",
+			},
+		},
+	)
+	if !ok || result.Kind != diagnostictrace.RecordToolResult || bytes.Contains(result.Data, []byte(resultCanary)) {
+		t.Fatalf("coding task result retained protected content: ok=%v record=%#v", ok, result)
+	}
+	var resultPayload diagnostictrace.ToolPayload
+	if err := json.Unmarshal(result.Data, &resultPayload); err != nil {
+		t.Fatal(err)
+	}
+	if resultPayload.ResultPreview != "" || resultPayload.ResultHash != "result-hash" ||
+		result.Scope.TaskID != "coding-task-1" ||
+		result.Correlation.TaskGenerationID != "task-generation-1" {
+		t.Fatalf("coding task result projection = payload %#v record %#v", resultPayload, result)
+	}
+}
+
+func TestRemoteCodingCompletionTraceDistinguishesTerminalStates(t *testing.T) {
+	tests := []struct {
+		name        string
+		taskStatus  string
+		remoteState string
+		failureCode string
+	}{
+		{name: "completed", taskStatus: "succeeded", remoteState: "completed"},
+		{name: "failed", taskStatus: "failed", remoteState: "failed", failureCode: "worker_failed"},
+		{name: "canceled", taskStatus: string(taskregistry.StatusCancelled), remoteState: "canceled"},
+		{name: "uncertain", taskStatus: "failed", remoteState: "uncertain", failureCode: "worker_lost"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			started := time.Now()
+			record, _, ok := runtimeEventRecord(
+				traceCaptureSettings{contentMode: diagnostictrace.ContentMetadataOnly},
+				&activeTraceCapture{startedAt: started, turnID: "coding-completion-1"},
+				runtimeevents.Event{
+					ID: "event-" + test.name, Kind: runtimeevents.KindAgentAsyncCompletion,
+					Time: started.Add(time.Millisecond),
+					Payload: AsyncCompletionPayload{
+						SourceTool: "coding_task", TaskID: "coding-task-1",
+						TaskGenerationID: "task-generation-1", CompletionID: "completion-1",
+						RemoteCoding: &RemoteCodingCompletionEvidence{
+							WorkerGenerationID: "worker-generation-1", RemoteThreadID: "thread-1",
+							ScopeAlias: "mintclaw-dev", ProfileAlias: "project-yolo",
+							TaskStatus: test.taskStatus, RemoteState: test.remoteState,
+							FailureCode: test.failureCode,
+						},
+					},
+				},
+			)
+			if !ok || record.Kind != diagnostictrace.RecordDeliveryDecision {
+				t.Fatalf("remote completion produced kind %q, ok=%v", record.Kind, ok)
+			}
+			var payload diagnostictrace.DeliveryPayload
+			if err := json.Unmarshal(record.Data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.TaskStatus != test.taskStatus || payload.RemoteState != test.remoteState ||
+				payload.FailureCode != test.failureCode {
+				t.Fatalf("remote completion terminal evidence = %#v", payload)
+			}
+		})
 	}
 }
 

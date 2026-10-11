@@ -5,7 +5,8 @@ Roadmap packet:
 
 Status: H1a baseline with the H1b terminal-truth, model-attempt, tool-call
 generation, async task/delivery, and human-interaction slices implemented and
-production-qualified.
+production-qualified. Remote-coding correlation is implemented; production
+qualification is pending.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -87,10 +88,17 @@ The following gaps drive H1b work in the existing event/trace pipeline:
 5. **Node and companion invocations.** The runtime event contains the gateway
    invocation ID and safe command/target facts. The current trace hashes the ID
    into a result digest, which cannot join the authoritative invocation store.
-6. **Remote coding generations.** Task, task generation, worker generation,
-   remote thread, scope/profile, and question identities remain authoritative
-   in task/worker/interaction stores. The parent turn trace needs safe
-   references for admission and terminal delivery.
+6. **Remote coding generations (implemented; production qualification
+   pending).** A `coding_task` result now projects exact task and task-generation
+   identity into the parent `tool.result`. Terminal gateway delivery creates a
+   bounded completion continuation that retains the same task/generation,
+   worker generation, remote thread, safe configured scope/profile aliases,
+   terminal task and node states, failure code, completion ID, and final
+   delivery receipt. Remote objectives, summaries, transcripts, commands,
+   paths, diffs, and artifacts remain only in their authoritative owners. A
+   remote monitor may outlive or recover independently of its initiating turn,
+   so task plus generation is the exact parent/terminal join; correlation does
+   not depend on time matching or an invented parent-turn identity.
 7. **Compaction and repository observations.** The coding runtime owns
    compaction attempt IDs and deterministic repository snapshots, while the
    passive trace currently records only the coarser context outcome. H1b must
@@ -356,7 +364,7 @@ evidence above are the qualifying path.
 | Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Add attempt/status and bounded repository re-anchor identity |
 | Human interaction | Interaction registry/events | Bounded lifecycle records in the parent trace or immediate late-event continuation | Interaction/event ID, revision, task, tool-call, and delivery joins implemented and production-qualified |
 | Channel/async delivery | Task registry, outbox, channel receipt | Bounded completion continuation with delivery decision/attempt/outcome | Task/generation, completion, tool-generation, parent-turn, and delivery joins implemented and production-qualified |
-| Remote coding task | Task registry, worker ledger/thread | Parent async/delivery evidence | Add task/generation/worker/thread references and terminal uncertainty |
+| Remote coding task | Task registry, worker ledger/thread | Parent tool result plus bounded terminal completion/delivery continuation | Task/generation/worker/thread, safe scope/profile, terminal uncertainty, completion, and delivery joins implemented; production qualification pending |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Retain invocation ID and safe policy/target aliases |
 | Repository/worktree | Git/filesystem, worktree owner | Context snapshot only | Add commit/worktree/snapshot digests and counts; no paths or diffs |
 | TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c exports bounded current-view/version facts, not cell history |
