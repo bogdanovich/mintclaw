@@ -268,53 +268,59 @@ type SessionSummarizePayload struct {
 
 // ToolExecStartPayload describes a tool execution request.
 type ToolExecStartPayload struct {
-	ToolCallID  string
-	Tool        string
-	Arguments   map[string]any
-	Observation *toolshared.ToolObservation
+	ToolCallID         string
+	ToolCallGeneration string
+	Tool               string
+	Arguments          map[string]any
+	Observation        *toolshared.ToolObservation
 }
 
 // ToolExecProgressPayload carries a bounded tool-owned observation correlated
 // to the same provider call identity as start and end.
 type ToolExecProgressPayload struct {
-	ToolCallID  string
-	Tool        string
-	Observation *toolshared.ToolObservation
+	ToolCallID         string
+	ToolCallGeneration string
+	Tool               string
+	Observation        *toolshared.ToolObservation
 }
 
 // ToolExecEndPayload describes the outcome of a tool execution.
 type ToolExecEndPayload struct {
-	ToolCallID       string
-	Tool             string
-	Duration         time.Duration
-	ForLLMLen        int
-	ForUserLen       int
-	IsError          bool
-	Async            bool
-	ResultHash       string
-	Suspended        bool
-	InteractionID    string
-	DiagnosticResult string
-	WriteAudit       []toolshared.WriteAuditEntry
-	Observation      *toolshared.ToolObservation
+	ToolCallID         string
+	ToolCallGeneration string
+	Tool               string
+	Duration           time.Duration
+	ForLLMLen          int
+	ForUserLen         int
+	IsError            bool
+	Async              bool
+	ResultHash         string
+	Suspended          bool
+	InteractionID      string
+	DiagnosticResult   string
+	WriteAudit         []toolshared.WriteAuditEntry
+	Observation        *toolshared.ToolObservation
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.
 type ToolExecSkippedPayload struct {
-	ToolCallID  string
-	Tool        string
-	Reason      string
-	Observation *toolshared.ToolObservation
+	ToolCallID         string
+	ToolCallGeneration string
+	Tool               string
+	Reason             string
+	Observation        *toolshared.ToolObservation
 }
 
 // ToolLoopDecisionPayload contains only hash-safe loop protection metadata.
 type ToolLoopDecisionPayload struct {
-	Tool      string
-	ArgsHash  string
-	Action    string
-	Code      string
-	Count     int
-	Threshold int
+	ToolCallID         string
+	ToolCallGeneration string
+	Tool               string
+	ArgsHash           string
+	Action             string
+	Code               string
+	Count              int
+	Threshold          int
 }
 
 // SteeringInjectedPayload describes steering messages appended before the next LLM call.

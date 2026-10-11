@@ -90,7 +90,11 @@ func TestRuntimeEventLogFieldsSummarizeAgentPayload(t *testing.T) {
 			AgentID:    "main",
 			SessionKey: "session-1",
 		},
-		Correlation: runtimeevents.Correlation{ModelAttemptID: "model-attempt-1"},
+		Correlation: runtimeevents.Correlation{
+			ModelAttemptID:     "model-attempt-1",
+			ToolCallID:         "tool-call-1",
+			ToolCallGeneration: "tool-call-generation-1",
+		},
 		Payload: ToolExecStartPayload{
 			Tool: "exec",
 			Arguments: map[string]any{
@@ -104,6 +108,10 @@ func TestRuntimeEventLogFieldsSummarizeAgentPayload(t *testing.T) {
 	}
 	if fields["model_attempt_id"] != "model-attempt-1" {
 		t.Fatalf("missing model attempt correlation: %#v", fields)
+	}
+	if fields["tool_call_id"] != "tool-call-1" ||
+		fields["tool_call_generation"] != "tool-call-generation-1" {
+		t.Fatalf("missing tool call correlation: %#v", fields)
 	}
 	if fields["tool"] != "exec" || fields["args_count"] != 1 {
 		t.Fatalf("missing safe agent payload summary fields: %#v", fields)

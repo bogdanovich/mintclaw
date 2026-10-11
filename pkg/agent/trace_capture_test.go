@@ -23,12 +23,54 @@ func TestChildTurnEventMetadataCarriesParentCorrelation(t *testing.T) {
 		workspace: "/workspace/browser", turnID: "browser-turn-2", agentID: "browser",
 		sessionKey: "durable-session", parentTurnID: "main-turn-1", childTurnID: "subturn-1",
 	}
-	meta := state.eventMeta("test", "turn.start")
+	meta := state.eventMeta("test", "turn.start").
+		withModelAttemptID("model-attempt-1").
+		withToolCallCorrelation("tool-call-1", "tool-call-generation-1")
+	correlation := runtimeCorrelationFromHookMeta(meta)
 	if meta.ParentTurnID != "main-turn-1" ||
 		meta.ChildTurnID != "subturn-1" ||
-		runtimeCorrelationFromHookMeta(meta).ParentTurnID != "main-turn-1" ||
-		runtimeCorrelationFromHookMeta(meta).ChildTurnID != "subturn-1" {
+		correlation.ParentTurnID != "main-turn-1" ||
+		correlation.ChildTurnID != "subturn-1" ||
+		correlation.ModelAttemptID != "model-attempt-1" ||
+		correlation.ToolCallID != "tool-call-1" ||
+		correlation.ToolCallGeneration != "tool-call-generation-1" {
 		t.Fatalf("child event metadata = %#v", meta)
+	}
+}
+
+func TestToolLoopDecisionTraceRetainsExactCallGeneration(t *testing.T) {
+	started := time.Now()
+	correlation := runtimeevents.Correlation{
+		ModelAttemptID:     "model-attempt-1",
+		ToolCallID:         "provider-call-1",
+		ToolCallGeneration: "tool-call-generation-1",
+	}
+	eventCorrelation := runtimeevents.Correlation{ModelAttemptID: correlation.ModelAttemptID}
+	record, _, ok := runtimeEventRecord(
+		traceCaptureSettings{contentMode: diagnostictrace.ContentMetadataOnly},
+		&activeTraceCapture{startedAt: started, turnID: "turn-tool-loop"},
+		runtimeevents.Event{
+			ID: "event-tool-loop", Kind: runtimeevents.KindAgentToolLoopDecision,
+			Time: started.Add(time.Millisecond), Correlation: eventCorrelation,
+			Payload: ToolLoopDecisionPayload{
+				ToolCallID:         correlation.ToolCallID,
+				ToolCallGeneration: correlation.ToolCallGeneration,
+				Tool:               "read_file",
+				ArgsHash:           "args-hash",
+				Action:             "block",
+				Code:               "repeated_exact_failure_block",
+				Count:              3,
+				Threshold:          3,
+			},
+		},
+	)
+	if !ok || record.Kind != diagnostictrace.RecordToolLoopDecision {
+		t.Fatalf("loop decision event produced kind %q, ok=%v", record.Kind, ok)
+	}
+	if record.Correlation.ModelAttemptID != correlation.ModelAttemptID ||
+		record.Correlation.ToolCallID != correlation.ToolCallID ||
+		record.Correlation.ToolCallGeneration != correlation.ToolCallGeneration {
+		t.Fatalf("loop decision correlation = %+v", record.Correlation)
 	}
 }
 

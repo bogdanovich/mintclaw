@@ -3050,6 +3050,7 @@ func (t *pipelineLoopGuardReadTool) Execute(_ context.Context, args map[string]a
 
 type capturedRuntimeEvent struct {
 	kind    runtimeevents.Kind
+	meta    HookMeta
 	payload any
 }
 
@@ -3110,8 +3111,8 @@ func (s *oneShotLoopGuardSteering) returnSteeringMessagesForTurn(
 	s.messages = append(messages, s.messages...)
 }
 
-func (e *captureRuntimeEmitter) emitEvent(kind runtimeevents.Kind, _ HookMeta, payload any) {
-	e.events = append(e.events, capturedRuntimeEvent{kind: kind, payload: payload})
+func (e *captureRuntimeEmitter) emitEvent(kind runtimeevents.Kind, meta HookMeta, payload any) {
+	e.events = append(e.events, capturedRuntimeEvent{kind: kind, meta: meta, payload: payload})
 }
 
 func (t *pipelineLoopGuardTool) Name() string        { return "pipeline_loop_test" }
@@ -3130,6 +3131,73 @@ func (t *pipelineLoopGuardTool) ToolLoopSemantics() loopguard.Semantics {
 func (t *pipelineLoopGuardTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
 	t.executions++
 	return toolshared.ErrorResult("stable pipeline failure")
+}
+
+func TestToolCallGenerationDistinguishesReusedProviderCallIDs(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	tool := &pipelineLoopGuardReadTool{}
+	registry.Register(tool)
+	agent := &AgentInstance{
+		ID: "main", Tools: registry, Sessions: session.NewMemoryStore(),
+	}
+	ts := &turnState{
+		agent: agent, agentID: "main", turnID: "turn-tool-generation",
+		sessionKey: "session-tool-generation", opts: freezeTurnInput(turnSpec{NoHistory: true}),
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
+	emitter := &captureRuntimeEmitter{}
+	pipeline := &Pipeline{events: emitter}
+
+	for iteration, text := range []string{"first", "second"} {
+		llm := newLLMIterationState(iteration + 1)
+		llm.beginModelAttempt()
+		llm.normalizedToolCalls = []providers.ToolCall{{
+			ID: "reused-provider-call", Name: tool.Name(), Arguments: map[string]any{"text": text},
+		}}
+		llm.toolResponseDisposition = toolResponseHandled
+		if outcome := pipeline.ExecuteTools(
+			t.Context(),
+			t.Context(),
+			ts,
+			exec,
+			llm,
+		); outcome.Control != turnStepContinue {
+			t.Fatalf("iteration %d outcome = %+v", iteration+1, outcome)
+		}
+	}
+
+	startEvents := make([]capturedRuntimeEvent, 0, 2)
+	endEvents := make([]capturedRuntimeEvent, 0, 2)
+	for _, event := range emitter.events {
+		switch event.kind {
+		case runtimeevents.KindAgentToolExecStart:
+			startEvents = append(startEvents, event)
+		case runtimeevents.KindAgentToolExecEnd:
+			endEvents = append(endEvents, event)
+		}
+	}
+	if len(startEvents) != 2 || len(endEvents) != 2 {
+		t.Fatalf("tool lifecycle events = starts %d ends %d", len(startEvents), len(endEvents))
+	}
+	for i := range startEvents {
+		start := startEvents[i]
+		end := endEvents[i]
+		startPayload := start.payload.(ToolExecStartPayload)
+		endPayload := end.payload.(ToolExecEndPayload)
+		if start.meta.ToolCallID != "reused-provider-call" || end.meta.ToolCallID != start.meta.ToolCallID ||
+			start.meta.ToolCallGeneration == "" || end.meta.ToolCallGeneration != start.meta.ToolCallGeneration ||
+			start.meta.ModelAttemptID == "" || end.meta.ModelAttemptID != start.meta.ModelAttemptID ||
+			startPayload.ToolCallGeneration != start.meta.ToolCallGeneration ||
+			endPayload.ToolCallGeneration != start.meta.ToolCallGeneration {
+			t.Fatalf("tool lifecycle %d correlation = start %#v end %#v", i, start, end)
+		}
+	}
+	if startEvents[0].meta.ToolCallGeneration == startEvents[1].meta.ToolCallGeneration {
+		t.Fatalf("reused provider call ID shared generation %q", startEvents[0].meta.ToolCallGeneration)
+	}
+	if startEvents[0].meta.ModelAttemptID == startEvents[1].meta.ModelAttemptID {
+		t.Fatalf("separate model attempts shared ID %q", startEvents[0].meta.ModelAttemptID)
+	}
 }
 
 func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
@@ -3212,13 +3280,35 @@ func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
 		t.Fatalf("post-steering result = %#v", exec.messages[3])
 	}
 	var decisions []ToolLoopDecisionPayload
+	var decisionEvents []capturedRuntimeEvent
 	for _, event := range emitter.events {
 		if event.kind == runtimeevents.KindAgentToolLoopDecision {
 			decisions = append(decisions, event.payload.(ToolLoopDecisionPayload))
+			decisionEvents = append(decisionEvents, event)
 		}
 	}
 	if len(decisions) != 4 || decisions[2].Action != "block" {
 		t.Fatalf("loop decision events = %#v", decisions)
+	}
+	for i, event := range decisionEvents {
+		decision := event.payload.(ToolLoopDecisionPayload)
+		if decision.ToolCallID == "" || decision.ToolCallGeneration == "" ||
+			event.meta.ToolCallID != decision.ToolCallID ||
+			event.meta.ToolCallGeneration != decision.ToolCallGeneration {
+			t.Fatalf("loop decision %d lacks exact call correlation: %#v", i, event)
+		}
+		terminalFound := false
+		for _, candidate := range emitter.events {
+			if candidate.meta.ToolCallGeneration != decision.ToolCallGeneration ||
+				candidate.meta.ToolCallID != decision.ToolCallID {
+				continue
+			}
+			terminalFound = terminalFound || candidate.kind == runtimeevents.KindAgentToolExecEnd ||
+				candidate.kind == runtimeevents.KindAgentToolExecSkipped
+		}
+		if !terminalFound {
+			t.Fatalf("loop decision %d has no correlated terminal tool event: %#v", i, event)
+		}
 	}
 	encoded, err := json.Marshal(decisions)
 	if err != nil {

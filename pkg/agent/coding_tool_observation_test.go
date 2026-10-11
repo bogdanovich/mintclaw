@@ -129,11 +129,13 @@ func TestCodingToolSkippedPayloadPreservesNativeObservationAndReason(t *testing.
 		ts,
 		registry,
 		"call-1",
+		"tool-call-generation-1",
 		"exec",
 		map[string]any{"action": "run", "command": "printf hello"},
 		"deferred by project instructions",
 	)
-	if payload.ToolCallID != "call-1" || payload.Tool != "exec" ||
+	if payload.ToolCallID != "call-1" || payload.ToolCallGeneration != "tool-call-generation-1" ||
+		payload.Tool != "exec" ||
 		payload.Reason != "deferred by project instructions" || payload.Observation == nil ||
 		payload.Observation.Command == nil || payload.Observation.Command.Action != "run" {
 		t.Fatalf("skipped tool payload = %+v", payload)

@@ -40,10 +40,8 @@
       "runtime_events": ["agent.tool.exec_start", "agent.tool.exec_progress", "agent.tool.exec_end", "agent.tool.exec_skipped", "agent.tool.loop_decision"],
       "trace_records": ["tool.call", "tool.result", "tool.skipped", "tool.loop_decision"],
       "required_ids": ["turn_id", "tool_call_id", "tool_call_generation", "event_id"],
-      "available_ids": ["turn_id", "tool_call_id", "event_id"],
-      "missing_trace_joins": [
-        {"id": "tool_call_generation", "disposition": "close_h1b", "observation": "Loop decisions have tool and argument hash but no exact call/generation correlation."}
-      ],
+      "available_ids": ["turn_id", "tool_call_id", "tool_call_generation", "event_id"],
+      "missing_trace_joins": [],
       "terminal_facts": ["tool.result", "tool.skipped", "tool.loop_decision", "agent.turn.end"],
       "retention_owner": "coding_thread_and_process_owner",
       "export_class": "private_redacted"
