@@ -19,7 +19,7 @@ may run in normal CI without credentials, a live gateway, paid models, or instal
 | E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation and adaptive runner/grade merged (#1531, #1541); live calibration/qualification pending |
 | E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Fixtures/oracle, preparation, approval contracts, dialogue, write intent, native write observation, metadata settlement and artifact collection merged (#1544, #1546, #1547, #1550, #1552, #1553, #1557, #1558); uniqueness/privacy/cleanup and live qualification pending |
 | E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Local fixture witness implemented; native snapshot observation and case integration/qualification pending |
-| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Not started |
+| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Bounded serial repeats and all-trial regrade implemented independently; provisioning/comparison/qualification pending |
 
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
 prerequisites when necessary. Do not reimplement protected intake, browser sessions, approval, or delivery in the harness.

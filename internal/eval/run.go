@@ -17,17 +17,26 @@ var (
 	ErrNotPassed  = errors.New("eval: run did not pass; inspect private report")
 )
 
+const MaxRepeat = 64
+
 type RunOptions struct {
 	Home            string
 	OutputParent    string
 	SuiteTimeout    time.Duration
 	PDFOraclePython string
+	Repeat          int
 }
 
 // Run attaches only after prepared-target admission. It never provisions or
 // restarts a target, replays a task, or treats disconnected work as canceled.
 func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOptions) (RunReport, error) {
 	if len(cases) == 0 || len(cases) > MaxCorpusCases {
+		return RunReport{}, ErrRunOptions
+	}
+	if options.Repeat == 0 {
+		options.Repeat = 1
+	}
+	if options.Repeat < 1 || options.Repeat > MaxRepeat || options.Repeat > MaxCorpusCases/len(cases) {
 		return RunReport{}, ErrRunOptions
 	}
 	if options.SuiteTimeout == 0 {
@@ -61,6 +70,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	result := RunReport{
 		Version: Version, ID: uuid.NewString(), PresetID: preset.ID, Runtime: target.probe, Mode: "run",
+		Repeat:  options.Repeat,
 		Verdict: Pass, StartedAt: time.Now().UTC(), Trials: []TrialSummary{}, Coverage: map[Verdict]int{},
 		Usage: "unknown", Cleanup: "local_transports_closed; remote_state_unknown",
 	}
@@ -79,7 +89,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		defer roles.judge.Close()
 	}
 	roleCalls := []RoleCall{}
-	for _, item := range cases {
+	// Case-major repetitions are independent trials, not retries of one session.
+	for ordinal := range len(cases) * options.Repeat {
+		item := cases[ordinal/options.Repeat]
 		trial := newUnattemptedTrial(item, preset.ExpectedAgent)
 		switch {
 		case !containsAll(preset.Capabilities, item.Case.Requires):
@@ -93,6 +105,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		default:
 			trial = runAdmittedTrial(suiteCtx, target, item, trial.SessionID, roles, options, writer)
 		}
+		trial.Repetition = ordinal%options.Repeat + 1
 		name := "trial-" + trial.ID + ".json"
 		roleCalls = append(roleCalls, trial.DriverCalls...)
 		if trial.Judge != nil && trial.Judge.Call != nil {
@@ -101,7 +114,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		result.RoleUsage = []RoleUsage{summarizeRoleCalls("user", roleCalls), summarizeRoleCalls("judge", roleCalls)}
 		result.Trials = append(result.Trials, TrialSummary{
 			ID: trial.ID, CaseID: trial.CaseID, CaseSHA256: trial.CaseSHA256,
-			Verdict: trial.Verdict, Code: trial.Code, DurationMS: trial.DurationMS, File: name,
+			Repetition: trial.Repetition,
+			Verdict:    trial.Verdict, Code: trial.Code, DurationMS: trial.DurationMS, File: name,
 		})
 		result.Coverage[trial.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, trial.Verdict)

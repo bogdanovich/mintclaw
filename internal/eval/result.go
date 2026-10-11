@@ -43,6 +43,7 @@ type Trial struct {
 	ID               string            `json:"id"`
 	CaseID           string            `json:"case_id"`
 	CaseSHA256       string            `json:"case_sha256"`
+	Repetition       int               `json:"repetition,omitempty"`
 	SessionID        string            `json:"session_id"`
 	AgentID          string            `json:"agent_id"`
 	SessionKey       string            `json:"session_key,omitempty"`

@@ -87,3 +87,20 @@ func TestRunRequiresExplicitPreparedTargetAndNeverEchoesCase(t *testing.T) {
 		}
 	}
 }
+
+func TestRunRejectsInvalidRepeatBeforeLoadingCorpusOrProfile(t *testing.T) {
+	for _, repeat := range []string{"0", "-1", "65"} {
+		command := NewEvalCommand()
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetErr(&output)
+		command.SetArgs([]string{
+			"run", "--repeat", repeat, "--root", "/nonexistent-private-corpus",
+			"--preset", "/nonexistent-private-preset", "--out", "/nonexistent-private-report",
+		})
+		if err := command.Execute(); !errors.Is(err, manualeval.ErrRunOptions) ||
+			strings.Contains(output.String(), `"verdict":"pass"`) {
+			t.Fatal("invalid explicit repetition count reached profile/corpus admission")
+		}
+	}
+}

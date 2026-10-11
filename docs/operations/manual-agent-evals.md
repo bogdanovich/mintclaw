@@ -4,21 +4,22 @@
 
 `mintclaw eval list` and `validate` remain offline. `run` attaches to an already prepared isolated loopback gateway
 on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,
-bootstrap skills, deploy a binary, restart a gateway, grant approval, or retry uncertain task admission.
+bootstrap skills, deploy a binary, restart a gateway, grant broad approval, or retry uncertain task admission.
 
-The runner does not yet admit domain execution, protected fact answers, artifact downloads, repeats, or comparison.
+Native browser execution, baseline comparison and complete domain qualification remain later packets.
 Missing capabilities/drivers/domain evidence produce explicit non-passing coverage. A text response never proves
 that a PDF was filled, a browser action happened, or Telegram delivery worked. See the
 [roadmap](../architecture/agent-evals-roadmap.md) for the remaining packets.
 
-PDF corpus/oracle preparation is described in the [PDF guide](manual-agent-evals-pdf.md). It does not yet enable
-PDF execution through `run`; unsupported domain evidence remains non-passing coverage.
+PDF preparation, protected answers, frozen write/approval binding, native settlement and bounded independent
+artifact collection are described in the [PDF guide](manual-agent-evals-pdf.md). Required delivery uniqueness,
+whole-runtime privacy and owned cleanup are still unproven; artifact predicates alone cannot qualify a PDF case.
 
 The E2 integration adds tools-disabled user/judge roles to `run`, a judge-only `grade` command, versioned prompts,
 strict typed actions/findings, and [six manually labelled calibration examples](../../evals/calibration/judge-v1.json).
 Model context excludes runtime authority, hidden hard-check expectations, simulator
-persona from judge input, and private fact values; fact handles alone are available to the user role. Admission of
-protected wire answers and domain evidence remains a later packet. Private values observed in raw events, even an
+persona from judge input, and private fact values; fact handles alone are available to the user role. Protected
+answers require PDF-specific native admission, not arbitrary case facts. Private values observed in raw events, even an
 excluded streaming revision, refuse model projection. Known credentials from native configuration are checked before
 wire/model input and report retention; unsafe output is withheld, not sanitized into a passing assessment.
 JSON escaping is not treated as redaction. When private facts or a credential filter exist, escape-bearing content
@@ -131,6 +132,16 @@ Suite, all requested tags, and case IDs intersect. Each selected case gets a fre
 new input in that same session. Runs are serial, with no reconnect/replay. Runtime identity is rechecked before
 each task. The whole-suite timeout defaults to one hour, with a four-hour maximum; case/turn bounds remain active.
 
+Use `--repeat 3` for three independent serial trials of every selected case. The default is one; admit at most
+64 per case and 256 trials total before contacting the target. Case-major order, fresh session/trial IDs and fresh
+domain preparation distinguish a repetition from retrying uncertain work. Each repetition gets a separate file
+and one-based `repetition`; `run.json` records `repeat`. JSON retains every observed verdict, not just the best one.
+Markdown and the CLI identify the attempt as `1/3`, `2/3`, etc. The suite deadline is shared, not multiplied.
+
+Skipped or interrupted repetitions remain explicit coverage. Later passes cannot hide an earlier hard failure.
+No reconnect/replay or automatic rerun after timeout/disconnect is added. Declared repetitions are not a guarantee
+of native quiescence, successful cleanup, complete privacy, or model independence/statistical significance.
+
 Every run gets a new `0700` directory with exclusive `0600` trial JSON, `summary.md`, and `run.json`. Trial files
 contain private transcripts; they must not be published. The public CLI summary contains IDs, verdicts, static
 codes, and the private report path, not task contents or credentials. JSON reports raw durations and observed
@@ -163,7 +174,7 @@ intent in the same target session. `finish` sends one last request and requires 
 An absent/unsupported user model skips the case without sending its task. Missing required judging cannot pass.
 
 Model roles are tools-disabled and separate from the target. The native runner binds navigation to the observed
-prompt and refuses grants. Facts/fixtures still require later domain admission; merely adding those fields does
+prompt and refuses unbound grants. Facts/fixtures require domain-specific admission; merely adding those fields does
 not make protected intake or artifacts available. Optional judge findings never hide transport or mandatory-check
 failures; private judge output fails even an optional rubric and becomes ineligible for regrading.
 
@@ -184,6 +195,12 @@ ineligible reports are refused. Operator-owned evidence is trusted input, not cr
 Mandatory checks are recomputed, not replaced with a previous judge verdict. A new private report is created;
 source evidence is never overwritten. No gateway connection, PID file, task input, or tool execution is involved.
 Source runtime identity is retained as historical evidence, not claimed as a newly observed running target.
+
+For a repeated source, every repetition of every selected case must be present, eligible and consistent before any
+judge call. Missing/duplicate trial or session IDs, mismatched ordinals, case hashes or evidence, and out-of-bound
+repeat counts refuse the entire selected source. Regrade retains all original trial IDs and ordinals, aggregates
+all returned judge usage, and never reruns target work. Older single-trial reports without repeat fields remain
+accepted under their existing evidence eligibility rules. PDF evidence is not made regrade-eligible by this change.
 
 Calibration uses `grade --calibration` without a source directory or corpus selection flags. It persists the labelled
 agreement and private judge findings, and exposes only summary metrics through the CLI. Its limit is ten minutes,

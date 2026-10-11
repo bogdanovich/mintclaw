@@ -17,6 +17,13 @@ import (
 
 func gradeFixture(t *testing.T, hardFailure bool) (*admissionFixture, LoadedCase, RunReport, *atomic.Int32) {
 	t.Helper()
+	return gradeRepeatedFixture(t, hardFailure, 1)
+}
+
+func gradeRepeatedFixture(
+	t *testing.T, hardFailure bool, repeat int,
+) (*admissionFixture, LoadedCase, RunReport, *atomic.Int32) {
+	t.Helper()
 	fixture := newAdmissionFixture(t)
 	item := loadedTestCase(t, "general.grade-source")
 	item.Case.Rubric = []Criterion{
@@ -30,8 +37,10 @@ func gradeFixture(t *testing.T, hardFailure bool) (*admissionFixture, LoadedCase
 	}
 	data, _ := json.Marshal(item.Case)
 	item.Digest = digest(data)
-	result, err := runAdmissionFixture(t, fixture, item)
-	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 1 {
+	result, err := Run(t.Context(), fixture.preset, []LoadedCase{item}, RunOptions{
+		Home: fixture.home, OutputParent: fixture.output, SuiteTimeout: 10 * time.Second, Repeat: repeat,
+	})
+	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != repeat {
 		t.Fatal("unjudged source run was not retained", err)
 	}
 	count := &atomic.Int32{}
@@ -73,6 +82,98 @@ func gradeFixture(t *testing.T, hardFailure bool) (*admissionFixture, LoadedCase
 		t.Fatal(err)
 	}
 	return fixture, item, result, count
+}
+
+func TestGradeRetainsAndRejudgesEveryIndependentRepetition(t *testing.T) {
+	for _, hardFailure := range []bool{false, true} {
+		fixture, item, source, count := gradeRepeatedFixture(t, hardFailure, 3)
+		tasks, probes := fixture.tasks.Load(), fixture.probes.Load()
+		result, err := Grade(t.Context(), fixture.preset, []LoadedCase{item}, source.ReportDir, RunOptions{
+			Home: fixture.home, OutputParent: fixture.output, SuiteTimeout: 10 * time.Second,
+		})
+		want := Pass
+		if hardFailure {
+			want = Fail
+		}
+		if !hardFailure && err != nil || hardFailure && !errors.Is(err, ErrNotPassed) ||
+			result.Verdict != want || !result.Complete || result.Repeat != 3 || len(result.Trials) != 3 ||
+			count.Load() != 3 || result.Coverage[want] != 3 || fixture.tasks.Load() != tasks ||
+			fixture.probes.Load() != probes || result.RoleUsage[0].InputTokens != 3*10252 {
+			t.Fatal("regrade lost a repetition, duplicated work or hid a failure", err)
+		}
+		for ordinal, summary := range result.Trials {
+			if summary.ID != source.Trials[ordinal].ID || summary.Repetition != ordinal+1 {
+				t.Fatal("regrade replaced source trial identity")
+			}
+		}
+	}
+}
+
+func TestGradeRejectsMissingDuplicatedOrMismatchedRepetitionsBeforeAnyCall(t *testing.T) {
+	for _, change := range []string{
+		"missing", "duplicate-id", "duplicate-session", "duplicate-ordinal", "ordinal", "trial-ordinal", "budget",
+	} {
+		t.Run(change, func(t *testing.T) {
+			fixture, item, source, count := gradeRepeatedFixture(t, false, 2)
+			switch change {
+			case "missing":
+				source.Trials = source.Trials[:1]
+			case "duplicate-id":
+				source.Trials[1].ID, source.Trials[1].File = source.Trials[0].ID, source.Trials[0].File
+			case "duplicate-ordinal":
+				source.Trials[1].Repetition = 1
+			case "ordinal":
+				source.Trials[1].Repetition = 3
+			case "budget":
+				source.Repeat = MaxRepeat + 1
+			default:
+				path := filepath.Join(source.ReportDir, source.Trials[1].File)
+				data, err := os.ReadFile(path)
+				var trial Trial
+				if err != nil || json.Unmarshal(data, &trial) != nil {
+					t.Fatal("invalid test source")
+				}
+				if change == "trial-ordinal" {
+					trial.Repetition = 1
+				} else {
+					firstData, err := os.ReadFile(filepath.Join(source.ReportDir, source.Trials[0].File))
+					var first Trial
+					if err != nil || json.Unmarshal(firstData, &first) != nil {
+						t.Fatal("invalid first source trial")
+					}
+					trial.SessionID = first.SessionID
+				}
+				writeAdmissionJSON(t, path, trial)
+			}
+			writeAdmissionJSON(t, filepath.Join(source.ReportDir, "run.json"), source)
+			result, err := Grade(t.Context(), fixture.preset, []LoadedCase{item}, source.ReportDir, RunOptions{
+				Home: fixture.home, OutputParent: fixture.output,
+			})
+			if !errors.Is(err, ErrGrade) || result.ID != "" || count.Load() != 0 {
+				t.Fatal("invalid repetition source reached a judge", change)
+			}
+		})
+	}
+}
+
+func TestGradePreservesLegacySingleTrialSourceWithoutRepeatFields(t *testing.T) {
+	fixture, item, source, count := gradeFixture(t, false)
+	source.Repeat, source.Trials[0].Repetition = 0, 0
+	path := filepath.Join(source.ReportDir, source.Trials[0].File)
+	data, err := os.ReadFile(path)
+	var trial Trial
+	if err != nil || json.Unmarshal(data, &trial) != nil {
+		t.Fatal("invalid test source")
+	}
+	trial.Repetition = 0
+	writeAdmissionJSON(t, path, trial)
+	writeAdmissionJSON(t, filepath.Join(source.ReportDir, "run.json"), source)
+	result, err := Grade(t.Context(), fixture.preset, []LoadedCase{item}, source.ReportDir, RunOptions{
+		Home: fixture.home, OutputParent: fixture.output,
+	})
+	if err != nil || result.Verdict != Pass || count.Load() != 1 || len(result.Trials) != 1 {
+		t.Fatal("legacy single-trial evidence became incompatible", err)
+	}
 }
 
 func TestGradeUsesRetainedEvidenceAndNeverConnectsToGateway(t *testing.T) {
