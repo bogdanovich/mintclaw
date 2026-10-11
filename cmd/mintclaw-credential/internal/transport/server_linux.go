@@ -232,15 +232,5 @@ func watchCall(
 }
 
 func connectionAlive(connection *net.UnixConn) bool {
-	raw, err := connection.SyscallConn()
-	if err != nil {
-		return false
-	}
-	alive := false
-	err = raw.Control(func(fd uintptr) {
-		fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLRDHUP}}
-		_, pollErr := unix.Poll(fds, 0)
-		alive = pollErr == nil && fds[0].Revents == 0
-	})
-	return err == nil && alive
+	return credentialipc.ConnectionAlive(connection)
 }
