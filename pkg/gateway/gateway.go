@@ -286,6 +286,9 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	// All services, including the shared HTTP server that owns the health
 	// routes, are up; mark GET /ready as ready.
 	runningServices.HealthServer.SetReady(true)
+	runningServices.HealthServer.SetRuntimeProbe(func() (health.RuntimeProbe, error) {
+		return snapshotRuntimeProbe(homePath, configPath, agentLoop, runningServices)
+	})
 	reportGatewayHandoffStatus(ctx, cfg, msgBus)
 	publishGatewayEvent(agentLoop, runtimeevents.KindGatewayReady, startedAt, nil)
 	closeListeners = false
