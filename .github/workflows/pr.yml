@@ -501,7 +501,7 @@ jobs:
         run: bash ./scripts/run-integration-tests.sh
 
   browser_windows:
-    name: Browser Windows
+    name: Windows AMD64
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -512,19 +512,37 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Run Windows platform tests
-        run: |
-          go test -tags goolm,stdjson ./pkg/browser ./pkg/fileutil
-          go test -tags goolm,stdjson -count=1 ./pkg/document ./cmd/mintclaw/internal/document
-          go test -tags goolm,stdjson ./pkg/coding/workerprocess
-          go test -tags goolm,stdjson -count=1 ./pkg/coding/tui
-          go test -tags goolm,stdjson -count=1 -run '^(TestCodeAndResumePersistOutsideProjectAcrossCommands|TestCodeUsesInteractiveShellOnlyForCapableTerminal|TestPlainResultDistinguishesProjectAndWorkingDirectory)$' ./cmd/mintclaw/internal/coding
-          go test -tags goolm,stdjson -count=1 -run '^(TestManagerAllocatesIdempotentIsolatedWorktreeFromDirtySource|TestManagerMapsNestedInvocationDirectoryIntoExecutionWorktree|TestOwnerLeaseExcludesAnotherProcess)$' ./pkg/coding/worktree
-          go test -tags goolm,stdjson -count=1 -run '^TestPreset' ./internal/eval
-          go test -tags goolm,stdjson -run '^(TestThreadLease|TestWindowsThreadLease|TestAttachment(Maintenance|Inflight|GarbageCollectionDoesNotRecoverLiveQuarantine))' ./pkg/coding/thread
+      - name: Run portable Windows filesystem tests
+        run: go test -tags goolm,stdjson -count=1 ./pkg/fileutil
+
+      - name: Run Windows coding thread and lock tests
+        run: >-
+          go test -tags goolm,stdjson -count=1
+          -run '^(TestThreadLease|TestWindowsThreadLease|TestAttachment(Maintenance|Inflight|GarbageCollectionDoesNotRecoverLiveQuarantine))'
+          ./pkg/coding/thread
+
+      - name: Qualify Windows headless coding
+        run: >-
+          go test -tags goolm,stdjson -count=1
+          -run '^(TestCodeAndResumePersistOutsideProjectAcrossCommands|TestCodeUsesInteractiveShellOnlyForCapableTerminal|TestPlainResultDistinguishesProjectAndWorkingDirectory)$'
+          ./cmd/mintclaw/internal/coding
+
+      - name: Qualify Windows isolated coding worktrees
+        run: >-
+          go test -tags goolm,stdjson -count=1
+          -run '^(TestManagerAllocatesIdempotentIsolatedWorktreeFromDirtySource|TestManagerMapsNestedInvocationDirectoryIntoExecutionWorktree|TestOwnerLeaseExcludesAnotherProcess)$'
+          ./pkg/coding/worktree
+
+      - name: Qualify Windows worker Job Object lifecycle
+        run: >-
+          go test -tags goolm,stdjson -count=1
+          -run '^(TestTerminateKillsWindowsWorkerDescendants|TestNormalCompletionDrainsWindowsWorkerDescendantsHoldingStderr)$'
+          ./pkg/coding/workerprocess
 
       - name: Smoke native coding CLI from PowerShell
-        run: go run -tags goolm,stdjson ./cmd/mintclaw code --help | Out-Null
+        run: |
+          go run -tags goolm,stdjson ./cmd/mintclaw code --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run portable protected intake and gateway composition
         run: >-
