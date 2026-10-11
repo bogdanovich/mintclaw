@@ -99,3 +99,61 @@ func TestInspectWriteOperationSnapshotPreservesNativeRefusals(t *testing.T) {
 		})
 	}
 }
+
+func TestInspectWriteOperationSnapshotForOwnerFiltersOnlyValidatedRecords(t *testing.T) {
+	journal, err := NewWriteJournal(filepath.Join(t.TempDir(), "journal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := writeTestOwner()
+	record, _, err := journal.Accept(t.Context(), writeTestOperationID("census"), owner,
+		normalizedWriteTestRequest(t, "census-canary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := bytes.Clone(valid)
+	got, matched, err := InspectWriteOperationSnapshotForOwner(valid, record.OperationID, owner)
+	if err != nil || !matched || got != record || !bytes.Equal(valid, original) {
+		t.Fatal("owned native snapshot was not observed without mutation", err)
+	}
+	foreign := owner
+	foreign.SessionID = "foreign-census-session"
+	got, matched, err = InspectWriteOperationSnapshotForOwner(valid, record.OperationID, foreign)
+	if err != nil || matched || got != (WriteOperationRecord{}) || !bytes.Equal(valid, original) {
+		t.Fatal("foreign snapshot returned owned evidence or private metadata", err)
+	}
+	if _, err = InspectWriteOperationSnapshot(valid, record.OperationID, foreign); !errors.Is(err, ErrWriteConflict) {
+		t.Fatal("existing owner-bound inspector no longer refuses a foreign record", err)
+	}
+	for _, mode := range []string{"empty", "oversize", "unknown", "trailing", "state", "id", "invalid-id", "authority"} {
+		t.Run(mode, func(t *testing.T) {
+			data, id, authority := bytes.Clone(valid), record.OperationID, foreign
+			switch mode {
+			case "empty":
+				data = nil
+			case "oversize":
+				data = bytes.Repeat([]byte(" "), DefaultMaxWriteJournalRecord+1)
+			case "unknown":
+				data = bytes.Replace(data, []byte(`"revision":1`), []byte(`"revision":1,"private":"canary"`), 1)
+			case "trailing":
+				data = append(data, []byte(`{}`)...)
+			case "state":
+				data = bytes.Replace(data, []byte(`"state":"accepted"`), []byte(`"state":"unknown"`), 1)
+			case "id":
+				id = writeTestOperationID("wrong-census-id")
+			case "invalid-id":
+				id = "invalid"
+			case "authority":
+				authority.Kind = ""
+			}
+			got, matched, err := InspectWriteOperationSnapshotForOwner(data, id, authority)
+			if err == nil || matched || got != (WriteOperationRecord{}) || strings.Contains(err.Error(), "canary") {
+				t.Fatal("invalid foreign snapshot was ignored, admitted or echoed", err)
+			}
+		})
+	}
+}

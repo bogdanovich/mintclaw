@@ -410,18 +410,35 @@ func (journal *WriteJournal) load(operationID string) (WriteOperationRecord, boo
 func InspectWriteOperationSnapshot(
 	data []byte, operationID string, owner Authority,
 ) (WriteOperationRecord, error) {
-	ownerDigest, err := documentOwnerDigest(owner)
-	if err != nil || !validWriteOperationID(operationID) {
-		return WriteOperationRecord{}, ErrWriteConflict
-	}
-	record, err := decodeWriteOperationSnapshot(data, operationID)
+	record, owned, err := InspectWriteOperationSnapshotForOwner(data, operationID, owner)
 	if err != nil {
 		return WriteOperationRecord{}, err
 	}
-	if record.OwnerSHA256 != ownerDigest {
+	if !owned {
 		return WriteOperationRecord{}, ErrWriteConflict
 	}
 	return record, nil
+}
+
+// InspectWriteOperationSnapshotForOwner validates the entire native snapshot
+// before filtering it for a read-only census. A valid foreign record returns
+// no data, false and nil; invalid bytes or scope remain errors. This does not
+// authorize a caller, mutate storage, or prove that future writes cannot occur.
+func InspectWriteOperationSnapshotForOwner(
+	data []byte, operationID string, owner Authority,
+) (WriteOperationRecord, bool, error) {
+	ownerDigest, err := documentOwnerDigest(owner)
+	if err != nil || !validWriteOperationID(operationID) {
+		return WriteOperationRecord{}, false, ErrWriteConflict
+	}
+	record, err := decodeWriteOperationSnapshot(data, operationID)
+	if err != nil {
+		return WriteOperationRecord{}, false, err
+	}
+	if record.OwnerSHA256 != ownerDigest {
+		return WriteOperationRecord{}, false, nil
+	}
+	return record, true, nil
 }
 
 func decodeWriteOperationSnapshot(data []byte, operationID string) (WriteOperationRecord, error) {
