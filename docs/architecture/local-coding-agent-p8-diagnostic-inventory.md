@@ -5,8 +5,9 @@ Roadmap packet:
 
 Status: H1a baseline with the H1b terminal-truth, model-attempt, tool-call
 generation, async task/delivery, and human-interaction slices implemented and
-production-qualified. Remote-coding and companion-invocation correlation are
-implemented; production qualification is pending.
+production-qualified. Companion-invocation correlation is also implemented and
+production-qualified. Remote-coding correlation is implemented; its production
+qualification is pending.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -85,8 +86,8 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    projector never holds a trace open for the human wait. Question, answer,
    approval, failure-detail, and execution-context content remain only in the
    authoritative interaction registry.
-5. **Node and companion invocations (implemented; production qualification
-   pending).** Each passive observation now retains the exact gateway
+5. **Node and companion invocations (implemented and production-qualified).**
+   Each passive observation now retains the exact gateway
    invocation ID, configured target and applicable scope/profile aliases, and
    the execution-policy revision. The trace projects those facts into bounded
    correlation/scope fields, so an investigator can select the gateway store
@@ -360,6 +361,58 @@ qualification because its standalone SSH process did not inherit the gateway
 service's provider-refresh environment; the live gateway canary and passive
 evidence above are the qualifying path.
 
+### Companion-invocation production qualification
+
+The first harmless companion canary after PR #1554 proved the exact gateway
+invocation and companion-ledger join, but its passive turn trace retained only
+the ordinary `nodes` and `nodes_invoke` tool records. The specialized node
+observations were published under the durable tool execution identity instead
+of the active trace turn identity, so the projector could not attach them to
+the turn. This was a passive-correlation defect; the remote command completed
+successfully and both authoritative ledgers were correct.
+
+PR #1556 separated those identities. Node event publishers now use the active
+turn ID for passive trace scope while preserving the execution ID for durable
+authorization and recovery; standalone tool execution retains the execution-ID
+fallback. The fix merged as
+`dae7fac0324d0354ee79de44d55ad1450c8d31cc` and was deployed from that exact
+merged-main revision on 2026-10-11. The checksum-verifiable rollback snapshot
+is `/home/server/mintclaw-core-backup-20261011T150238Z`; its SHA-256 manifest
+digest is
+`1a47a66febff1606e7fb021d3b0fc859db9a3ca583b93b136db5114077996be2`.
+
+The installed core/CLI, node, and launcher SHA-256 digests are respectively
+`d2b01e84003d5584a766352cf298a1fe7042cc4358d537051c575445269f724d`,
+`1c1bbd1f0208edb95b3e71b3d593f017b481547a9aa67f5d7edf01a38d47e428`, and
+`31f0d1125b63d7592caa4c7aec5a0b07e2a2d1e95356c9505f259b1b41d787eb`.
+All five active profile doctor results were byte-identical to the previous
+binary's existing policy findings. All ten expected services were active, no
+failed or legacy processes were present, launcher and reviewer-webhook probes
+returned their expected 302 and 404 responses, and the ten-minute service
+error-journal scan was empty.
+
+A live gateway deployment canary completed with trace
+`trace-turn-4e93e5ee3f001e5477b6b9ab`: schema v1, eight records, completed
+outcome, `redacted_content`, and no truncation. A separate one-shot companion
+canary then created invocation
+`inv_3cc23f93a4eaaab19154a5d1eb1b3a1b25bd106fad92bd750300e2dc51de0586`
+for configured target `ab-2`. Trace
+`trace-turn-3ec0fbebf110ad2df0e2be14` retained three ordered node observations:
+`prepared`, `dispatched`, and terminal `succeeded`. All three carry the exact
+invocation ID, originating provider tool-call ID, configured target and scope
+aliases, and policy revision
+`local-test-automation-v15-owner-shell-v1`.
+
+The invocation ID selects exactly one gateway SQLite row and exactly one
+companion-ledger record. The gateway row retains its durable hashed tool-call
+identity and `dispatched` handoff state; the companion is the terminal owner
+and records `succeeded`, exit code zero, exact expected stdout, empty stderr,
+and no truncation. The three correlated trace records contain only bounded
+tool/action/status hashes and aliases: they contain no command, input, output,
+path, node identity, or authority digest. The trace envelope's `source.commit`
+is still absent, so deployment-commit attribution remains an independent open
+H1b gap rather than being inferred from this deployment record.
+
 ## Evidence map
 
 | Path | Authoritative evidence | Passive evidence | H1b/H1c action |
@@ -371,7 +424,7 @@ evidence above are the qualifying path.
 | Human interaction | Interaction registry/events | Bounded lifecycle records in the parent trace or immediate late-event continuation | Interaction/event ID, revision, task, tool-call, and delivery joins implemented and production-qualified |
 | Channel/async delivery | Task registry, outbox, channel receipt | Bounded completion continuation with delivery decision/attempt/outcome | Task/generation, completion, tool-generation, parent-turn, and delivery joins implemented and production-qualified |
 | Remote coding task | Task registry, worker ledger/thread | Parent tool result plus bounded terminal completion/delivery continuation | Task/generation/worker/thread, safe scope/profile, terminal uncertainty, completion, and delivery joins implemented; production qualification pending |
-| Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Retain invocation ID and safe policy/target aliases |
+| Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Invocation ID and safe policy/target aliases implemented and production-qualified |
 | Repository/worktree | Git/filesystem, worktree owner | Context snapshot only | Add commit/worktree/snapshot digests and counts; no paths or diffs |
 | TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c exports bounded current-view/version facts, not cell history |
 | Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c summarizes disabled/drop/expiry/corruption truth |

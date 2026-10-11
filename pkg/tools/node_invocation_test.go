@@ -1680,6 +1680,7 @@ func TestNodeInvocationEventsUseProvenStatesAndRedactPayloads(t *testing.T) {
 	eventBus := &recordingNodeEventBus{}
 	tool.SetEventPublisher(eventBus)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
+	ctx = toolshared.WithToolTraceTurnID(ctx, "main-turn-1")
 	args := nodeInvocationTestArgs()
 	args["input"] = map[string]any{
 		"argv": []any{"git", "status", "super-secret-command-input"},
@@ -1722,7 +1723,7 @@ func TestNodeInvocationEventsUseProvenStatesAndRedactPayloads(t *testing.T) {
 			t.Fatalf("event[%d] payload = %#v", index, payload)
 		}
 		if event.Scope.Workspace != "/workspace/main" ||
-			event.Scope.TurnID != "execution-1" ||
+			event.Scope.TurnID != "main-turn-1" ||
 			event.Scope.AgentID != "main" ||
 			event.Scope.SessionKey != "route-session" ||
 			event.Scope.Channel != "telegram" ||

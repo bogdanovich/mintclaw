@@ -7,6 +7,14 @@ The first consumer performs one configured login in a fresh, private Chromium
 context. It returns a fixed login or human-handoff outcome. This document does
 not enable a worker, qualify a deployment, or permit real-token startup.
 
+The private implementation adds a canonical `LoginFlow` to account rules,
+captures a value copy in the signed login lease, and supplies a credential-only
+Playwright session component. Legacy rules without a flow deny browser login.
+The Linux launch helper requires inherited privilege restrictions, a protected
+executable, an explicit child environment, and a namespace/seccomp witness;
+it does not prove caller role, complete network/filesystem isolation, or service
+readiness. No command, listener, provider retrieval or model tool activates it.
+
 Ordinary browser tools retain their existing contract. A credential context
 has no ordinary browser handle. General browsing, page observations, human
 view transport, and subsequent account operations require their own admitted
@@ -16,7 +24,8 @@ interfaces and cannot be enabled by handing its context to an ordinary worker.
 
 Protected operator configuration selects the exact HTTPS navigation URL,
 credential-entry origin, top-frame form, username/password input identities
-and expected types, submission destination, and success or handoff conditions.
+and expected types, submission destination, and exact success/handoff URLs with
+unique visible state markers. A URL alone cannot report authenticated state.
 Every effective flow constraint contributes to the account policy revision.
 No model request supplies a URL, selector, JavaScript, provider item ID, browser
 path, proxy, launch flag, or credential value. Accounts without a complete
@@ -24,8 +33,15 @@ qualified flow deny login. The initial flow excludes embedded frames and
 multi-step credential entry; admit them separately after concrete fixtures.
 
 Before retrieval, the worker proves that the configured form and inputs are
-current, unique, connected, enabled, and in the live top-frame document at the
+current, unique, connected, effectively enabled, and in the live top-frame document at the
 exact entry origin. Capture document/element authority in the private driver.
+Native `:disabled` semantics include ancestor fieldsets and their first-legend
+exception. Recheck them before readiness, injection, and submission.
+
+The initial component requires visible inputs and a same-origin POST form with
+URL-encoded submission, an empty target, and query/fragment-free unescaped paths.
+Each configured ID is bounded ASCII. These deliberately narrow constraints
+need individual site qualification; sample test flows are synthetic.
 Immediately before injection, recheck that authority and the full current
 authenticated owner, actor, agent, host, account, and policy revision. A URL
 requested earlier is not evidence of the current origin. Navigation, document
@@ -38,6 +54,15 @@ lease. Recheck the lease after provider access and before private injection.
 Destroy an unconsumed login on denial. Submit only the configured form after
 the independent browser action policy permits login submission. The credential
 grant does not approve purchases, posts, messages, or account changes.
+Once injection begins, the driver denies other network requests. It admits one
+actual top-frame request to the configured submission URL with method POST and
+exact URL-encoded content type, then one GET navigation to the configured
+success or handoff URL. Submit-event changes to the action, method, or encoding
+retire the attempt before the changed request reaches the destination. Outcome
+markers must be unique, laid out, and have computed visibility `visible`.
+These constraints also exclude extra page resources after injection; flows
+requiring them need separately qualified admission. Real HTTP redirect
+enforcement remains the proxy's qualification responsibility.
 
 ## Browser and process boundary
 
@@ -72,6 +97,9 @@ caller death, service shutdown, or lost control transport stops admission,
 cancels work, and closes the context. A fixed failure is not proof of cleanup:
 acknowledge destruction or quarantine/terminate the worker before admitting
 another operation. Do not replay an uncertain login after restart or failure.
+After a confirmed login or MFA outcome, any further top-frame navigation,
+including reload and same-document history navigation, retires the context.
+No subsequent network or account operation is admitted by this component.
 
 Return only service-owned opaque references and validated fixed outcomes.
 Never forward driver exceptions, page text, accessibility/DOM values,

@@ -448,6 +448,7 @@ func TestNodeTerminalEventsAreRedacted(t *testing.T) {
 	eventBus := &recordingNodeEventBus{}
 	tool.SetEventPublisher(eventBus)
 	ctx := nodeTerminalTestContext("actor-1", "call-events")
+	ctx = toolshared.WithToolTraceTurnID(ctx, "main-turn-1")
 	args := nodeTerminalOpenArgs(t, tool, ctx)
 	if _, err := tool.ApprovalArguments(ctx, args); err != nil {
 		t.Fatal(err)
@@ -456,6 +457,11 @@ func TestNodeTerminalEventsAreRedacted(t *testing.T) {
 	events := eventBus.snapshot()
 	if len(events) == 0 {
 		t.Fatal("terminal lifecycle event was not published")
+	}
+	for index, event := range events {
+		if event.Scope.Workspace != "/workspace/main" || event.Scope.TurnID != "main-turn-1" {
+			t.Fatalf("event[%d] trace scope = %#v", index, event.Scope.TraceScope)
+		}
 	}
 	raw, err := json.Marshal(events)
 	if err != nil {

@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,6 +128,9 @@ func (transport *Transport) admit(ctx context.Context) (result error) {
 		if recover() != nil {
 			result = errUnavailable
 		}
+		if result != nil {
+			_ = transport.Close()
+		}
 	}()
 	if transport == nil || transport.ctx.Err() != nil || ctx == nil || ctx.Err() != nil {
 		return result
@@ -210,7 +214,7 @@ func (transport *Transport) RoundTrip(request *http.Request) (*http.Response, er
 	if transport == nil || transport.ctx == nil || transport.backend == nil || request == nil {
 		return nil, errUnavailable
 	}
-	if request.Method == http.MethodConnect || request.Header.Get("Upgrade") != "" ||
+	if request.Method == http.MethodConnect || upgradeRequested(request.Header) ||
 		request.URL == nil || request.URL.Scheme != "https" || request.URL.User != nil ||
 		request.URL.Opaque != "" || request.URL.Fragment != "" ||
 		"https://"+request.URL.Host != transport.origin ||
@@ -238,6 +242,24 @@ func (transport *Transport) RoundTrip(request *http.Request) (*http.Response, er
 	}
 	response.Body = &body{ReadCloser: response.Body, owner: transport, ctx: ctx, release: release}
 	return response, nil
+}
+
+func upgradeRequested(header http.Header) bool {
+	for name, values := range header {
+		if strings.EqualFold(name, "Upgrade") {
+			return true
+		}
+		if strings.EqualFold(name, "Connection") {
+			for _, value := range values {
+				for _, token := range strings.Split(value, ",") {
+					if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // Close permanently denies reuse and destroys active as well as idle sockets.

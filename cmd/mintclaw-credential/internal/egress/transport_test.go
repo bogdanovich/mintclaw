@@ -315,7 +315,10 @@ func TestCurrentPrincipalChangeDeniesCachedTransport(t *testing.T) {
 }
 
 func TestEndpointAndProtocolConfusionDeniesBeforeDial(t *testing.T) {
-	for _, mode := range []string{"host", "userinfo", "http", "fragment", "opaque", "request-uri", "connect", "upgrade"} {
+	for _, mode := range []string{
+		"host", "userinfo", "http", "fragment", "opaque", "request-uri", "connect", "upgrade",
+		"upgrade-lowercase", "upgrade-mixed-case", "connection-upgrade", "empty-upgrade",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			f := newFixture(
 				t,
@@ -341,10 +344,68 @@ func TestEndpointAndProtocolConfusionDeniesBeforeDial(t *testing.T) {
 				request.Method = http.MethodConnect
 			case "upgrade":
 				request.Header.Set("Upgrade", "websocket")
+			case "upgrade-lowercase":
+				request.Header = http.Header{"upgrade": {"websocket"}, "Connection": {"Upgrade"}}
+			case "upgrade-mixed-case":
+				request.Header = http.Header{"uPgRaDe": {"websocket"}, "connection": {"upgrade"}}
+			case "connection-upgrade":
+				request.Header = http.Header{"cOnNeCtIoN": {"keep-alive, uPgRaDe"}}
+			case "empty-upgrade":
+				request.Header = http.Header{"upgrade": {""}}
 			}
 			denyRequest(t, f.transport, request)
 			if f.dials.Load() != 0 {
 				t.Fatal("endpoint confusion reached dial")
+			}
+		})
+	}
+}
+
+type changingResponse struct {
+	io.ReadCloser
+	change func()
+}
+
+func (response *changingResponse) Read(data []byte) (int, error) {
+	count, err := response.ReadCloser.Read(data)
+	response.change()
+	return count, err
+}
+
+func TestDeniedResponseReadPermanentlyRetiresRestoredScope(t *testing.T) {
+	for _, phase := range []string{"before-read", "after-read"} {
+		t.Run(phase, func(t *testing.T) {
+			f := newFixture(t, func(writer http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(writer, "SYNTHETIC_PRIVATE_RESPONSE")
+			}, nil, nil)
+			response, err := f.transport.RoundTrip(getRequest(t, context.Background(), testOrigin+"/login"))
+			if err != nil {
+				t.Fatal("private response fixture unavailable")
+			}
+			defer func() { _ = response.Body.Close() }()
+			changed := f.request
+			changed.Principal.ActorID = "changed"
+			if phase == "before-read" {
+				f.current.Store(&changed)
+			} else {
+				owned := response.Body.(*body)
+				owned.ReadCloser = &changingResponse{
+					ReadCloser: owned.ReadCloser,
+					change:     func() { f.current.Store(&changed) },
+				}
+			}
+			var data [64]byte
+			count, readErr := response.Body.Read(data[:])
+			f.current.Store(&f.request)
+			if count != 0 || !errors.Is(readErr, errUnavailable) || f.transport.ctx.Err() == nil {
+				t.Fatal("observed response denial retained transport authority")
+			}
+			if phase == "after-read" && data != [64]byte{} {
+				t.Fatal("denied response bytes were retained")
+			}
+			denyRequest(t, f.transport, getRequest(t, context.Background(), testOrigin+"/login"))
+			if f.dials.Load() != 1 {
+				t.Fatal("restored scope reopened retired transport")
 			}
 		})
 	}

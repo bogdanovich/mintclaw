@@ -11,7 +11,9 @@ executable does not invoke it and no real token access is activated.
 
 Every request, DNS/dial transition, TLS admission and response read checks
 the complete current owner, actor, agent, execution host, account, revision
-and original grant generation. The endpoint origin is immutable. Caller or
+and original grant generation. Any observed admission failure permanently
+retires the whole transport, including failures before or after response I/O;
+restoring runtime scope cannot reopen it. The endpoint origin is immutable. Caller or
 model identity fields cannot supply this scope. Startup must source it from
 authenticated runtime state and keep the transport inside the private service.
 
@@ -32,6 +34,8 @@ protocol responses. It follows no redirects: private callers must admit each
 subsequent request separately. Connection reuse is disabled so uncertain
 operations cannot enter the HTTP transport's automatic retry path on reused
 connections. An uncertain request permanently retires the transport.
+Upgrade header names and `Connection: upgrade` tokens are checked without case
+assumptions before dialing, including directly constructed header maps.
 
 ## Retirement and output
 
