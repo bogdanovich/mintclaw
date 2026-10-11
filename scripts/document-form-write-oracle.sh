@@ -18,8 +18,8 @@ fi
 poppler_render=/usr/bin/pdftoppm
 poppler_text=/usr/bin/pdftotext
 if [ ! -x "$poppler_render" ] || [ ! -x "$poppler_text" ] || \
-	[ "$(sha256sum "$poppler_render" | cut -d ' ' -f 1)" != "207dcabcaeea0ce572aefc498d07d44d56a9ca06a85b3ae1fecd050476a34bf8" ] || \
-	[ "$(sha256sum "$poppler_text" | cut -d ' ' -f 1)" != "0fb98ea179e19154a90202608c164f2a319b79f16576fa6534b2d601033565e7" ]; then
+	[ "$(sha256sum "$poppler_render" | cut -d ' ' -f 1)" != "ab7c91f0f144335ad7696f4f23aefbd564ef67c099290bd8f813cdbb47cd1e9e" ] || \
+	[ "$(sha256sum "$poppler_text" | cut -d ' ' -f 1)" != "88263e2333fa712d6eadfc69dd2daf826792a67abb14f4d2110673d5f195b154" ]; then
 	echo "document form write oracle: pinned Poppler 24.02.0 is required" >&2
 	exit 2
 fi

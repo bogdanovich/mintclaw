@@ -15,8 +15,8 @@
     "name": "poppler",
     "version": "24.02.0",
     "dpi": 144,
-    "renderer_sha256": "207dcabcaeea0ce572aefc498d07d44d56a9ca06a85b3ae1fecd050476a34bf8",
-    "text_sha256": "0fb98ea179e19154a90202608c164f2a319b79f16576fa6534b2d601033565e7"
+    "renderer_sha256": "ab7c91f0f144335ad7696f4f23aefbd564ef67c099290bd8f813cdbb47cd1e9e",
+    "text_sha256": "88263e2333fa712d6eadfc69dd2daf826792a67abb14f4d2110673d5f195b154"
   },
   "independent_reader": {
     "name": "pypdf",

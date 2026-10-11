@@ -385,14 +385,14 @@ jobs:
 
       - name: Install pinned document runtime
         run: |
-          snapshot=20261004T000000Z
+          snapshot=20261011T000000Z
           sudo apt-get update --snapshot "$snapshot"
           sudo apt-get install --yes --no-install-recommends --allow-downgrades --snapshot "$snapshot" \
             bubblewrap=0.9.0-1ubuntu0.3 \
             ghostscript=10.02.1~dfsg1-0ubuntu7.9 \
             libgs-common=10.02.1~dfsg1-0ubuntu7.9 \
-            poppler-utils=24.02.0-1ubuntu9.9 \
-            libpoppler134=24.02.0-1ubuntu9.9 \
+            poppler-utils=24.02.0-1ubuntu9.10 \
+            libpoppler134=24.02.0-1ubuntu9.10 \
             fonts-dejavu-core=2.37-8 \
             fonts-liberation=1:2.1.5-3
 

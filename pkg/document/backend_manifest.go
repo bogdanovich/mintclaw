@@ -8,7 +8,7 @@ import (
 
 const (
 	PopplerBackendPackage         = "poppler-utils"
-	PopplerBackendPackageRevision = "24.02.0-1ubuntu9.9"
+	PopplerBackendPackageRevision = "24.02.0-1ubuntu9.10"
 
 	GhostscriptBackendPackage             = "ghostscript"
 	GhostscriptBackendPackageRevision     = "10.02.1~dfsg1-0ubuntu7.9"
@@ -40,17 +40,17 @@ var admittedNativeBackendManifest = []nativeBackendSpec{
 			{
 				Name:   popplerTextExecutableName,
 				Path:   "/usr/bin/pdftotext",
-				SHA256: "0fb98ea179e19154a90202608c164f2a319b79f16576fa6534b2d601033565e7",
+				SHA256: "88263e2333fa712d6eadfc69dd2daf826792a67abb14f4d2110673d5f195b154",
 			},
 			{
 				Name:   popplerRenderExecutableName,
 				Path:   "/usr/bin/pdftoppm",
-				SHA256: "207dcabcaeea0ce572aefc498d07d44d56a9ca06a85b3ae1fecd050476a34bf8",
+				SHA256: "ab7c91f0f144335ad7696f4f23aefbd564ef67c099290bd8f813cdbb47cd1e9e",
 			},
 			{
 				Name:   popplerInfoExecutableName,
 				Path:   "/usr/bin/pdfinfo",
-				SHA256: "3293dda06d80e1e38dab859aa47368c2876aedc41cbc2e24e8fb9a4e66392078",
+				SHA256: "b81cc1b1588d7ce8e2c384130c2e5d5d8e339e738e615cbe1ef7dc9819ef2bbe",
 			},
 		},
 	},
