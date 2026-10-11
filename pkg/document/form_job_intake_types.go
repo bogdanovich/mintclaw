@@ -84,6 +84,8 @@ type FormIntakeMessageRequest struct {
 // FormIntakeInput is an ephemeral protected read. Even accidental ordinary JSON
 // serialization cannot expose its utterance or interpretation context.
 type FormIntakeInput struct {
+	// AdmittedRevision is the immutable origin, not current write authority.
+	AdmittedRevision int64 `json:"-"`
 	// DialogIntent is derived from the last committed private pass, never approval.
 	DialogIntent FormIntakeDialogIntent             `json:"-"`
 	JobID        string                             `json:"job_id"`
@@ -171,9 +173,11 @@ type formIntakeStoredInput struct {
 // The bounded reservation list is also the budget: no separately mutable
 // counter or latest-only binding can drift from durable replay identity.
 type formIntakeStoredPass struct {
-	ID           string                   `json:"id"`
-	KeyDigest    string                   `json:"key_digest"`
-	GroupDigest  string                   `json:"group_digest,omitempty"`
+	ID          string `json:"id"`
+	KeyDigest   string `json:"key_digest"`
+	GroupDigest string `json:"group_digest,omitempty"`
+	// ReceiptCount binds this pass to an existing immutable admission snapshot.
+	ReceiptCount int                      `json:"receipt_count,omitempty"`
 	Revision     int64                    `json:"revision"`
 	CandidateIDs []string                 `json:"candidate_field_ids"`
 	Outcome      *formIntakeStoredOutcome `json:"outcome,omitempty"`

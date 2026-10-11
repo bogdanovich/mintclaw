@@ -90,8 +90,6 @@ func (sink *FormProtectedAnswerSink) commitFormIntake(
 			return false, ErrFormJobConflict
 		}
 		input.State, input.CommittedAt = formIntakeInputCommitted, now.UnixMilli()
-		record.Public.Revision++
-		invalidateFormIntakeReview(&record.Public)
 		if err := sink.store.writeFormIntakeSource(&record, key, source, now); err != nil {
 			return false, err
 		}

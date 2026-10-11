@@ -69,6 +69,13 @@ func TestFormIntakeRevisionRetryUsesOneBoundedReservationGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	update := start
+	update.ExpectedRevision = second.Job.Revision
+	update.Context.Question = "Whose additional facts are these?"
+	updated, err := store.UpdateFormIntakeContext(t.Context(), update, mode.Progress.ModeID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	apply := FormIntakeApplyRequest{
 		Reference:        admitted.Receipt,
 		PassID:           stale.ID,
@@ -81,7 +88,7 @@ func TestFormIntakeRevisionRetryUsesOneBoundedReservationGroup(t *testing.T) {
 	if _, err = store.ApplyFormIntakePass(t.Context(), apply); !errors.Is(err, ErrFormJobConflict) {
 		t.Fatal("stale interpretation was applied")
 	}
-	request.ExpectedRevision = second.Job.Revision
+	request.ExpectedRevision = updated.Revision
 	fresh, err := store.ReserveFormIntakePass(t.Context(), request)
 	if err != nil || fresh.ID == stale.ID || fresh.Input.Passes != 2 || fresh.Reused {
 		t.Fatal("revision retry reset budget or reused stale authority")

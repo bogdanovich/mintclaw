@@ -112,7 +112,7 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		}
 		if source.Intake.State != FormIntakeActive || input.State != formIntakeInputCommitted ||
 			!formIntakeMutable(record.Public) || record.Public.Revision != request.ExpectedRevision ||
-			len(record.PendingEvents) != 0 {
+			len(record.PendingEvents) != 0 || pass.ReceiptCount != len(source.Intake.Inputs) {
 			return false, ErrFormJobConflict
 		}
 		if stageErr := requireNoStagedFormIntake(record, key); stageErr != nil {
@@ -135,11 +135,10 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		); appendErr != nil {
 			return false, appendErr
 		}
-		// Accounting-only writes also detach Public before invalidation: pruning
-		// unrelated jobs must not publish a prefix after a sealing/write failure.
+		// Bookkeeping does not change reviewed assignments. Pending input still
+		// fences all final gates; actual composite events invalidate authority.
+		// Detach Public so a failed sealing/write cannot leak changes via pruning.
 		record.Public = cloneFormJobRecord(record.Public)
-		record.Public.Revision++
-		invalidateFormIntakeReview(&record.Public)
 		input.OriginalBytes, input.Accounted = len(input.Text), selection.Accounted
 		pass.Outcome = &formIntakeStoredOutcome{
 			Digest: digest, AppliedRevision: record.Public.Revision, AcceptedIDs: selection.AcceptedIDs,

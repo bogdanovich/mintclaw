@@ -218,6 +218,65 @@ func TestDocumentFormIntakeFiveFactsOutsideFirstWindowAndThreeOrdinaryMessages(t
 	if model.intakeCalls != 4 {
 		t.Fatalf("unbounded or repeated private passes: %d", model.intakeCalls)
 	}
+	model.proposal = document.FormAuditProposal{Decision: document.FormAuditPass}
+	reviewed := tool.Execute(ctx, map[string]any{"action": "form", "form_action": "review", "job_id": jobID})
+	review := decodeWorkflowResult(t, reviewed.ForLLM)
+	if reviewed.IsError || review.Review == nil || !review.Review.Ready {
+		t.Fatal("accepted paragraphs did not reach native review")
+	}
+	reviewFollowup, err := tool.ToolResultFollowup(reviewed)
+	if err != nil || reviewFollowup == nil || !reviewFollowup.ResponseOnly {
+		t.Fatal("review did not wait for a separate finish request")
+	}
+	model.interpret = func(view document.FormIntakeInterpretationView) (document.FormIntakeInterpretation, error) {
+		return document.FormIntakeInterpretation{
+			Intent:  document.FormIntakeIntentFinish,
+			NonData: []document.FormIntakeLiteral{{Text: view.Pass.Input.Text, Occurrence: 1}},
+		}, nil
+	}
+	progress, err := tool.FindProtectedFormIntake(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishRef, err := tool.AdmitProtectedFormIntake(ctx,
+		bus.InboundDocumentIntakeGuard{JobID: jobID, ModeID: progress.ModeID}, "separate-finish", "Finish this PDF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishArgs, err := tool.ProtectedAnswerContinuationArguments(finishRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := tool.Execute(ctx, finishArgs)
+	finish := decodeWorkflowResult(t, finished.ForLLM)
+	if finished.IsError || finish.Review == nil || !finish.Review.Ready || finish.Intake == nil ||
+		finish.Intake.Progress.PendingInputs != 0 || finish.Intake.Intent != document.FormIntakeIntentFinish ||
+		finish.Review.ReviewDigest != review.Review.ReviewDigest ||
+		finish.Intake.RequestRevision != review.Review.ReviewRevision {
+		t.Fatal("control-only finish reset the review or lost its admission provenance")
+	}
+	followup, err := tool.ProtectedAnswerContinuationFollowup(finished)
+	if err != nil || followup == nil || followup.ResponseOnly {
+		t.Fatal("separate finish failed to request existing final approval")
+	}
+	if err = followup.ValidateArguments(
+		map[string]any{"action": "form", "form_action": "commit", "job_id": jobID},
+	); err != nil {
+		t.Fatal(err)
+	}
+	calls := model.intakeCalls
+	tool.formJobs.Close()
+	tool.formJobs, err = document.OpenFormJobStore(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tool.formJobs.Close)
+	replayed := tool.Execute(ctx, finishArgs)
+	replay := decodeWorkflowResult(t, replayed.ForLLM)
+	if replayed.IsError || model.intakeCalls != calls || replay.Intake == nil ||
+		replay.Intake.Intent != finish.Intake.Intent || replay.Intake.RequestRevision != finish.Intake.RequestRevision {
+		t.Fatal("restart lost finish intent or called the private interpreter again")
+	}
 }
 
 func TestDocumentFormIntakeFailureReportsAcceptedPrefixWithoutExposingIt(t *testing.T) {

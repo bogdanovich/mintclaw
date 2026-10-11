@@ -77,9 +77,12 @@ func validateFormIntakeOutcome(record FormJobRecord, pass formIntakeStoredPass) 
 		return nil
 	}
 	if outcome.Intent != "" && !outcome.Intent.Valid() ||
-		!validDocumentDigest(outcome.Digest) || outcome.AppliedRevision <= pass.Revision ||
+		!validDocumentDigest(outcome.Digest) || outcome.AppliedRevision < pass.Revision ||
 		outcome.AppliedRevision > record.Revision ||
-		outcome.AppliedRevision != pass.Revision+int64(len(outcome.AcceptedIDs))+1 ||
+		// Older outcomes charged a final accounting revision. Both exact shapes
+		// remain readable; new writes charge only committed field events.
+		(outcome.AppliedRevision != pass.Revision+int64(len(outcome.AcceptedIDs)) &&
+			outcome.AppliedRevision != pass.Revision+int64(len(outcome.AcceptedIDs))+1) ||
 		len(outcome.AcceptedIDs)+len(outcome.AcknowledgedIDs)+len(outcome.Findings) > len(pass.CandidateIDs) {
 		return ErrFormJobRecordCorrupt
 	}

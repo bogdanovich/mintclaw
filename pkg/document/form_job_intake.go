@@ -246,7 +246,11 @@ func (store *FormJobStore) admitFormIntake(
 			return false, ErrFormJobCapacityExceeded
 		}
 		for _, input := range mode.Inputs {
-			if input.State == formIntakeInputStaged {
+			// A registry question remains a one-answer claim even when admission
+			// no longer advances the assignment revision. Exact transport replay
+			// was handled above; a new message cannot reuse the same claim.
+			if input.State == formIntakeInputStaged || staged && (input.InteractionID == interactionID ||
+				input.InteractionID != "" && equalFormIntakeOrigin(input.Origin, origin)) {
 				return false, ErrFormJobConflict
 			}
 		}
@@ -261,10 +265,8 @@ func (store *FormJobStore) admitFormIntake(
 		}
 		if !staged {
 			input.State, input.CommittedAt = formIntakeInputCommitted, now.UnixMilli()
-			record.Public.Revision++
 		}
 		mode.Inputs = append(mode.Inputs, input)
-		invalidateFormIntakeReview(&record.Public)
 		if err := store.writeFormIntakeSource(&record, key, source, now); err != nil {
 			return false, err
 		}
@@ -344,6 +346,9 @@ func (store *FormJobStore) ReserveFormIntakePass(
 			record.Public.Revision != request.ExpectedRevision || source.Intake.Inputs[index].State != formIntakeInputCommitted {
 			return false, ErrFormJobConflict
 		}
+		if stageErr := requireNoStagedFormIntake(record, key); stageErr != nil {
+			return false, stageErr
+		}
 		input := &source.Intake.Inputs[index]
 		digest := keyedDigest(store.profileKey, "intake_pass", input.ID, request.IdempotencyKey)
 		group := ""
@@ -370,6 +375,7 @@ func (store *FormJobStore) ReserveFormIntakePass(
 				"intake_retry",
 				group,
 				strconv.FormatInt(request.ExpectedRevision, 10),
+				strconv.Itoa(len(source.Intake.Inputs)),
 			)
 		}
 		reservationIndex := slices.IndexFunc(input.Reservations, func(pass formIntakeStoredPass) bool {
@@ -383,6 +389,9 @@ func (store *FormJobStore) ReserveFormIntakePass(
 				!slices.Equal(reservation.CandidateIDs, request.CandidateIDs) {
 				return false, ErrFormJobAnswerConflict
 			}
+			if reservation.Outcome == nil && reservation.ReceiptCount != len(source.Intake.Inputs) {
+				return false, ErrFormJobConflict
+			}
 		} else {
 			if len(input.Reservations) >= MaxFormIntakeExtractionPasses {
 				return false, ErrFormJobCapacityExceeded
@@ -391,6 +400,7 @@ func (store *FormJobStore) ReserveFormIntakePass(
 				ID:           "form_pass_" + digest[:32],
 				KeyDigest:    digest,
 				GroupDigest:  group,
+				ReceiptCount: len(source.Intake.Inputs),
 				Revision:     request.ExpectedRevision,
 				CandidateIDs: slices.Clone(request.CandidateIDs),
 			}
@@ -405,6 +415,9 @@ func (store *FormJobStore) ReserveFormIntakePass(
 			ID: reservation.ID, Revision: reservation.Revision,
 			CandidateIDs: slices.Clone(reservation.CandidateIDs), Reused: reused,
 		}
+		// This ephemeral interpretation sees the question at its reserved
+		// revision. The receipt's persisted origin remains immutable.
+		result.Input.Context = cloneFormIntakeContext(source.Intake.Context)
 		return !reused, nil
 	})
 	if err != nil {
@@ -512,9 +525,10 @@ func formIntakeInput(record FormJobRecord, mode *formIntakeStoredMode, input for
 	}
 	return FormIntakeInput{
 		JobID: record.JobID, ModeID: mode.ID, Reference: formIntakeReceiptPrefix + record.JobID + "." + input.ID,
-		Revision: record.Revision, Passes: len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
+		Revision: record.Revision, AdmittedRevision: input.Origin.ExpectedRevision,
 		DialogIntent: dialogIntent,
-		Intent:       input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
+		Passes:       len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
+		Intent: input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
 		Accounted: formIntakeAccountedLiterals(input),
 		Findings:  formIntakeCurrentFindings(input),
 	}
@@ -662,6 +676,7 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 		for _, reservation := range input.Reservations {
 			if !validDocumentDigest(reservation.KeyDigest) ||
 				reservation.GroupDigest != "" && !validDocumentDigest(reservation.GroupDigest) ||
+				reservation.ReceiptCount < 0 || reservation.ReceiptCount > len(mode.Inputs) ||
 				reservation.ID != "form_pass_"+prefixFormIntakeDigest(reservation.KeyDigest) ||
 				seenReservations[reservation.ID] || reservation.Revision <= 0 || reservation.Revision > record.Revision ||
 				!validFormIntakeCandidateIDs(reservation.CandidateIDs) {

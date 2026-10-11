@@ -650,6 +650,13 @@ func TestFormIntakeApplyStalePassKeepsAllMessagesAndFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	update := request
+	update.ExpectedRevision = second.Job.Revision
+	update.Context.Question = "Identify the person for these facts."
+	updated, err := store.UpdateFormIntakeContext(t.Context(), update, started.Progress.ModeID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if result, applyErr := store.ApplyFormIntakePass(
 		t.Context(),
 		apply,
@@ -658,7 +665,7 @@ func TestFormIntakeApplyStalePassKeepsAllMessagesAndFacts(t *testing.T) {
 		t.Fatalf("stale pass applied: %#v, %v", result, applyErr)
 	}
 	progress, err := store.FindFormIntake(t.Context(), request.Owner)
-	if err != nil || progress.PendingInputs != 2 || progress.Revision != second.Job.Revision {
+	if err != nil || progress.PendingInputs != 2 || progress.Revision != updated.Revision {
 		t.Fatal("stale pass discarded a message")
 	}
 	job, err := store.Get(t.Context(), request.JobID, request.Owner)
@@ -705,7 +712,7 @@ func TestFormIntakeApplyConcurrentExactRetriesPublishOnce(t *testing.T) {
 		if !result.Reused {
 			publications++
 		}
-		if !result.Consumed || result.Job.LedgerRevision != 1 || result.AppliedRevision != message.Job.Revision+2 {
+		if !result.Consumed || result.Job.LedgerRevision != 1 || result.AppliedRevision != message.Job.Revision+1 {
 			t.Fatalf("inconsistent replay: %#v", result)
 		}
 	}

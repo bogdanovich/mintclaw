@@ -17,6 +17,7 @@ import (
 
 type safeDocumentFormIntake struct {
 	Progress          document.FormIntakeProgress        `json:"progress"`
+	RequestRevision   int64                              `json:"request_revision,omitempty"`
 	Question          string                             `json:"question,omitempty"`
 	Summary           string                             `json:"form_summary,omitempty"`
 	Plan              string                             `json:"collection_plan,omitempty"`
@@ -298,13 +299,15 @@ func (tool *DocumentTool) continueFormIntake(
 	if err != nil || progress == nil || progress.JobID != input.JobID || progress.ModeID != input.ModeID {
 		return documentFormToolFailure("form_job_conflict", "the protected intake receipt is unavailable")
 	}
-	intake := safeDocumentFormIntake{Progress: *progress, Intent: input.DialogIntent}
+	intake := safeDocumentFormIntake{
+		Progress: *progress, RequestRevision: input.AdmittedRevision, Intent: input.DialogIntent,
+	}
 	references, err := tool.formJobs.FormIntakeReferences(ctx, input.JobID, input.ModeID, owner)
 	if err != nil {
 		return documentFormToolError(err)
 	}
 	for _, pending := range references {
-		result, processErr := tool.processFormIntakeInput(ctx, owner, schema, *progress, pending, reference, references)
+		result, processErr := tool.processFormIntakeInput(ctx, owner, schema, *progress, pending, reference)
 		intake.AcceptedCount += result.accepted
 		intake.AcknowledgedCount += result.acknowledged
 		if pending == reference {
@@ -344,7 +347,7 @@ type formIntakeProcessedInput struct {
 
 func (tool *DocumentTool) processFormIntakeInput(
 	ctx context.Context, owner document.FormJobOwner, schema document.FormFieldsFacts,
-	progress document.FormIntakeProgress, reference, trigger string, references []string,
+	progress document.FormIntakeProgress, reference, trigger string,
 ) (formIntakeProcessedInput, error) {
 	var result formIntakeProcessedInput
 	windows := formIntakeCandidateWindows(schema, progress.Context.CandidateFieldIDs)
@@ -354,6 +357,7 @@ func (tool *DocumentTool) processFormIntakeInput(
 			return result, err
 		}
 		if input.Consumed {
+			result.intent = input.DialogIntent
 			break
 		}
 		clarificationTrigger := ""
@@ -400,11 +404,16 @@ func (tool *DocumentTool) processFormIntakeInput(
 				result.intent = pass.Outcome.Intent
 				break
 			}
-			pass.Input.Context = progress.Context
 			view := document.FormIntakeInterpretationView{Pass: pass, Evidence: evidence}
+			// Refresh after reserving the admission snapshot. A subsequent new
+			// receipt will make native apply stale instead of hiding related input.
+			relatedReferences, err := tool.formJobs.FormIntakeReferences(ctx, input.JobID, input.ModeID, owner)
+			if err != nil {
+				return result, err
+			}
 			relatedBytes := 0
-			for index := len(references) - 1; index >= 0; index-- {
-				other := references[index]
+			for index := len(relatedReferences) - 1; index >= 0; index-- {
+				other := relatedReferences[index]
 				if other == reference {
 					continue
 				}
