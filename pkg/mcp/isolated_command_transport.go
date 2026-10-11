@@ -81,11 +81,11 @@ func startIsolatedCommand(
 	if command == nil {
 		return nil, errors.New("isolated command is required")
 	}
-	stdout, err := command.StdoutPipe()
+	stdoutPipe, err := command.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
-	stdout = io.NopCloser(stdout)
+	stdout := newDrainTrackedReadCloser(stdoutPipe)
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -109,9 +109,26 @@ func startIsolatedCommand(
 	if err := isolation.Start(command); err != nil {
 		return nil, errors.Join(err, pipe.Close())
 	}
+	stderrDone := make(chan struct{})
+	if private {
+		go func() {
+			defer close(stderrDone)
+			_, _ = io.Copy(io.Discard, stderr)
+		}()
+	} else {
+		go func() {
+			defer close(stderrDone)
+			logStdioProcessStderr(ctx, name, command.Path, stderr)
+		}()
+	}
 	waitCh := make(chan error, 1)
 	pipe.waitCh = waitCh
 	go func() {
+		// os/exec requires callers to finish reading StdoutPipe and
+		// StderrPipe before Wait. Waiting first can close either pipe while a
+		// final read is still in flight and lose otherwise valid output.
+		<-stdout.Done()
+		<-stderrDone
 		err := command.Wait()
 		fields := map[string]any{
 			"server":  name,
@@ -136,12 +153,35 @@ func startIsolatedCommand(
 			"command": command.Path,
 			"pid":     command.Process.Pid,
 		})
-	if private {
-		go func() { _, _ = io.Copy(io.Discard, stderr) }()
-	} else {
-		go logStdioProcessStderr(ctx, name, command.Path, stderr)
-	}
 	return pipe, nil
+}
+
+type drainTrackedReadCloser struct {
+	io.ReadCloser
+	done chan struct{}
+	once sync.Once
+}
+
+func newDrainTrackedReadCloser(reader io.ReadCloser) *drainTrackedReadCloser {
+	return &drainTrackedReadCloser{ReadCloser: reader, done: make(chan struct{})}
+}
+
+func (r *drainTrackedReadCloser) Read(payload []byte) (int, error) {
+	read, err := r.ReadCloser.Read(payload)
+	if err != nil {
+		r.once.Do(func() { close(r.done) })
+	}
+	return read, err
+}
+
+func (r *drainTrackedReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.once.Do(func() { close(r.done) })
+	return err
+}
+
+func (r *drainTrackedReadCloser) Done() <-chan struct{} {
+	return r.done
 }
 
 type isolatedPipeRWC struct {
@@ -175,6 +215,10 @@ func (s *isolatedPipeRWC) Close() error {
 	// descendants sharing the owned process group are gone before Close
 	// succeeds and an exclusive profile lease may be released.
 	s.stdinOnce.Do(func() { _ = s.stdin.Close() })
+	// Close may be called before the protocol reader reaches EOF. Release the
+	// stdout drain before process-tree polling so Wait can reap an exited root
+	// process instead of leaving it visible as a zombie.
+	_ = s.stdout.Close()
 	if err := s.stopProcessTree(s.terminateDuration); err != nil {
 		return err
 	}
@@ -206,6 +250,7 @@ func (s *isolatedPipeRWC) Abort() error {
 	if s.abortProcessTree == nil {
 		return errors.New("abrupt process-tree cleanup is unavailable")
 	}
+	_ = s.stdout.Close()
 	if err := s.abortProcessTree(s.terminateDuration); err != nil {
 		return err
 	}
