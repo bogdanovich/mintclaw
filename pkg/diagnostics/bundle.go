@@ -31,6 +31,7 @@ var defaultBundleOmissions = []string{
 	"source_and_diff_content",
 	"tool_arguments_and_results",
 	"unrelated_traces",
+	"unselected_owner_records",
 }
 
 type BundleSource struct {
@@ -44,6 +45,7 @@ type BundleSource struct {
 type BundleOptions struct {
 	OutputDir              string
 	Query                  QueryResult
+	Owners                 *OwnerReport
 	Source                 BundleSource
 	IncludeRedactedContent bool
 }
@@ -91,6 +93,7 @@ type BundleManifest struct {
 	Problems       []Problem     `json:"problems,omitempty"`
 	Traces         []BundleTrace `json:"traces"`
 	Files          []BundleFile  `json:"files"`
+	OwnersFile     string        `json:"owners_file,omitempty"`
 	MatchTruncated bool          `json:"match_truncated,omitempty"`
 	ScanTruncated  bool          `json:"scan_truncated,omitempty"`
 }
@@ -169,6 +172,17 @@ func WriteBundle(options BundleOptions) (BundleReceipt, error) {
 	if writeHealthErr := writePayload(output, "health.json", healthData, &files); writeHealthErr != nil {
 		return BundleReceipt{}, writeHealthErr
 	}
+	ownersFile := ""
+	if options.Owners != nil {
+		ownersData, marshalOwnersErr := marshalBundleJSON(options.Owners)
+		if marshalOwnersErr != nil {
+			return BundleReceipt{}, marshalOwnersErr
+		}
+		ownersFile = "owners.json"
+		if writeOwnersErr := writePayload(output, ownersFile, ownersData, &files); writeOwnersErr != nil {
+			return BundleReceipt{}, writeOwnersErr
+		}
+	}
 
 	traces := make([]BundleTrace, 0, len(options.Query.Matches))
 	for _, match := range options.Query.Matches {
@@ -220,7 +234,11 @@ func WriteBundle(options BundleOptions) (BundleReceipt, error) {
 	if options.IncludeRedactedContent {
 		privacyMode = "private_redacted_content"
 		private = true
-		omissions = []string{"service_logs_not_requested", "unrelated_traces"}
+		omissions = []string{
+			"service_logs_not_requested",
+			"unrelated_traces",
+			"unselected_owner_records",
+		}
 		warnings = []string{
 			"contains_private_redacted_trace_content",
 			"do_not_upload_without_explicit_operator_review",
@@ -233,7 +251,7 @@ func WriteBundle(options BundleOptions) (BundleReceipt, error) {
 			Omissions: omissions, Warnings: warnings, ManifestSelfDigest: "omitted_to_avoid_self_reference",
 		},
 		Selector: options.Query.Selector, Stores: options.Query.Stores, Problems: options.Query.Problems,
-		Traces: traces, Files: files, MatchTruncated: options.Query.MatchTruncated,
+		Traces: traces, Files: files, OwnersFile: ownersFile, MatchTruncated: options.Query.MatchTruncated,
 		ScanTruncated: options.Query.ScanTruncated,
 	}
 	manifestData, marshalManifestErr := marshalBundleJSON(manifest)

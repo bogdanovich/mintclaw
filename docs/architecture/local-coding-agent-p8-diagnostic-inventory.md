@@ -12,8 +12,10 @@ correlation are production-qualified. Local-coding trace-store ownership,
 deployment attribution, and privacy-safe project correlation are implemented
 and production-qualified.
 The H1c metadata-only list/show/correlate/export surface is implemented with
-bounded scans and checksummed support directories; production qualification
-and the remaining authoritative-owner/presentation summary are pending.
+bounded scans and checksummed support directories. Its authoritative-owner and
+presentation summary is implemented and production-qualified for successful
+and failed local coding turns; remote-coding owner qualification remains with
+the wider H6 canary matrix.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -556,8 +558,8 @@ coding canary is intended to use a deployed profile's authenticated provider.
 | Remote coding task | Task registry, worker ledger/thread | Parent tool result plus bounded terminal completion/delivery continuation | Task/generation/worker/thread, safe scope/profile, terminal uncertainty, completion, and delivery joins implemented; production qualification pending |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Invocation ID and safe policy/target aliases implemented and production-qualified |
 | Repository/worktree | Git/filesystem, worktree owner | Bounded repository context snapshot | Commit/snapshot projection, privacy-safe project hash, and trace-store corrections are production-qualified without paths or diffs |
-| TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c exports bounded current-view/version facts, not cell history |
-| Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c bounded query/export summarizes disabled/drop/expiry/corruption truth and awaits production qualification |
+| TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c persists a common-controller, content-free presentation revision/count checkpoint; successful and failed local turns are production-qualified, missing checkpoints remain explicitly unavailable, and cell history is never copied |
+| Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c bounded query/export summarizes disabled/drop/expiry/corruption truth plus exact authoritative-owner state and is production-qualified for local coding |
 
 ## H1a exit assessment
 

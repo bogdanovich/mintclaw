@@ -141,7 +141,7 @@ func intakeIngressTestReference() string {
 func TestDocumentIntakeTurnAndSteeringRearmTheExistingProtectedFence(t *testing.T) {
 	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
 	defer cleanup()
-	agent.Tools.Register(tools.NewDocumentTool())
+	agent.Tools.RegisterHidden(tools.NewDocumentTool())
 	reference := intakeIngressTestReference()
 	opts := makeTestTurnSpec("intake-transport")
 	opts.DocumentIntakeReference = reference
@@ -155,11 +155,19 @@ func TestDocumentIntakeTurnAndSteeringRearmTheExistingProtectedFence(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	llm := newLLMIterationState(1)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); err != nil {
+		t.Fatal(err)
+	}
+	if len(llm.providerToolDefs) != 1 || llm.providerToolDefs[0].Function.Name != "document" {
+		t.Fatal("protected intake did not restore its deferred document tool")
+	}
 	if !exec.protectedAnswerContinuation.pending() ||
 		exec.protectedAnswerContinuation.arguments["answer_ref"] != reference {
 		t.Fatal("trusted receipt did not install the mechanical document continuation")
 	}
 	exec.protectedAnswerContinuation.complete()
+	agent.Tools.TickTTL()
 	steered := strings.Replace(reference, strings.Repeat("b", 32), strings.Repeat("c", 32), 1)
 	message := providers.Message{
 		Role:                    "user",
@@ -177,6 +185,9 @@ func TestDocumentIntakeTurnAndSteeringRearmTheExistingProtectedFence(t *testing.
 	if !exec.protectedAnswerContinuation.pending() ||
 		exec.protectedAnswerContinuation.arguments["answer_ref"] != steered {
 		t.Fatal("busy-turn receipt was treated as unrestricted steering")
+	}
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, newLLMIterationState(2)); err != nil {
+		t.Fatal(err)
 	}
 	state := exec.protectedAnswerContinuation
 	if state.accept(&providers.LLMResponse{Content: "Please repeat your name"}) {

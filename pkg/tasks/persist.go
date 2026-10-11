@@ -22,20 +22,8 @@ func (r *Registry) load() error {
 		}
 		return err
 	}
-	var snap Snapshot
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&snap); err != nil {
-		return err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return fmt.Errorf("task registry contains a trailing JSON value")
-		}
-		return fmt.Errorf("task registry contains trailing data: %w", err)
-	}
-	if err := validateSnapshot(snap); err != nil {
+	snap, err := decodeSnapshot(data)
+	if err != nil {
 		return err
 	}
 	records := make(map[string]Record, len(snap.Tasks))
@@ -45,6 +33,26 @@ func (r *Registry) load() error {
 	r.records = records
 	r.events = append([]TaskEvent(nil), snap.Events...)
 	return nil
+}
+
+func decodeSnapshot(data []byte) (Snapshot, error) {
+	var snap Snapshot
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&snap); err != nil {
+		return Snapshot{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return Snapshot{}, fmt.Errorf("task registry contains a trailing JSON value")
+		}
+		return Snapshot{}, fmt.Errorf("task registry contains trailing data: %w", err)
+	}
+	if err := validateSnapshot(snap); err != nil {
+		return Snapshot{}, err
+	}
+	return snap, nil
 }
 
 func validateSnapshot(snapshot Snapshot) error {

@@ -260,6 +260,19 @@ func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
 	)
 }
 
+// RestoreToolVisibility gives an expired registered tool a one-iteration lease.
+// Trusted recovery uses this atomic lifecycle operation so concurrent discovery
+// cannot have its existing lease shortened. Sealed hidden catalogs stay sealed.
+func (r *ToolRegistry) RestoreToolVisibility(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.tools[name]
+	if !ok || r.sealed || entry.IsCore || entry.TTL > 0 {
+		return
+	}
+	entry.TTL = 1
+}
+
 // TickTTL decreases TTL only for non-core tools
 func (r *ToolRegistry) TickTTL() {
 	r.TickTTLExcept(nil)

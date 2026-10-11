@@ -2950,3 +2950,64 @@ func TestHydratedTranscriptTextUsesBoundedValidUTF8(t *testing.T) {
 		t.Fatalf("bounded text bytes=%d truncated=%v valid=%v", len(text), truncated, utf8.ValidString(text))
 	}
 }
+
+func TestNativeControllerPersistsContentFreePresentationCheckpoint(t *testing.T) {
+	root := t.TempDir()
+	store, err := thread.NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := thread.ResolveProject(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(
+		thread.NewThreadID(),
+		project,
+		"private metadata title",
+		time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	projector, err := frontend.NewProjector(metadata.ThreadID, frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.Open(false)
+	projector.TurnStarted("turn-presentation-safe", "PRIVATE_PRESENTATION_MARKER")
+	checkpointAt := metadata.CreatedAt.Add(time.Minute)
+	runtime := &nativeControllerRuntime{
+		lease: lease, projector: projector,
+		metadataState: newCodingMetadataState(store, lease, metadata, func() time.Time { return checkpointAt }),
+	}
+	if err = runtime.persistPresentationCheckpoint(); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := store.Inspect(t.Context(), metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.PresentationAvailability != "available" || inspection.Presentation == nil ||
+		inspection.Presentation.PresentationRevision < 2 || inspection.Presentation.ItemCount != 1 ||
+		inspection.Presentation.Activity != "running" {
+		t.Fatalf("presentation inspection = %#v", inspection)
+	}
+	encoded, err := json.Marshal(inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"PRIVATE_PRESENTATION_MARKER", metadata.Title, project.ProjectRoot} {
+		if strings.Contains(string(encoded), private) {
+			t.Fatalf("presentation checkpoint leaked %q: %s", private, encoded)
+		}
+	}
+}

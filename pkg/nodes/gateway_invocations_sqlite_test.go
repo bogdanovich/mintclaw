@@ -893,6 +893,25 @@ func TestGatewayInvocationSQLiteInspect(t *testing.T) {
 		report.MaximumBytes < 16*1024*1024 || report.RetentionSeconds != int64(7*24*time.Hour/time.Second) {
 		t.Fatalf("inspection report = %#v", report)
 	}
+
+	inspection, found, err := InspectGatewayInvocation(path, plan.InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || inspection.InvocationID != plan.InvocationID || inspection.Target != "vpn" ||
+		inspection.ToolCallID != "call-sqlite-inspect" || inspection.State != GatewayInvocationPrepared ||
+		inspection.CreatedAt == 0 || inspection.UpdatedAt == 0 || inspection.PlanExpiresAt != plan.ExpiresAt ||
+		inspection.DispatchedAt != 0 || inspection.HasExecutionScope || inspection.CancellationRequested {
+		t.Fatalf("invocation inspection = (%#v, %v)", inspection, found)
+	}
+	if _, found, err = InspectGatewayInvocation(path, "inv_sqlite_missing"); err != nil || found {
+		t.Fatalf("missing invocation inspection = (%v, %v)", found, err)
+	}
+	for _, invalid := range []string{"", "../private", strings.Repeat("x", MaxIDLength+1)} {
+		if _, found, err = InspectGatewayInvocation(path, invalid); !errors.Is(err, ErrInvalidInvocation) || found {
+			t.Fatalf("invalid invocation inspection %q = (%v, %v)", invalid, found, err)
+		}
+	}
 }
 
 func closeGatewayInvocationSQLiteTestStore(t *testing.T, store *GatewayInvocationStore) func() {
