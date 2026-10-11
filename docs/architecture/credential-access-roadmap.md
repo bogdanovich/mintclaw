@@ -235,8 +235,12 @@ entire personal vault.
   role/path/data denial; the executable does not invoke it. Full activation
   and caller/consumer admission remain required before any real token read.
 - CA3: [verifier candidate qualification](credential-phone-approval-qualification.md)
-  records build and upstream fixture evidence; control-plane and Android
-  end-to-end implementation remain pending.
+  records build and upstream fixture evidence. The private passkey controller
+  and protected owner-key store now implement signed enrollment/approval/revoke
+  verification, scope binding, bounded single-use challenges, policy-transition
+  invalidation, and durable counter updates. They have no executable entry
+  point. Protected setup/control wiring, the HTTPS UI, notifications, and
+  actual Android end-to-end qualification remain pending.
 - CA4–CA6: pending their dependencies and admission/qualification gates.
   Runtime credential access remains disabled and no real token is provisioned.
 

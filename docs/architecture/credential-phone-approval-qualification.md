@@ -17,7 +17,8 @@ these commands explicitly used MintClaw's Go 1.26.9 toolchain.
 upstream fixture tests, not tests of MintClaw's future approval integration.
 `OP_SERVICE_ACCOUNT_TOKEN` was removed from every build/test environment
 without reading it. No real token, vault, passkey, phone, or approval was
-accessed. The dependency has not been added to the application.
+accessed. The dependency is now pinned for the private approval controller;
+the gateway and the current provision-only executable do not import it.
 
 ## Required control-service contract
 
@@ -41,10 +42,60 @@ accessed. The dependency has not been added to the application.
 - Notification URLs locate requests and never approve them. Return fixed
   failures that exclude assertion bodies and raw verifier diagnostics.
 
-CA3 still requires hostile-input, origin, user-verification, expiration,
-single-use, concurrency, policy-transition, owner-substitution, enrollment,
-and Android remote-approval tests. The control endpoint, owner-key store,
-enrollment path, and notification channel are not implemented.
+## Private controller implementation
+
+`cmd/mintclaw-credential/internal/approval` owns policy, exact provider-binding
+snapshots, pending requests, the complete verifier sessions, and grant authority
+under one lock. There is no externally mutable Authority pointer or direct
+approval boolean. Requests and ceremonies are bounded to 64 records each and
+five monotonic minutes. A finish attempt consumes its ceremony before parsing
+or verification, including canceled, invalid, and operation-substituted attempts.
+Every effective policy transition clears pending requests, ceremonies, and
+grants, including A-B-A. Equivalent normalized policy retains authority.
+
+One owner, one exact HTTPS browser origin, and ES256 registration are admitted.
+Registration and assertions require user presence and verification. Timeouts
+are enforced both by the verifier and by the controller, including after a
+durable write. Cross-origin, related-origin, native, and opaque-origin modes
+are absent. Browser options are independently encoded public data; the private
+SessionData returned by Begin is retained intact by the controller.
+
+The constructor returns an initial `OwnerSetup` capability only to trusted
+startup when no key is enrolled. Its zero value denies access. The ordinary
+controller cannot begin or finish enrollment. Startup must keep the capability
+outside the public approval handler and admit its use only through an
+authenticated protected owner action. Possession of a Go object does not
+establish human approval or qualify the eventual enrollment channel.
+
+Linux owner storage uses a service-owned mode-0700 directory below root-owned,
+non-writable, non-symlink ancestry. Records are service-owned mode-0600 regular
+files with one link and no extended access ACL. A lifetime directory lock
+prevents concurrent controllers from using stale counters. The complete
+library Credential record is atomically replaced and both file and directory
+are synced before grant issuance. An uncertain write permanently disables the
+controller; restart reloads state but restores no grants or challenges. A clone
+warning is persisted and disables authority, including after restart; recovery
+needs a separate protected operator procedure. Other platforms deny store use.
+These metadata checks do not prove process-role or agent/browser isolation.
+
+Signed synthetic ES256 fixtures exercise enrollment, approval, revocation,
+exact scope binding, malicious origin/UV/key/owner/operation substitution,
+replay, concurrency, request expiration during persistence, cancellation,
+policy transitions, capacity, durable failures, and clone warnings. The
+disposable Linux owner-store fixture exercises actual permissions, ACLs,
+symlinks, hard links, FIFO denial, store locking, and restart state.
+
+Reproduce the filesystem fixture with Go and Docker available:
+
+```sh
+bash scripts/qualify-credential-approval.sh
+```
+
+This implements private authorization and persistence. No HTTP listener,
+notification, SDK call, token access, public enrollment endpoint, or model tool
+is activated. CA3 still requires protected startup/enrollment wiring, HTTPS
+approval/revoke UI, authorized notifications, and actual Android remote approval
+and revocation evidence. Credential-browser lease enforcement remains CA4.
 
 ## Primary sources
 
