@@ -12,6 +12,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   independent artifact/state checks, LLM user simulation, and separate rubric judging; approved for implementation.
 - [Manual Agent Evals Roadmap](agent-evals-roadmap.md): admitted bounded runner, model roles, PDF/browser suites,
   workspace presets, and baseline comparisons without live evals in CI.
+- [Eval Runtime Admission Probe](agent-evals-runtime-probe.md): authenticated read-only active-config identity for
+  isolated-target preflight; not an isolation certificate or tool authority.
 - [Manual Agent Evals First-Release Goal](agent-evals-goal.md): frozen packets, minimum cases, safety/evidence contracts,
   acceptance matrix, and finite completion gates for E1-E5.
 - [Runtime Capability And Turn-Engine Convergence Roadmap](runtime-capability-convergence-roadmap.md): shared tool

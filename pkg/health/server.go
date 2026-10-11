@@ -10,11 +10,12 @@ import (
 )
 
 type Server struct {
-	mu         sync.RWMutex
-	ready      bool
-	startTime  time.Time
-	reloadFunc func() error
-	authToken  string // optional bearer token for protected endpoints
+	mu           sync.RWMutex
+	ready        bool
+	startTime    time.Time
+	reloadFunc   func() error
+	authToken    string // optional bearer token for protected endpoints
+	runtimeProbe func() (RuntimeProbe, error)
 }
 
 type StatusResponse struct {
@@ -132,11 +133,12 @@ type HandlerMux interface {
 	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
 }
 
-// RegisterOnMux registers /health, /ready and /reload handlers onto the given mux.
+// RegisterOnMux registers health and protected operator endpoints on the shared mux.
 func (s *Server) RegisterOnMux(mux HandlerMux) {
 	mux.HandleFunc("/health", s.healthHandler)
 	mux.HandleFunc("/ready", s.readyHandler)
 	mux.HandleFunc("/reload", s.reloadHandler)
+	mux.HandleFunc("/runtime", s.runtimeHandler)
 }
 
 // extractBearerToken returns the token from an "Authorization: Bearer <t>" header,
