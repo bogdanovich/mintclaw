@@ -135,9 +135,13 @@ If a backend can only create a flattened copy, do not promise that its remaining
    Merge the exit report and mark PDFI4 complete only after all gates below pass.
 
 Each code packet has independently testable contracts and may be split further at an architecture checkpoint, without
-dropping any acceptance criterion. Merge a prerequisite before implementing its dependent packet. Use
-`mintclaw-autonomous-pr`: code needs green exact-head required CI, actual review, no actionable unresolved threads,
-and authorized rocket approval; docs-only admission and exit follow the docs-only exception.
+dropping any acceptance criterion. Prefer merging a prerequisite before its dependent packet. When external CI or
+review waiting prevents useful progress, the autonomous PR flow may prepare a small, explicitly stacked dependent PR.
+Record its dependency, keep incomplete user-facing behavior disabled, and retarget/revalidate after the prerequisite
+merges. Never enable or deploy the dependent behavior before every prerequisite is merged. This execution-order
+flexibility does not waive any acceptance, privacy, authority, review, or deployment gate. Use `mintclaw-autonomous-pr`:
+code needs green exact-head required CI, actual review, no actionable unresolved threads, and authorized rocket
+approval; docs-only admission and exit follow the docs-only exception.
 
 ## Fixed Bounds And Stop Gates
 
