@@ -231,6 +231,9 @@ type FormJobRecord struct {
 	SourceDigest         string                 `json:"source_digest"`
 	FieldSchemaDigest    string                 `json:"field_schema_digest"`
 	BackendRevision      string                 `json:"backend_revision"`
+	OutputMode           FormOutputMode         `json:"output_mode,omitempty"`
+	OutputScope          FormOutputScope        `json:"output_scope,omitempty"`
+	DeferredFieldIDs     []string               `json:"deferred_field_ids,omitempty"`
 	AuditPolicyRevision  string                 `json:"audit_policy_revision"`
 	LedgerRevision       int64                  `json:"ledger_revision"`
 	LedgerDigest         string                 `json:"ledger_digest,omitempty"`
@@ -263,6 +266,7 @@ type FormJobCreateRequest struct {
 	SourceDigest        string
 	FieldSchemaDigest   string
 	BackendRevision     string
+	OutputMode          FormOutputMode
 	AuditPolicyRevision string
 	Retention           time.Duration
 }
@@ -468,6 +472,9 @@ func validateFormJobRecord(record FormJobRecord) error {
 	if record.FailureCode != "" && !safeFormJobCodePattern.MatchString(record.FailureCode) {
 		return ErrFormJobRecordCorrupt
 	}
+	if validateFormOutputScope(record) != nil {
+		return ErrFormJobRecordCorrupt
+	}
 	if err := validateFormJobReviewProjection(record); err != nil {
 		return err
 	}
@@ -503,6 +510,7 @@ func cloneFormJobRecord(record FormJobRecord) FormJobRecord {
 	cloned := record
 	cloned.Fields = append([]FormJobFieldState(nil), record.Fields...)
 	cloned.AuditBlockers = append([]FormJobReviewBlocker(nil), record.AuditBlockers...)
+	cloned.DeferredFieldIDs = append([]string(nil), record.DeferredFieldIDs...)
 	return cloned
 }
 
@@ -616,7 +624,7 @@ func validateFormJobCommitProjection(record FormJobRecord) error {
 		return nil
 	}
 	if record.ApprovalRevision <= record.ReviewRevision || record.ApprovalRevision > record.Revision ||
-		record.ApprovalDigest == "" || record.OutputPolicyRevision == "" ||
+		record.ApprovalDigest == "" || record.OutputPolicyRevision != record.FormOutputPolicy() ||
 		!validWriteOperationID(record.OperationID) {
 		return ErrFormJobRecordCorrupt
 	}

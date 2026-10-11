@@ -13,23 +13,27 @@ import (
 
 const FormCommitOutputPolicyRevision = "mintclaw.document_form_output.verified_pdf.v1"
 
+const FormCommitDraftOutputPolicyRevision = "mintclaw.document_form_output.editable_draft.v1"
+
 // FormCommitBinding is the value-free authority hashed into one durable
 // approval. It deliberately contains no source reference, field value, path,
 // or filename.
 type FormCommitBinding struct {
-	JobID                string `json:"job_id"`
-	OwnerDigest          string `json:"owner_digest"`
-	ApprovalRevision     int64  `json:"approval_revision"`
-	ReviewRevision       int64  `json:"review_revision"`
-	SourceDigest         string `json:"source_digest"`
-	FieldSchemaDigest    string `json:"field_schema_digest"`
-	BackendRevision      string `json:"backend_revision"`
-	AuditPolicyRevision  string `json:"audit_policy_revision"`
-	AssignmentDigest     string `json:"assignment_digest"`
-	ReviewDigest         string `json:"review_digest"`
-	OutputPolicyRevision string `json:"output_policy_revision"`
-	OperationID          string `json:"operation_id"`
-	ExpiresAt            int64  `json:"expires_at"`
+	JobID                string          `json:"job_id"`
+	OwnerDigest          string          `json:"owner_digest"`
+	ApprovalRevision     int64           `json:"approval_revision"`
+	ReviewRevision       int64           `json:"review_revision"`
+	SourceDigest         string          `json:"source_digest"`
+	FieldSchemaDigest    string          `json:"field_schema_digest"`
+	BackendRevision      string          `json:"backend_revision"`
+	AuditPolicyRevision  string          `json:"audit_policy_revision"`
+	AssignmentDigest     string          `json:"assignment_digest"`
+	ReviewDigest         string          `json:"review_digest"`
+	OutputPolicyRevision string          `json:"output_policy_revision"`
+	OutputScope          FormOutputScope `json:"output_scope,omitempty"`
+	OutputMode           FormOutputMode  `json:"output_mode,omitempty"`
+	OperationID          string          `json:"operation_id"`
+	ExpiresAt            int64           `json:"expires_at"`
 }
 
 type FormCommitRequest struct {
@@ -48,6 +52,7 @@ type FormCommitArtifactRequest struct {
 	OperationID      string
 	ArtifactRef      string
 	ArtifactDigest   string
+	OutputMode       FormOutputMode
 }
 
 // PrepareFormCommitApproval freezes one exact reviewed assignment behind a
@@ -76,6 +81,9 @@ func (store *FormJobStore) PrepareFormCommitApproval(
 		if record.Public.AuditPolicyRevision != request.AuditPolicyRevision {
 			return false, ErrFormAuditPolicyChanged
 		}
+		if record.Public.FormOutputPolicy() != request.OutputPolicyRevision {
+			return false, ErrFormApprovalStale
+		}
 		if record.Public.State == FormJobAwaitingApproval {
 			binding, err = formCommitBindingFromRecord(record.Public)
 			if err != nil || binding.OutputPolicyRevision != request.OutputPolicyRevision {
@@ -102,6 +110,7 @@ func (store *FormJobStore) PrepareFormCommitApproval(
 			AuditPolicyRevision: record.Public.AuditPolicyRevision,
 			AssignmentDigest:    record.Public.AssignmentDigest, ReviewDigest: record.Public.ReviewDigest,
 			OutputPolicyRevision: request.OutputPolicyRevision, OperationID: operationID,
+			OutputScope: record.Public.OutputScope, OutputMode: record.Public.OutputMode,
 			ExpiresAt: record.Public.ExpiresAt,
 		}
 		approvalDigest, err := formJobJSONDigest(binding)
@@ -138,7 +147,8 @@ func (store *FormJobStore) CurrentFormCommitBinding(
 	if err = formJobMatchesSchema(record, request.Schema); err != nil {
 		return FormJobRecord{}, FormCommitBinding{}, err
 	}
-	if record.AuditPolicyRevision != request.AuditPolicyRevision ||
+	if record.FormOutputPolicy() != request.OutputPolicyRevision ||
+		record.AuditPolicyRevision != request.AuditPolicyRevision ||
 		record.OutputPolicyRevision != request.OutputPolicyRevision {
 		return FormJobRecord{}, FormCommitBinding{}, ErrFormApprovalStale
 	}
@@ -170,6 +180,10 @@ func (store *FormJobStore) BeginFormCommit(
 		defer clear(jobKey)
 		if intakeErr := requireSettledFormIntake(record, jobKey); intakeErr != nil {
 			return false, intakeErr
+		}
+		if record.Public.FormOutputPolicy() != request.OutputPolicyRevision ||
+			record.Public.AuditPolicyRevision != request.AuditPolicyRevision {
+			return false, ErrFormApprovalStale
 		}
 		if record.Public.State == FormJobCommitting {
 			binding, bindingErr := formCommitBindingFromRecord(record.Public)
@@ -221,6 +235,7 @@ func (store *FormJobStore) MaterializeFormCommit(
 			return false, intakeErr
 		}
 		if record.Public.State != FormJobCommitting || record.Public.Revision != request.ExpectedRevision ||
+			record.Public.FormOutputPolicy() != request.OutputPolicyRevision ||
 			record.Public.AuditPolicyRevision != request.AuditPolicyRevision ||
 			record.Public.OutputPolicyRevision != request.OutputPolicyRevision {
 			return false, ErrFormApprovalStale
@@ -256,7 +271,7 @@ func (store *FormJobStore) RecordFormCommitArtifact(
 ) (FormJobRecord, error) {
 	if strings.TrimSpace(request.JobID) == "" || request.ExpectedRevision <= 0 ||
 		!validWriteOperationID(request.OperationID) || !validDurableArtifactRef(request.ArtifactRef) ||
-		!validDocumentDigest(request.ArtifactDigest) {
+		!validDocumentDigest(request.ArtifactDigest) || !validFormJobOutputMode(request.OutputMode) {
 		return FormJobRecord{}, errors.New("document form commit artifact is invalid")
 	}
 	var result FormJobRecord
@@ -264,6 +279,9 @@ func (store *FormJobStore) RecordFormCommitArtifact(
 		record, err := store.authorizedPublicRecord(document, request.JobID, request.Owner)
 		if err != nil {
 			return false, err
+		}
+		if record.Public.OutputMode != "" && record.Public.OutputMode != request.OutputMode {
+			return false, ErrFormApprovalStale
 		}
 		if record.Public.State == FormJobDelivering {
 			if record.Public.OperationID != request.OperationID || record.Public.ArtifactRef != request.ArtifactRef ||
@@ -330,7 +348,8 @@ func validateFormCommitRequest(request FormCommitRequest) error {
 	}
 	if strings.TrimSpace(request.JobID) == "" || request.ExpectedRevision <= 0 ||
 		!validFormFieldsFacts(request.Schema) || strings.TrimSpace(request.AuditPolicyRevision) == "" ||
-		request.OutputPolicyRevision != FormCommitOutputPolicyRevision {
+		(request.OutputPolicyRevision != FormCommitOutputPolicyRevision &&
+			request.OutputPolicyRevision != FormCommitDraftOutputPolicyRevision) {
 		return errors.New("document form commit request is invalid")
 	}
 	return nil
@@ -344,6 +363,7 @@ func formCommitBindingFromRecord(record FormJobRecord) (FormCommitBinding, error
 		AuditPolicyRevision: record.AuditPolicyRevision, AssignmentDigest: record.AssignmentDigest,
 		ReviewDigest: record.ReviewDigest, OutputPolicyRevision: record.OutputPolicyRevision,
 		OperationID: record.OperationID, ExpiresAt: record.ExpiresAt,
+		OutputScope: record.OutputScope, OutputMode: record.OutputMode,
 	}
 	digest, err := formJobJSONDigest(binding)
 	if err != nil || !constantTimeStringEqual(digest, record.ApprovalDigest) {
@@ -386,7 +406,7 @@ func formCommitHasMaterializableAssignment(record FormJobRecord, schema FormFiel
 func materializeProtectedFormFill(fields []FormAuditField) (FillMap, error) {
 	fill := FillMap{SchemaVersion: FillMapSchemaVersion}
 	for _, field := range fields {
-		if field.Existing {
+		if field.Existing || field.Deferred {
 			continue
 		}
 		value, selected, err := materializeProtectedFormValue(field.Schema, field.State, field.Value)

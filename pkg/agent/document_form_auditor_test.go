@@ -87,6 +87,24 @@ func TestDocumentFormAuditorUsesEphemeralStrictTypedCall(t *testing.T) {
 	}
 }
 
+func TestDocumentFormAuditorDistinguishesDeferredDraftFieldsWithoutInventingValues(t *testing.T) {
+	payload, err := encodeDocumentFormAuditView(document.FormAuditView{
+		OutputScope: document.FormOutputEditableDraft, OutputMode: document.FormOutputEditableAcroForm,
+		Fields: []document.FormAuditField{{
+			Schema: document.FormField{ID: "field_" + strings.Repeat("a", 64), Required: true}, Deferred: true,
+		}},
+	})
+	if err != nil || !strings.Contains(string(payload), `"deferred":true`) ||
+		!strings.Contains(
+			string(payload),
+			`"required":true`,
+		) || !strings.Contains(string(payload), `"output_scope":"editable_draft"`) ||
+		strings.Contains(string(payload), `"value"`) {
+		t.Fatal("private draft audit lost scope or manufactured a field value")
+	}
+	clear(payload)
+}
+
 func TestDocumentFormAuditorFailsClosedOnAliasProviderAndShape(t *testing.T) {
 	provider := &documentAuditTestProvider{response: &providers.LLMResponse{
 		Content: "```json\n{\"decision\":\"pass\"}\n```",

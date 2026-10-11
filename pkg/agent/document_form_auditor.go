@@ -162,12 +162,16 @@ const documentFormAuditSystemPrompt = `You audit one protected PDF form assignme
 	`"code":"field_ambiguous|field_conflicting|field_confirmation_required|field_invalid"}]}. ` +
 	`Use only field IDs present in the request. Never copy, transform, summarize, or emit a field value. ` +
 	`Pass only when the supplied assignments are internally coherent with the bounded field schema. ` +
+	`An editable_draft explicitly omits deferred fields without claiming completeness. ` +
+	`Deferred fields have no supplied value; assess this scope and the retained assignments, never invent blank values. ` +
 	`Your output is advisory and cannot confirm or modify an assignment.`
 
 type documentFormAuditPayload struct {
 	SchemaVersion  string                          `json:"schema_version"`
 	PolicyRevision string                          `json:"policy_revision"`
 	SchemaDigest   string                          `json:"schema_digest"`
+	OutputScope    document.FormOutputScope        `json:"output_scope,omitempty"`
+	OutputMode     document.FormOutputMode         `json:"output_mode,omitempty"`
 	Fields         []documentFormAuditFieldPayload `json:"fields"`
 }
 
@@ -182,6 +186,7 @@ type documentFormAuditFieldPayload struct {
 	DateFormat  string                       `json:"date_format,omitempty"`
 	Options     []document.FormFieldOption   `json:"options,omitempty"`
 	Existing    bool                         `json:"existing,omitempty"`
+	Deferred    bool                         `json:"deferred,omitempty"`
 	State       document.FormValueState      `json:"state,omitempty"`
 	Source      document.FormValueSource     `json:"source,omitempty"`
 	Confidence  document.FormValueConfidence `json:"confidence,omitempty"`
@@ -194,6 +199,8 @@ func encodeDocumentFormAuditView(view document.FormAuditView) ([]byte, error) {
 		SchemaVersion:  document.FormAuditPromptRevision,
 		PolicyRevision: view.PolicyRevision,
 		SchemaDigest:   view.SchemaDigest,
+		OutputScope:    view.OutputScope,
+		OutputMode:     view.OutputMode,
 		Fields:         make([]documentFormAuditFieldPayload, 0, len(view.Fields)),
 	}
 	for _, field := range view.Fields {
@@ -204,6 +211,7 @@ func encodeDocumentFormAuditView(view document.FormAuditView) ([]byte, error) {
 			DateFormat: field.Schema.DateFormat,
 			Options:    append([]document.FormFieldOption(nil), field.Schema.Options...),
 			Existing:   field.Existing, State: field.State.State, Source: field.State.Source,
+			Deferred:   field.Deferred,
 			Confidence: field.State.Confidence, Validation: field.State.Validation,
 			Value: field.Value,
 		})
