@@ -6,7 +6,8 @@ The private `mintclaw-credential/internal/supervision` package owns one Linux
 cgroup-v2 worker forest at a time. It provides a concrete termination operation
 for the [private browser channel](credential-browser-private-channel.md).
 No command, listener, provider startup, or agent tool currently invokes it.
-It does not complete browser supervision or activate credential access.
+It also allocates a private network namespace for later browser startup.
+Neither primitive completes browser supervision or activates credential access.
 
 Only real/effective Root UID and GID may open or start it. Production startup
 uses the fixed parent `/sys/fs/cgroup/mintclaw-credential-browser.slice`, which
@@ -44,11 +45,39 @@ admits no replacement worker. Protected operator repair/service teardown is
 required before reopening an empty parent. Raw spawn and process errors are
 discarded; callers receive one fixed error.
 
+## Private network namespace
+
+`OpenNetwork` requires real/effective Root UID and GID. It creates a fresh
+Linux network namespace on a dedicated locked OS thread, enables only loopback,
+and binds one non-reusable IPv4 TCP listener to `127.0.0.1` on an ephemeral
+unprivileged port. No bridge, veth, external interface/route, DNS service, or
+host firewall rule is created. Socket `SIOCGSKNS` evidence must identify the
+exact newly created namespace; a listener in the host namespace is inadmissible.
+
+Setup pins the original thread's namespace before unsharing and restores it
+before publishing either descriptor. If restoration fails, the locked thread
+exits without unlocking and Go terminates it rather than reusing contaminated
+thread state. Cancellation returns a fixed denial and cleans any late setup
+result. Unsupported namespace evidence denies; there is no host-network fallback.
+
+Qualified Root startup can borrow independent namespace and listener pins.
+The future authenticated supervision transport must give the broker only the
+listener and enter the browser's namespace before dropping its privileges.
+The broker can serve that socket while its own approved upstream connections
+use its normal network namespace. The browser has no direct external route.
+The enforcing proxy still owns HTTP/origin/lease admission within this boundary.
+
+The caller owns borrowed descriptors. `Network.Close` releases its originals
+and prevents further borrowing; it cannot revoke another process's copies.
+Full teardown must close the enforcing proxy and accepted sockets, retire the
+complete browser forest, and close every borrowed pin. Creation context is an
+admission/cancellation input, not a grant or a lease-renewal mechanism.
+
 ## Qualification and remaining gates
 
 `scripts/qualify-credential-browser-forest.sh` is for a disposable Linux
 qualification host. It builds a race-enabled test executable and runs it in a
-temporary Root systemd unit with private child groups, bounded tasks/memory,
+temporary Root systemd unit with private child groups and network namespace, bounded tasks/memory,
 a runtime deadline, and an empty environment. It never accepts a token or
 opens a vault. The PR integration job runs it as a mandatory step.
 
@@ -59,6 +88,17 @@ token-environment refusal, and unsafe cleanup-control metadata that must quarant
 the supervisor and deny restart. Only known synthetic groups are repaired and removed
 by the fixture. The ordinary parser tests reject ambiguous kernel evidence.
 Non-Linux builds fail closed.
+
+The same qualification script runs the private network fixture under the race
+detector. It witnesses a distinct namespace and original-thread restoration,
+adopts the listener from the broker's namespace, connects and transfers a
+synthetic byte from the private namespace, and requires kernel `ENETUNREACH`
+for direct external IPv4 and IPv6 destinations (or unavailable IPv6 support).
+It also verifies unprivileged setup denial, canceled borrowing, repeated
+allocation/cleanup and closed-resource denial. A separate child exhausts
+descriptor allocation after unshare to verify failed setup restores the original
+Go namespace. The fixtures create no browser, load no token, and change no
+production network configuration.
 
 On 2026-10-11 at 18:18 UTC, the normal Linux fixture passed on `server@oc`
 inside a disposable, resource-bounded Root systemd unit with an empty
@@ -76,7 +116,8 @@ real credential deployment.
 This resource owner accepts a command constructed by trusted Root code; it
 does not establish that command's browser identity, privilege drop, immutable
 executable/modules, private mount/profile/IPC boundary, sandbox witness,
-network confinement, or independence from agent administration. Those remain
+application of the private network namespace, or independence from agent
+administration. Those remain
 required startup gates before connecting the browser channel, loading the
 provider, or allowing credentials. Root supervision IPC and full browser
 startup wiring remain later changes. Qualification on the actual selected
@@ -90,3 +131,7 @@ Primary references: [Linux cgroup-v2 interface](https://docs.kernel.org/admin-gu
 documents whole-tree kill, live-process evidence, and non-revivable dying groups;
 [Go Linux process startup](https://go.dev/src/syscall/exec_linux.go)
 defines the atomic cgroup descriptor attachment.
+[Linux network namespaces](https://www.man7.org/linux/man-pages/man7/network_namespaces.7.html)
+describe network-stack, route, port and abstract-socket isolation;
+[Go OS-thread locking](https://pkg.go.dev/runtime#LockOSThread) specifies
+termination when a locked goroutine exits without unlocking its thread.
