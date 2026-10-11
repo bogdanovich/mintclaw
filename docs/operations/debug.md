@@ -65,6 +65,9 @@ jq -r '
     (.scope.task_id // "-"),
     (.correlation.task_generation_id // "-"),
     (.correlation.completion_id // "-"),
+    (.correlation.interaction_id // "-"),
+    ((.correlation.interaction_revision // 0) | tostring),
+    (.correlation.interaction_event_id // "-"),
     (.correlation.delivery_id // "-"),
     (.scope.target_hash // "-"),
     (.correlation.event_id // "-")
@@ -109,6 +112,16 @@ retry decision for a failed attempt, and its eventual `model.response`. An
 outer retry gets a new ID. This is separate from a provider-controlled request
 ID, which remains optional. Historical traces written before this field was
 introduced must be correlated conservatively by turn and sequence.
+
+Human interaction traces contain only lifecycle metadata. Join an
+`interaction.lifecycle` record to the authoritative interaction registry by
+`correlation.interaction_id` and `correlation.interaction_revision`; use
+`correlation.interaction_event_id` for the exact event-log entry,
+`scope.task_id` for task ownership, and `correlation.delivery_id` for the
+prompt or final outbox intent when present. Events emitted after the originating
+turn was finalized are stored as immediate one-record continuation traces whose
+`metadata.parent_turn_id` names that turn. Search parent and continuation
+traces, and never expect question or answer content in passive diagnostics.
 
 A trace is passive, best-effort evidence. A missing or incomplete trace can
 make diagnosis harder, but it does not imply that the agent run failed. Never

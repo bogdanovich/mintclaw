@@ -520,6 +520,21 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["is_error"] = payload.IsError
 		fields["will_user"] = payload.WillUser
 		fields["will_parent"] = payload.WillParent
+	case InteractionEventPayload:
+		setStringField(fields, "interaction_id", payload.InteractionID)
+		setStringField(fields, "interaction_event_id", payload.InteractionEventID)
+		setStringField(fields, "task_id", payload.TaskID)
+		setStringField(fields, "delivery_id", payload.DeliveryID)
+		setStringField(fields, "interaction_kind", string(payload.Kind))
+		setStringField(fields, "interaction_event", string(payload.Event))
+		setStringField(fields, "status", string(payload.Status))
+		setStringField(fields, "outcome", string(payload.Outcome))
+		fields["revision"] = payload.Revision
+		fields["sequence"] = payload.Sequence
+		setStringField(fields, "code", payload.Code)
+		if payload.Success != nil {
+			fields["success"] = *payload.Success
+		}
 	case InterruptReceivedPayload:
 		fields["interrupt_kind"] = payload.Kind
 		fields["role"] = payload.Role

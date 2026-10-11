@@ -105,6 +105,12 @@ The table below lists the current runtime event kinds, when they are emitted, an
 | `agent.steering.injected` | Queued steering messages are injected into the next LLM context. | `count`, `total_content_len` |
 | `agent.follow_up.queued` | An async tool result is queued back into the inbound/follow-up flow. | `source_tool`, `content_len` |
 | `agent.interrupt.received` | A turn accepts steering, graceful interrupt, or hard-abort input. | `interrupt_kind`, `role`, `content_len`, `queue_depth`, `hint_len` |
+| `agent.interaction.created` | A durable question or approval interaction is created. | Interaction/event ID, kind, status, revision, sequence, originating task/tool call; no prompt content |
+| `agent.interaction.delivery` | A prompt or final interaction delivery is bound. | Exact prompt/final `delivery_id` plus bounded interaction lifecycle identity |
+| `agent.interaction.waiting` | The durable interaction becomes answerable. | Interaction/event ID, status, revision, sequence, task and prompt-delivery joins |
+| `agent.interaction.answer` | An answer claim is accepted, rejected, or times out. | Interaction/event ID, status, outcome, revision, code, success; no answer content |
+| `agent.interaction.resume` | Continuation, approval consumption/expiry, recovery, or cancellation advances. | Interaction/event ID, status, outcome, revision, code, success |
+| `agent.interaction.end` | The interaction resolves, is cancelled, or fails. | Interaction/event ID, terminal status/outcome, revision, code, success, final delivery join when present |
 | `agent.subturn.spawn` | A parent turn creates a child turn/subagent. | `child_agent_id`, `label`, `parent_turn_id` |
 | `agent.subturn.end` | A child turn ends. | `child_agent_id`, `status` |
 | `agent.subturn.result_delivered` | A child turn result is delivered to the target channel/chat. | `target_channel`, `target_chat_id`, `content_len` |
@@ -207,6 +213,7 @@ Agent events add safe payload summaries:
 | `agent.steering.injected` | `count`, `total_content_len` |
 | `agent.follow_up.queued` | `source_tool`, `content_len` |
 | `agent.interrupt.received` | `interrupt_kind`, `role`, `content_len`, `queue_depth`, `hint_len` |
+| `agent.interaction.*` | `interaction_id`, `interaction_event_id`, `task_id`, `delivery_id`, `interaction_kind`, `interaction_event`, `status`, `outcome`, `revision`, `sequence`, `code`, `success` |
 | `agent.subturn.spawn` | `child_agent_id`, `label` |
 | `agent.subturn.end` | `child_agent_id`, `status` |
 | `agent.subturn.result_delivered` | `target_channel`, `target_chat_id`, `content_len` |

@@ -4,8 +4,9 @@ Roadmap packet:
 [H1a — Evidence inventory and correlation tests](local-coding-agent-p8-hardening.md#h1a--evidence-inventory-and-correlation-tests).
 
 Status: H1a baseline with the H1b terminal-truth, model-attempt, tool-call
-generation, and async task/delivery slices implemented. The async
-task/delivery slice is production-qualified.
+generation, async task/delivery, and human-interaction slices implemented. The
+async task/delivery slice is production-qualified; human-interaction production
+qualification is pending.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -74,10 +75,16 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    120-second synthesis deadline plus the 30-second delivery window; any
    earlier direct user message is correlated but only the final synthesized
    outbound settles the trace.
-4. **Interactions.** Existing interaction runtime events carry interaction ID,
-   revision, event, status, outcome, code, and success, but the turn projector
-   currently ignores them. H1b needs bounded lifecycle records and joins, not a
-   copy of the interaction registry.
+4. **Interactions (implemented; production qualification pending).** Existing
+   interaction runtime events now produce bounded `interaction.lifecycle`
+   records with exact interaction/event ID, revision, task, originating tool
+   call, and prompt/final delivery joins. Events observed while the originating
+   turn is active remain in that trace. A later answer, resume, final delivery,
+   cancellation, timeout, failure, or terminal outcome receives an immediate
+   one-record continuation trace linked by `metadata.parent_turn_id`; the
+   projector never holds a trace open for the human wait. Question, answer,
+   approval, failure-detail, and execution-context content remain only in the
+   authoritative interaction registry.
 5. **Node and companion invocations.** The runtime event contains the gateway
    invocation ID and safe command/target facts. The current trace hashes the ID
    into a result digest, which cannot join the authoritative invocation store.
@@ -295,7 +302,7 @@ it was not counted as a successful-delivery qualification.
 | Provider retry/fallback | Runtime provider outcome | Model retry/fallback records | Model-attempt join complete; retain optional provider request ID separately |
 | Tool/process lifecycle | Tool record, process owner | Tool call/result/skip/loop records | Call/generation join complete; keep PID/process details external |
 | Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Add attempt/status and bounded repository re-anchor identity |
-| Human interaction | Interaction registry/events | No interaction trace records today | Project bounded lifecycle and interaction/revision correlation |
+| Human interaction | Interaction registry/events | Bounded lifecycle records in the parent trace or immediate late-event continuation | Interaction/event ID, revision, task, tool-call, and delivery joins implemented; production qualification pending |
 | Channel/async delivery | Task registry, outbox, channel receipt | Bounded completion continuation with delivery decision/attempt/outcome | Task/generation, completion, tool-generation, parent-turn, and delivery joins implemented and production-qualified |
 | Remote coding task | Task registry, worker ledger/thread | Parent async/delivery evidence | Add task/generation/worker/thread references and terminal uncertainty |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Retain invocation ID and safe policy/target aliases |

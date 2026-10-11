@@ -33,6 +33,7 @@ const (
 	RecordDeliveryDecision     RecordKind = "delivery.decision"
 	RecordDeliveryAttempt      RecordKind = "delivery.attempt"
 	RecordDeliveryOutcome      RecordKind = "delivery.outcome"
+	RecordInteractionLifecycle RecordKind = "interaction.lifecycle"
 	RecordContextCompaction    RecordKind = "context.compaction"
 	RecordContextSnapshot      RecordKind = "context.snapshot"
 	RecordSubTurnAdmission     RecordKind = "subturn.admission"
@@ -103,15 +104,18 @@ type Scope struct {
 }
 
 type Correlation struct {
-	ParentTurnID       string `json:"parent_turn_id,omitempty"`
-	ModelAttemptID     string `json:"model_attempt_id,omitempty"`
-	RequestID          string `json:"request_id,omitempty"`
-	ToolCallID         string `json:"tool_call_id,omitempty"`
-	ToolCallGeneration string `json:"tool_call_generation,omitempty"`
-	TaskGenerationID   string `json:"task_generation_id,omitempty"`
-	CompletionID       string `json:"completion_id,omitempty"`
-	DeliveryID         string `json:"delivery_id,omitempty"`
-	EventID            string `json:"event_id,omitempty"`
+	ParentTurnID        string `json:"parent_turn_id,omitempty"`
+	ModelAttemptID      string `json:"model_attempt_id,omitempty"`
+	RequestID           string `json:"request_id,omitempty"`
+	ToolCallID          string `json:"tool_call_id,omitempty"`
+	ToolCallGeneration  string `json:"tool_call_generation,omitempty"`
+	TaskGenerationID    string `json:"task_generation_id,omitempty"`
+	CompletionID        string `json:"completion_id,omitempty"`
+	InteractionID       string `json:"interaction_id,omitempty"`
+	InteractionRevision int64  `json:"interaction_revision,omitempty"`
+	InteractionEventID  string `json:"interaction_event_id,omitempty"`
+	DeliveryID          string `json:"delivery_id,omitempty"`
+	EventID             string `json:"event_id,omitempty"`
 }
 
 type Outcome struct {

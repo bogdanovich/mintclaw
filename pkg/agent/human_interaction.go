@@ -139,15 +139,19 @@ func (al *AgentLoop) resolveDurableLiveHandoffs(
 }
 
 type InteractionEventPayload struct {
-	InteractionID string                 `json:"interaction_id"`
-	ShortID       string                 `json:"short_id,omitempty"`
-	Kind          interactions.Kind      `json:"kind"`
-	Event         interactions.EventType `json:"event"`
-	Status        interactions.Status    `json:"status"`
-	Outcome       interactions.Outcome   `json:"outcome,omitempty"`
-	Revision      int64                  `json:"revision"`
-	Code          string                 `json:"code,omitempty"`
-	Success       *bool                  `json:"success,omitempty"`
+	InteractionID      string                 `json:"interaction_id"`
+	InteractionEventID string                 `json:"interaction_event_id"`
+	ShortID            string                 `json:"short_id,omitempty"`
+	TaskID             string                 `json:"task_id,omitempty"`
+	DeliveryID         string                 `json:"delivery_id,omitempty"`
+	Kind               interactions.Kind      `json:"kind"`
+	Event              interactions.EventType `json:"event"`
+	Status             interactions.Status    `json:"status"`
+	Outcome            interactions.Outcome   `json:"outcome,omitempty"`
+	Revision           int64                  `json:"revision"`
+	Sequence           int64                  `json:"sequence"`
+	Code               string                 `json:"code,omitempty"`
+	Success            *bool                  `json:"success,omitempty"`
 }
 
 func (al *AgentLoop) interactionRegistryForWorkspace(workspace string) *interactions.Registry {
@@ -186,18 +190,37 @@ func (al *AgentLoop) observeInteractionEvent(
 		TraceScope: runtimeevents.NewTraceScope(workspace, record.Origin.TurnID),
 		AgentID:    record.Route.AgentID,
 		SessionKey: record.Route.SessionKey,
+		ToolCallID: record.Origin.ToolCallID,
 		Source:     "interaction_registry",
 	}, InteractionEventPayload{
-		InteractionID: record.ID,
-		ShortID:       record.ShortID,
-		Kind:          record.Kind,
-		Event:         observation.Event.Type,
-		Status:        record.Status,
-		Outcome:       record.Outcome,
-		Revision:      record.Revision,
-		Code:          observation.Event.Code,
-		Success:       observation.Event.Success,
+		InteractionID:      record.ID,
+		InteractionEventID: observation.Event.EventID,
+		ShortID:            record.ShortID,
+		TaskID:             record.Origin.TaskID,
+		DeliveryID:         interactionEventDeliveryID(observation),
+		Kind:               record.Kind,
+		Event:              observation.Event.Type,
+		Status:             record.Status,
+		Outcome:            record.Outcome,
+		Revision:           record.Revision,
+		Sequence:           observation.Event.Sequence,
+		Code:               observation.Event.Code,
+		Success:            observation.Event.Success,
 	})
+}
+
+func interactionEventDeliveryID(observation interactions.EventObservation) string {
+	record := observation.Record
+	switch observation.Event.Type {
+	case interactions.EventFinalDelivery,
+		interactions.EventResolved,
+		interactions.EventCancelled,
+		interactions.EventFailed:
+		if len(record.FinalDeliveryIDs) > 0 {
+			return strings.TrimSpace(record.FinalDeliveryIDs[len(record.FinalDeliveryIDs)-1])
+		}
+	}
+	return strings.TrimSpace(record.PromptDeliveryID)
 }
 
 func (al *AgentLoop) abandonInactiveInteractionPrompt(record interactions.Record) {
