@@ -446,6 +446,9 @@ jobs:
           grep -Fq -- '--- PASS: TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts' \
             "$RUNNER_TEMP/document-read-process.txt"
 
+      - name: Qualify Root-protected credential browser runtime
+        run: bash ./scripts/qualify-credential-browser-runtime.sh
+
       - name: Qualify private credential browser DOM and session retirement
         run: >-
           env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
