@@ -201,6 +201,8 @@ func TestToolExecutionContextCarriesTurnBoundRuntimeCapabilities(t *testing.T) {
 		agentID:             "main",
 		sessionKey:          "thread-session",
 		executionID:         "execution-3",
+		turnID:              "main-turn-3",
+		workspace:           "/workspace/main",
 		runtimeCapabilities: base.BindPrincipal(principal),
 		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
 			RouteSessionKey: "thread-session", SessionKey: "thread-session",
@@ -208,6 +210,12 @@ func TestToolExecutionContextCarriesTurnBoundRuntimeCapabilities(t *testing.T) {
 	}
 
 	toolContext := toolExecutionContextForTurn(context.Background(), ts)
+	if got := toolshared.ToolTraceTurnID(toolContext); got != "main-turn-3" {
+		t.Fatalf("tool trace turn ID = %q, want main-turn-3", got)
+	}
+	if got := toolshared.ToolExecutionID(toolContext); got != "execution-3" {
+		t.Fatalf("tool execution ID = %q, want execution-3", got)
+	}
 	runtime, ok := toolshared.RuntimeCapabilities(toolContext)
 	if !ok {
 		t.Fatal("tool context is missing runtime capabilities")

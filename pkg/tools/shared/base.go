@@ -151,6 +151,7 @@ var (
 	ctxKeySessionScope        = &toolCtxKey{"sessionScope"}
 	ctxKeyToolCallID          = &toolCtxKey{"toolCallID"}
 	ctxKeyExecutionID         = &toolCtxKey{"executionID"}
+	ctxKeyTraceTurnID         = &toolCtxKey{"traceTurnID"}
 	ctxKeyWorkspace           = &toolCtxKey{"workspace"}
 	ctxKeyApprovalResume      = &toolCtxKey{"approvalResume"}
 	ctxKeyApprovalArguments   = &toolCtxKey{"approvalArguments"}
@@ -295,6 +296,13 @@ func PublishCommandObservation(ctx context.Context, observation CommandObservati
 func WithToolExecutionIdentity(ctx context.Context, workspace, executionID string) context.Context {
 	ctx = context.WithValue(ctx, ctxKeyWorkspace, workspace)
 	return context.WithValue(ctx, ctxKeyExecutionID, executionID)
+}
+
+// WithToolTraceTurnID carries the active agent turn identity used only for
+// passive event correlation. It is intentionally distinct from the durable
+// execution identity used to authorize and recover tool side effects.
+func WithToolTraceTurnID(ctx context.Context, turnID string) context.Context {
+	return context.WithValue(ctx, ctxKeyTraceTurnID, turnID)
 }
 
 // WithToolRecoverableOutbound marks a tool execution whose outbound results
@@ -505,6 +513,16 @@ func ToolCallID(ctx context.Context) string {
 // ToolExecutionID extracts the stable logical turn identity from ctx.
 func ToolExecutionID(ctx context.Context) string {
 	v, ok := ctx.Value(ctxKeyExecutionID).(string)
+	if !ok {
+		return ""
+	}
+	return v
+}
+
+// ToolTraceTurnID extracts the active agent turn identity used for passive
+// event correlation, or "" when a tool runs outside an agent turn.
+func ToolTraceTurnID(ctx context.Context) string {
+	v, ok := ctx.Value(ctxKeyTraceTurnID).(string)
 	if !ok {
 		return ""
 	}

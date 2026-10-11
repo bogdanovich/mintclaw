@@ -108,6 +108,10 @@ func publishNodeInvocationEvent(
 	if sessionKey == "" {
 		sessionKey = strings.TrimSpace(toolshared.ToolSessionKey(ctx))
 	}
+	traceTurnID := strings.TrimSpace(toolshared.ToolTraceTurnID(ctx))
+	if traceTurnID == "" {
+		traceTurnID = strings.TrimSpace(toolshared.ToolExecutionID(ctx))
+	}
 	gatewayState := record.State
 	if observation != NodeInvocationObservationPrepared {
 		gatewayState = nodes.GatewayInvocationDispatched
@@ -195,7 +199,7 @@ func publishNodeInvocationEvent(
 		Scope: runtimeevents.Scope{
 			TraceScope: runtimeevents.NewTraceScope(
 				toolshared.ToolWorkspace(ctx),
-				toolshared.ToolExecutionID(ctx),
+				traceTurnID,
 			),
 			AgentID:    toolshared.ToolAgentID(ctx),
 			SessionKey: sessionKey,
