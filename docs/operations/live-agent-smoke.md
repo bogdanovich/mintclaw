@@ -51,6 +51,24 @@ flag. Omit `--session` when a fresh live conversation is sufficient, but note
 that the resulting turn is still processed and recorded by the live gateway's
 normal durable runtime.
 
+For a profile-scoped direct smoke on the deployed host, preserve both the
+profile home and the shared authentication-store override used by that
+profile's systemd unit:
+
+```sh
+MINTCLAW_HOME=/home/server/.mintclaw/main \
+MINTCLAW_AUTH_FILE=/home/server/.mintclaw/auth.json \
+mintclaw agent --stateless \
+  --session direct-smoke \
+  --message 'Reply with exactly MINTCLAW_DIRECT_OK.'
+```
+
+Setting only `MINTCLAW_HOME` changes the default authentication-store lookup
+and can make a healthy provider appear unauthenticated. Inspect the unit's
+declared path override, never the credential file contents. A direct smoke
+owns presentation of the returned final response, so its completed trace does
+not require channel delivery records.
+
 ## Continue an existing session
 
 Without `--session`, every invocation generates a new `live-smoke-<UUID>`

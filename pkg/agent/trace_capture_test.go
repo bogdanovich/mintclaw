@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -497,7 +498,88 @@ func TestTraceCaptureShutdownDoesNotWaitForIncompleteActiveTurn(t *testing.T) {
 	if elapsed := time.Since(startedClosing); elapsed > time.Second {
 		t.Fatalf("capture shutdown took %v; diagnostics must not delay runtime shutdown", elapsed)
 	}
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if !trace.Truncation.Incomplete ||
+		!slices.Contains(trace.Truncation.Reasons, traceIncompleteRuntimeClosedBeforeTerminalOutcome) {
+		t.Fatalf("active-turn truncation = %#v", trace.Truncation)
+	}
+	if trace.Outcome != nil {
+		t.Fatalf("active-turn outcome = %#v, want nil", trace.Outcome)
+	}
 	_ = eventBus.Close()
+}
+
+func TestTraceCaptureShutdownDistinguishesPendingDeliverySettlement(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	startedAt := time.Now().UTC()
+	scope := runtimeevents.Scope{
+		TraceScope: runtimeevents.NewTraceScope(workspace, "pending-delivery-turn"),
+		Channel:    "telegram",
+		ChatID:     "chat-pending-delivery",
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "start", Kind: runtimeevents.KindAgentTurnStart, Time: startedAt,
+		Scope: scope, Payload: TurnStartPayload{Workspace: workspace},
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "end", Kind: runtimeevents.KindAgentTurnEnd, Time: startedAt.Add(time.Millisecond),
+		Scope: scope, Payload: TurnEndPayload{
+			Workspace: workspace, Status: TurnEndStatusCompleted, DeliveryExpected: true,
+		},
+	})
+
+	manager.close()
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if trace.Outcome == nil || trace.Outcome.Status != string(TurnEndStatusCompleted) {
+		t.Fatalf("pending-delivery outcome = %#v", trace.Outcome)
+	}
+	if !trace.Truncation.Incomplete ||
+		!slices.Contains(trace.Truncation.Reasons, traceIncompleteRuntimeClosedBeforeDeliverySettlement) ||
+		slices.Contains(trace.Truncation.Reasons, traceIncompleteRuntimeClosedBeforeTerminalOutcome) {
+		t.Fatalf("pending-delivery truncation = %#v", trace.Truncation)
+	}
+	_ = eventBus.Close()
+}
+
+func TestTraceCaptureDirectTurnSettlesWithoutChannelDelivery(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	fixture := newAgentLoopTestFixtureWithWorkspace(
+		t,
+		workspace,
+		&simpleConvProvider{},
+		func(cfg *config.Config) {
+			cfg.Diagnostics.TraceCapture.Enabled = true
+			cfg.Diagnostics.TraceCapture.ContentMode = "metadata_only"
+		},
+	)
+
+	response, err := fixture.Loop.ProcessDirectWithOptions(
+		t.Context(),
+		"finish without channel delivery",
+		"direct-trace-session",
+		"cli",
+		"direct",
+		DirectTurnOptions{Stateless: true},
+	)
+	if err != nil || response == "" {
+		t.Fatalf("ProcessDirectWithOptions() = (%q, %v)", response, err)
+	}
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if trace.Outcome == nil || trace.Outcome.Status != string(TurnEndStatusCompleted) {
+		t.Fatalf("direct-turn outcome = %#v", trace.Outcome)
+	}
+	if trace.Truncation.Incomplete {
+		t.Fatalf("direct-turn truncation = %#v", trace.Truncation)
+	}
+	foundTurnEnd := false
+	for _, record := range trace.Records {
+		foundTurnEnd = foundTurnEnd || record.Kind == diagnostictrace.RecordTurnEnd
+	}
+	if !foundTurnEnd {
+		t.Fatalf("direct-turn records = %#v", trace.Records)
+	}
 }
 
 func TestTraceCaptureWaitsForExpectedDeliveryOutcome(t *testing.T) {
