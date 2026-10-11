@@ -109,13 +109,7 @@
       "trace_records": ["tool.call", "tool.result"],
       "required_ids": ["turn_id", "tool_call_id", "invocation_id", "target_alias", "scope_alias", "profile_alias", "policy_revision", "event_id"],
       "available_ids": ["turn_id", "tool_call_id", "invocation_id", "target_alias", "scope_alias", "profile_alias", "policy_revision", "event_id"],
-      "missing_trace_joins": [
-        {"id": "invocation_id", "disposition": "close_h1b", "observation": "Projection hashes the invocation ID into result_hash, preventing exact store lookup."},
-        {"id": "target_alias", "disposition": "close_h1b", "observation": "Safe configured target alias is present in the event but absent from the trace record."},
-        {"id": "scope_alias", "disposition": "close_h1b", "observation": "Configured workspace/scope alias should be retained without node-local paths."},
-        {"id": "profile_alias", "disposition": "close_h1b", "observation": "The admitted capability/profile needs a safe authority reference."},
-        {"id": "policy_revision", "disposition": "close_h1b", "observation": "Stale-policy incidents need the prepared policy/catalog revision."}
-      ],
+      "missing_trace_joins": [],
       "terminal_facts": ["node.invocation.observed", "tool.result", "uncertain_remote_outcome"],
       "retention_owner": "gateway_invocation_store_companion_ledger_and_diagnostic_store",
       "export_class": "metadata_safe"

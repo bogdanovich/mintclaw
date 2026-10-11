@@ -1181,7 +1181,7 @@ func TestNodeInvocationEventsExposeOnlyBoundedJobMetadata(t *testing.T) {
 		t.Fatalf("job invocation events = %#v", events)
 	}
 	payload, ok := events[0].Payload.(NodeInvocationEventPayload)
-	if !ok || payload.JobProfile != "test-jobs" ||
+	if !ok || payload.JobProfile != "test-jobs" || payload.ProfileAlias != "test-jobs" ||
 		payload.JobID != "job_0123456789abcdef0123456789abcdef" ||
 		payload.JobState != "succeeded" || payload.JobLogStream != "stdout" ||
 		payload.JobLogBytes != len("TOP_SECRET_JOB_LOG") || payload.JobLogCursor != 18 {
@@ -1198,6 +1198,64 @@ func TestNodeInvocationEventsExposeOnlyBoundedJobMetadata(t *testing.T) {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("job event leaked %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestNodeInvocationEventsRetainSafeAuthorityCorrelation(t *testing.T) {
+	eventBus := &recordingNodeEventBus{}
+	descriptor := shellNodeInvocationTestDescriptor()
+	record := nodes.GatewayInvocationRecord{
+		Target: "workstation",
+		Plan: nodes.ExecutionPlan{
+			InvocationRequest: nodes.InvocationRequest{
+				InvocationID: "inv_shell_diagnostic",
+				Command:      descriptor.Name,
+				Input: json.RawMessage(
+					`{"profile":"owner","script":"TOP_SECRET_COMMAND",` +
+						`"cwd":"workspace","env":{},"timeout_seconds":30}`,
+				),
+			},
+			PolicyRevision: "policy-v7",
+		},
+		Descriptor: descriptor,
+		State:      nodes.GatewayInvocationDispatched,
+	}
+	publishNodeInvocationEvent(
+		eventBus,
+		nodeInvocationTestContext("actor-1", "call-shell-diagnostic"),
+		NodeInvocationObservationCompleted,
+		"nodes_invoke",
+		record,
+		string(nodes.InvocationSucceeded),
+		"",
+	)
+	events := eventBus.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("node invocation events = %#v", events)
+	}
+	payload, ok := events[0].Payload.(NodeInvocationEventPayload)
+	if !ok || payload.InvocationID != "inv_shell_diagnostic" || payload.Target != "workstation" ||
+		payload.ScopeAlias != "workspace" || payload.ProfileAlias != "owner" ||
+		payload.PolicyRevision != "policy-v7" {
+		t.Fatalf("node authority correlation payload = %#v", events[0].Payload)
+	}
+	for field, want := range map[string]any{
+		"invocation_id":   "inv_shell_diagnostic",
+		"target":          "workstation",
+		"scope_alias":     "workspace",
+		"profile_alias":   "owner",
+		"policy_revision": "policy-v7",
+	} {
+		if events[0].Attrs[field] != want {
+			t.Fatalf("event attr %q = %#v, want %#v", field, events[0].Attrs[field], want)
+		}
+	}
+	encoded, err := json.Marshal(events[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "TOP_SECRET_COMMAND") {
+		t.Fatalf("node event leaked command input: %s", encoded)
 	}
 }
 
@@ -1660,7 +1718,7 @@ func TestNodeInvocationEventsUseProvenStatesAndRedactPayloads(t *testing.T) {
 			)
 		}
 		if payload.Target != "build" || payload.Command != "system.exec.v1" ||
-			payload.InvocationID == "" {
+			payload.InvocationID == "" || payload.PolicyRevision != "policy-1" {
 			t.Fatalf("event[%d] payload = %#v", index, payload)
 		}
 		if event.Scope.Workspace != "/workspace/main" ||
@@ -1694,7 +1752,6 @@ func TestNodeInvocationEventsUseProvenStatesAndRedactPayloads(t *testing.T) {
 		"super-secret-command-input",
 		"private-node-id",
 		"plan_hash",
-		"policy_revision",
 		`\"stdout\"`,
 	} {
 		if strings.Contains(string(encoded), forbidden) {

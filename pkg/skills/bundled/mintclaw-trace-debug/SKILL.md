@@ -83,12 +83,17 @@ jq -r '
     .kind,
     (.scope.turn_id // "-"),
     (.scope.target_hash // "-"),
+    (.scope.target_alias // "-"),
+    (.scope.scope_alias // "-"),
+    (.scope.profile_alias // "-"),
     (.correlation.model_attempt_id // "-"),
     (.correlation.tool_call_id // "-"),
     (.correlation.tool_call_generation // "-"),
     (.scope.task_id // "-"),
     (.correlation.task_generation_id // "-"),
     (.correlation.completion_id // "-"),
+    (.correlation.invocation_id // "-"),
+    (.correlation.policy_revision // "-"),
     (.correlation.interaction_id // "-"),
     ((.correlation.interaction_revision // 0) | tostring),
     (.correlation.interaction_event_id // "-"),
@@ -149,6 +154,16 @@ Correlate:
   inferred `metadata.parent_turn_id`; verify current state in the task
   registry, companion worker ledger, and remote thread without replaying the
   task;
+- `node.invocation.observed` tool results with the gateway invocation store and
+  companion invocation ledger by exact `correlation.invocation_id`. Use
+  `scope.target_alias`, optional applicable `scope.scope_alias` and
+  `scope.profile_alias`, and `correlation.policy_revision` to verify the
+  admitted authority. Read `.data.action`, `.data.status`, and
+  `.data.decision_code` to distinguish prepared/dispatched/completed/status,
+  success/failure/cancellation/timeout, and disconnect/uncertainty. A missing
+  optional scope or profile means that capability has no such configured
+  alias; never infer one from command text, paths, or timestamps. Inspect the
+  authoritative ledgers read-only and never replay an uncertain mutation;
 - `interaction.lifecycle` records with the authoritative interaction registry
   by `correlation.interaction_id` and exact
   `correlation.interaction_revision`; use
@@ -169,7 +184,9 @@ runtime-generated model-attempt ID. Historical traces may lack
 `correlation.interaction_id`, `correlation.interaction_revision`,
 `correlation.interaction_event_id`, `correlation.model_attempt_id`,
 `correlation.tool_call_generation`, `correlation.worker_generation_id`, or
-`correlation.remote_thread_id`; for
+`correlation.remote_thread_id`, `correlation.invocation_id`,
+`correlation.policy_revision`, `scope.target_alias`, `scope.scope_alias`, or
+`scope.profile_alias`; for
 those traces, correlate records conservatively by turn and sequence and state
 the limitation. Older loop-decision records may also lack
 `correlation.tool_call_id`; use their tool and argument hash only as bounded

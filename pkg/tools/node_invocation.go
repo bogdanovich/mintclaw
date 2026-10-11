@@ -241,11 +241,15 @@ const (
 // NodeInvocationEventPayload is a redacted, passive invocation snapshot
 // published to the runtime event bus. Concurrent observations are not a
 // transaction log and may arrive out of order. Command input, output, node
-// identity, and plan authority are intentionally excluded.
+// identity, and authority digests are intentionally excluded. Configured
+// aliases and the execution-policy revision are safe correlation metadata.
 type NodeInvocationEventPayload struct {
 	Observation       string                       `json:"observation"`
 	InvocationID      string                       `json:"invocation_id"`
 	Target            string                       `json:"target"`
+	ScopeAlias        string                       `json:"scope_alias,omitempty"`
+	ProfileAlias      string                       `json:"profile_alias,omitempty"`
+	PolicyRevision    string                       `json:"policy_revision"`
 	Workspace         string                       `json:"workspace,omitempty"`
 	WorkspaceRevision string                       `json:"workspace_revision,omitempty"`
 	Command           string                       `json:"command"`
