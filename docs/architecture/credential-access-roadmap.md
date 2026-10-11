@@ -204,9 +204,23 @@ entire personal vault.
 
 - CA0: merged in [PR #1511](https://github.com/bogdanovich/mintclaw/pull/1511);
   `make lint-docs` passed.
-- CA1: policy and grant foundation implemented; validation and review in
-  progress. Runtime credential access remains disabled.
-- CA2–CA6: pending their dependencies and admission/qualification gates.
+- CA1: merged in [PR #1512](https://github.com/bogdanovich/mintclaw/pull/1512).
+  Targeted policy/grant tests, package race tests, changed-package lint, and all
+  16 GitHub checks passed. The exact-origin review finding was fixed, tested,
+  and cleared on the merged head.
+- CA2: the private provider adapter is merged in
+  [PR #1515](https://github.com/bogdanovich/mintclaw/pull/1515). Full local lint,
+  targeted normal/race tests, and all 16 GitHub checks passed; review found no
+  actionable findings. The agent gateway has no SDK dependency.
+  Process/provisioning qualification is recorded in
+  [PR #1514](https://github.com/bogdanovich/mintclaw/pull/1514), with browser
+  startup requirements in [PR #1519](https://github.com/bogdanovich/mintclaw/pull/1519).
+  Protected provisioning, isolated startup, and authenticated IPC remain pending.
+- CA3: [verifier candidate qualification](credential-phone-approval-qualification.md)
+  records build and upstream fixture evidence; control-plane and Android
+  end-to-end implementation remain pending.
+- CA4–CA6: pending their dependencies and admission/qualification gates.
+  Runtime credential access remains disabled and no real token is provisioned.
 
 Update this record with PRs, validation, and any narrowed admissions as work
 lands. A milestone completes on demonstrated evidence, not on scaffolding.
