@@ -1422,13 +1422,16 @@ func workflowTestSchema(source []byte) document.FormFieldsFacts {
 	sourceDigest := sha256.Sum256(source)
 	fieldDigest := sha256.Sum256([]byte("workflow-field"))
 	widgetDigest := sha256.Sum256([]byte("workflow-widget"))
+	var backend document.BackendIdentity
+	for _, capability := range document.Capabilities().Backends {
+		if capability.Identity.Name == document.PDFCPUBackendName {
+			backend = capability.Identity
+			break
+		}
+	}
 	return document.FormFieldsFacts{
 		SourceSHA256: hex.EncodeToString(sourceDigest[:]),
-		Backend: document.BackendIdentity{
-			Name: document.PDFCPUBackendName, Version: document.PDFCPUBackendVersion,
-			Package: document.PDFCPUBackendPackage, PackageRevision: document.PDFCPUBackendVersion,
-			Role: "production", IsolationMode: document.WorkerIsolationMode,
-		},
+		Backend:      backend,
 		Limits: document.FormFieldLimits{
 			MaxFields: document.DefaultMaxFormFields, MaxWidgets: document.DefaultMaxFieldWidgets,
 			MaxOptions: document.DefaultMaxFieldOptions, MaxTextBytes: document.DefaultMaxFieldTextBytes,
