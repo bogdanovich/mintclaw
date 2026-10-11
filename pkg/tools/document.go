@@ -69,23 +69,25 @@ type documentFormSchemaResolver func(
 // configured local path may only enter through inspect, which retains the
 // immutable snapshot behind a turn-owned ref for every later operation.
 type DocumentTool struct {
-	mu            sync.Mutex
-	store         media.MediaStore
-	scratchRoot   string
-	stateRoot     string
-	workspace     string
-	restrict      bool
-	allowPaths    []*regexp.Regexp
-	deliveryState documentDeliveryInspector
-	formJobs      *document.FormJobStore
-	formAudit     document.FormAuditor
-	formPolicy    document.FormAuditPolicy
-	formSchema    documentFormSchemaResolver
-	budget        *document.ExecutionBudget
-	cleanupScopes map[string][]string
-	localRefs     map[string]map[string]struct{}
-	readOnly      bool
-	localWrites   bool
+	mu                 sync.Mutex
+	store              media.MediaStore
+	scratchRoot        string
+	stateRoot          string
+	workspace          string
+	restrict           bool
+	allowPaths         []*regexp.Regexp
+	deliveryState      documentDeliveryInspector
+	formJobs           *document.FormJobStore
+	formAudit          document.FormAuditor
+	formInterpreter    document.FormIntakeInterpreter
+	formPolicy         document.FormAuditPolicy
+	formSchema         documentFormSchemaResolver
+	formIntakeEvidence documentFormIntakeEvidenceResolver
+	budget             *document.ExecutionBudget
+	cleanupScopes      map[string][]string
+	localRefs          map[string]map[string]struct{}
+	readOnly           bool
+	localWrites        bool
 }
 
 // WithDocumentFormJobStore supplies the protected multi-turn form workflow
@@ -104,6 +106,13 @@ func WithDocumentFormAudit(policy document.FormAuditPolicy, auditor document.For
 		tool.formPolicy = policy
 		tool.formAudit = auditor
 	}
+}
+
+// WithDocumentFormIntake opts into the protected dialog using the existing
+// configured deliberative integration. Production wiring remains disabled
+// until the dependent review/partial-output packet is merged and qualified.
+func WithDocumentFormIntake(interpreter document.FormIntakeInterpreter) DocumentToolOption {
+	return func(tool *DocumentTool) { tool.formInterpreter = interpreter }
 }
 
 // WithDocumentStateRoot sets the private durable journal/generation root used
@@ -308,11 +317,11 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"type": "string",
 				"enum": []string{
 					"discover", "start", "collect", "continue", "clarify", "back", "status", "correct", "review",
-					"commit", "cancel", "clarify_intent", "evidence",
+					"commit", "cancel", "clarify_intent", "evidence", "pause", "resume",
 				},
 				"description": "Agent-led protected form operation. discover returns a bounded field window and exact " +
 					"field_schema_digest; start prepares a job from that digest without asking a question and returns " +
-					"bounded candidate_fields; collect asks one explicitly selected field and MUST include a non-empty " +
+					"bounded candidate_fields; collect supports grouped free-text candidate_field_ids or one legacy field and MUST include a non-empty " +
 					"question; continue accepts only answer_ref and never asks the next field; clarify and back accept " +
 					"only an interaction-runtime navigation_ref and deterministically ask the authenticated field; " +
 					"clarify_intent pauses before collection for ordinary intent/applicability clarification, never values; " +
@@ -346,7 +355,20 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			},
 			"field_id": map[string]any{
 				"type":        "string",
-				"description": "Stable field identity returned in form candidate_fields; required for collect or correct.",
+				"description": "Stable field identity returned in form candidate_fields; required for legacy collect or correct, optional focus for grouped collect.",
+			},
+			"candidate_field_ids": map[string]any{
+				"type":        "array",
+				"minItems":    1,
+				"maxItems":    document.MaxFormIntakeCandidates,
+				"uniqueItems": true,
+				"items":       map[string]any{"type": "string"},
+				"description": "For grouped free-text collect: select up to eight exact unresolved candidate fields. The user can provide other facts too; do not require labels, IDs or answer syntax.",
+			},
+			"role_context": map[string]any{
+				"type":        "string",
+				"maxLength":   768,
+				"description": "Value-free person/role context for grouped collect, grounded in document evidence and the user's stated intent. Never include personal field values.",
 			},
 			"question": map[string]any{
 				"type":      "string",
@@ -399,6 +421,21 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			},
 		},
 		"required": []string{"action"},
+	}
+	if tool.formInterpreter == nil {
+		properties := parameters["properties"].(map[string]any)
+		delete(properties, "candidate_field_ids")
+		delete(properties, "role_context")
+		formAction := properties["form_action"].(map[string]any)
+		formAction["description"] = strings.Replace(
+			formAction["description"].(string),
+			"collect supports grouped free-text candidate_field_ids or one legacy field",
+			"collect asks one explicitly selected field", 1,
+		)
+		properties["field_id"].(map[string]any)["description"] = "Stable field identity returned in form candidate_fields; required for collect or correct."
+		formAction["enum"] = slices.DeleteFunc(formAction["enum"].([]string), func(action string) bool {
+			return action == "pause" || action == "resume"
+		})
 	}
 	if tool.readOnly || tool.localWrites {
 		properties := parameters["properties"].(map[string]any)
@@ -462,6 +499,9 @@ func (*DocumentTool) ProtectedDurableArguments(args map[string]any) bool {
 // re-ask their bound field without a model-authored transition.
 func (*DocumentTool) ProtectedAnswerContinuationArguments(reference string) (map[string]any, error) {
 	reference = strings.TrimSpace(reference)
+	if _, _, err := document.ParseFormIntakeReference(reference); err == nil {
+		return map[string]any{"action": "form", "form_action": "continue", "answer_ref": reference}, nil
+	}
 	if navigation, err := document.ParseFormProtectedNavigationReference(reference); err == nil {
 		return map[string]any{
 			"action":         "form",
@@ -496,6 +536,9 @@ func (*DocumentTool) ProtectedAnswerContinuationFollowup(
 		projection.Operation != "form" || projection.FormAction != "continue" || projection.Job == nil {
 		return nil, errors.New("protected form continuation result is invalid")
 	}
+	if projection.Intake != nil {
+		return documentFormIntakeFollowup(projection, false)
+	}
 	return documentFormToolOnlyFollowup(projection, false)
 }
 
@@ -503,7 +546,7 @@ func (*DocumentTool) ProtectedAnswerContinuationFollowup(
 // document tool until the agent deliberately selects one exact field and asks
 // its protected question. The runtime owns only the generic tool-only fence;
 // all form/job semantics remain in this provider.
-func (*DocumentTool) ToolResultFollowup(
+func (tool *DocumentTool) ToolResultFollowup(
 	result *toolshared.ToolResult,
 ) (*toolshared.ToolOnlyFollowup, error) {
 	if result == nil || result.IsError || strings.TrimSpace(result.ForLLM) == "" {
@@ -515,6 +558,16 @@ func (*DocumentTool) ToolResultFollowup(
 	}
 	if projection.SchemaVersion != documentFormWorkflowSchemaVersion || projection.Operation != "form" {
 		return nil, nil
+	}
+	if projection.Intake != nil {
+		return documentFormIntakeFollowup(projection, false)
+	}
+	if tool.formInterpreter != nil && projection.Job != nil && projection.Mapping != nil &&
+		(projection.FormAction == "start" || projection.FormAction == "status" || projection.FormAction == "evidence") {
+		return documentFormIntakeFollowup(
+			projection,
+			projection.Job.NeedsInitialPlan || projection.Job.State == document.FormJobPrepared,
+		)
 	}
 	switch projection.FormAction {
 	case "discover":
@@ -1483,10 +1536,27 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		},
 		"fields": {"action": {}, "source": {}},
 		"form": {
-			"action": {}, "form_action": {}, "source": {}, "job_id": {}, "answer_ref": {}, "event_id": {},
-			"navigation_ref": {}, "field_id": {}, "question": {}, "field_schema_digest": {}, "form_summary": {},
-			"collection_plan": {}, "checked_label": {}, "unchecked_label": {}, "pages": {}, "field_offset": {},
-			"interaction_language": {}, "blank_actions": {}, "evidence_mode": {},
+			"action":               {},
+			"form_action":          {},
+			"source":               {},
+			"job_id":               {},
+			"answer_ref":           {},
+			"event_id":             {},
+			"navigation_ref":       {},
+			"field_id":             {},
+			"question":             {},
+			"field_schema_digest":  {},
+			"form_summary":         {},
+			"collection_plan":      {},
+			"checked_label":        {},
+			"unchecked_label":      {},
+			"pages":                {},
+			"field_offset":         {},
+			"interaction_language": {},
+			"blank_actions":        {},
+			"evidence_mode":        {},
+			"candidate_field_ids":  {},
+			"role_context":         {},
 		},
 		"fill":   {"action": {}, "source": {}, "assignments": {}, "operation_id": {}},
 		"verify": {"action": {}, "source": {}, "operation_id": {}},
@@ -1561,6 +1631,21 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		hasNavigation := navigationReference != ""
 		hasLegacyEvent := strings.TrimSpace(stringDocumentArg(args, "event_id")) != ""
 		hasField := strings.TrimSpace(stringDocumentArg(args, "field_id")) != ""
+		_, hasCandidates := args["candidate_field_ids"]
+		_, hasRole := args["role_context"]
+		if hasCandidates || hasRole {
+			if formAction != "collect" || !hasCandidates {
+				return errors.New("intake candidates and role context apply only to grouped collect")
+			}
+			ids, err := documentFormIntakeCandidateIDs(args["candidate_field_ids"])
+			if err != nil || hasField && !slices.Contains(ids, stringDocumentArg(args, "field_id")) {
+				return errors.New("intake candidate selection is invalid")
+			}
+			role := stringDocumentArg(args, "role_context")
+			if !utf8.ValidString(role) || utf8.RuneCountInString(role) > 768 {
+				return errors.New("intake role context is invalid")
+			}
+		}
 		schemaDigest := strings.TrimSpace(stringDocumentArg(args, "field_schema_digest"))
 		hasSchemaDigest := schemaDigest != ""
 		question := strings.TrimSpace(stringDocumentArg(args, "question"))
@@ -1622,7 +1707,8 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 				)
 			}
 		case "collect":
-			if hasSource || !hasJob || hasAnswer || hasNavigation || hasLegacyEvent || !hasField || !hasQuestion ||
+			if hasSource || !hasJob || hasAnswer || hasNavigation || hasLegacyEvent || (!hasField && !hasCandidates) ||
+				!hasQuestion ||
 				hasSchemaDigest {
 				return errors.New("form collect or correction requires job_id, field_id, and question")
 			}
@@ -1646,7 +1732,7 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 				string(navigation.Action) != formAction {
 				return errors.New("form clarify or back requires only its exact navigation_ref")
 			}
-		case "status", "review", "commit", "cancel", "clarify_intent", "evidence":
+		case "status", "review", "commit", "cancel", "clarify_intent", "evidence", "pause", "resume":
 			if hasSource || !hasJob || hasAnswer || hasNavigation || hasLegacyEvent || hasField || hasQuestion ||
 				hasSchemaDigest ||
 				hasFormSummary ||

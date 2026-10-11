@@ -10,7 +10,7 @@ import (
 )
 
 func TestInboundSpoolRefusesUnsupportedVersionsWithoutMutation(t *testing.T) {
-	for _, version := range []int{-1, 0, inboundSpoolVersion + 1, 999} {
+	for _, version := range []int{-1, 0, inboundDocumentSpoolVersion + 1, 999} {
 		t.Run(strconv.Itoa(version), func(t *testing.T) {
 			spool, err := NewInboundSpool(t.TempDir())
 			if err != nil {

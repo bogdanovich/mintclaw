@@ -15,15 +15,18 @@ import (
 )
 
 const (
-	inboundSpoolVersion = 1
-	spoolPendingExt     = ".json"
-	spoolProcessingExt  = ".processing"
-	spoolFailedExt      = ".failed"
+	inboundSpoolVersion         = 1
+	inboundDocumentSpoolVersion = 2
+	spoolPendingExt             = ".json"
+	spoolProcessingExt          = ".processing"
+	spoolFailedExt              = ".failed"
 )
 
 var errRetiredInboundSpoolContext = errors.New("retired inbound spool context is unsupported")
 
 var errInboundSpoolVersionUnsupported = errors.New("inbound spool record version is unsupported")
+
+var errInboundDocumentIntakeGuard = errors.New("inbound document intake guard is invalid")
 
 var retiredInboundInteractionRawKeys = [...]string{
 	"interaction_choice",
@@ -98,6 +101,9 @@ func (s *InboundSpool) Prepare(ctx context.Context, msg InboundMessage) (Inbound
 		ReceivedAt: msg.Context.ReceivedAt,
 		Message:    msg,
 	}
+	if !msg.Context.DocumentIntake.IsZero() {
+		rec.Version = inboundDocumentSpoolVersion
+	}
 	if err := s.writeRecord(s.pendingPath(id), rec); err != nil {
 		return msg, err
 	}
@@ -161,6 +167,9 @@ func (s *InboundSpool) Pending(ctx context.Context, limit int) ([]InboundMessage
 }
 
 func validateCurrentInboundSpoolContext(ctx InboundContext) error {
+	if !ctx.DocumentIntake.IsZero() && !ctx.DocumentIntake.Valid() {
+		return errInboundDocumentIntakeGuard
+	}
 	if len(ctx.Raw) == 0 {
 		return nil
 	}
@@ -195,6 +204,18 @@ func (s *InboundSpool) PersistContext(msg InboundMessage) error {
 		return err
 	}
 	context := normalizeInboundContext(msg.Context)
+	guard := rec.Message.Context.DocumentIntake
+	if !guard.IsZero() && (guard.JobID != context.DocumentIntake.JobID ||
+		guard.ModeID != context.DocumentIntake.ModeID || guard.Reference != "" && guard.Reference != context.DocumentIntake.Reference) {
+		return errInboundDocumentIntakeGuard
+	}
+	if !context.DocumentIntake.IsZero() {
+		if !context.DocumentIntake.Valid() {
+			return errInboundDocumentIntakeGuard
+		}
+		rec.Version = inboundDocumentSpoolVersion
+		rec.Message.Context.DocumentIntake = context.DocumentIntake
+	}
 	if context.ReceivedAt.IsZero() {
 		context.ReceivedAt = rec.ReceivedAt.UTC()
 	}
@@ -257,8 +278,8 @@ func (s *InboundSpool) Fail(id string, cause error) error {
 }
 
 func (s *InboundSpool) writeRecord(path string, rec spooledInboundRecord) error {
-	if rec.Version != inboundSpoolVersion {
-		return errInboundSpoolVersionUnsupported
+	if err := validateInboundSpoolVersion(rec); err != nil {
+		return err
 	}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
@@ -284,8 +305,8 @@ func (s *InboundSpool) readRecord(path string) (spooledInboundRecord, error) {
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return spooledInboundRecord{}, fmt.Errorf("decode inbound spool entry %s: %w", path, err)
 	}
-	if rec.Version != inboundSpoolVersion {
-		return spooledInboundRecord{}, errInboundSpoolVersionUnsupported
+	if err := validateInboundSpoolVersion(rec); err != nil {
+		return spooledInboundRecord{}, err
 	}
 	if rec.ID == "" {
 		rec.ID = spoolIDFromName(filepath.Base(path))

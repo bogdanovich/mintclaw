@@ -1,6 +1,7 @@
 package bus
 
 import (
+	"strings"
 	"time"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -116,9 +117,44 @@ type InboundContext struct {
 	Relation         InboundMessageRelation       `json:"relation,omitzero"`
 	MediaGroup       InboundMediaGroup            `json:"media_group,omitzero"`
 	Interaction      InboundInteractionProjection `json:"interaction,omitzero"`
+	DocumentIntake   InboundDocumentIntakeGuard   `json:"document_intake,omitzero"`
 
 	ReplyHandles map[string]string `json:"reply_handles,omitempty"`
 	Raw          map[string]string `json:"raw,omitempty"`
+}
+
+// InboundDocumentIntakeGuard is a value-free document-owned replay fence, not
+// assignment authority. Once durably admitted it cannot be cleared or rebound.
+type InboundDocumentIntakeGuard struct {
+	JobID     string `json:"job_id"`
+	ModeID    string `json:"mode_id"`
+	Reference string `json:"reference,omitempty"`
+}
+
+func (guard InboundDocumentIntakeGuard) IsZero() bool {
+	return guard.JobID == "" && guard.ModeID == "" && guard.Reference == ""
+}
+
+func (guard InboundDocumentIntakeGuard) Valid() bool {
+	validID := func(value, prefix string) bool {
+		if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+32 {
+			return false
+		}
+		for _, char := range value[len(prefix):] {
+			if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+				return false
+			}
+		}
+		return true
+	}
+	if !validID(guard.JobID, "form_job_") || !validID(guard.ModeID, "form_intake_") {
+		return false
+	}
+	if guard.Reference == "" {
+		return true
+	}
+	parts := strings.Split(guard.Reference, ".")
+	return len(parts) == 3 && parts[0] == "form_intake" && parts[1] == guard.JobID && validID(parts[2], "form_input_")
 }
 
 type InboundMessage struct {

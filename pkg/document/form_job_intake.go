@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -345,6 +346,32 @@ func (store *FormJobStore) ReserveFormIntakePass(
 		}
 		input := &source.Intake.Inputs[index]
 		digest := keyedDigest(store.profileKey, "intake_pass", input.ID, request.IdempotencyKey)
+		group := ""
+		if request.RetryStale {
+			group = digest
+			for _, prior := range input.Reservations {
+				if !constantTimeStringEqual(prior.GroupDigest, group) {
+					continue
+				}
+				if !slices.Equal(prior.CandidateIDs, request.CandidateIDs) {
+					return false, ErrFormJobAnswerConflict
+				}
+				if prior.Outcome != nil {
+					outcome := formIntakeApplyResult(record.Public, source.Intake, prior.Outcome, true)
+					result = FormIntakePass{
+						ID: prior.ID, Revision: prior.Revision,
+						CandidateIDs: slices.Clone(prior.CandidateIDs), Reused: true, Outcome: &outcome,
+					}
+					return false, nil
+				}
+			}
+			digest = keyedDigest(
+				store.profileKey,
+				"intake_retry",
+				group,
+				strconv.FormatInt(request.ExpectedRevision, 10),
+			)
+		}
 		reservationIndex := slices.IndexFunc(input.Reservations, func(pass formIntakeStoredPass) bool {
 			return constantTimeStringEqual(pass.KeyDigest, digest)
 		})
@@ -361,7 +388,10 @@ func (store *FormJobStore) ReserveFormIntakePass(
 				return false, ErrFormJobCapacityExceeded
 			}
 			reservation = formIntakeStoredPass{
-				ID: "form_pass_" + digest[:32], KeyDigest: digest, Revision: request.ExpectedRevision,
+				ID:           "form_pass_" + digest[:32],
+				KeyDigest:    digest,
+				GroupDigest:  group,
+				Revision:     request.ExpectedRevision,
 				CandidateIDs: slices.Clone(request.CandidateIDs),
 			}
 			input.Reservations = append(input.Reservations, reservation)
@@ -449,6 +479,7 @@ func formIntakeProgress(record FormJobRecord, mode *formIntakeStoredMode) FormIn
 		Revision:   record.Revision,
 		State:      mode.State,
 		InputCount: len(mode.Inputs),
+		Context:    cloneFormIntakeContext(mode.Context),
 	}
 	for _, input := range mode.Inputs {
 		if input.State != formIntakeInputConsumed {
@@ -472,11 +503,20 @@ func formIntakeAdmission(
 }
 
 func formIntakeInput(record FormJobRecord, mode *formIntakeStoredMode, input formIntakeStoredInput) FormIntakeInput {
+	var dialogIntent FormIntakeDialogIntent
+	for index := len(input.Reservations) - 1; index >= 0; index-- {
+		if outcome := input.Reservations[index].Outcome; outcome != nil {
+			dialogIntent = outcome.Intent
+			break
+		}
+	}
 	return FormIntakeInput{
 		JobID: record.JobID, ModeID: mode.ID, Reference: formIntakeReceiptPrefix + record.JobID + "." + input.ID,
 		Revision: record.Revision, Passes: len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
-		Intent: input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
+		DialogIntent: dialogIntent,
+		Intent:       input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
 		Accounted: formIntakeAccountedLiterals(input),
+		Findings:  formIntakeCurrentFindings(input),
 	}
 }
 
@@ -621,6 +661,7 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 		seenReservations := make(map[string]bool, len(input.Reservations))
 		for _, reservation := range input.Reservations {
 			if !validDocumentDigest(reservation.KeyDigest) ||
+				reservation.GroupDigest != "" && !validDocumentDigest(reservation.GroupDigest) ||
 				reservation.ID != "form_pass_"+prefixFormIntakeDigest(reservation.KeyDigest) ||
 				seenReservations[reservation.ID] || reservation.Revision <= 0 || reservation.Revision > record.Revision ||
 				!validFormIntakeCandidateIDs(reservation.CandidateIDs) {

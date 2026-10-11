@@ -30,6 +30,9 @@ func newProtectedAnswerContinuationState(
 	opts turnInput,
 	registry *tools.ToolRegistry,
 ) protectedAnswerContinuationState {
+	if reference := documentIntakeReferenceForTurn(opts); reference != "" {
+		return newDocumentIntakeContinuationState(reference, registry)
+	}
 	continuation := opts.InteractionContinuation
 	if strings.TrimSpace(continuation.ProtectedAnswer) == "" {
 		return protectedAnswerContinuationState{}
@@ -60,6 +63,35 @@ func newProtectedAnswerContinuationState(
 		toolName:  strings.TrimSpace(continuation.OriginToolName),
 		arguments: cloneStringAnyMap(arguments),
 	}
+}
+
+func documentIntakeReferenceForTurn(opts turnInput) string {
+	reference := opts.DocumentIntakeReference
+	for _, message := range opts.InitialSteeringMessages {
+		if message.DocumentIntakeReference != "" {
+			reference = message.DocumentIntakeReference
+		}
+	}
+	return reference
+}
+
+func newDocumentIntakeContinuationState(
+	reference string,
+	registry *tools.ToolRegistry,
+) protectedAnswerContinuationState {
+	if registry == nil {
+		return protectedAnswerContinuationState{setupErr: errors.New("protected document continuation is unavailable")}
+	}
+	tool, ok := registry.GetRegistered("document")
+	provider, supported := tool.(toolshared.ProtectedAnswerContinuationProvider)
+	if !ok || !supported {
+		return protectedAnswerContinuationState{setupErr: errors.New("protected document continuation is unavailable")}
+	}
+	arguments, err := provider.ProtectedAnswerContinuationArguments(reference)
+	if err != nil || !strings.HasPrefix(reference, "form_intake.") {
+		return protectedAnswerContinuationState{setupErr: errors.New("protected document continuation is invalid")}
+	}
+	return protectedAnswerContinuationState{enabled: true, toolName: "document", arguments: arguments}
 }
 
 func (state *protectedAnswerContinuationState) pending() bool {

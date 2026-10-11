@@ -26,9 +26,11 @@ type FormIntakeApplyRequest struct {
 	PassID           string
 	ExpectedRevision int64
 	Owner            FormJobOwner
-	Schema           FormFieldsFacts      `json:"-"`
-	Proposals        []FormIntakeProposal `json:"-"`
-	NonData          []FormIntakeLiteral  `json:"-"`
+	Schema           FormFieldsFacts           `json:"-"`
+	Proposals        []FormIntakeProposal      `json:"-"`
+	NonData          []FormIntakeLiteral       `json:"-"`
+	Findings         []FormFieldMappingBlocker `json:"-"`
+	Intent           FormIntakeDialogIntent    `json:"-"`
 }
 
 // FormIntakeAccountedLiteral is an ephemeral private view for the next pass.
@@ -46,8 +48,9 @@ type FormIntakeApplyResult struct {
 	AcknowledgedIDs  []string                  `json:"acknowledged_field_ids,omitempty"`
 	Findings         []FormFieldMappingBlocker `json:"findings,omitempty"`
 	// Consumed is this original pass's outcome; Job/Progress are current on replay.
-	Consumed bool `json:"consumed"`
-	Reused   bool `json:"reused"`
+	Consumed bool                   `json:"consumed"`
+	Reused   bool                   `json:"reused"`
+	Intent   FormIntakeDialogIntent `json:"intent,omitempty"`
 }
 
 type formIntakeStoredOutcome struct {
@@ -57,6 +60,7 @@ type formIntakeStoredOutcome struct {
 	AcknowledgedIDs []string                  `json:"acknowledged_ids,omitempty"`
 	Findings        []FormFieldMappingBlocker `json:"findings,omitempty"`
 	Consumed        bool                      `json:"consumed"`
+	Intent          FormIntakeDialogIntent    `json:"intent,omitempty"`
 }
 
 // ApplyFormIntakePass publishes accepted ledger events, raw-input accounting
@@ -137,15 +141,16 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		record.Public.Revision++
 		invalidateFormIntakeReview(&record.Public)
 		input.OriginalBytes, input.Accounted = len(input.Text), selection.Accounted
-		consumed := input.Intent != interactions.ProtectedAnswerValue ||
-			formIntakeTextAccounted(input.Text, input.Accounted)
+		pass.Outcome = &formIntakeStoredOutcome{
+			Digest: digest, AppliedRevision: record.Public.Revision, AcceptedIDs: selection.AcceptedIDs,
+			AcknowledgedIDs: selection.AcknowledgedIDs, Findings: selection.Findings, Intent: request.Intent,
+		}
+		consumed := len(formIntakeCurrentFindings(*input)) == 0 && (input.Intent != interactions.ProtectedAnswerValue ||
+			formIntakeTextAccounted(input.Text, input.Accounted))
 		if consumed {
 			input.State, input.Text = formIntakeInputConsumed, ""
 		}
-		pass.Outcome = &formIntakeStoredOutcome{
-			Digest: digest, AppliedRevision: record.Public.Revision, AcceptedIDs: selection.AcceptedIDs,
-			AcknowledgedIDs: selection.AcknowledgedIDs, Findings: selection.Findings, Consumed: consumed,
-		}
+		pass.Outcome.Consumed = consumed
 		if saveErr := store.writeFormIntakeSource(&record, key, source, now); saveErr != nil {
 			return false, saveErr
 		}
@@ -186,7 +191,11 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		}
 		return result
 	}
-	if len(request.Proposals) > MaxFormIntakeCandidates || len(request.NonData) > MaxFormIntakeAccountedSpans {
+	if request.Intent != "" && !request.Intent.Valid() {
+		return "", ErrFormJobAnswerConflict
+	}
+	if len(request.Proposals)+len(request.Findings) > MaxFormIntakeCandidates ||
+		len(request.NonData) > MaxFormIntakeAccountedSpans {
 		return "", ErrFormJobCapacityExceeded
 	}
 	proposals := make([]proposal, len(request.Proposals))
@@ -217,7 +226,9 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		Schema    FormFieldsFacts
 		Proposals []proposal
 		NonData   []literal
-	}{request.Reference, request.PassID, request.ExpectedRevision, request.Schema, proposals, nonData})
+		Findings  []FormFieldMappingBlocker `json:"Findings,omitempty"`
+		Intent    FormIntakeDialogIntent    `json:"Intent,omitempty"`
+	}{request.Reference, request.PassID, request.ExpectedRevision, request.Schema, proposals, nonData, request.Findings, request.Intent})
 }
 
 func formIntakeApplyResult(
@@ -234,5 +245,6 @@ func formIntakeApplyResult(
 		Findings:         slices.Clone(outcome.Findings),
 		Consumed:         outcome.Consumed,
 		Reused:           reused,
+		Intent:           outcome.Intent,
 	}
 }

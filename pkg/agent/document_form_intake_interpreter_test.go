@@ -25,6 +25,44 @@ func privateIntakeTestView() document.FormIntakeInterpretationView {
 	}}
 }
 
+func TestDocumentIntakeRelatedInputsStayBoundedPrivateAndBoundToTheSameMode(t *testing.T) {
+	view := privateIntakeTestView()
+	view.Pass.Input.JobID, view.Pass.Input.ModeID, view.Pass.Input.Reference = "owned-job", "owned-mode", "current-input"
+	view.RelatedInputs = []document.FormIntakeInput{{
+		JobID: "owned-job", ModeID: "owned-mode",
+		Reference: "related-input", Text: "Those details are for the borrower.",
+	}}
+	view.RelatedInputsPartial = true
+	encoded, err := encodeDocumentIntakeView(view)
+	if err != nil || !strings.Contains(string(encoded), `"related_inputs_partial":true`) ||
+		!strings.Contains(string(encoded), view.RelatedInputs[0].Text) {
+		t.Fatal("bounded private clarification context was lost")
+	}
+	public, err := json.Marshal(view)
+	if err != nil || string(public) != "{}" {
+		t.Fatal("related input escaped public JSON")
+	}
+	for _, change := range []func(*document.FormIntakeInterpretationView){
+		func(v *document.FormIntakeInterpretationView) { v.RelatedInputs[0].JobID = "other-job" },
+		func(v *document.FormIntakeInterpretationView) { v.RelatedInputs[0].ModeID = "other-mode" },
+		func(v *document.FormIntakeInterpretationView) { v.RelatedInputs[0].Reference = "current-input" },
+		func(v *document.FormIntakeInterpretationView) { v.RelatedInputs[0].Consumed = true },
+		func(v *document.FormIntakeInterpretationView) {
+			v.RelatedInputs[0].Text = strings.Repeat("x", document.MaxFormIntakeInputBytes+1)
+		},
+		func(v *document.FormIntakeInterpretationView) {
+			v.RelatedInputs = append(v.RelatedInputs, v.RelatedInputs[0])
+		},
+	} {
+		copy := view
+		copy.RelatedInputs = append([]document.FormIntakeInput(nil), view.RelatedInputs...)
+		change(&copy)
+		if _, err = encodeDocumentIntakeView(copy); err == nil {
+			t.Fatal("unbound or unbounded related context was accepted")
+		}
+	}
+}
+
 func TestDocumentIntakeInterpreterUsesPrivateCallAndNeverPublicJSON(t *testing.T) {
 	provider := &documentAuditTestProvider{response: &providers.LLMResponse{Content: `{"intent":"facts",` +
 		`"proposals":[{"field_id":"field_name","literals":[{"text":"Casey Mint","occurrence":1}]},` +
