@@ -110,3 +110,30 @@ func TestEvaluateNativeBackendFailsClosedWithPackageRevision(t *testing.T) {
 		t.Fatalf("unknown backend = %#v", unknown)
 	}
 }
+
+func TestPopplerSecurityPinRejectsEachChangedExecutable(t *testing.T) {
+	t.Parallel()
+	backend, exists := nativeBackendSpecByName(PopplerBackendName)
+	if !exists || backend.identity.PackageRevision != "24.02.0-1ubuntu9.10" {
+		t.Fatal("Poppler manifest lost its qualified security revision")
+	}
+	for _, changed := range backend.executables {
+		t.Run(changed.Name, func(t *testing.T) {
+			capability := evaluateNativeBackend(backend, func(path string) string {
+				for _, expected := range backend.executables {
+					if expected.Path == path {
+						if path == changed.Path {
+							return strings.Repeat("0", 64)
+						}
+						return expected.SHA256
+					}
+				}
+				return ""
+			})
+			if capability.State != CapabilityUnavailable || len(capability.Executables) != 3 ||
+				!strings.Contains(capability.Reason, PopplerBackendPackageRevision) {
+				t.Fatal("one unknown executable bypassed the exact Poppler admission gate")
+			}
+		})
+	}
+}

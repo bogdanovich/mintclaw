@@ -184,6 +184,9 @@ func (backend pdfCPUFormWriteBackend) fill(data []byte, request WorkerRequest) b
 			)
 		}
 	}
+	if err = preparePDFCPUAbsentFormFonts(context, bindings); err != nil {
+		return classifyPDFCPUFormWriteError(err)
+	}
 	_, pages, err := form.FillForm(
 		context,
 		form.FillDetails(&target, nil),
@@ -346,7 +349,7 @@ func ensurePDFCPUSelectedAppearances(
 					fonts,
 				)
 			case FormFieldCombo:
-				appearance, restore, appearanceErr := preparePDFCPUCompleteChoiceAppearance(
+				appearance, restore, appearanceErr := preparePDFCPUCompleteWidgetAppearance(
 					context,
 					widget,
 					defaultAppearance,
@@ -370,7 +373,7 @@ func ensurePDFCPUSelectedAppearances(
 				)
 				restore()
 			case FormFieldList:
-				appearance, restore, appearanceErr := preparePDFCPUCompleteChoiceAppearance(
+				appearance, restore, appearanceErr := preparePDFCPUCompleteWidgetAppearance(
 					context,
 					widget,
 					defaultAppearance,
@@ -401,7 +404,54 @@ func ensurePDFCPUSelectedAppearances(
 	return nil
 }
 
-func preparePDFCPUCompleteChoiceAppearance(
+// Without AcroForm font resources, pdfcpu falls back to an installed user font.
+// Prepare only selected widgets with the existing complete-font policy instead;
+// never enable host configuration or alter source bytes to satisfy that fallback.
+func preparePDFCPUAbsentFormFonts(context *model.Context, bindings map[string]pdfCPUFormBinding) error {
+	resources, err := primitives.FormFontResDict(context.XRefTable)
+	if err != nil || len(resources) != 0 {
+		return err
+	}
+	fonts := map[string]types.IndirectRef{}
+	fontResources := map[bool]string{}
+	for _, binding := range bindings {
+		if binding.field.Kind == FormFieldCheckbox || binding.field.Kind == FormFieldRadio {
+			continue
+		}
+		numbers, failure := fieldObjectNumbers(binding.backendID)
+		if failure != nil {
+			return errors.New("form field identity is invalid")
+		}
+		object, findErr := context.FindObject(numbers[len(numbers)-1])
+		if findErr != nil {
+			return findErr
+		}
+		field, dereferenceErr := context.DereferenceDict(object)
+		if dereferenceErr != nil || field == nil {
+			return errors.New("form field structure is invalid")
+		}
+		widgets := field.ArrayEntry("Kids")
+		if len(widgets) == 0 {
+			widgets = []types.Object{object}
+		}
+		for _, widgetObject := range widgets {
+			widget, widgetErr := context.DereferenceDict(widgetObject)
+			if widgetErr != nil || widget == nil {
+				return errors.New("form widget structure is invalid")
+			}
+			_, _, appearanceErr := preparePDFCPUCompleteWidgetAppearance(
+				context, widget, field.StringEntry("DA"), pdfCPUFormValueNeedsUnicode(binding.expected),
+				fonts, fontResources,
+			)
+			if appearanceErr != nil {
+				return appearanceErr
+			}
+		}
+	}
+	return nil
+}
+
+func preparePDFCPUCompleteWidgetAppearance(
 	context *model.Context,
 	widget types.Dict,
 	inherited *string,

@@ -11,9 +11,53 @@ import (
 	"strings"
 	"testing"
 
+	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/form"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
+
+func TestPDFCPUSelectedAppearanceWithoutFormFontsUsesCoreFont(t *testing.T) {
+	data, input, fields := portableFormWriteFixture(t, "acroform-fields.pdf")
+	value := "Core font only"
+	fill := portableNormalizedNamedFill(t, input, fields, map[string]FormValue{
+		"full_name": {Type: FormValueText, Text: &value},
+	})
+	ctx, failure := readFormContext(bytes.NewReader(data), defaultInspectionLimits())
+	if failure != nil {
+		t.Fatal("form context is unavailable")
+	}
+	ctx.Cmd = model.FILLFORMFIELDS
+	if err := pdfcpuapi.OptimizeContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	delete(ctx.Form, "DR")
+	source, present, err := form.ExportForm(ctx.XRefTable, "")
+	if err != nil || !present || len(source.Forms) != 1 {
+		t.Fatal("form export is unavailable")
+	}
+	target, _, bindings, failure := preparePDFCPUFormWrite(source.Forms[0], fields, fill)
+	if failure != nil {
+		t.Fatal("form bindings are unavailable")
+	}
+	if err = preparePDFCPUAbsentFormFonts(ctx, bindings); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := ctx.FillFonts[pdfCPUASCIIFormFontResource]; !present {
+		t.Fatal("selected widget did not register the complete core font")
+	}
+	if changed, _, fillErr := form.FillForm(
+		ctx,
+		form.FillDetails(&target, nil),
+		target.Pages,
+		form.JSON,
+	); fillErr != nil ||
+		!changed {
+		t.Fatalf("isolated form fill failed without host fonts: %v", fillErr)
+	}
+	if model.ConfigPath != "disable" {
+		t.Fatal("missing form font fallback enabled host PDF configuration")
+	}
+}
 
 func TestPortablePDFCPUFormWriteBackendUsesPDFiumVisibleReadback(t *testing.T) {
 	data, input, fields := portableFormWriteFixture(t, "acroform-fields.pdf")

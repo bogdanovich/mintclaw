@@ -118,8 +118,8 @@ expected_packages = {
     "fonts-liberation": "1:2.1.5-3",
     "ghostscript": "10.02.1~dfsg1-0ubuntu7.9",
     "libgs-common": "10.02.1~dfsg1-0ubuntu7.9",
-    "libpoppler134:amd64": "24.02.0-1ubuntu9.9",
-    "poppler-utils": "24.02.0-1ubuntu9.9",
+    "libpoppler134:amd64": "24.02.0-1ubuntu9.10",
+    "poppler-utils": "24.02.0-1ubuntu9.10",
 }
 require(packages == expected_packages, f"package revisions differ: {packages!r} != {expected_packages!r}")
 digests = {}
@@ -129,11 +129,12 @@ for line in pathlib.Path(digests_path).read_text(encoding="utf-8").splitlines():
 
 backends = capabilities.get("backends", [])
 require(
-    {backend["identity"]["name"] for backend in backends} == {"poppler", "ghostscript"},
+    {backend["identity"]["name"] for backend in backends} == {"pdfcpu", "pdfium-wasm", "poppler", "ghostscript"},
     f"unexpected backend set: {backends!r}",
 )
 expected_roles = {"poppler": "independent_verifier", "ghostscript": "independent_verifier"}
-for backend in backends:
+native_backends = [backend for backend in backends if backend["identity"]["name"] in expected_roles]
+for backend in native_backends:
     identity = backend["identity"]
     require(backend["state"] == "supported", f"backend is not supported: {backend!r}")
     require(
@@ -184,7 +185,7 @@ result = {
         "GOTOOLCHAIN": "local",
         "GOPROXY": "off",
     },
-    "backends": backends,
+    "backends": native_backends,
     "isolation": {
         "mode": "bubblewrap_document_worker_v1",
         "package_revision": packages["bubblewrap"],

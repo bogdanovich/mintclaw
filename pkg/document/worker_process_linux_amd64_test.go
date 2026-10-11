@@ -171,10 +171,28 @@ func TestDocumentNativeBoundaryDeniesHostFileAndNetwork(t *testing.T) {
 	}
 	defer func() { _ = listener.Close() }()
 
-	snapshot, input := processWorkerFixture(t)
+	snapshot, input := processReadFixture(t, "boundary_probe", "acroform-fields.pdf")
+	source, err := os.ReadFile(snapshot.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := newFormFieldsBackend().Fields(bytes.NewReader(source), defaultInspectionLimits(), input.SHA256)
+	if fields.State != StateSucceeded || fields.Facts == nil {
+		t.Fatal("boundary probe form schema is unavailable")
+	}
+	value := "Boundary probe"
+	fill := normalizedNamedFill(t, input, *fields.Facts, map[string]FormValue{
+		"full_name": {Type: FormValueText, Text: &value},
+	})
 	worker := testProcessWorker("boundary-probe", secretPath, listener.Addr().String())
 	request := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFillCandidate)
-	result := worker.run(t.Context(), snapshot.path, t.TempDir(), request)
+	request.OperationID = writeTestOperationID("boundary_probe")
+	request.Fill = &fill
+	scratch := directTempDir(t)
+	if err := os.Chmod(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := worker.run(t.Context(), snapshot.path, scratch, request)
 	assertWorkerFailure(t, result, StateUnavailable, FailureBackendUnavailable)
 	if result.Failure.Message != "document boundary probe passed" {
 		t.Fatalf("boundary probe result = %#v", result)
@@ -258,8 +276,8 @@ func TestProcessFormWriterUsesRealSubprocessAndAdoptsPrivateCandidate(t *testing
 		"full_name": {Type: FormValueText, Text: &privateValue},
 	})
 	t.Setenv(workerSecretCanary, "must-not-reach-worker")
-	worker := testProcessWorker("serve")
-	worker.timeout = 10 * time.Second
+	worker := NewProcessFormWriterWorker().(*processWorker)
+	worker.args = testProcessWorker("serve").args
 	result := worker.FillCandidate(
 		t.Context(),
 		snapshot,
@@ -316,8 +334,8 @@ func TestProcessFormWriterProducesVerifiedFlattenedHybridDerivative(t *testing.T
 	fill := normalizedNamedFill(t, input, *fields.Facts, map[string]FormValue{
 		"hybrid-name": {Type: FormValueText, Text: &name},
 	})
-	worker := testProcessWorker("serve")
-	worker.timeout = 15 * time.Second
+	worker := NewProcessFormWriterWorker().(*processWorker)
+	worker.args = testProcessWorker("serve").args
 	result := worker.FillCandidate(
 		t.Context(),
 		snapshot,
