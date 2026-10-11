@@ -158,6 +158,12 @@ func (flow *conversation) turn(
 		if eventErr != nil {
 			return Inconclusive, "invalid_response"
 		}
+		for _, scope := range event.TraceScopes {
+			if !scope.Complete() || scope.Workspace != flow.workspace {
+				flow.append(event)
+				return Fail, "unexpected_workspace"
+			}
+		}
 		if event.Kind == "auxiliary" {
 			continue
 		}
@@ -173,11 +179,6 @@ func (flow *conversation) turn(
 		}
 		if event.AgentID == "" || event.SessionKey == "" || len(event.TraceScopes) == 0 {
 			return Inconclusive, "missing_route_identity"
-		}
-		for _, scope := range event.TraceScopes {
-			if !scope.Complete() || scope.Workspace != flow.workspace {
-				return Fail, "unexpected_workspace"
-			}
 		}
 		flow.trial.SessionKey = event.SessionKey
 		flow.last = flow.trial.Events[len(flow.trial.Events)-1]

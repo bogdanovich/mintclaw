@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -194,6 +196,76 @@ func TestClientCancellationSettlesWorkersAndDoesNotSend(t *testing.T) {
 	client.Close()
 	if requests.Load() != 0 {
 		t.Fatal("canceled request reached the gateway")
+	}
+}
+
+type blockedWriteConn struct {
+	net.Conn
+	armed     atomic.Bool
+	started   chan struct{}
+	released  chan struct{}
+	startOnce sync.Once
+	closeOnce sync.Once
+}
+
+func (connection *blockedWriteConn) Write(data []byte) (int, error) {
+	if !connection.armed.Load() {
+		return connection.Conn.Write(data)
+	}
+	connection.startOnce.Do(func() { close(connection.started) })
+	<-connection.released
+	return 0, net.ErrClosed
+}
+
+func (connection *blockedWriteConn) Close() error {
+	connection.closeOnce.Do(func() { close(connection.released) })
+	return connection.Conn.Close()
+}
+
+func TestClientCallerCancellationInterruptsActiveWrite(t *testing.T) {
+	server := testServer(t, func(*websocket.Conn, protocol.MintClawMessage) {})
+	var socket *blockedWriteConn
+	dialer := websocket.Dialer{NetDialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		connection, err := (&net.Dialer{}).DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		socket = &blockedWriteConn{Conn: connection, started: make(chan struct{}), released: make(chan struct{})}
+		return socket, nil
+	}}
+	connection, response, err := dialer.DialContext(t.Context(), "ws"+strings.TrimPrefix(server.URL, "http"),
+		http.Header{"Authorization": {"Bearer test-token"}})
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, stopChild := context.WithCancel(t.Context())
+	client := &Client{
+		connection: connection, ctx: child, cancel: stopChild,
+		writes: make(chan struct{}, 1), stopCancel: func() bool { return true },
+	}
+	t.Cleanup(client.Close)
+	socket.armed.Store(true)
+	caller, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() { finished <- client.Send(caller, protocol.MintClawMessage{Type: protocol.TypeMessageSend}) }()
+	select {
+	case <-socket.started:
+	case <-time.After(time.Second):
+		t.Fatal("write never started")
+	}
+	cancel()
+	select {
+	case err = <-finished:
+		if !errors.Is(err, context.Canceled) || !errors.Is(client.Failure(), context.Canceled) ||
+			len(client.writes) != 0 {
+			t.Fatal("active cancellation was not retained and settled before releasing the write slot", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active write waited for its original deadline instead of caller cancellation")
 	}
 }
 

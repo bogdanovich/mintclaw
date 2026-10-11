@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -92,6 +93,61 @@ func TestRunLiveReturnsCorrelatedFinalFromOneRequest(t *testing.T) {
 		result.InteractionPromptID != "" ||
 		result.ResultOutput == nil || result.ResultOutput.Records[0]["state"] != "ready" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestRunLiveRetainedOutputLimitOverridesBufferedFinal(t *testing.T) {
+	for _, frameLimit := range []bool{false, true} {
+		t.Run(fmt.Sprint(frameLimit), func(t *testing.T) {
+			closed := make(chan struct{})
+			server := liveTestServer(t, "test-token",
+				func(connection *websocket.Conn, request channelmintclaw.MintClawMessage) {
+					_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
+						Type: channelmintclaw.TypeMessageUpdate, SessionID: request.SessionID,
+						Payload: map[string]any{
+							channelmintclaw.PayloadKeyRequestID: request.ID,
+							channelmintclaw.PayloadKeyContent:   "buffered final",
+							channelmintclaw.PayloadKeyFinal:     true,
+						},
+					})
+					if frameLimit {
+						_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
+							Type:    channelmintclaw.TypeMessageUpdate,
+							Payload: map[string]any{"content": strings.Repeat("x", liveMaxOutputBytes+128*1024)},
+						})
+					} else {
+						for range 20 {
+							_ = connection.WriteJSON(
+								channelmintclaw.MintClawMessage{Type: channelmintclaw.TypeMessageUpdate},
+							)
+						}
+					}
+					_ = connection.SetReadDeadline(time.Now().Add(3 * time.Second))
+					_, _, _ = connection.ReadMessage()
+					close(closed)
+				})
+			result, err := runLive(t.Context(), liveOptions{
+				ConfigPath: liveTestConfig(
+					t,
+					server.URL,
+					"test-token",
+				),
+				Message: "synthetic request",
+				Timeout: 5 * time.Second,
+				Progress: func(message string) {
+					if strings.HasPrefix(message, "Request accepted;") {
+						select {
+						case <-closed:
+						case <-time.After(4 * time.Second):
+							t.Fatal("transport did not settle its retained output limit")
+						}
+					}
+				},
+			})
+			if err == nil || result.Outcome != "output_limit" || result.Response != "buffered final" {
+				t.Fatal("buffered final concealed transport limit", result.Outcome, err)
+			}
+		})
 	}
 }
 

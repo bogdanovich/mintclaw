@@ -160,6 +160,19 @@ func (client *Client) Send(ctx context.Context, message protocol.MintClawMessage
 	if err := client.ctx.Err(); err != nil {
 		return err
 	}
+	settled := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		// A canceled active write has unknown admission. The connection cannot
+		// be reused, and the callback must settle before releasing its write slot.
+		client.fail(ctx.Err())
+		_ = client.connection.Close()
+		close(settled)
+	})
+	defer func() {
+		if !stop() {
+			<-settled
+		}
+	}()
 	deadline := time.Now().Add(10 * time.Second)
 	if requested, ok := ctx.Deadline(); ok && requested.Before(deadline) {
 		deadline = requested
@@ -167,7 +180,11 @@ func (client *Client) Send(ctx context.Context, message protocol.MintClawMessage
 	if err := client.connection.SetWriteDeadline(deadline); err != nil {
 		return err
 	}
-	return client.connection.WriteJSON(message)
+	err := client.connection.WriteJSON(message)
+	if canceled := ctx.Err(); canceled != nil {
+		return canceled
+	}
+	return err
 }
 
 func (client *Client) Receive(ctx context.Context) (protocol.MintClawMessage, error) {

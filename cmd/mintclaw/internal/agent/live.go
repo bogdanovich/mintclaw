@@ -206,7 +206,14 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 		result.Outcome = classifyLiveDialError(ctx, dialErr)
 		return result, &liveRunError{cause: fmt.Errorf("connect to live gateway: %w", dialErr)}
 	}
-	defer connection.Close()
+	defer func() {
+		connection.Close()
+		if failure := connection.Failure(); err == nil &&
+			(errors.Is(failure, gatewayclient.ErrQueueLimit) || errors.Is(failure, websocket.ErrReadLimit)) {
+			result.Outcome = "output_limit"
+			err = &liveRunError{cause: errors.New("live transport output limit exceeded")}
+		}
+	}()
 
 	request := channelmintclaw.MintClawMessage{
 		Type:      channelmintclaw.TypeMessageSend,

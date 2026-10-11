@@ -151,6 +151,28 @@ func TestScriptedConversationDoesNotPassFabricatedDoneOrMissingIdentity(t *testi
 	}
 }
 
+func TestScriptedConversationRejectsWrongWorkspaceOnStreamingEvidence(t *testing.T) {
+	for _, kind := range []string{"", protocol.MessageKindToolCalls} {
+		t.Run(kind, func(t *testing.T) {
+			transport := newFakeConversation()
+			transport.onSend = func(request protocol.MintClawMessage, number int) {
+				stream := testResponse(request, number)
+				stream.Payload[protocol.PayloadKeyFinal] = false
+				stream.Payload[protocol.PayloadKeyKind] = kind
+				stream.Payload[protocol.PayloadKeyTraceScopes] = []events.TraceScope{{
+					Workspace: "/production", TurnID: "observed-cross-workspace-turn",
+				}}
+				transport.events <- stream
+				transport.events <- testResponse(request, number)
+			}
+			trial := runFakeConversation(t, transport, testCase())
+			if trial.Verdict != Fail || trial.Code != "unexpected_workspace" || len(transport.sent) != 1 {
+				t.Fatal("valid final concealed an observed streaming workspace violation", trial.Verdict, trial.Code)
+			}
+		})
+	}
+}
+
 func TestScriptedNavigationBindsLatestPrompt(t *testing.T) {
 	transport := newFakeConversation()
 	transport.onSend = func(request protocol.MintClawMessage, number int) {
