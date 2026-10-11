@@ -114,9 +114,25 @@ terminal outcome is absent. An active turn with no turn-end event retains
 
 Regression tests exercise all three states plus successful channel settlement,
 and the machine-readable inventory no longer carries `terminal_consistency` as
-an open lifecycle gap. H6 still requires a merged-main production canary; an
-older deployed binary's contradictory marker remains authoritative evidence
-for that older run.
+an open lifecycle gap.
+
+Merged-main production qualification completed on 2026-10-11 at
+`756ea80a257bbc298117f3f8b8e41cb1fb0e41c1` after PR #1496 merged. The direct
+stateless canary retained trace `trace-turn-257fb60524a6220f73eb07c6` with a
+completed outcome, six records ending in `turn.end`, no delivery records, and
+no truncation. The live gateway canary retained
+`trace-turn-1b3488bbdd51e41237b41fc6` with a completed outcome followed by
+`delivery.attempt` (`queued`) and `delivery.outcome` (`sent`), again without
+truncation. All expected services remained active and the ten-minute
+error-journal scan was empty after both canaries.
+
+The checksum-verifiable rollback snapshot is
+`/home/server/mintclaw-core-backup-20261011T025349Z`; it records the previous
+core revision `9aef97d8956056fc4a059bdd3e029495f16bdde9`, binaries, user units and
+drop-ins, service states, and a SHA-256 manifest. Historical traces from the
+older binary remain authoritative evidence for their own runs. H6 still owns
+the wider final P8 qualification matrix, but terminal and delivery settlement
+truth is production-qualified.
 
 ## Evidence map
 
