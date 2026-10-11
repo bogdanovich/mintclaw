@@ -272,6 +272,9 @@ func (flow *conversation) turn(
 	defer cancel()
 	request, code := flow.request(turnCtx, action, prompt)
 	if code != "" {
+		if code == "private_native_evidence" {
+			return Fail, code
+		}
 		return Inconclusive, code
 	}
 	if credentialJSONValue(request, flow.filter) || action.Kind != "protected_answer" &&
@@ -364,6 +367,9 @@ func (flow *conversation) request(ctx context.Context, action Action, prompt Eve
 	if flow.domain != nil {
 		request, handled, err := flow.domain.request(ctx, action, prompt)
 		if err != nil {
+			if errors.Is(err, ErrPrivateEvidence) {
+				return protocol.MintClawMessage{}, "private_native_evidence"
+			}
 			return protocol.MintClawMessage{}, "domain_input_not_admitted"
 		}
 		if handled {
