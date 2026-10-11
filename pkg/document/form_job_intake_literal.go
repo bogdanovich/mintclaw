@@ -14,9 +14,10 @@ type FormIntakeLiteral struct {
 }
 
 type formIntakeSpan struct {
-	Start   int    `json:"start"`
-	End     int    `json:"end"`
-	FieldID string `json:"field_id,omitempty"`
+	Start             int    `json:"start"`
+	End               int    `json:"end"`
+	FieldID           string `json:"field_id,omitempty"`
+	ScopedInstruction bool   `json:"scoped_instruction,omitempty"`
 }
 
 const MaxFormIntakeAccountedSpans = 64

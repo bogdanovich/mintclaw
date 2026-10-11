@@ -14,11 +14,12 @@ import (
 // Proposals are private interpreter output. Values are derived from exact
 // source literals, never from replacement text supplied by an interpreter.
 type FormIntakeProposal struct {
-	FieldID            string              `json:"field_id"`
-	Literals           []FormIntakeLiteral `json:"-"`
-	SupersedesEventID  string              `json:"supersedes_event_id,omitempty"`
-	ReplaceExisting    bool                `json:"replace_existing,omitempty"`
-	CorrectionEvidence []FormIntakeLiteral `json:"-"`
+	FieldID            string                `json:"field_id"`
+	Disposition        FormIntakeDisposition `json:"disposition,omitempty"`
+	Literals           []FormIntakeLiteral   `json:"-"`
+	SupersedesEventID  string                `json:"supersedes_event_id,omitempty"`
+	ReplaceExisting    bool                  `json:"replace_existing,omitempty"`
+	CorrectionEvidence []FormIntakeLiteral   `json:"-"`
 }
 
 type FormIntakeApplyRequest struct {
@@ -36,8 +37,9 @@ type FormIntakeApplyRequest struct {
 // FormIntakeAccountedLiteral is an ephemeral private view for the next pass.
 // A FieldID identifies already accepted evidence, not a new assignment.
 type FormIntakeAccountedLiteral struct {
-	Literal FormIntakeLiteral `json:"-"`
-	FieldID string            `json:"field_id,omitempty"`
+	Literal           FormIntakeLiteral `json:"-"`
+	FieldID           string            `json:"field_id,omitempty"`
+	ScopedInstruction bool              `json:"-"`
 }
 
 type FormIntakeApplyResult struct {
@@ -54,13 +56,14 @@ type FormIntakeApplyResult struct {
 }
 
 type formIntakeStoredOutcome struct {
-	Digest          string                    `json:"digest"`
-	AppliedRevision int64                     `json:"applied_revision"`
-	AcceptedIDs     []string                  `json:"accepted_ids,omitempty"`
-	AcknowledgedIDs []string                  `json:"acknowledged_ids,omitempty"`
-	Findings        []FormFieldMappingBlocker `json:"findings,omitempty"`
-	Consumed        bool                      `json:"consumed"`
-	Intent          FormIntakeDialogIntent    `json:"intent,omitempty"`
+	Digest            string                    `json:"digest"`
+	AppliedRevision   int64                     `json:"applied_revision"`
+	AcceptedIDs       []string                  `json:"accepted_ids,omitempty"`
+	AcknowledgedIDs   []string                  `json:"acknowledged_ids,omitempty"`
+	Findings          []FormFieldMappingBlocker `json:"findings,omitempty"`
+	Consumed          bool                      `json:"consumed"`
+	Intent            FormIntakeDialogIntent    `json:"intent,omitempty"`
+	ScopedInstruction bool                      `json:"scoped_instruction,omitempty"`
 }
 
 // ApplyFormIntakePass publishes accepted ledger events, raw-input accounting
@@ -143,9 +146,13 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		pass.Outcome = &formIntakeStoredOutcome{
 			Digest: digest, AppliedRevision: record.Public.Revision, AcceptedIDs: selection.AcceptedIDs,
 			AcknowledgedIDs: selection.AcknowledgedIDs, Findings: selection.Findings, Intent: request.Intent,
+			ScopedInstruction: selection.ScopedInstruction,
 		}
 		consumed := len(formIntakeCurrentFindings(*input)) == 0 && (input.Intent != interactions.ProtectedAnswerValue ||
 			formIntakeTextAccounted(input.Text, input.Accounted))
+		if consumed && formIntakeHasScopedInstruction(*input) {
+			consumed = formIntakeScopeCoverageComplete(*input, request.Schema)
+		}
 		if consumed {
 			input.State, input.Text = formIntakeInputConsumed, ""
 		}
@@ -172,6 +179,7 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 	}
 	type proposal struct {
 		FieldID           string
+		Disposition       FormIntakeDisposition `json:"Disposition,omitempty"`
 		Literals          []literal
 		SupersedesEventID string
 		ReplaceExisting   bool
@@ -200,6 +208,7 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 	proposals := make([]proposal, len(request.Proposals))
 	for i, item := range request.Proposals {
 		if !opaqueFieldID.MatchString(item.FieldID) || len(item.Literals) == 0 ||
+			!item.Disposition.valid() ||
 			len(item.Literals) > maxFormJobChoices ||
 			len(item.CorrectionEvidence) > MaxFormIntakeCandidates ||
 			len(item.SupersedesEventID) > maxFormJobEventIDLength ||
@@ -207,8 +216,9 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 			return "", ErrFormJobAnswerConflict
 		}
 		proposals[i] = proposal{
-			item.FieldID, convert(item.Literals), item.SupersedesEventID,
-			item.ReplaceExisting, convert(item.CorrectionEvidence),
+			FieldID: item.FieldID, Disposition: item.Disposition, Literals: convert(item.Literals),
+			SupersedesEventID: item.SupersedesEventID, ReplaceExisting: item.ReplaceExisting,
+			Correction: convert(item.CorrectionEvidence),
 		}
 	}
 	nonData := convert(request.NonData)

@@ -32,7 +32,7 @@ func (model *intakeWorkflowTestInterpreter) InterpretFormIntake(
 }
 
 func intakeWorkflowFixture(
-	t *testing.T, model *intakeWorkflowTestInterpreter,
+	t *testing.T, model *intakeWorkflowTestInterpreter, schemaChanges ...func(*document.FormFieldsFacts),
 ) (*DocumentTool, context.Context, document.FormFieldsFacts, string, document.FormJobStoreOptions) {
 	t.Helper()
 	store, options := newWorkflowFormStore(t)
@@ -63,6 +63,9 @@ func intakeWorkflowFixture(
 			Kind: document.FormFieldText, Required: true,
 			Widgets: []document.FormFieldWidget{{ID: "widget_" + hex.EncodeToString(digest[:]), Page: 1, Ordinal: 1}},
 		})
+	}
+	for _, change := range schemaChanges {
+		change(&schema)
 	}
 	tool := NewDocumentTool(WithDocumentFormJobStore(store), WithDocumentFormAudit(document.FormAuditPolicy{
 		PrimaryModel: "deliberative", PrimaryIdentity: "test:deliberative",
