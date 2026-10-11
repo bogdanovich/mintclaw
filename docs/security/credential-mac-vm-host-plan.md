@@ -27,6 +27,21 @@ reach and a separate service identity remain unqualified: passwordless sudo
 denial alone does not establish that all agent administration paths are absent.
 These probes changed no host configuration.
 
+The installed Apple SDK's Virtualization framework subsequently reported
+support on this Mac. The proposed two CPUs and 4 GiB lie within its reported
+limits. `sudo -n -l` still required a password. Neither hardware support nor
+that sudo result qualifies the administration boundary.
+
+From the repository, `bash scripts/credential-mac-vm-preflight.sh` compiles and
+runs a read-only public-metadata probe against the installed Apple SDK. It
+reports architecture, framework limits, current UID/GID and admin-group
+membership, and whether the proposed `_mintclawcredvm` account exists. That
+account was absent in the current probe. It does not create an account or VM,
+read keys or configuration, inspect process arguments, or probe guest storage.
+The report always leaves credential-host, administration, storage/console/
+backup, and actual browser/phone qualification unqualified. The helper accepts
+no arguments and requires macOS; temporary build output is removed on exit.
+
 The existing VPN VPS is currently unsuitable because MintClaw has admin
 access. Reusing it would require a separate reviewed migration that removes
 all equivalent access, including credentials that can restore it.
