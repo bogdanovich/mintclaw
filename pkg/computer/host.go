@@ -144,7 +144,19 @@ func (host *ReadOnlyHost) Open(ctx context.Context, request OpenRequest) (Sessio
 		host.revoke(previous)
 	}
 	if len(host.sessions) >= 128 {
-		return Session{}, ErrBusy
+		// Keep bounded tombstones for status/idempotence, but never let completed
+		// work prevent admission. Evict the oldest terminal entry, not a live lease.
+		var oldest string
+		for id, entry := range host.sessions {
+			if entry.session.Control.Terminal() &&
+				(oldest == "" || entry.session.ExpiresAt.Before(host.sessions[oldest].session.ExpiresAt)) {
+				oldest = id
+			}
+		}
+		if oldest == "" {
+			return Session{}, ErrBusy
+		}
+		delete(host.sessions, oldest)
 	}
 	id, err := newID()
 	if err != nil {

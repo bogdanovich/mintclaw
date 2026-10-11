@@ -357,3 +357,33 @@ func TestReadOnlyHostConcurrentOpen(t *testing.T) {
 		t.Fatalf("admitted %d owners", admitted.Load())
 	}
 }
+
+func TestReadOnlyHostReleasedSessionChurnDoesNotBlockAdmission(t *testing.T) {
+	host, request := readOnlyFixture(t, nil, nil)
+	now := time.Now()
+	host.now = func() time.Time { return now }
+	host.policy.LeaseTTL = time.Hour
+	var first Session
+	for i := range 256 {
+		session, err := host.Open(t.Context(), request)
+		if err != nil {
+			t.Fatalf("open after %d completed sessions: %v", i, err)
+		}
+		if i == 0 {
+			first = session
+		}
+		if _, err = host.Release(t.Context(), session.Binding); err != nil {
+			t.Fatal(err)
+		}
+		if len(host.sessions) > 128 || len(host.arbiter.leases) != 0 {
+			t.Fatal("retained state is unbounded or completed session still owns desktop")
+		}
+		now = now.Add(time.Millisecond)
+	}
+	if _, err := host.Status(t.Context(), request.Principal, first.Binding.SessionID); err == nil {
+		t.Fatal("evicted terminal session still has authority")
+	}
+	if _, err := host.Open(t.Context(), request); err != nil {
+		t.Fatal("terminal tombstones blocked subsequent work", err)
+	}
+}
