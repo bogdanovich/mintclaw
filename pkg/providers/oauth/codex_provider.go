@@ -201,8 +201,10 @@ func (p *CodexProvider) chatResponses(
 		if errors.As(normalizedErr, &providerErr) && providerErr != nil {
 			fields["error_kind"] = providerErr.Kind.Canonical()
 			fields["status_code"] = providerErr.HTTPStatus
-			fields["request_id"] = providerErr.RequestID
-			fields["safe_message"] = providerErr.SafeMessage
+			if !protocoltypes.IsSensitiveRequest(ctx) {
+				fields["request_id"] = providerErr.RequestID
+				fields["safe_message"] = providerErr.SafeMessage
+			}
 		}
 		logger.ErrorCF("provider.codex", "Codex API call failed", fields)
 		return nil, normalizedErr
