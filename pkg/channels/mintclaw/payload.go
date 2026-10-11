@@ -10,16 +10,6 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
 
-// mintclawConn represents a single WebSocket connection.
-
-func truncate(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen]) + "..."
-}
-
 func parseInlineImageMedia(payload map[string]any) ([]string, error) {
 	if len(payload) == 0 {
 		return nil, nil
