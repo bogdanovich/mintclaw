@@ -24,6 +24,9 @@ import (
 const (
 	traceCaptureBuffer             = 512
 	traceDeliverySettlementTimeout = 30 * time.Second
+
+	traceIncompleteRuntimeClosedBeforeTerminalOutcome    = "runtime_closed_before_terminal_outcome"
+	traceIncompleteRuntimeClosedBeforeDeliverySettlement = "runtime_closed_before_delivery_settlement"
 )
 
 type traceCaptureSettings struct {
@@ -174,11 +177,13 @@ func (p *turnTraceProjector) close() {
 	settings := p.settings
 	traces := make([]*activeTraceCapture, 0, len(p.turns))
 	for _, trace := range p.turns {
+		reason := traceIncompleteRuntimeClosedBeforeTerminalOutcome
 		if trace.settlementTimer != nil {
+			reason = traceIncompleteRuntimeClosedBeforeDeliverySettlement
 			trace.settlementTimer.Stop()
 			trace.settlementTimer = nil
 		}
-		trace.builder.MarkIncomplete("runtime_closed_before_terminal_outcome", 0)
+		trace.builder.MarkIncomplete(reason, 0)
 		traces = append(traces, trace)
 	}
 	p.turns = nil

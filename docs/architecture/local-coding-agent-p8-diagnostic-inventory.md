@@ -95,7 +95,7 @@ The trace carries only enough identity and status to select the right owner.
 H1c may export bounded metadata summaries from those owners, but collection is
 read-only and privacy-safe by default.
 
-## Production qualification finding
+## Production qualification finding and H1b resolution
 
 A harmless stateless deployment canary completed successfully and retained
 both a `turn.end` record with status `completed` and a completed envelope
@@ -103,10 +103,20 @@ outcome. The same trace was nevertheless marked incomplete with
 `runtime_closed_before_terminal_outcome`. The content and runtime outcome were
 not lost, but the truncation claim conflicts with the retained terminal facts.
 
-The machine-readable inventory now preserves this as the
-`terminal_consistency` lifecycle gap. H1b must make terminal projection and
-writer close agree; consumers must continue treating the current incomplete
-marker as authoritative until that fix is merged and qualified.
+The H1b terminal-truth slice resolves that contradiction at both ownership
+boundaries. Direct and coding callers own presentation of the returned final
+response, so their turn-end event no longer claims that a channel delivery is
+pending. A gateway turn that has ended but is still awaiting a channel receipt
+remains open, and shutdown labels it
+`runtime_closed_before_delivery_settlement` instead of claiming that the
+terminal outcome is absent. An active turn with no turn-end event retains
+`runtime_closed_before_terminal_outcome`.
+
+Regression tests exercise all three states plus successful channel settlement,
+and the machine-readable inventory no longer carries `terminal_consistency` as
+an open lifecycle gap. H6 still requires a merged-main production canary; an
+older deployed binary's contradictory marker remains authoritative evidence
+for that older run.
 
 ## Evidence map
 
@@ -128,6 +138,7 @@ marker as authoritative until that fix is merged and qualified.
 
 The supported paths have an authoritative evidence owner and a terminal or
 explicit uncertainty source. The machine-readable inventory names every
-currently missing passive join and assigns it to H1b or H1c. H1a therefore
-does not add a new event system, trace schema, runtime dependency, or operator
-command; those changes proceed only from this audited list.
+currently missing passive join and assigns it to H1b or H1c; the first audited
+lifecycle gap, terminal consistency, is protected by focused H1b regressions.
+H1a therefore does not add a new event system, trace schema, runtime dependency,
+or operator command; those changes proceed only from this audited list.

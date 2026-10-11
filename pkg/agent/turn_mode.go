@@ -29,7 +29,6 @@ func newTurnSpec(mode turnMode, dispatch DispatchRequest, binding effectiveModel
 		spec.AllowInterimMintClawPublish = true
 	case turnModeCoding:
 		spec.DefaultResponse = defaultResponse
-		spec.ExpectFinalDelivery = true
 	case turnModeScheduled, turnModeHeartbeat:
 		spec.DefaultResponse = defaultResponse
 		spec.SuppressToolFeedback = true

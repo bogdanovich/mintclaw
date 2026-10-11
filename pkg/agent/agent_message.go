@@ -298,6 +298,10 @@ func (al *AgentLoop) processDirectInputWithChannel(
 	if err != nil {
 		return "", err
 	}
+	// Direct callers own presentation of the returned response. A channel name
+	// here scopes routing and streaming; it does not create a final-delivery
+	// owner that can settle the trace after this call returns.
+	turn.Options.ExpectFinalDelivery = false
 	if directOpts.Stateless {
 		turn.Options.NoHistory = true
 		turn.Options.EnableSummary = false

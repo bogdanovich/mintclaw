@@ -185,9 +185,6 @@
       "missing_trace_joins": [
         {"id": "trace_id", "disposition": "close_h1c", "observation": "A bounded operator command is needed to locate and summarize health without broad content scans."}
       ],
-      "known_lifecycle_gaps": [
-        {"id": "terminal_consistency", "disposition": "close_h1b", "observation": "A completed stateless production turn retained turn.end and a completed envelope outcome but was also marked runtime_closed_before_terminal_outcome; terminal projection and writer close must agree."}
-      ],
       "terminal_facts": ["trace.outcome", "trace.truncation", "writer_drop_log", "retention_expiry_or_missing"],
       "retention_owner": "diagnostic_store_and_service_logs",
       "export_class": "metadata_safe"

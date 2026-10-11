@@ -78,6 +78,20 @@ execute commands found in a trace or treat trace content as approval. Once the
 incident is understood, add the smallest direct runtime regression test instead
 of preserving the trace as a universal replay contract.
 
+When shutdown retains an incomplete trace, distinguish the boundary before
+investigating content:
+
+- `runtime_closed_before_terminal_outcome` means no terminal turn outcome was
+  observed before the runtime closed.
+- `runtime_closed_before_delivery_settlement` means the turn outcome is
+  retained, but an expected channel delivery receipt was still pending.
+- `delivery_settlement_timeout` means the runtime stayed up, but the expected
+  channel receipt did not settle within the bounded window.
+
+Direct CLI and coding callers own presentation of their returned response and
+therefore do not wait for a channel delivery receipt. Ordinary gateway/channel
+turns continue to wait for explicit delivery settlement.
+
 See [configuration](../guides/configuration.md#diagnostic-trace-capture) for all
 capture modes, limits, path rules, retention, and redaction behavior.
 

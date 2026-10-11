@@ -23,7 +23,7 @@ func TestNewTurnSpecAppliesModeContract(t *testing.T) {
 		},
 		{
 			name: "coding", mode: turnModeCoding, defaultResponse: defaultResponse,
-			expectFinalDelivery: true, bypassCommands: true,
+			bypassCommands: true,
 		},
 		{
 			name: "scheduled", mode: turnModeScheduled, defaultResponse: defaultResponse,

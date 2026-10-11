@@ -175,8 +175,8 @@ func validateCodingDiagnosticPath(
 		lifecycleGaps[gap.ID] = struct{}{}
 	}
 	if path.ID == "diagnostic_pipeline_health" {
-		if _, documented := lifecycleGaps["terminal_consistency"]; !documented {
-			t.Fatalf("path %q does not preserve the production terminal-consistency gap", path.ID)
+		if _, unresolved := lifecycleGaps["terminal_consistency"]; unresolved {
+			t.Fatalf("path %q reintroduced the resolved terminal-consistency gap", path.ID)
 		}
 	}
 }
