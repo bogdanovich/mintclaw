@@ -239,3 +239,116 @@ func TestRetiredRouteClaimCannotReleaseReplacementAtSameScope(t *testing.T) {
 		t.Fatal("retired claim removed the replacement owner")
 	}
 }
+
+type finalHandoffPreparationKey struct{}
+
+type finalHandoffPreparationStore struct {
+	session.SessionStore
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (store *finalHandoffPreparationStore) ReadTurnHistory(
+	ctx context.Context,
+	key string,
+) ([]providers.Message, error) {
+	if ctx.Value(finalHandoffPreparationKey{}) == true {
+		store.once.Do(func() { close(store.entered) })
+		select {
+		case <-store.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return store.SessionStore.ReadTurnHistory(ctx, key)
+}
+
+func TestDeferredInteractionPreparationAcrossRetirementStartsFollowup(t *testing.T) {
+	provider := newBlockingInteractionProvider()
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	tracker := &finalResponseAdmissionTestBus{MessageBus: al.bus.(*bus.MessageBus)}
+	setTestMessageBus(al, tracker)
+	root := testInboundMessage(bus.InboundMessage{
+		Content:    "ask a question",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:deferred-preparation-handoff"),
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "deferred-chat", ChatType: "direct", SenderID: "deferred-owner",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, agent, root, "")
+	store := &finalHandoffPreparationStore{
+		SessionStore: agent.Sessions, entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	agent.Sessions = store
+	var releasePreparation, releaseProvider sync.Once
+	defer releasePreparation.Do(func() { close(store.release) })
+	defer releaseProvider.Do(func() { close(provider.release) })
+	answer := root
+	answer.Content = "/answer " + record.ShortID + " continue"
+	answer.SpoolID = "answer-before-deferred-preparation"
+	answer.Context.MessageID = answer.SpoolID
+	coordinator := newInboundTurnCoordinator(al)
+	claim, target, claimed := coordinator.claimSession(target)
+	if !claimed {
+		t.Fatal("interaction route unavailable")
+	}
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		coordinator.runInteractionWorker(t.Context(), answer, target, claim)
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("interaction worker did not reach its provider barrier")
+	}
+	if !al.hasNonterminalInteraction(agent.Workspace, target.SessionKey) {
+		t.Fatal("deferred ingress did not begin while the interaction was nonterminal")
+	}
+	followup := root
+	followup.Content = "Perform the next separate task"
+	followup.SpoolID = "prepared-after-interaction-retirement"
+	followup.Context.MessageID = followup.SpoolID
+	admitted := make(chan error, 1)
+	go func() {
+		ctx := context.WithValue(t.Context(), finalHandoffPreparationKey{}, true)
+		admitted <- coordinator.enqueueDeferredInteractionInbound(ctx, followup, target)
+	}()
+	select {
+	case <-store.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferred input did not reach its preparation barrier")
+	}
+	releaseProvider.Do(func() { close(provider.release) })
+	select {
+	case <-workerDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("interaction worker did not retire while preparation was blocked")
+	}
+	current, exists := al.interactionRegistryForWorkspace(agent.Workspace).Get(record.ID)
+	if !exists || current.Status != interactions.StatusResolved || len(current.FinalDeliveryIDs) == 0 {
+		t.Fatal("interaction was not durably resolved before deferred preparation completed")
+	}
+	releasePreparation.Do(func() { close(store.release) })
+	select {
+	case err := <-admitted:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("prepared input was not admitted")
+	}
+	coordinator.wait()
+	provider.mu.Lock()
+	calls := provider.calls
+	provider.mu.Unlock()
+	acked, released, _ := tracker.ownership()
+	depth := al.pendingSteeringCountForScope(target.runtimeSessionScope())
+	if calls != 2 || countMatchingStrings(acked, followup.SpoolID) != 1 || len(released) != 0 || depth != 0 {
+		t.Fatalf("deferred follow-up stranded: calls=%d queue=%d acked=%v released=%v", calls, depth, acked, released)
+	}
+}

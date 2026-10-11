@@ -184,21 +184,7 @@ func (c *inboundTurnCoordinator) enqueueDeferredInteractionInbound(
 	if err != nil {
 		return err
 	}
-	c.al.turns.routeAdmissionMu.Lock()
-	defer c.al.turns.routeAdmissionMu.Unlock()
-	return c.al.enqueueSteeringMessageWithSender(
-		target.runtimeSessionScope(),
-		target.Agent.ID,
-		msg.Context.SenderID,
-		providers.Message{
-			Role:                    "user",
-			Content:                 msg.Content,
-			CreatedAt:               inboundReceivedAt(msg),
-			Media:                   append([]string(nil), msg.Media...),
-			InboundSpoolID:          msg.SpoolID,
-			DocumentIntakeReference: msg.Context.DocumentIntake.Reference,
-		},
-	)
+	return c.admitPreparedInbound(ctx, msg, target)
 }
 
 func (c *inboundTurnCoordinator) claimSession(
@@ -232,20 +218,41 @@ func (c *inboundTurnCoordinator) handleBusySession(
 		al.turns.inbound.release(ctx, msg, err)
 		return
 	}
-	// Preparation may outlive the previous worker's last queue drain. Decide
-	// between a fresh claim and queue admission under the retirement lock.
-	al.turns.routeAdmissionMu.Lock()
-	claim, activeTarget, claimed := al.turns.claimRuntimeRouteSessionLocked(
-		targetWithInboundRelationRoot(target, msg),
-		makePendingTurnID(target.SessionKey, al.turns.nextSequence()),
-	)
-	if claimed {
-		al.turns.routeAdmissionMu.Unlock()
-		c.startWorker(ctx, msg, activeTarget, claim)
-		return
+	if err := c.admitPreparedInbound(ctx, msg, target); err != nil {
+		logger.WarnCF("agent", "Failed to enqueue steering message",
+			map[string]any{
+				"error":       err.Error(),
+				"channel":     msg.Context.Channel,
+				"chat_id":     msg.Context.ChatID,
+				"session_key": scope.sessionKey,
+			})
+		al.turns.inbound.release(ctx, msg, err)
 	}
-	if err := al.enqueueSteeringMessageWithSender(
-		scope,
+}
+
+// Preparation can outlive either ordinary or interaction worker retirement.
+// Recheck the interaction gate and claim-or-queue under the same lock used by
+// retirement; a fresh worker must start only after unlocking.
+func (c *inboundTurnCoordinator) admitPreparedInbound(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+) error {
+	al := c.al
+	al.turns.routeAdmissionMu.Lock()
+	if !al.hasNonterminalInteraction(target.Agent.Workspace, target.SessionKey) {
+		claim, activeTarget, claimed := al.turns.claimRuntimeRouteSessionLocked(
+			targetWithInboundRelationRoot(target, msg),
+			makePendingTurnID(target.SessionKey, al.turns.nextSequence()),
+		)
+		if claimed {
+			al.turns.routeAdmissionMu.Unlock()
+			c.startWorker(ctx, msg, activeTarget, claim)
+			return nil
+		}
+	}
+	err := al.enqueueSteeringMessageWithSender(
+		target.runtimeSessionScope(),
 		target.Agent.ID,
 		msg.Context.SenderID,
 		providers.Message{
@@ -256,19 +263,9 @@ func (c *inboundTurnCoordinator) handleBusySession(
 			InboundSpoolID:          msg.SpoolID,
 			DocumentIntakeReference: msg.Context.DocumentIntake.Reference,
 		},
-	); err != nil {
-		al.turns.routeAdmissionMu.Unlock()
-		logger.WarnCF("agent", "Failed to enqueue steering message",
-			map[string]any{
-				"error":       err.Error(),
-				"channel":     msg.Context.Channel,
-				"chat_id":     msg.Context.ChatID,
-				"session_key": scope.sessionKey,
-			})
-		al.turns.inbound.release(ctx, msg, err)
-		return
-	}
+	)
 	al.turns.routeAdmissionMu.Unlock()
+	return err
 }
 
 func inboundReceivedAt(msg bus.InboundMessage) *time.Time {
