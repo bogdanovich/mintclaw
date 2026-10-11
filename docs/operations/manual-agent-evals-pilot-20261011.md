@@ -60,6 +60,10 @@ action admission and separately assess whether notices need a distinct evidence 
 
 ## Follow-Up
 
+The [second judge experiment](manual-agent-evals-judge-experiment-20261011.md) used a separately identified model
+configuration with unchanged labels. Agreement improved to 5/6, but calibration still failed; it is not a replacement
+for these first outcomes or proof of target qualification.
+
 1. Fix prepared sender admission and the template regression test: [PR #1576](https://github.com/bogdanovich/mintclaw/pull/1576).
 2. Use a valid native interaction/navigation scenario, retain unsupported/stale/foreign actions as negative controls,
    and keep real runtime evidence requirements. Do not silently relabel the original result as a pass.
