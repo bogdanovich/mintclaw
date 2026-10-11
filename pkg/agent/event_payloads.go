@@ -348,16 +348,17 @@ type FollowUpQueuedPayload struct {
 // AsyncCompletionPayload describes a typed async tool completion event before
 // the runtime applies user/parent delivery policy.
 type AsyncCompletionPayload struct {
-	SourceTool   string
-	CompletionID string
-	TaskID       string
-	DeliveryMode string
-	ContentLen   int
-	ForUserLen   int
-	MediaCount   int
-	IsError      bool
-	WillUser     bool
-	WillParent   bool
+	SourceTool       string
+	CompletionID     string
+	TaskID           string
+	TaskGenerationID string
+	DeliveryMode     string
+	ContentLen       int
+	ForUserLen       int
+	MediaCount       int
+	IsError          bool
+	WillUser         bool
+	WillParent       bool
 }
 
 type InterruptKind string

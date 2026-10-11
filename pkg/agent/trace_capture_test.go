@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestChildTurnEventMetadataCarriesParentCorrelation(t *testing.T) {
@@ -71,6 +72,84 @@ func TestToolLoopDecisionTraceRetainsExactCallGeneration(t *testing.T) {
 		record.Correlation.ToolCallID != correlation.ToolCallID ||
 		record.Correlation.ToolCallGeneration != correlation.ToolCallGeneration {
 		t.Fatalf("loop decision correlation = %+v", record.Correlation)
+	}
+}
+
+func TestTraceCaptureRetainsAsyncTaskCompletionAndDeliveryCorrelation(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	traceScope := runtimeevents.NewTraceScope(workspace, "turn-async-delivery")
+	scope := runtimeevents.Scope{
+		TraceScope: traceScope, AgentID: "main", SessionKey: "session-async-delivery",
+		Channel: "telegram", ChatID: "chat-async-delivery",
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "start", Kind: runtimeevents.KindAgentTurnStart, Time: startedAt, Scope: scope,
+		Payload: TurnStartPayload{Workspace: workspace},
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "async-completion", Kind: runtimeevents.KindAgentAsyncCompletion,
+		Time: startedAt.Add(time.Millisecond), Scope: scope,
+		Payload: AsyncCompletionPayload{
+			SourceTool: "spawn", TaskID: "task-1", TaskGenerationID: "task-generation-1",
+			CompletionID: "completion-1", DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
+			WillUser: true, ContentLen: 12,
+		},
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "end", Kind: runtimeevents.KindAgentTurnEnd,
+		Time: startedAt.Add(2 * time.Millisecond), Scope: scope,
+		Payload: TurnEndPayload{
+			Workspace: workspace, Status: TurnEndStatusCompleted, DeliveryExpected: true,
+		},
+	})
+	channelScope := runtimeevents.Scope{Channel: "telegram", ChatID: "chat-async-delivery"}
+	channelPayload := channels.ChannelOutboundPayload{
+		DeliveryID: "delivery-1", TraceScopes: []runtimeevents.TraceScope{traceScope},
+		TraceSettlement: true, ContentLen: 12,
+	}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "queued", Kind: runtimeevents.KindChannelMessageOutboundQueued,
+		Time: startedAt.Add(3 * time.Millisecond), Scope: channelScope, Payload: channelPayload,
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "sent", Kind: runtimeevents.KindChannelMessageOutboundSent,
+		Time: startedAt.Add(4 * time.Millisecond), Scope: channelScope, Payload: channelPayload,
+	})
+
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if err := diagnostictrace.Validate(trace); err != nil {
+		t.Fatalf("validate async-delivery trace: %v", err)
+	}
+	var decision, attempt, outcome *diagnostictrace.Record
+	for index := range trace.Records {
+		record := &trace.Records[index]
+		switch record.Kind {
+		case diagnostictrace.RecordDeliveryDecision:
+			decision = record
+		case diagnostictrace.RecordDeliveryAttempt:
+			attempt = record
+		case diagnostictrace.RecordDeliveryOutcome:
+			outcome = record
+		}
+	}
+	if decision == nil || attempt == nil || outcome == nil {
+		t.Fatalf("async-delivery records = %#v", trace.Records)
+	}
+	if decision.Scope.TaskID != "task-1" ||
+		decision.Correlation.TaskGenerationID != "task-generation-1" ||
+		decision.Correlation.CompletionID != "completion-1" {
+		t.Fatalf("delivery decision correlation = scope %#v correlation %#v", decision.Scope, decision.Correlation)
+	}
+	if attempt.Correlation.DeliveryID != "delivery-1" || outcome.Correlation.DeliveryID != "delivery-1" {
+		t.Fatalf("delivery attempt/outcome correlation = %#v / %#v", attempt.Correlation, outcome.Correlation)
 	}
 }
 

@@ -88,12 +88,7 @@
       "trace_records": ["delivery.decision", "delivery.attempt", "delivery.outcome"],
       "required_ids": ["turn_id", "task_id", "task_generation_id", "completion_id", "delivery_id", "event_id"],
       "available_ids": ["turn_id", "task_id", "task_generation_id", "completion_id", "delivery_id", "event_id"],
-      "missing_trace_joins": [
-        {"id": "task_id", "disposition": "close_h1b", "observation": "Async completion payload carries the task ID but projection discards it."},
-        {"id": "task_generation_id", "disposition": "close_h1b", "observation": "Reused task IDs require generation correlation from the authoritative registry."},
-        {"id": "completion_id", "disposition": "close_h1b", "observation": "Async completion payload carries the completion ID but projection discards it."},
-        {"id": "delivery_id", "disposition": "close_h1b", "observation": "Channel payload carries the durable delivery ID but projection discards it."}
-      ],
+      "missing_trace_joins": [],
       "terminal_facts": ["task_terminal_event", "delivery.outcome", "durable_delivery_outcome"],
       "retention_owner": "task_registry_outbox_and_diagnostic_store",
       "export_class": "metadata_safe"

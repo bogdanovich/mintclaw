@@ -141,6 +141,10 @@ func (sm *SubagentManager) spawnWithModel(
 	if err := sm.taskRegistry.Create(record); err != nil {
 		return "", fmt.Errorf("persist spawned subagent: %w", err)
 	}
+	record, found := sm.taskRegistry.Get(taskID)
+	if !found || strings.TrimSpace(record.GenerationID) == "" {
+		return "", errors.New("persist spawned subagent: task generation is unavailable")
+	}
 
 	// Start task in background with context cancellation support
 	go sm.runTask(ctx, record, modelOverride, objectiveItems, callback)
@@ -466,7 +470,7 @@ func (sm *SubagentManager) runTask(
 		sm.recordTaskResult(task.TaskID, result)
 	}
 	if result != nil {
-		result.WithTaskID(task.TaskID)
+		result.WithTaskIdentity(task.TaskID, task.GenerationID)
 	}
 	if callback != nil && result != nil {
 		callback(ctx, result)

@@ -121,6 +121,28 @@ func TestRuntimeEventLogFieldsSummarizeAgentPayload(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventLogFieldsRetainAsyncCompletionCorrelation(t *testing.T) {
+	fields := runtimeEventLogFields(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentAsyncCompletion,
+		Payload: AsyncCompletionPayload{
+			SourceTool: "spawn", TaskID: "task-1", TaskGenerationID: "task-generation-1",
+			CompletionID: "completion-1", DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
+			ContentLen: 12, ForUserLen: 8, MediaCount: 1, WillUser: true,
+		},
+	})
+
+	if fields["source_tool"] != "spawn" || fields["task_id"] != "task-1" ||
+		fields["task_generation_id"] != "task-generation-1" ||
+		fields["completion_id"] != "completion-1" ||
+		fields["delivery_mode"] != string(toolshared.AsyncDeliveryUserOnly) {
+		t.Fatalf("async completion summary = %#v", fields)
+	}
+	if fields["content_len"] != 12 || fields["for_user_len"] != 8 || fields["media_count"] != 1 ||
+		fields["will_user"] != true {
+		t.Fatalf("async completion facts = %#v", fields)
+	}
+}
+
 func TestRuntimeEventLogFieldsPreserveCacheUsageKnownState(t *testing.T) {
 	known := runtimeEventLogFields(runtimeevents.Event{
 		Kind: runtimeevents.KindAgentLLMResponse,

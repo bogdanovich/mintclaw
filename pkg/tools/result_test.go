@@ -138,10 +138,20 @@ func TestToolResultWithAsyncDelivery(t *testing.T) {
 }
 
 func TestToolResultWithTaskID(t *testing.T) {
-	result := toolshared.AsyncResult("async task started").WithTaskID(" subagent-7 ")
+	result := toolshared.AsyncResult("async task started").
+		WithTaskIdentity("old-task", "old-generation").
+		WithTaskID(" subagent-7 ")
 
-	if result.Control.TaskID != "subagent-7" {
-		t.Fatalf("AsyncTaskID = %q, want subagent-7", result.Control.TaskID)
+	if result.Control.TaskID != "subagent-7" || result.Control.TaskGenerationID != "" {
+		t.Fatalf("task identity = %#v, want task ID without a stale generation", result.Control)
+	}
+}
+
+func TestToolResultWithTaskIdentity(t *testing.T) {
+	result := toolshared.AsyncResult("async task started").WithTaskIdentity(" subagent-7 ", " generation-3 ")
+
+	if result.Control.TaskID != "subagent-7" || result.Control.TaskGenerationID != "generation-3" {
+		t.Fatalf("task identity = %#v", result.Control)
 	}
 }
 

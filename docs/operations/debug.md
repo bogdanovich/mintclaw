@@ -61,6 +61,11 @@ jq -r '
     (.scope.turn_id // "-"),
     (.correlation.model_attempt_id // "-"),
     (.correlation.tool_call_id // "-"),
+    (.correlation.tool_call_generation // "-"),
+    (.scope.task_id // "-"),
+    (.correlation.task_generation_id // "-"),
+    (.correlation.completion_id // "-"),
+    (.correlation.delivery_id // "-"),
     (.scope.target_hash // "-"),
     (.correlation.event_id // "-")
   ] | @tsv
@@ -68,9 +73,11 @@ jq -r '
 ```
 
 Inspect content only around the first suspicious transition and correlate exact
-IDs with service logs. Current turn traces do not include task or completion
-IDs; obtain those from logs or the durable task registry when needed. The
-bundled `mintclaw-trace-debug` skill provides the full investigation and
+IDs with service logs and durable state. Async delivery decisions retain the
+task ID, exact task generation, and completion ID. Channel attempts and
+outcomes retain their durable delivery ID. Historical traces may omit these
+fields; never infer an exact generation or delivery from timestamps or prose.
+The bundled `mintclaw-trace-debug` skill provides the full investigation and
 reporting workflow.
 
 Runtime-generated `model_attempt_id` joins one logical provider attempt across

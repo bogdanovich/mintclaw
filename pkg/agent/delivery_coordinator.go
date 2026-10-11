@@ -22,15 +22,16 @@ import (
 // through this type so media, duplicate, timeout, and restart handling can move
 // behind the same coordinator boundary later.
 type AsyncDeliveryDecision struct {
-	TaskID        string
-	DeliveryMode  toolshared.AsyncDeliveryMode
-	PublishToUser bool
-	QueueParent   bool
-	ParentHandled bool
-	ContentLen    int
-	ForUserLen    int
-	MediaCount    int
-	IsError       bool
+	TaskID           string
+	TaskGenerationID string
+	DeliveryMode     toolshared.AsyncDeliveryMode
+	PublishToUser    bool
+	QueueParent      bool
+	ParentHandled    bool
+	ContentLen       int
+	ForUserLen       int
+	MediaCount       int
+	IsError          bool
 }
 
 type AsyncDeliveryRequest struct {
@@ -425,6 +426,7 @@ func decideAsyncToolResultDelivery(result *toolshared.ToolResult) AsyncDeliveryD
 
 	content := result.ContentForLLM()
 	decision.TaskID = result.Control.TaskID
+	decision.TaskGenerationID = result.Control.TaskGenerationID
 	decision.ContentLen = len(content)
 	decision.ForUserLen = len(toolResultUserText(result))
 	decision.MediaCount = len(toolResultMediaRefs(result))

@@ -508,6 +508,18 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 	case FollowUpQueuedPayload:
 		fields["source_tool"] = payload.SourceTool
 		fields["content_len"] = payload.ContentLen
+	case AsyncCompletionPayload:
+		setStringField(fields, "source_tool", payload.SourceTool)
+		setStringField(fields, "completion_id", payload.CompletionID)
+		setStringField(fields, "task_id", payload.TaskID)
+		setStringField(fields, "task_generation_id", payload.TaskGenerationID)
+		setStringField(fields, "delivery_mode", payload.DeliveryMode)
+		fields["content_len"] = payload.ContentLen
+		fields["for_user_len"] = payload.ForUserLen
+		fields["media_count"] = payload.MediaCount
+		fields["is_error"] = payload.IsError
+		fields["will_user"] = payload.WillUser
+		fields["will_parent"] = payload.WillParent
 	case InterruptReceivedPayload:
 		fields["interrupt_kind"] = payload.Kind
 		fields["role"] = payload.Role
