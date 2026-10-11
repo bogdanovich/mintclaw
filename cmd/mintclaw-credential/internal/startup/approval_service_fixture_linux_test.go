@@ -287,10 +287,10 @@ func verifyApprovalFixtureConsole(t *testing.T) {
 		t.Fatal("console role unavailable")
 	}
 	var peer *unix.Ucred
-	if raw.Control(func(fd uintptr) { peer, err = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED) }) != nil ||
-		err != nil || peer == nil ||
-		peer.Uid != 65532 ||
-		peer.Gid != 65532 {
+	controlErr := raw.Control(func(fd uintptr) {
+		peer, err = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+	})
+	if controlErr != nil || err != nil || peer == nil || peer.Uid != 65532 || peer.Gid != 65532 {
 		t.Fatal("console creator role mismatch")
 	}
 	_, _ = connection.Write([]byte("{}"))
