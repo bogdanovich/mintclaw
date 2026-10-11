@@ -446,6 +446,7 @@ type Session struct {
 	ProfileRevision        string                   `json:"profile_revision,omitempty"`
 	PolicyRevision         string                   `json:"policy_revision"`
 	RecoveryAttempted      bool                     `json:"recovery_attempted,omitempty"`
+	SteelProxy             bool                     `json:"steel_proxy,omitempty"`
 	SuccessfulDomains      [16]BrowserDomainSuccess `json:"successful_domains,omitzero"`
 	ControllerGeneration   uint64                   `json:"controller_generation"`
 	Controller             ControllerState          `json:"controller"`

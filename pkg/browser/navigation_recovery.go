@@ -34,11 +34,13 @@ type NavigationRecovery struct {
 	SessionID     string       `json:"browser_session_id,omitempty"`
 	Target        string       `json:"target,omitempty"`
 	Profile       string       `json:"profile,omitempty"`
+	UseProxy      bool         `json:"use_proxy,omitempty"`
 	InvocationID  string       `json:"invocation_id,omitempty"`
 	Observation   *Observation `json:"-"`
 }
 
-// RecoverNavigation admits at most one new navigation after a completed GET.
+// RecoverNavigation admits at most one recovery per completed source session:
+// local to Steel, then optionally direct Steel to proxied Steel on a fresh block.
 // It never redispatches the original invocation or transfers cookies, approvals,
 // element refs, or controller authority between targets.
 func (broker *Broker) RecoverNavigation(
@@ -48,8 +50,28 @@ func (broker *Broker) RecoverNavigation(
 		return NavigationRecovery{}, ErrInvalid
 	}
 	broker.mu.Lock()
-	recovery, destination, rawURL, err := broker.prepareNavigationRecoveryLocked(ctx, owner, invocationID, snapshotID)
+	recovery, destination, rawURL, err := broker.prepareNavigationRecoveryLocked(
+		ctx,
+		owner,
+		invocationID,
+		snapshotID,
+		true,
+	)
 	broker.mu.Unlock()
+	if err == nil && recovery.Status == "waiting_for_solver" {
+		observation, waitErr := broker.waitForNavigationSolver(ctx, owner, *recovery.Observation)
+		if waitErr != nil {
+			return NavigationRecovery{Status: "unavailable", Reason: navigationRecoveryFailure(waitErr)}, waitErr
+		}
+		broker.mu.Lock()
+		recovery, destination, rawURL, err = broker.prepareNavigationRecoveryLocked(
+			ctx, owner, invocationID, observation.SnapshotID, false,
+		)
+		broker.mu.Unlock()
+		if err == nil && destination.Target == "" && recovery.Status == "" {
+			recovery.Observation = &observation
+		}
+	}
 	if err != nil || destination.Target == "" {
 		return recovery, err
 	}
@@ -59,6 +81,7 @@ func (broker *Broker) RecoverNavigation(
 		return recovery, nil
 	}
 	recovery.SessionID, recovery.Target, recovery.Profile = session.ID, session.Target, session.Profile
+	recovery.UseProxy = session.SteelProxy
 	fail := func(cause error) (NavigationRecovery, error) {
 		recovery.Status, recovery.Reason = "unavailable", navigationRecoveryFailure(cause)
 		_, closeErr := broker.Close(context.WithoutCancel(ctx), owner, session.ID)
@@ -94,29 +117,36 @@ func (broker *Broker) RecoverNavigation(
 	if err != nil {
 		return fail(err)
 	}
-	// Give supported automatic solvers one bounded passive wait. No challenge
-	// interaction or original action is redispatched during this interval.
-	if broker.config.Targets[session.Target].Steel.SolveCaptcha && observation.AntiBotBlock == "cloudflare" {
-		deadline := time.Now().Add(15 * time.Second)
-		for observation.AntiBotBlock == "cloudflare" && time.Now().Before(deadline) {
-			timer := time.NewTimer(time.Second)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return fail(ctx.Err())
-			case <-timer.C:
-			}
-			observation, err = broker.Observe(ctx, owner, session.ID, session.TabID)
-			if err != nil {
-				return fail(err)
-			}
+	steel := broker.config.Targets[session.Target].Steel
+	// Conditional direct sessions wait in the source preparation path below,
+	// including explicit Steel opens. Other Steel modes retain their passive wait.
+	if steel.SolveCaptcha && (!steel.ProxyOnBlock || session.SteelProxy) && observation.AntiBotBlock == "cloudflare" {
+		observation, err = broker.waitForNavigationSolver(ctx, owner, observation)
+		if err != nil {
+			return fail(err)
 		}
 	}
 	recovery.Observation = &observation
 	recovery.Status = "recovered"
 	if observation.AntiBotBlock != "" {
-		recovery.Status, recovery.Reason = "blocked", observation.AntiBotBlock
-		return recovery, nil
+		if steel.ProxyOnBlock && !session.SteelProxy {
+			proxied, proxyErr := broker.RecoverNavigation(ctx, owner, invocation.ID, observation.SnapshotID)
+			if proxied.Status != "" {
+				proxied.FromSessionID = recovery.FromSessionID
+				return proxied, proxyErr
+			}
+			if proxyErr != nil {
+				return recovery, proxyErr
+			}
+			if proxied.Observation != nil {
+				observation = *proxied.Observation
+				recovery.Observation = &observation
+			}
+		}
+		if observation.AntiBotBlock != "" {
+			recovery.Status, recovery.Reason = "blocked", observation.AntiBotBlock
+			return recovery, nil
+		}
 	}
 	if observation.HTTPStatus >= 400 {
 		recovery.Status, recovery.Reason = "unavailable", "http_error"
@@ -129,7 +159,7 @@ func (broker *Broker) RecoverNavigation(
 }
 
 func (broker *Broker) prepareNavigationRecoveryLocked(
-	ctx context.Context, owner Owner, invocationID, snapshotID string,
+	ctx context.Context, owner Owner, invocationID, snapshotID string, allowSolverWait bool,
 ) (NavigationRecovery, OpenRequest, string, error) {
 	invocation, err := broker.store.GetInvocation(ctx, invocationID)
 	if err != nil {
@@ -155,16 +185,21 @@ func (broker *Broker) prepareNavigationRecoveryLocked(
 		return NavigationRecovery{}, OpenRequest{}, "", ErrStale
 	}
 	observation := Observation{
+		SessionID: session.ID, TabID: prepared.TabID,
 		URL: slot.observedURL, HTTPStatus: slot.navigationEvidence.HTTPStatus,
 		AntiBotBlock: slot.navigationEvidence.AntiBotBlock,
 	}
 	target := broker.config.Targets[session.Target]
-	if target.EffectiveProvider() == config.BrowserProviderSteel {
+	steelSource := target.EffectiveProvider() == config.BrowserProviderSteel
+	if steelSource && (!target.Steel.ProxyOnBlock || session.SteelProxy || observation.AntiBotBlock == "") {
 		return NavigationRecovery{}, OpenRequest{}, "", broker.rememberSuccessfulNavigationLocked(
 			ctx, owner, session.ID, observation, prepared.Action.URL,
 		)
 	}
 	fallback := target.Fallback
+	if steelSource {
+		fallback = config.BrowserFallbackConfig{Target: session.Target, Profile: session.Profile}
+	}
 	if fallback.Target == "" {
 		return NavigationRecovery{}, OpenRequest{}, "", nil
 	}
@@ -186,7 +221,12 @@ func (broker *Broker) prepareNavigationRecoveryLocked(
 	if observation.AntiBotBlock == "" && !remembered {
 		return NavigationRecovery{}, OpenRequest{}, "", nil
 	}
-	destination := OpenRequest{Owner: owner, Target: fallback.Target, Profile: fallback.Profile}
+	destination := OpenRequest{
+		Owner:      owner,
+		Target:     fallback.Target,
+		Profile:    fallback.Profile,
+		steelProxy: steelSource,
+	}
 	_, profile, grantErr := broker.authorize(destination)
 	granted := grantErr == nil
 	if !granted || profile.CapabilityMode != config.BrowserCapabilityFullAccess ||
@@ -202,6 +242,9 @@ func (broker *Broker) prepareNavigationRecoveryLocked(
 			prepared.DestinationOrigin,
 		) {
 		return NavigationRecovery{Status: "unavailable", Reason: "not_granted"}, OpenRequest{}, "", nil
+	}
+	if allowSolverWait && steelSource && target.Steel.SolveCaptcha && observation.AntiBotBlock == "cloudflare" {
+		return NavigationRecovery{Status: "waiting_for_solver", Observation: &observation}, OpenRequest{}, "", nil
 	}
 	reason := observation.AntiBotBlock
 	if reason == "" {
@@ -220,6 +263,30 @@ func (broker *Broker) prepareNavigationRecoveryLocked(
 		return recovery, OpenRequest{}, "", err
 	}
 	return recovery, destination, prepared.Action.URL, nil
+}
+
+// waitForNavigationSolver observes only the owned live session. Callers must
+// revalidate the resulting snapshot and grants before admitting a replacement.
+func (broker *Broker) waitForNavigationSolver(
+	ctx context.Context, owner Owner, observation Observation,
+) (Observation, error) {
+	deadline := time.Now().Add(15 * time.Second)
+	host := navigationHostname(observation.URL)
+	for observation.AntiBotBlock == "cloudflare" && navigationHostname(observation.URL) == host && time.Now().Before(deadline) {
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return observation, ctx.Err()
+		case <-timer.C:
+		}
+		var err error
+		observation, err = broker.Observe(ctx, owner, observation.SessionID, observation.TabID)
+		if err != nil {
+			return observation, err
+		}
+	}
+	return observation, nil
 }
 
 func navigationHostname(raw string) string {

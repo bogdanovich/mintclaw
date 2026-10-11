@@ -31,6 +31,7 @@ type WorkerOpenRequest struct {
 	Profile         string
 	ProfileRevision string
 	DryRun          bool
+	SteelProxy      bool
 	Limits          config.BrowserLimitsConfig
 }
 
@@ -526,6 +527,7 @@ type OpenRequest struct {
 	Target        string
 	Profile       string
 	AttachConsent *AttachConsentBinding
+	steelProxy    bool
 }
 
 // AttachConsentBinding is the private, bounded authority hashed into one
@@ -632,9 +634,12 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 	if err := request.Owner.Validate(); err != nil {
 		return Session{}, err
 	}
-	_, profile, err := broker.authorize(request)
+	target, profile, err := broker.authorize(request)
 	if err != nil {
 		return Session{}, err
+	}
+	if request.steelProxy && (target.EffectiveProvider() != config.BrowserProviderSteel || !target.Steel.ProxyOnBlock) {
+		return Session{}, ErrDenied
 	}
 
 	broker.mu.Lock()
@@ -685,6 +690,7 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 	session := Session{
 		ID: id, Owner: request.Owner, Target: request.Target, Profile: request.Profile,
 		State: state, DryRun: profile.DryRun,
+		SteelProxy:      target.Steel.UseProxy || request.steelProxy,
 		ProfileRevision: profile.Revision, PolicyRevision: broker.policyRevision,
 		ControllerGeneration: 1, Controller: ControllerAgent,
 		TabID: "tab_primary", Revision: 1, CreatedAt: now.UnixNano(),
@@ -756,8 +762,14 @@ func (broker *Broker) activateSessionLocked(
 	readyBefore time.Time,
 ) (Session, error) {
 	opened, openErr := broker.factory.Open(workerCtx, WorkerOpenRequest{
-		SessionID: session.ID, Owner: session.Owner, Target: session.Target, Profile: session.Profile,
-		ProfileRevision: session.ProfileRevision, DryRun: session.DryRun, Limits: limits,
+		SessionID:       session.ID,
+		Owner:           session.Owner,
+		Target:          session.Target,
+		Profile:         session.Profile,
+		ProfileRevision: session.ProfileRevision,
+		DryRun:          session.DryRun,
+		SteelProxy:      session.SteelProxy,
+		Limits:          limits,
 	})
 	if openErr != nil {
 		consentExpired := !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore)

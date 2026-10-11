@@ -23,6 +23,7 @@ type actionTestWorker struct {
 	observation            DriverObservation
 	observeErr             error
 	observeCalls           int
+	onObserve              func()
 	resolveElement         DriverElement
 	resolveElements        map[string]DriverElement
 	resolveOrigin          string
@@ -141,6 +142,9 @@ func (worker *actionTestWorker) Close(context.Context) error {
 
 func (worker *actionTestWorker) Observe(context.Context) (DriverObservation, error) {
 	worker.observeCalls++
+	if worker.onObserve != nil {
+		worker.onObserve()
+	}
 	return worker.observation, worker.observeErr
 }
 

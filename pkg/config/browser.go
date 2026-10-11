@@ -153,6 +153,7 @@ type BrowserSteelProviderConfig struct {
 	InactivityTimeoutSeconds int                      `json:"inactivity_timeout_seconds,omitempty" yaml:"-"`
 	MaxBillableSeconds       int                      `json:"max_billable_seconds,omitempty"       yaml:"-"`
 	UseProxy                 bool                     `json:"use_proxy,omitempty"                  yaml:"-"`
+	ProxyOnBlock             bool                     `json:"proxy_on_block,omitempty"             yaml:"-"`
 	ProxyCountry             string                   `json:"proxy_country,omitempty"              yaml:"-"`
 	SolveCaptcha             bool                     `json:"solve_captcha,omitempty"              yaml:"-"`
 	Budget                   BrowserSteelBudgetConfig `json:"budget,omitzero"                      yaml:"-"`
@@ -945,13 +946,19 @@ func validateBrowserSteelProvider(name string, steel BrowserSteelProviderConfig)
 			name, BrowserMinCloudSessionSeconds,
 		)
 	}
-	if steel.ProxyCountry != "" && (!steel.UseProxy || len(steel.ProxyCountry) != 2 ||
+	if steel.UseProxy && steel.ProxyOnBlock {
+		return fmt.Errorf("browser target %q steel use_proxy and proxy_on_block are mutually exclusive", name)
+	}
+	if steel.ProxyCountry != "" && ((!steel.UseProxy && !steel.ProxyOnBlock) || len(steel.ProxyCountry) != 2 ||
 		steel.ProxyCountry[0] < 'A' || steel.ProxyCountry[0] > 'Z' ||
 		steel.ProxyCountry[1] < 'A' || steel.ProxyCountry[1] > 'Z') {
-		return fmt.Errorf("browser target %q proxy_country requires use_proxy and an uppercase ISO country code", name)
+		return fmt.Errorf(
+			"browser target %q proxy_country requires a proxy mode and an uppercase ISO country code",
+			name,
+		)
 	}
 	budget := steel.Budget
-	if steel.UseProxy || steel.SolveCaptcha || budget != (BrowserSteelBudgetConfig{}) {
+	if steel.UseProxy || steel.ProxyOnBlock || steel.SolveCaptcha || budget != (BrowserSteelBudgetConfig{}) {
 		if budget.MaxSessionsPerDay < 1 || budget.MaxSessionsPerDay > 100 ||
 			budget.MaxBillableSecondsPerDay < steel.MaxBillableSeconds ||
 			budget.MaxBillableSecondsPerDay > 86400 ||

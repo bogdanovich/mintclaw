@@ -146,6 +146,71 @@ func TestSteelProviderAPITimeoutAllowsColdLaunch(t *testing.T) {
 	}
 }
 
+func TestSteelConditionalProxySharesProfileLeaseAndBudget(t *testing.T) {
+	client := &budgetMonitorTestClient{
+		fakeSteelRuntimeClient: &fakeSteelRuntimeClient{
+			createResults: []steelProviderSession{
+				fakeSteelSession("session_direct", "profile_personal"),
+				fakeSteelSession("session_proxy", "profile_personal"),
+			},
+			profileStatus: "READY",
+		},
+		released: make(chan struct{}, 2),
+	}
+	_, provider, stateFile := steelProviderFactoryFixture(t, client)
+	provider.provider.ProxyOnBlock, provider.provider.ProxyCountry = true, "US"
+	provider.provider.Budget = trialSteelBudget()
+	provider.provider.Budget.MaxSessionsPerDay = 2
+	provider.provider.Budget.MaxDailyCostUSD = 0.5
+	direct, err := provider.Provision(t.Context(), WorkerOpenRequest{SessionID: "direct"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.Provision(
+		t.Context(),
+		WorkerOpenRequest{SessionID: "proxy", SteelProxy: true},
+	); !errors.Is(
+		err,
+		ErrCapacity,
+	) {
+		t.Fatalf("direct session did not retain exclusive ownership: %v", err)
+	}
+	if err = direct.Release(true); err != nil {
+		t.Fatal(err)
+	}
+	proxied, err := provider.Provision(t.Context(), WorkerOpenRequest{SessionID: "proxy", SteelProxy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = proxied.Release(true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.Provision(
+		t.Context(),
+		WorkerOpenRequest{SessionID: "extra"},
+	); !errors.Is(
+		err,
+		ErrProviderQuota,
+	) {
+		t.Fatalf("direct/proxy attempts did not share their allowance: %v", err)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.createRequests) != 2 || client.createRequests[0].UseProxy || !client.createRequests[1].UseProxy ||
+		client.createRequests[1].ProfileID != "profile_personal" || client.createRequests[1].ProxyCountry != "US" ||
+		len(client.releaseCalls) != 2 {
+		t.Fatalf("provider sequence=%+v releases=%+v", client.createRequests, client.releaseCalls)
+	}
+	raw, err := os.ReadFile(stateFile + ".usage.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ledger steelBudgetLedger
+	if err = json.Unmarshal(raw, &ledger); err != nil || ledger.Sessions != 2 || ledger.Seconds != 360 {
+		t.Fatalf("shared ledger=%+v err=%v", ledger, err)
+	}
+}
+
 func TestSteelProviderPersistsAndReusesOpaqueProfile(t *testing.T) {
 	client := &fakeSteelRuntimeClient{
 		createResults: []steelProviderSession{

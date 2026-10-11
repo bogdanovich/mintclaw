@@ -44,6 +44,9 @@ automatic top-up disabled to bound account exposure during the initial trial.
 - An ordinary site opens locally without creating a paid session.
 - A known challenge causes at most one authorized Steel retry and returns new
   session, context, and element identities.
+- Conditional proxies try direct Steel first, then admit one proxied Steel
+  session only on fresh challenge evidence. Both modes share the same profile
+  and spending allowance; ordinary HTTP errors do not enable proxies.
 - An unavailable provider or exhausted allowance returns a clear bounded
   failure; it does not create an unbounded retry loop.
 - A successful Steel domain is reused on a subsequent safe navigation.
