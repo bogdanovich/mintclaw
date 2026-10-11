@@ -7,7 +7,8 @@ Status: H1a baseline with the H1b terminal-truth, model-attempt, tool-call
 generation, async task/delivery, and human-interaction slices implemented and
 production-qualified. Companion-invocation correlation is also implemented and
 production-qualified. Remote-coding correlation is implemented; its production
-qualification is pending.
+qualification is pending. Compaction-attempt and repository-snapshot
+correlation are implemented; production qualification is pending.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -106,11 +107,14 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    remote monitor may outlive or recover independently of its initiating turn,
    so task plus generation is the exact parent/terminal join; correlation does
    not depend on time matching or an invented parent-turn identity.
-7. **Compaction and repository observations.** The coding runtime owns
-   compaction attempt IDs and deterministic repository snapshots, while the
-   passive trace currently records only the coarser context outcome. H1b must
-   retain bounded attempt/snapshot identity and terminal status without paths
-   or diff content.
+7. **Compaction and repository observations (implemented; production
+   qualification pending).** Active-turn and standalone compaction lifecycle
+   records retain the runtime-owned attempt ID, safe status, revision, counts,
+   duration, and terminal outcome. A manual or background compaction outside an
+   active turn receives a bounded continuation trace that closes on the end
+   event. Repository snapshot records retain the deterministic snapshot hash,
+   validated Git commit, and bounded counts/flags. Paths, branch names, changed
+   filenames, warnings, diff content, and raw errors remain external.
 
 These are additive passive joins. None may make the runtime wait for or depend
 on trace persistence.
@@ -420,12 +424,12 @@ H1b gap rather than being inferred from this deployment record.
 | Local coding turn | Coding JSONL, metadata, Git/filesystem | Turn/model/tool/context/error records | Model-attempt join complete; add thread/project joins |
 | Provider retry/fallback | Runtime provider outcome | Model retry/fallback records | Model-attempt join complete; retain optional provider request ID separately |
 | Tool/process lifecycle | Tool record, process owner | Tool call/result/skip/loop records | Call/generation join complete; keep PID/process details external |
-| Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Add attempt/status and bounded repository re-anchor identity |
+| Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Attempt/status and bounded repository re-anchor identity implemented; production qualification pending |
 | Human interaction | Interaction registry/events | Bounded lifecycle records in the parent trace or immediate late-event continuation | Interaction/event ID, revision, task, tool-call, and delivery joins implemented and production-qualified |
 | Channel/async delivery | Task registry, outbox, channel receipt | Bounded completion continuation with delivery decision/attempt/outcome | Task/generation, completion, tool-generation, parent-turn, and delivery joins implemented and production-qualified |
 | Remote coding task | Task registry, worker ledger/thread | Parent tool result plus bounded terminal completion/delivery continuation | Task/generation/worker/thread, safe scope/profile, terminal uncertainty, completion, and delivery joins implemented; production qualification pending |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Invocation ID and safe policy/target aliases implemented and production-qualified |
-| Repository/worktree | Git/filesystem, worktree owner | Context snapshot only | Add commit/worktree/snapshot digests and counts; no paths or diffs |
+| Repository/worktree | Git/filesystem, worktree owner | Bounded repository context snapshot | Commit/snapshot digest and counts implemented without paths or diffs; production qualification pending |
 | TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c exports bounded current-view/version facts, not cell history |
 | Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c summarizes disabled/drop/expiry/corruption truth |
 
