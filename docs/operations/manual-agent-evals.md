@@ -72,6 +72,8 @@ outside Git. The [first live pilot](manual-agent-evals-pilot-20261011.md) and
 [judge v2 calibration](manual-agent-evals-judge-v2-calibration-20261011.md) record actual results and limits.
 The [general v2 pilot](manual-agent-evals-general-pilot-20261011.md) retains a passing context trial and the
 interaction harness failure that identified the incorrect native outbox root.
+The [general v3 pilot](manual-agent-evals-general-v3-pilot-20261011.md) records both required scripted general
+cases passing on Linux after that reviewed fix, without claiming PDF/browser or full-goal qualification.
 
 ## Prepare The Target
 
