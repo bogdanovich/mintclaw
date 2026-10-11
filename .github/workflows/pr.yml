@@ -453,6 +453,9 @@ jobs:
           runtime/browser/credential-login/session-browser.test.cjs
           runtime/browser/credential-login/channel-contract.test.cjs
 
+      - name: Qualify Root-owned credential browser process forest
+        run: bash ./scripts/qualify-credential-browser-forest.sh
+
       - name: Qualify private Go browser channel with synthetic credentials
         env:
           MINTCLAW_SYNTHETIC_CREDENTIAL_BROWSER_FIXTURE: "1"
