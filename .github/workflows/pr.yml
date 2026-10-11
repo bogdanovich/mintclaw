@@ -188,7 +188,8 @@ jobs:
       - name: Run credential authority and private setup race suites
         run: >-
           go test -count=1 -race -tags goolm,stdjson
-          ./pkg/credentialbroker
+          ./pkg/credentialbroker/...
+          ./internal/credentialipc
           ./cmd/mintclaw-credential/...
 
   platform_compile:
