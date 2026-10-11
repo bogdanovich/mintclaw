@@ -4,6 +4,11 @@ MintClaw performs multiple complex interactions under the hood for every single 
 
 ## Inspecting A Completed Run
 
+Prefer [`mintclaw diagnostics`](diagnostic-support-bundles.md) for bounded
+metadata-only discovery, correlation, and checksum-verifiable support export.
+The direct `jq` workflow below remains useful for a deliberately selected
+private trace when richer local inspection is necessary.
+
 Passive diagnostic traces preserve a bounded timeline after a turn completes.
 Fallback attempt records retain structured provider status, request ID, retry
 timing, and classification source. With `redacted_content`, they also retain a

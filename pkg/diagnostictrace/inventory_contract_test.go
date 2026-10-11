@@ -233,6 +233,11 @@ func validateCodingDiagnosticPath(
 			}
 		}
 	}
+	if path.ID == "diagnostic_pipeline_health" {
+		if _, unresolved := gaps["trace_id"]; unresolved {
+			t.Fatalf("path %q reintroduced the resolved read-only trace discovery gap", path.ID)
+		}
+	}
 
 	lifecycleGaps := make(map[string]struct{}, len(path.KnownLifecycleGaps))
 	for _, gap := range path.KnownLifecycleGaps {

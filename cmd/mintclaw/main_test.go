@@ -40,6 +40,7 @@ func TestNewMintClawCommand(t *testing.T) {
 		"code",
 		"config",
 		"cron",
+		"diagnostics",
 		"document",
 		"doctor",
 		"eval",
@@ -76,6 +77,7 @@ func TestMachineJSONRequested(t *testing.T) {
 		want bool
 	}{
 		{name: "doctor json", args: []string{"doctor", "--json"}, want: true},
+		{name: "diagnostics json", args: []string{"diagnostics", "list", "--json"}, want: true},
 		{name: "global flag first", args: []string{"--no-color", "doctor", "--json=true"}, want: true},
 		{name: "json numeric true", args: []string{"doctor", "--json=1"}, want: true},
 		{name: "json short true", args: []string{"threads", "delete", "id", "--json=t"}, want: true},
