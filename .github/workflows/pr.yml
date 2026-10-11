@@ -185,6 +185,12 @@ jobs:
           ./pkg/interactions
           ./pkg/nodes/ws
 
+      - name: Run credential authority and private setup race suites
+        run: >-
+          go test -count=1 -race -tags goolm,stdjson
+          ./pkg/credentialbroker
+          ./cmd/mintclaw-credential/...
+
   platform_compile:
     name: Compile ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -382,6 +388,9 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+
+      - name: Qualify credential setup with synthetic data and real OS encryption
+        run: bash ./scripts/qualify-credential-provisioning.sh
 
       - name: Install pinned document runtime
         run: |

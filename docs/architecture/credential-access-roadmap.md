@@ -215,7 +215,10 @@ entire personal vault.
   Process/provisioning qualification is recorded in
   [PR #1514](https://github.com/bogdanovich/mintclaw/pull/1514), with browser
   startup requirements in [PR #1519](https://github.com/bogdanovich/mintclaw/pull/1519).
-  Protected provisioning, isolated startup, and authenticated IPC remain pending.
+  The protected Linux provisioning command and disposable real-OS qualification
+  are implemented; [operator setup](../security/credential-broker-setup.md)
+  records the boundary and remaining gates. Isolated startup and authenticated
+  IPC remain pending. Provisioning alone enables no agent access.
 - CA3: [verifier candidate qualification](credential-phone-approval-qualification.md)
   records build and upstream fixture evidence; control-plane and Android
   end-to-end implementation remain pending.
