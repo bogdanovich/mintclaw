@@ -26,6 +26,7 @@ import (
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/cron"
 	doctorcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/doctor"
 	documentcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/document"
+	evalcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/eval"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/gateway"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/mcp"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/migrate"
@@ -92,7 +93,7 @@ func machineJSONRequested(args []string) bool {
 	hasJSON := false
 	for _, arg := range args {
 		switch arg {
-		case "doctor", "document", "nodes", "agent", "code", "resume", "review", "threads", "skills":
+		case "doctor", "document", "nodes", "agent", "code", "resume", "review", "threads", "skills", "eval":
 			hasJSONCommand = true
 		case "--json":
 			hasJSON = true
@@ -118,9 +119,8 @@ func codingFrontendRequested(args []string) bool {
 	return false
 }
 
-// systemSkillBundleRequired keeps internal document workers free of unrelated
-// CLI bootstrap side effects. Their isolated working directory may contain
-// only declared artifacts when the parent process validates it.
+// Document workers must contain only declared artifacts; offline eval commands
+// must not bootstrap or modify a runtime home just to validate a corpus.
 func systemSkillBundleRequired(args []string) bool {
 	positionals := make([]string, 0, 2)
 	for _, arg := range args {
@@ -131,6 +131,10 @@ func systemSkillBundleRequired(args []string) bool {
 		if len(positionals) == 2 {
 			break
 		}
+	}
+	if len(positionals) == 2 && positionals[0] == "eval" &&
+		(positionals[1] == "list" || positionals[1] == "validate") {
+		return false
 	}
 	return len(positionals) != 2 || positionals[0] != "document" || positionals[1] != "_worker"
 }
@@ -173,6 +177,7 @@ mintclaw --no-color status`,
 		gateway.NewGatewayCommand(),
 		status.NewStatusCommand(),
 		doctorcmd.NewDoctorCommand(),
+		evalcmd.NewEvalCommand(),
 		documentcmd.NewDocumentCommand(func() string {
 			return filepath.Join(config.GetHome(), "state", "document-scratch")
 		}),

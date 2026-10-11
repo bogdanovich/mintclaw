@@ -81,8 +81,8 @@ Cleanup removes only runner-owned resources; failure or unresolved mutation cann
 | Packet | Scope | Dependency |
 | --- | --- | --- |
 | Admission | Design, roadmap, this goal, architecture index | None |
-| E1A | Strict corpus/preset/result contracts, selection, offline CLI and unit tests | Admission |
-| E1B | Shared live client, scripted runner, bounded events/evidence and reports; general cases | E1A |
+| E1A | Strict corpus/preset contracts, selection, offline CLI and unit tests | Admission |
+| E1B | Shared live client, scripted runner, result contracts, bounded events/evidence and reports; general cases | E1A |
 | E2 | Tools-disabled model roles, action/rubric validation, calibration, offline grading | E1B |
 | E3 | Pinned PDF fixtures and independent document/delivery/privacy graders, six PDF cases | E1B, E2 for adaptive cases |
 | E4 | Safe browser fixture/state/artifact graders, six browser cases | E1B, E2 for adaptive cases |

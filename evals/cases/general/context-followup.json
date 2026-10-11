@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "id": "general.context.followup",
+  "suite": "general",
+  "tags": ["context", "multi-turn"],
+  "description": "Retain a synthetic marker across two turns in one session.",
+  "task": "Remember this test marker: MC_EVAL_CONTEXT_7C9. Reply briefly that you have noted it.",
+  "requires": ["conversation"],
+  "fixtures": [],
+  "driver": {
+    "mode": "scripted",
+    "steps": [
+      {
+        "wait_for": {"kind": "final"},
+        "action": {"kind": "message", "text": "What was the test marker I just gave you? Reply with the marker only."}
+      }
+    ]
+  },
+  "limits": {"max_user_turns": 2, "turn_timeout": "3m", "case_timeout": "5m", "max_driver_calls": 1},
+  "checks": [
+    {"id": "marker-retained", "kind": "response_contains", "expected": "MC_EVAL_CONTEXT_7C9"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"}
+  ],
+  "rubric": []
+}
