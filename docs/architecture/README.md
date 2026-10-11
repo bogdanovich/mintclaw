@@ -8,6 +8,12 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   compatibility boundaries, and guardrails after the completed simplification
   and code-health programs.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
+- [Manual Agent Evals Design](agent-evals-design.md): proposed on-demand multi-turn task evaluation, isolated targets,
+  independent artifact/state checks, LLM user simulation, and separate rubric judging; approved for implementation.
+- [Manual Agent Evals Roadmap](agent-evals-roadmap.md): admitted bounded runner, model roles, PDF/browser suites,
+  workspace presets, and baseline comparisons without live evals in CI.
+- [Manual Agent Evals First-Release Goal](agent-evals-goal.md): frozen packets, minimum cases, safety/evidence contracts,
+  acceptance matrix, and finite completion gates for E1-E5.
 - [Runtime Capability And Turn-Engine Convergence Roadmap](runtime-capability-convergence-roadmap.md): shared tool
   composition for gateway and coding, PDF/browser portability, host boundaries, and the deferred native/external
   harness decision.
