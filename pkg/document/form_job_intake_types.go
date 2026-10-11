@@ -84,17 +84,21 @@ type FormIntakeMessageRequest struct {
 // FormIntakeInput is an ephemeral protected read. Even accidental ordinary JSON
 // serialization cannot expose its utterance or interpretation context.
 type FormIntakeInput struct {
-	JobID     string                             `json:"job_id"`
-	ModeID    string                             `json:"mode_id"`
-	Reference string                             `json:"reference"`
-	Revision  int64                              `json:"revision"`
-	Passes    int                                `json:"passes"`
-	Consumed  bool                               `json:"consumed"`
-	Intent    interactions.ProtectedAnswerIntent `json:"-"`
-	Text      string                             `json:"-"`
-	Context   FormIntakeContext                  `json:"-"`
-	Accounted []FormIntakeAccountedLiteral       `json:"-"`
-	Findings  []FormFieldMappingBlocker          `json:"-"`
+	// AdmittedRevision is the immutable origin, not current write authority.
+	AdmittedRevision int64 `json:"-"`
+	// DialogIntent is derived from the last committed private pass, never approval.
+	DialogIntent FormIntakeDialogIntent             `json:"-"`
+	JobID        string                             `json:"job_id"`
+	ModeID       string                             `json:"mode_id"`
+	Reference    string                             `json:"reference"`
+	Revision     int64                              `json:"revision"`
+	Passes       int                                `json:"passes"`
+	Consumed     bool                               `json:"consumed"`
+	Intent       interactions.ProtectedAnswerIntent `json:"-"`
+	Text         string                             `json:"-"`
+	Context      FormIntakeContext                  `json:"-"`
+	Accounted    []FormIntakeAccountedLiteral       `json:"-"`
+	Findings     []FormFieldMappingBlocker          `json:"-"`
 }
 
 type FormIntakePassRequest struct {

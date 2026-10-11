@@ -246,7 +246,11 @@ func (store *FormJobStore) admitFormIntake(
 			return false, ErrFormJobCapacityExceeded
 		}
 		for _, input := range mode.Inputs {
-			if input.State == formIntakeInputStaged {
+			// A registry question remains a one-answer claim even when admission
+			// no longer advances the assignment revision. Exact transport replay
+			// was handled above; a new message cannot reuse the same claim.
+			if input.State == formIntakeInputStaged || staged && (input.InteractionID == interactionID ||
+				input.InteractionID != "" && equalFormIntakeOrigin(input.Origin, origin)) {
 				return false, ErrFormJobConflict
 			}
 		}
@@ -261,10 +265,8 @@ func (store *FormJobStore) admitFormIntake(
 		}
 		if !staged {
 			input.State, input.CommittedAt = formIntakeInputCommitted, now.UnixMilli()
-			record.Public.Revision++
 		}
 		mode.Inputs = append(mode.Inputs, input)
-		invalidateFormIntakeReview(&record.Public)
 		if err := store.writeFormIntakeSource(&record, key, source, now); err != nil {
 			return false, err
 		}
@@ -503,9 +505,18 @@ func formIntakeAdmission(
 }
 
 func formIntakeInput(record FormJobRecord, mode *formIntakeStoredMode, input formIntakeStoredInput) FormIntakeInput {
+	var dialogIntent FormIntakeDialogIntent
+	for index := len(input.Reservations) - 1; index >= 0; index-- {
+		if outcome := input.Reservations[index].Outcome; outcome != nil {
+			dialogIntent = outcome.Intent
+			break
+		}
+	}
 	return FormIntakeInput{
 		JobID: record.JobID, ModeID: mode.ID, Reference: formIntakeReceiptPrefix + record.JobID + "." + input.ID,
-		Revision: record.Revision, Passes: len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
+		Revision: record.Revision, AdmittedRevision: input.Origin.ExpectedRevision,
+		DialogIntent: dialogIntent,
+		Passes:       len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
 		Intent: input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
 		Accounted: formIntakeAccountedLiterals(input),
 		Findings:  formIntakeCurrentFindings(input),

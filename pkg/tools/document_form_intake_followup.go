@@ -41,7 +41,27 @@ func documentFormIntakeFollowup(
 		}, nil
 	}
 	if projection.Mapping == nil {
-		return nil, nil
+		if projection.Review == nil || !projection.Review.Ready {
+			return nil, nil
+		}
+		if projection.Review.JobID != projection.Job.JobID || projection.Review.ReviewRevision <= 0 {
+			return nil, errors.New("protected finish review binding is unavailable")
+		}
+		if intake := projection.Intake; intake == nil || intake.Intent != "finish" ||
+			intake.RequestRevision != projection.Review.ReviewRevision || projection.FormAction != "continue" {
+			return documentFormReviewToolOnlyFollowup(projection)
+		}
+		return &toolshared.ToolOnlyFollowup{
+			Instruction: "The separately admitted finish request follows this exact ready review. Call the same document tool exactly once with action=form, form_action=commit and this job_id. This requests the existing final approval; never approve it yourself or claim a PDF exists yet.",
+			ValidateArguments: func(arguments map[string]any) error {
+				if len(arguments) != 3 || stringDocumentArg(arguments, "action") != "form" ||
+					stringDocumentArg(arguments, "form_action") != "commit" ||
+					stringDocumentArg(arguments, "job_id") != projection.Job.JobID {
+					return errors.New("finish request changed its reviewed job or action")
+				}
+				return validateDocumentActionOptions("form", arguments)
+			},
+		}, nil
 	}
 	jobID := projection.Job.JobID
 	allowed := make(map[string]bool, len(projection.Mapping.CandidateFields))

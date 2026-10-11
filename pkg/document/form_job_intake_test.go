@@ -82,7 +82,7 @@ func TestFormIntakeStandaloneMessagesRestartReplayAndPrivateProjection(t *testin
 		intakePrivateSentinel,
 	)
 	first, err := store.AdmitFormIntakeMessage(t.Context(), firstMessage)
-	if err != nil || first.Reused || first.Job.Revision != request.ExpectedRevision+1 || len(first.Job.Fields) != 0 {
+	if err != nil || first.Reused || first.Job.Revision != request.ExpectedRevision || len(first.Job.Fields) != 0 {
 		t.Fatalf("raw admission incorrectly accepted field facts: %#v, %v", first, err)
 	}
 	revision := first.Job.Revision
@@ -250,7 +250,8 @@ func TestFormIntakeQuestionClaimStagingRestartCommitAndTransportReplay(t *testin
 		t.Fatalf("commit replay: %v", err)
 	}
 	input, err := reopened.ReadFormIntakeInput(t.Context(), receipt.Reference, request.Owner)
-	if err != nil || input.Text != intakePrivateSentinel || input.Revision != started.Job.Revision+1 {
+	if err != nil || input.Text != intakePrivateSentinel || input.Revision != started.Job.Revision ||
+		input.AdmittedRevision != started.Job.Revision {
 		t.Fatalf("committed private input unavailable: %v", err)
 	}
 	nativeReplay, err := reopened.AdmitFormIntakeMessage(t.Context(), intakeMessage(
@@ -264,6 +265,10 @@ func TestFormIntakeQuestionClaimStagingRestartCommitAndTransportReplay(t *testin
 	stale.MessageIdentity, stale.IdempotencyKey = "new-message", "new-legacy-key"
 	if _, err := sink.Accept(t.Context(), stale); !errors.Is(err, ErrFormJobConflict) {
 		t.Fatalf("new answer to old binding accepted: %v", err)
+	}
+	stale.InteractionID = "different-question"
+	if _, err := sink.Accept(t.Context(), stale); !errors.Is(err, ErrFormJobConflict) {
+		t.Fatalf("used binding rebound to a new question: %v", err)
 	}
 	if err := sink.Discard(t.Context(), interactions.ProtectedAnswerDiscardRequest{
 		Binding: answer.Binding, Workspace: answer.Workspace, Route: answer.Route,
@@ -436,7 +441,7 @@ func TestFormIntakeAtomicWriteFailureConcurrentDuplicateAndNoPrefix(t *testing.T
 			receipt = result.Receipt
 		}
 		if result.Receipt != receipt || result.Progress.InputCount != 1 ||
-			result.Job.Revision != started.Job.Revision+1 {
+			result.Job.Revision != started.Job.Revision {
 			t.Fatalf("duplicate atomic admission = %#v", result)
 		}
 	}
@@ -702,8 +707,9 @@ func TestFormIntakePendingInputFencesNativeReviewApprovalAndMaterialization(t *t
 				t.Fatal(err)
 			}
 			current, err := store.Get(t.Context(), job.JobID, owner)
-			if err != nil || current.ReviewDigest != "" || current.ApprovalDigest != "" || current.OperationID != "" {
-				t.Fatal("raw input did not invalidate old finish authority")
+			if err != nil || current.ReviewDigest != approvalJob.ReviewDigest ||
+				current.ApprovalDigest != approvalJob.ApprovalDigest || current.Revision != approvalJob.Revision {
+				t.Fatal("raw admission changed reviewed assignments or their revision")
 			}
 			reviewRequest.ExpectedRevision = current.Revision
 			if _, err := store.ReviewFormJob(t.Context(), reviewRequest); !errors.Is(err, ErrFormJobConflict) {
@@ -834,7 +840,7 @@ func TestFormIntakeNewEncryptedShapeFailsClosedForOldReadersAndPreservesSource(t
 		t.Fatal(err)
 	}
 	legacyBinding, err := store.NewProtectedAnswerBinding(t.Context(), FormProtectedAnswerBindingRequest{
-		JobID: request.JobID, ExpectedRevision: started.Job.Revision + 1, Owner: request.Owner,
+		JobID: request.JobID, ExpectedRevision: started.Job.Revision, Owner: request.Owner,
 		FieldID: request.Schema.Fields[0].ID,
 	})
 	if err != nil {
@@ -1069,7 +1075,14 @@ func TestFormIntakeInterleavedPassReplayRetainsExactBindingAcrossRestart(t *test
 		t.Fatal(err)
 	}
 	changed = firstRequest
-	changed.ExpectedRevision = newInput.Job.Revision
+	update := request
+	update.ExpectedRevision = newInput.Job.Revision
+	update.Context.Question = "Which person's details are these?"
+	updated, err := reopened.UpdateFormIntakeContext(t.Context(), update, started.Progress.ModeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed.ExpectedRevision = updated.Revision
 	if _, err := reopened.ReserveFormIntakePass(t.Context(), changed); !errors.Is(err, ErrFormJobAnswerConflict) {
 		t.Fatal("original A key rebound itself to a newer revision")
 	}

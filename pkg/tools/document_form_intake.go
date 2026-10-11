@@ -17,6 +17,7 @@ import (
 
 type safeDocumentFormIntake struct {
 	Progress          document.FormIntakeProgress        `json:"progress"`
+	RequestRevision   int64                              `json:"request_revision,omitempty"`
 	Question          string                             `json:"question,omitempty"`
 	Summary           string                             `json:"form_summary,omitempty"`
 	Plan              string                             `json:"collection_plan,omitempty"`
@@ -298,7 +299,9 @@ func (tool *DocumentTool) continueFormIntake(
 	if err != nil || progress == nil || progress.JobID != input.JobID || progress.ModeID != input.ModeID {
 		return documentFormToolFailure("form_job_conflict", "the protected intake receipt is unavailable")
 	}
-	intake := safeDocumentFormIntake{Progress: *progress}
+	intake := safeDocumentFormIntake{
+		Progress: *progress, RequestRevision: input.AdmittedRevision, Intent: input.DialogIntent,
+	}
 	references, err := tool.formJobs.FormIntakeReferences(ctx, input.JobID, input.ModeID, owner)
 	if err != nil {
 		return documentFormToolError(err)
@@ -354,6 +357,7 @@ func (tool *DocumentTool) processFormIntakeInput(
 			return result, err
 		}
 		if input.Consumed {
+			result.intent = input.DialogIntent
 			break
 		}
 		clarificationTrigger := ""

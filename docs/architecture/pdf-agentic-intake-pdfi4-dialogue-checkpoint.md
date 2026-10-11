@@ -43,7 +43,10 @@ replay, concurrency and privacy regressions. Complete/partial
 output, real model, deployed Telegram qualification and exit remain separate mandatory gates. This checkpoint and
 foundation tests alone do not complete PDFI4.
 
-Before enabling this dialogue, the output packet must also qualify the transition from review to the separate
-finish request. Conservatively admitted raw inputs currently advance the job revision: control-only finish intent
-must not create a re-review loop or restore stale approval. Resolve this inside the existing native review/input
-boundary with regression tests, not by trusting the interpreter's advisory intent or weakening final approval.
+The dependent review-boundary prerequisite separates opaque admission and bookkeeping from assignment changes.
+Pending and staged input still fences review publication, approval and materialization. Accepted field events,
+context changes and lifecycle controls still invalidate authority. A control-only finish preserves the review;
+only a receipt admitted at that exact ready review can request the existing final approval. An older receipt cannot
+auto-finish a newly published review. Intent is derived from existing encrypted outcomes on restart, not a second
+state machine or approval grant. Native and tool tests cover this boundary; full/partial output and real channel
+qualification remain mandatory before enabling the dialogue.
