@@ -45,7 +45,7 @@ func TestPDFRequestAdmissionKeepsConfirmedPrivacyFailuresHard(t *testing.T) {
 					if control.jobID == "" {
 						t.Fatal("control mutated evidence before the first native prompt observation")
 					}
-					path := filepath.Join(prepared.home, "state", "outbox", record.PromptDeliveryID+".json")
+					path := filepath.Join(prepared.workspace, "state", "outbox", record.PromptDeliveryID+".json")
 					if surface == "unavailable" {
 						if err := os.Remove(path); err != nil {
 							t.Fatal(err)

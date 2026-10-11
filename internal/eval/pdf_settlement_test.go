@@ -118,7 +118,7 @@ func settledPDFControl(t *testing.T) (*pdfConversation, pdfSettlement) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	box, err := outbox.Open(domain.prepared.home)
+	box, err := outbox.Open(domain.prepared.workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestPDFSettlementRefusesUnconsumedOrForeignGrantAndReceipt(t *testing.T) {
 				}
 				data, _ := json.Marshal(settlement.delivery)
 				if err := os.WriteFile(
-					filepath.Join(domain.prepared.home, "state", "outbox", settlement.delivery.ID+".json"),
+					filepath.Join(domain.prepared.workspace, "state", "outbox", settlement.delivery.ID+".json"),
 					data,
 					0o600,
 				); err != nil {
@@ -238,7 +238,7 @@ func TestPDFSettlementRefusesUnconsumedOrForeignGrantAndReceipt(t *testing.T) {
 					domain.operationID+".json",
 				)
 				if mode == "outbox_private" {
-					path = filepath.Join(domain.prepared.home, "state", "outbox", settlement.delivery.ID+".json")
+					path = filepath.Join(domain.prepared.workspace, "state", "outbox", settlement.delivery.ID+".json")
 				}
 				data, err := os.ReadFile(path)
 				if err != nil {

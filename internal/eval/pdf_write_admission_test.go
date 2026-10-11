@@ -164,7 +164,7 @@ func approvalPDFControl(t *testing.T, domain *pdfConversation, store *document.F
 	if err != nil {
 		t.Fatal(err)
 	}
-	box, err := outbox.Open(domain.prepared.home)
+	box, err := outbox.Open(domain.prepared.workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
