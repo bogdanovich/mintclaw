@@ -3,6 +3,7 @@ package eval
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -24,6 +25,11 @@ type Selection struct {
 	IDs   []string
 }
 
+const (
+	maxCorpusEntries = 4096
+	corpusReadBatch  = 128
+)
+
 func LoadCorpus(directory string) ([]LoadedCase, error) {
 	root, err := os.OpenRoot(directory)
 	if err != nil {
@@ -32,18 +38,7 @@ func LoadCorpus(directory string) ([]LoadedCase, error) {
 	defer func() { _ = root.Close() }()
 	items := make([]LoadedCase, 0)
 	seen := make(map[string]bool)
-	entries := 0
-	err = fs.WalkDir(root.FS(), "cases", func(name string, entry fs.DirEntry, walkErr error) error {
-		entries++
-		if walkErr != nil || entries > 4096 {
-			return ErrInvalidCorpus
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		if entry.Type()&fs.ModeSymlink != 0 {
-			return ErrInvalidCorpus
-		}
+	err = walkCorpusFiles(root, func(name string) error {
 		if path.Ext(name) != ".json" {
 			return nil
 		}
@@ -72,6 +67,67 @@ func LoadCorpus(directory string) ([]LoadedCase, error) {
 	}
 	slices.SortFunc(items, func(a, b LoadedCase) int { return strings.Compare(a.Case.ID, b.Case.ID) })
 	return items, nil
+}
+
+// Directory contents are admitted in batches before being retained. WalkDir
+// would allocate and sort an entire directory before enforcing this budget.
+func walkCorpusFiles(root *os.Root, visit func(string) error) error {
+	entries := 1 // The cases directory itself consumes an entry.
+	pending := []string{"cases"}
+	for len(pending) > 0 {
+		name := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		before, err := root.Lstat(name)
+		if err != nil || !before.IsDir() {
+			return ErrInvalidCorpus
+		}
+		file, err := root.Open(name)
+		if err != nil {
+			return ErrInvalidCorpus
+		}
+		info, statErr := file.Stat()
+		if statErr != nil || !info.IsDir() || !os.SameFile(before, info) {
+			_ = file.Close()
+			return ErrInvalidCorpus
+		}
+		err = consumeCorpusDirectory(file, &entries, func(entry fs.DirEntry) error {
+			if entry.Type()&fs.ModeSymlink != 0 {
+				return ErrInvalidCorpus
+			}
+			child := path.Join(name, entry.Name())
+			if entry.IsDir() {
+				pending = append(pending, child)
+				return nil
+			}
+			return visit(child)
+		})
+		closeErr := file.Close()
+		if err != nil || closeErr != nil {
+			return ErrInvalidCorpus
+		}
+	}
+	return nil
+}
+
+func consumeCorpusDirectory(file fs.ReadDirFile, entries *int, visit func(fs.DirEntry) error) error {
+	for {
+		batch, err := file.ReadDir(min(corpusReadBatch, maxCorpusEntries-*entries+1))
+		for _, entry := range batch {
+			*entries++
+			if *entries > maxCorpusEntries {
+				return ErrInvalidCorpus
+			}
+			if visit(entry) != nil {
+				return ErrInvalidCorpus
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return ErrInvalidCorpus
+		}
+	}
 }
 
 func Select(corpus []LoadedCase, selection Selection) ([]LoadedCase, error) {

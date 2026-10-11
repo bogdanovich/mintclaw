@@ -3,6 +3,8 @@ package eval
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,5 +144,63 @@ func TestRepositoryCorpus(t *testing.T) {
 	corpus, err := LoadCorpus("../../evals")
 	if err != nil || len(corpus) != 2 {
 		t.Fatal("repository cases invalid", err)
+	}
+}
+
+type syntheticDirectory struct {
+	fs.File
+	entry     fs.DirEntry
+	remaining int
+	requested []int
+}
+
+func (directory *syntheticDirectory) ReadDir(count int) ([]fs.DirEntry, error) {
+	directory.requested = append(directory.requested, count)
+	if count < 1 || count > corpusReadBatch {
+		return nil, errors.New("unbounded directory enumeration")
+	}
+	batch := make([]fs.DirEntry, min(count, directory.remaining))
+	for index := range batch {
+		batch[index] = directory.entry
+	}
+	directory.remaining -= len(batch)
+	if directory.remaining == 0 {
+		return batch, io.EOF
+	}
+	return batch, nil
+}
+
+func TestCorpusEnumerationEnforcesBudgetBeforeRetention(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "ignored.txt"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, total := range []int{maxCorpusEntries - 1, 1_000_000_000} {
+		directory := &syntheticDirectory{entry: files[0], remaining: total}
+		entries, visited := 1, 0
+		err = consumeCorpusDirectory(directory, &entries, func(fs.DirEntry) error {
+			visited++
+			return nil
+		})
+		if total == maxCorpusEntries-1 && err != nil ||
+			total > maxCorpusEntries && !errors.Is(err, ErrInvalidCorpus) ||
+			visited != maxCorpusEntries-1 || len(directory.requested) > maxCorpusEntries/corpusReadBatch+1 {
+			t.Fatal("directory budget was enforced too late", err, visited)
+		}
+	}
+	first := &syntheticDirectory{entry: files[0], remaining: 3}
+	second := &syntheticDirectory{entry: files[0], remaining: 1_000_000_000}
+	entries := maxCorpusEntries - 4
+	if consumeCorpusDirectory(first, &entries, func(fs.DirEntry) error { return nil }) != nil ||
+		!errors.Is(
+			consumeCorpusDirectory(second, &entries, func(fs.DirEntry) error { return nil }),
+			ErrInvalidCorpus,
+		) ||
+		len(second.requested) != 1 || second.requested[0] != 2 {
+		t.Fatal("directory budgets were reset between directories")
 	}
 }

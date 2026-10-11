@@ -43,7 +43,7 @@ func LoadPreset(name string) (Preset, error) {
 	result.ConfigPath = resolvePath(base, result.ConfigPath)
 	result.ExpectedWorkspace = resolvePath(base, result.ExpectedWorkspace)
 	result.IsolationRoot = resolvePath(base, result.IsolationRoot)
-	if result.IsolationRoot == string(filepath.Separator) ||
+	if filepath.Dir(result.IsolationRoot) == result.IsolationRoot ||
 		!pathWithin(result.IsolationRoot, result.ConfigPath) ||
 		!pathWithin(result.IsolationRoot, result.ExpectedWorkspace) {
 		return Preset{}, ErrInvalidPreset
