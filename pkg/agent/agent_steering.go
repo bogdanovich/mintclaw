@@ -453,11 +453,12 @@ func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (*inboundDisp
 	routeClaimKey := runtimeRouteClaimKey(allocation.RouteScopeKey, msg.SessionKey)
 	routeScope := newRuntimeRouteScope(agent.Workspace, routeClaimKey)
 	if activeTarget, ok := al.turns.activeRouteSessions.Load(routeScope); ok {
-		target, targetOK := activeTarget.(*inboundDispatchTarget)
-		if targetOK {
-			al.touchActiveSessionLifecycle(target)
+		owner, targetOK := activeTarget.(*runtimeSessionClaim)
+		if !targetOK || owner.routeTarget == nil {
+			return nil, false
 		}
-		return target, targetOK
+		al.touchActiveSessionLifecycle(owner.routeTarget)
+		return owner.routeTarget, true
 	}
 	allocation, err = al.applySessionLifecycle(allocation, route.SessionPolicy.Lifecycle)
 	if err != nil {

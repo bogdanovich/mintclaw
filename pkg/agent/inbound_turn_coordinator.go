@@ -378,7 +378,7 @@ func (c *inboundTurnCoordinator) finishWorkerClaim(
 	for {
 		al.turns.routeAdmissionMu.Lock()
 		owner, owned := al.turns.activeRouteSessions.Load(claim.routeScope)
-		if !owned || owner != claim.routeTarget ||
+		if !owned || owner != claim ||
 			al.hasNonterminalInteraction(claim.scope.workspace, claim.scope.sessionKey) ||
 			al.pendingSteeringCountForScope(claim.scope) == 0 {
 			claim.releaseIfOwnedLocked()

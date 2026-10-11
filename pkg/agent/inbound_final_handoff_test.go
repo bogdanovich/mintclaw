@@ -235,7 +235,7 @@ func TestRetiredRouteClaimCannotReleaseReplacementAtSameScope(t *testing.T) {
 	defer second.releaseIfOwned()
 	first.releaseIfOwned()
 	actual, exists := al.turns.activeRouteSessions.Load(second.routeScope)
-	if !exists || actual != secondTarget {
+	if !exists || actual != second || second.routeTarget != secondTarget {
 		t.Fatal("retired claim removed the replacement owner")
 	}
 }
