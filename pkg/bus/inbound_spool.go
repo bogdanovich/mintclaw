@@ -23,6 +23,8 @@ const (
 
 var errRetiredInboundSpoolContext = errors.New("retired inbound spool context is unsupported")
 
+var errInboundSpoolVersionUnsupported = errors.New("inbound spool record version is unsupported")
+
 var retiredInboundInteractionRawKeys = [...]string{
 	"interaction_choice",
 	"interaction_response",
@@ -255,6 +257,9 @@ func (s *InboundSpool) Fail(id string, cause error) error {
 }
 
 func (s *InboundSpool) writeRecord(path string, rec spooledInboundRecord) error {
+	if rec.Version != inboundSpoolVersion {
+		return errInboundSpoolVersionUnsupported
+	}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal inbound spool entry %s: %w", rec.ID, err)
@@ -278,6 +283,9 @@ func (s *InboundSpool) readRecord(path string) (spooledInboundRecord, error) {
 	var rec spooledInboundRecord
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return spooledInboundRecord{}, fmt.Errorf("decode inbound spool entry %s: %w", path, err)
+	}
+	if rec.Version != inboundSpoolVersion {
+		return spooledInboundRecord{}, errInboundSpoolVersionUnsupported
 	}
 	if rec.ID == "" {
 		rec.ID = spoolIDFromName(filepath.Base(path))
