@@ -25,6 +25,10 @@ type ownerRecord struct {
 	Origin      string                `json:"origin"`
 	UserID      []byte                `json:"user_id"`
 	Credentials []webauthn.Credential `json:"credentials"`
+	// Registration is stored inactive before its final admission check. The
+	// first assertion after an accepted registration persists activation. A
+	// restart before that assertion requires fresh protected owner setup.
+	EnrollmentPending bool `json:"enrollment_pending,omitempty"`
 }
 
 func (owner ownerRecord) WebAuthnID() []byte                         { return owner.UserID }

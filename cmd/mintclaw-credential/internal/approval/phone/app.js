@@ -76,7 +76,7 @@
       if (result.status === "approved") {
         grantID = result.grant_id; reference = ""; element("revoke").hidden = false;
         status(`Approved until ${new Date(result.expires_at).toLocaleString()}. You can revoke access now.`);
-      } else if (result.status === "enrolled") { reference = ""; status("Passkey enrolled. You can now approve MintClaw account access on this phone."); }
+      } else if (result.status === "enrolled") { reference = ""; status("Passkey enrolled. Approve your first account request to complete setup."); }
       else if (result.status === "revoked") { grantID = ""; reference = ""; status("Access revoked."); }
       else throw new Error("unavailable");
     } catch {

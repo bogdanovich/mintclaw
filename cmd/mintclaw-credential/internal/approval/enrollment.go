@@ -34,7 +34,7 @@ func NewEnrollment(setup *OwnerSetup) (*Enrollment, error) {
 	controller := setup.controller
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
-	if !controller.usable(context.Background()) || len(controller.owner.Credentials) != 0 {
+	if !controller.usable(context.Background()) || !controller.enrollmentAllowed() {
 		return nil, ErrUnavailable
 	}
 	return &Enrollment{setup: setup, now: time.Now, boundary: newPhoneBoundary(controller.origin)}, nil
@@ -49,7 +49,7 @@ func (enrollment *Enrollment) issue(ctx context.Context) ([]byte, error) {
 	controller := enrollment.setup.controller
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
-	if !controller.usable(ctx) || len(controller.owner.Credentials) != 0 {
+	if !controller.usable(ctx) || !controller.enrollmentAllowed() {
 		return nil, ErrDenied
 	}
 	// Reissuing deliberately invalidates the previous bootstrap and ceremony.
@@ -91,7 +91,7 @@ func (enrollment *Enrollment) begin(ctx context.Context, secret string) (Ceremon
 		}
 		return publicCeremony(enrollment.ceremony, pending), nil
 	}
-	ceremony, err := enrollment.setup.Begin(ctx)
+	ceremony, err := enrollment.setup.begin(ctx, enrollment.issued)
 	if err != nil {
 		enrollment.clear()
 		return Ceremony{}, err
@@ -121,13 +121,7 @@ func (enrollment *Enrollment) finish(ctx context.Context, secret, id string, res
 	}
 	finishCtx, cancel := context.WithTimeout(ctx, time.Until(issued.Add(PendingLifetime)))
 	defer cancel()
-	if err := enrollment.setup.Finish(finishCtx, id, response); err != nil {
-		return err
-	}
-	if !withinLifetime(enrollment.now(), issued) {
-		return ErrDenied
-	}
-	return nil
+	return enrollment.setup.Finish(finishCtx, id, response)
 }
 
 func (enrollment *Enrollment) clear() {

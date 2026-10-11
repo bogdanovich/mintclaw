@@ -80,6 +80,14 @@ setup link and ceremony. Reopening a link preserves its original deadline.
 Registration cannot overwrite an enrolled owner. Neither approval links nor
 the public HTTP handler can issue enrollment capabilities.
 
+After registration, approve the first account request to complete setup.
+Registration is initially stored inactive; it becomes live only after its
+final deadline/cancellation check, and the first signed approval persists
+activation. If the service restarts before that first approval, repeat private
+enrollment. A rejected or interrupted candidate cannot authorize account use
+after reload; only a fresh protected console action may replace it. An already
+active owner cannot be overwritten by this path.
+
 This command currently has no deployed listener to contact. HTTPS startup,
 service-role and complete agent isolation, authorized notifications, physical
 Android qualification, and browser lease enforcement remain rollout gates.

@@ -305,6 +305,13 @@ func TestEnrollmentOriginalDeadlineAndSafeZero(t *testing.T) {
 	if fixture.store.commits != 1 {
 		t.Fatal("fixture did not exercise an in-flight durable write")
 	}
+	assertEnrollmentInactive(t, fixture.controller)
+	restarted, pendingSetup, reloadErr := newController(testConfig(), fixture.store)
+	if reloadErr != nil || pendingSetup == nil {
+		t.Fatal("rejected enrollment lost protected recovery")
+	}
+	defer func() { _ = restarted.Close() }()
+	assertEnrollmentInactive(t, restarted)
 	for _, empty := range []*Enrollment{nil, {}, {setup: &OwnerSetup{}}} {
 		if _, err = empty.issue(context.Background()); err == nil {
 			t.Fatal("zero enrollment issued")

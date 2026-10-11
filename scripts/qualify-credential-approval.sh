@@ -32,9 +32,9 @@ docker run --rm --network none --cap-drop ALL --cap-add CHOWN \
   --mount "type=volume,src=$fixture_volume,dst=/qual-approval" \
   "$fixture_image" -ec '
     test ! -e /qual-approval/synthetic-only
-    mkdir /qual-approval/state
-    chmod 700 /qual-approval/state
-    chown 65532:65532 /qual-approval/state
+    mkdir /qual-approval/state /qual-approval/rejected
+    chmod 700 /qual-approval/state /qual-approval/rejected
+    chown 65532:65532 /qual-approval/state /qual-approval/rejected
     chmod 755 /qual-approval
     printf "mintclaw-synthetic-approval-v1\n" >/qual-approval/synthetic-only
     chmod 444 /qual-approval/synthetic-only
