@@ -88,6 +88,11 @@ exceptions, subagents, dispatch/routing overrides, and custom provider bodies ar
 The active gateway log level must be `warn`, `error`, or `fatal`, not a debug override. Check inherited MintClaw
 environment overrides in both processes. Adding a capability name to a preset does not enable that capability.
 
+Enable exactly one MintClaw channel with `allow_from: ["mintclaw-user"]`, the native client's sender ID.
+An empty list denies every sender and would otherwise leave the runner waiting for a response to discarded input.
+The eval preflight rejects empty, foreign, wildcard, additional-sender and ambiguous enabled-channel policies
+before contacting the target. This restriction applies only to prepared eval profiles, not ordinary `agent live`.
+
 Start the isolated gateway with the same merged binary used by the runner:
 
 ```sh

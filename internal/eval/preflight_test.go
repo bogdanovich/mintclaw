@@ -138,7 +138,7 @@ func newAdmissionFixture(t *testing.T) *admissionFixture {
 		t.Fatal(err)
 	}
 	cfg.Channels = config.ChannelsConfig{"mintclaw": {
-		Type: config.ChannelMintClaw, Enabled: true, Settings: settings,
+		Type: config.ChannelMintClaw, Enabled: true, AllowFrom: []string{"mintclaw-user"}, Settings: settings,
 	}}
 	fixture.cfg = cfg
 	fixture.preset = Preset{
@@ -203,6 +203,48 @@ func TestPreparedAdmissionRefusesNonLoopbackListenersBeforeProbe(t *testing.T) {
 			_, err := admitPreparedTarget(t.Context(), fixture.preset, fixture.home)
 			if !errors.Is(err, ErrUnsafeTarget) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
 				t.Fatal("non-loopback listener reached target observation or task ingress", err)
+			}
+		})
+	}
+}
+
+func TestPreparedAdmissionRefusesUnusableOrBroadChannelSendersBeforeProbe(t *testing.T) {
+	for name, allowed := range map[string][]string{
+		"missing": nil, "empty": {}, "blank": {" "}, "foreign": {"other-user"},
+		"public": {"*"}, "public and expected": {"*", "mintclaw-user"},
+		"additional sender": {"mintclaw-user", "other-user"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newAdmissionFixture(t)
+			fixture.cfg.Channels["mintclaw"].AllowFrom = allowed
+			fixture.writeConfig(t)
+			_, err := admitPreparedTarget(t.Context(), fixture.preset, fixture.home)
+			if !errors.Is(err, ErrUnsafeTarget) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+				t.Fatal("unusable or broad sender policy reached runtime observation or task ingress", err)
+			}
+		})
+	}
+}
+
+func TestPreparedProfileUsesNativeSenderNormalization(t *testing.T) {
+	fixture := newAdmissionFixture(t)
+	fixture.cfg.Channels["mintclaw"].AllowFrom = []string{" ", " mintclaw-user "}
+	if err := validateConversationProfile(fixture.cfg, fixture.preset, fixture.workspace); err != nil {
+		t.Fatal("native-normalized trusted sender was refused", err)
+	}
+}
+
+func TestPreparedAdmissionRefusesAmbiguousEnabledChannels(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			fixture := newAdmissionFixture(t)
+			copyChannel := *fixture.cfg.Channels["mintclaw"]
+			copyChannel.Enabled = enabled
+			fixture.cfg.Channels["second"] = &copyChannel
+			fixture.writeConfig(t)
+			_, err := admitPreparedTarget(t.Context(), fixture.preset, fixture.home)
+			if !errors.Is(err, ErrUnsafeTarget) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+				t.Fatal("ambiguous channel configuration reached runtime observation or task ingress", err)
 			}
 		})
 	}
@@ -317,7 +359,11 @@ func TestConversationTemplateUsesNativeConfigAndAdmissionPolicy(t *testing.T) {
 	}
 	cfg.Agents.Defaults.Workspace = fixture.workspace
 	cfg.ModelList[0].Model = "synthetic-model"
-	cfg.Channels = fixture.cfg.Channels
+	channel := cfg.Channels.GetByType(config.ChannelMintClaw)
+	if channel == nil {
+		t.Fatal("public template has no native channel")
+	}
+	channel.Settings = fixture.cfg.Channels["mintclaw"].Settings
 	if err = validateConversationProfile(&cfg, fixture.preset, fixture.workspace); err != nil {
 		t.Fatal("documented template is refused by admission", err)
 	}

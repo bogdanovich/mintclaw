@@ -97,10 +97,25 @@ func validateConversationProfile(cfg *config.Config, preset Preset, workspace st
 		len(cfg.Agents.Defaults.ContextManagerConfig) != 0 {
 		return ErrUnsafeTarget
 	}
+	channels, nativeChannels := 0, 0
 	for _, channel := range cfg.Channels {
-		if channel != nil && channel.Enabled && channel.Type != config.ChannelMintClaw {
+		if channel == nil {
+			continue
+		}
+		if channel.Type == config.ChannelMintClaw {
+			nativeChannels++
+		}
+		if !channel.Enabled {
+			continue
+		}
+		channels++
+		if channel.Type != config.ChannelMintClaw ||
+			!slices.Equal(config.NormalizeAllowFrom(channel.AllowFrom), []string{"mintclaw-user"}) {
 			return ErrUnsafeTarget
 		}
+	}
+	if channels != 1 || nativeChannels != 1 {
+		return ErrUnsafeTarget
 	}
 	plan, err := netbind.BuildPlan(cfg.Gateway.Host, netbind.DefaultLoopback)
 	if err != nil || !plan.IsLoopbackOnly() {
