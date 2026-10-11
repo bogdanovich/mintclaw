@@ -25,8 +25,8 @@ func TestOfflineCommands(t *testing.T) {
 		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 			t.Fatal(err)
 		}
-		if result.RuntimeRun || result.Outcome != "valid" || len(result.Cases) != 1 ||
-			result.Cases[0].ID != "general.context.followup" ||
+		if result.RuntimeRun || result.Outcome != "valid" || len(result.Cases) != 2 ||
+			result.Cases[0].ID != "browser.fixture.followup" || result.Cases[1].ID != "general.context.followup" ||
 			strings.Contains(output.String(), "MC_EVAL_CONTEXT") {
 			t.Fatal("offline command leaked task contents or claimed a runtime run")
 		}
