@@ -121,6 +121,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   access, Android passkey approval, 20-hour revocable grants, isolated browser
   login, and qualification gates for keeping authentication material outside
   model context.
+- [Credential Provider And Isolation Qualification](credential-provider-qualification.md):
+  pinned official 1Password SDK build evidence, private service and caller
+  isolation requirements, protected provisioning, and planned CA2 merge units.
 - [Reliable PDF Support Roadmap](pdf-support-roadmap.md): ordered document
   identity, inspection, read/render, AcroForm, durable form, XFA, transformation,
   companion, and production-verification milestones.
