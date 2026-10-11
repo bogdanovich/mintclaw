@@ -16,7 +16,7 @@ const password = Buffer.from('SYNTHETIC_PRIVATE_PASSWORD_v1');
 const cookie = 'SYNTHETIC_PRIVATE_COOKIE_v1';
 let browser;
 before(async () => {
-  browser = await chromium.launch({ headless: true, chromiumSandbox: true, timeout: 30000 });
+  browser = await chromium.launch({ channel: 'chromium', headless: true, chromiumSandbox: true, timeout: 30000 });
   if (process.platform === 'linux') {
     const context = await browser.newContext({ acceptDownloads: false, serviceWorkers: 'block' });
     try {

@@ -59,7 +59,7 @@ async function launch(config) {
     if (proxy.protocol !== 'http:' || proxy.hostname !== '127.0.0.1' || !proxy.port ||
         Number(proxy.port) < 1024 || proxy.username || proxy.password || proxy.search || proxy.hash ||
         proxy.href !== `${config.proxyServer}/`) throw new Error();
-    browser = await chromium.launch({ executablePath: config.executablePath, chromiumSandbox: true, headless: true,
+    browser = await chromium.launch({ executablePath: config.executablePath, channel: 'chromium', chromiumSandbox: true, headless: true,
       timeout: 15000, env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', TZ: 'UTC' },
       proxy: { server: config.proxyServer, bypass: '<-loopback>' },
       args: ['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] });
