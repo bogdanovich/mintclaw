@@ -107,14 +107,23 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    remote monitor may outlive or recover independently of its initiating turn,
    so task plus generation is the exact parent/terminal join; correlation does
    not depend on time matching or an invented parent-turn identity.
-7. **Compaction and repository observations (implemented; production
-   qualification pending).** Active-turn and standalone compaction lifecycle
-   records retain the runtime-owned attempt ID, safe status, revision, counts,
+7. **Compaction and repository observations (correlation semantics
+   production-qualified; coding trace-store ownership correction pending).**
+   Active-turn and standalone compaction lifecycle records retain the
+   runtime-owned attempt ID, safe status, revision, counts,
    duration, and terminal outcome. A manual or background compaction outside an
    active turn receives a bounded continuation trace that closes on the end
    event. Repository snapshot records retain the deterministic snapshot hash,
    validated Git commit, and bounded counts/flags. Paths, branch names, changed
    filenames, warnings, diff content, and raw errors remain external.
+
+   The production canaries proved those bounded records and joins. They also
+   exposed that an empty trace `state_dir` currently resolves a local coding
+   trace beneath the execution root instead of the thread-owned diagnostics
+   root. The next H1b slice must correct that placement before H1c support
+   export relies on coding trace discovery. The checkout remained clean only
+   because its existing ignore policy covered the generated `state/` path;
+   ignore rules are not an acceptable state-ownership boundary.
 
 These are additive passive joins. None may make the runtime wait for or depend
 on trace persistence.
@@ -417,6 +426,53 @@ path, node identity, or authority digest. The trace envelope's `source.commit`
 is still absent, so deployment-commit attribution remains an independent open
 H1b gap rather than being inferred from this deployment record.
 
+### Compaction and repository-snapshot production qualification
+
+PR #1563 merged as `62ed7ec37b7d9c429a3d2c948404eb102b6f46e5` and was
+deployed from that exact merged-main revision on 2026-10-11. The
+checksum-verifiable rollback snapshot is
+`/home/server/mintclaw-core-backup-20261011T155545Z`; its 19-entry SHA-256
+manifest has digest
+`bd3120d9dd73204fff0543508dbe129874a444c929f59a8d54ea94346a7de523`.
+The installed core/CLI, node, and launcher SHA-256 digests are respectively
+`e3a36363b0d6c3a80040c15c7d6a38a481171a8752b32013505991bb361c856a`,
+`40f753a963bb2e4967cb9c30b067dddb1fb3b3030b7fffb648830228c01b406d`,
+and `39b0260d118b66e53402f5c4a84574b2d65a8e541646ad134b436461b2c3f0a2`.
+All five profile doctor outputs and exit codes were byte-identical to the
+previous binary's existing policy findings. All ten expected services were
+active, no failed or legacy processes were present, and the ten-minute service
+error-journal scan was empty before and after the canaries.
+
+A live gateway deployment smoke returned the exact marker
+`P8_H1B_COMPACTION_SNAPSHOT_DEPLOY_OK`. Its completed trace
+`trace-turn-077d540ebaa84cc87ff6a8a4` used `redacted_content`, retained eight
+records, and reported no truncation.
+
+The local production coding canary created thread
+`5d654077-37a8-40b4-82a6-d2883ba0bdb5` against the clean core checkout and
+completed `main-turn-1` without tool use or repository mutation. Trace
+`trace-turn-10bea383ca48b26332a6ff3b` retained one repository snapshot with
+deterministic hash
+`df92a8d8d292abadc81c611b02d6851dd7029d6cd7093c48bd0ddeabba1dc85d`
+and exact repository commit
+`62ed7ec37b7d9c429a3d2c948404eb102b6f46e5`. It exposed only availability
+flags plus snapshot type; path, branch, filenames, diff, warning, and raw-error
+content were absent. The six-record trace completed without truncation.
+
+A real TUI `/compact` on the same thread created standalone trace
+`trace-compaction-ee3963bb668ac88fe65acce3`. Both ordered lifecycle records
+share attempt `a3365aba-db49-488c-88c7-bd04d7ff4f9d`; they distinguish
+`started` from terminal `no_progress`, retain safe transcript and token counts,
+and agree with the envelope outcome. The two-record trace completed without
+truncation, and the source checkout remained clean.
+
+The canary also found a state-placement defect: with an empty configured
+`state_dir`, those coding traces were written under the execution root's
+ignored `state/diagnostics/traces` directory instead of the coding thread's
+owned diagnostics root. Correlation and privacy semantics are therefore
+production-qualified, while coding trace-store ownership remains an explicit
+H1b fix rather than being mislabeled as complete.
+
 ## Evidence map
 
 | Path | Authoritative evidence | Passive evidence | H1b/H1c action |
@@ -424,12 +480,12 @@ H1b gap rather than being inferred from this deployment record.
 | Local coding turn | Coding JSONL, metadata, Git/filesystem | Turn/model/tool/context/error records | Model-attempt join complete; add thread/project joins |
 | Provider retry/fallback | Runtime provider outcome | Model retry/fallback records | Model-attempt join complete; retain optional provider request ID separately |
 | Tool/process lifecycle | Tool record, process owner | Tool call/result/skip/loop records | Call/generation join complete; keep PID/process details external |
-| Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Attempt/status and bounded repository re-anchor identity implemented; production qualification pending |
+| Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Attempt/status correlation is production-qualified; move default local-coding traces to thread-owned diagnostics state |
 | Human interaction | Interaction registry/events | Bounded lifecycle records in the parent trace or immediate late-event continuation | Interaction/event ID, revision, task, tool-call, and delivery joins implemented and production-qualified |
 | Channel/async delivery | Task registry, outbox, channel receipt | Bounded completion continuation with delivery decision/attempt/outcome | Task/generation, completion, tool-generation, parent-turn, and delivery joins implemented and production-qualified |
 | Remote coding task | Task registry, worker ledger/thread | Parent tool result plus bounded terminal completion/delivery continuation | Task/generation/worker/thread, safe scope/profile, terminal uncertainty, completion, and delivery joins implemented; production qualification pending |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Invocation ID and safe policy/target aliases implemented and production-qualified |
-| Repository/worktree | Git/filesystem, worktree owner | Bounded repository context snapshot | Commit/snapshot digest and counts implemented without paths or diffs; production qualification pending |
+| Repository/worktree | Git/filesystem, worktree owner | Bounded repository context snapshot | Commit/snapshot projection is production-qualified without paths or diffs; correct default coding trace-store ownership |
 | TUI/headless projection | Canonical transcript, deterministic projector | Turn/tool/context events | H1c exports bounded current-view/version facts, not cell history |
 | Trace pipeline health | Trace envelope, writer counters/logs | Truncation/drop reasons | H1b fixes terminal consistency; H1c summarizes disabled/drop/expiry/corruption truth |
 
