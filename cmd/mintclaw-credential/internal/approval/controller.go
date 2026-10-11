@@ -568,6 +568,7 @@ func (controller *Controller) clearPending() {
 
 func (controller *Controller) fail() {
 	controller.failed = true
+	controller.authority.Close()
 	controller.authority = nil
 	controller.clearPending()
 }

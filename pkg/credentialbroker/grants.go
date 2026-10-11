@@ -40,9 +40,10 @@ type Grant struct {
 type Authority struct {
 	mu     sync.Mutex
 	policy *Policy
-	grants map[string]Grant
+	grants map[string]*grantLifetime
 	now    func() time.Time
 	random io.Reader
+	closed bool
 }
 
 func NewAuthority(policy *Policy) (*Authority, error) {
@@ -50,7 +51,7 @@ func NewAuthority(policy *Policy) (*Authority, error) {
 		return nil, ErrInvalidPolicy
 	}
 	return &Authority{
-		policy: policy, grants: make(map[string]Grant), now: time.Now, random: rand.Reader,
+		policy: policy, grants: make(map[string]*grantLifetime), now: time.Now, random: rand.Reader,
 	}, nil
 }
 
@@ -60,7 +61,7 @@ func NewAuthority(policy *Policy) (*Authority, error) {
 func (authority *Authority) Approve(approval Approval) (Grant, error) {
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
-	if authority.policy.Revision() == "" || authority.now == nil || authority.random == nil {
+	if authority.closed || authority.policy.Revision() == "" || authority.now == nil || authority.random == nil {
 		return Grant{}, ErrUnavailable
 	}
 	if !validPrincipal(approval.Principal) || approval.PolicyRevision != authority.policy.Revision() ||
@@ -92,7 +93,17 @@ func (authority *Authority) Approve(approval Approval) (Grant, error) {
 		ID: id, Principal: approval.Principal, Accounts: accounts,
 		PolicyRevision: approval.PolicyRevision, IssuedAt: now, ExpiresAt: now.Add(approval.Lifetime),
 	}
-	authority.grants[id] = grant
+	lifetime := &grantLifetime{grant: grant, done: make(chan struct{})}
+	authority.grants[id] = lifetime
+	current := authority.now()
+	delay := grant.ExpiresAt.Sub(current)
+	if current.Before(grant.IssuedAt) {
+		delay = 0
+	}
+	// One timer/channel per bounded grant, shared by all scoped consumers.
+	// The callback retains the generation, so it cannot revoke a replacement
+	// even if a future grant happens to reuse the same random reference.
+	lifetime.timer = time.AfterFunc(delay, func() { authority.expire(id, lifetime) })
 	grant.Accounts = slices.Clone(grant.Accounts)
 	return grant, nil
 }
@@ -102,6 +113,14 @@ func (authority *Authority) Approve(approval Approval) (Grant, error) {
 func (authority *Authority) Authorize(grantID string, request Request) error {
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
+	return authority.authorize(grantID, request)
+}
+
+// authorize requires the authority lock.
+func (authority *Authority) authorize(grantID string, request Request) error {
+	if authority.closed {
+		return ErrUnavailable
+	}
 	if !authority.policy.permits(request) {
 		return ErrDenied
 	}
@@ -109,10 +128,11 @@ func (authority *Authority) Authorize(grantID string, request Request) error {
 		return ErrApprovalRequired
 	}
 	authority.prune(authority.now())
-	grant, exists := authority.grants[grantID]
+	lifetime, exists := authority.grants[grantID]
 	if !exists {
 		return ErrApprovalRequired
 	}
+	grant := lifetime.grant
 	if grant.Principal != request.Principal || grant.PolicyRevision != request.PolicyRevision ||
 		!slices.Contains(grant.Accounts, request.Account) {
 		return ErrDenied
@@ -122,18 +142,22 @@ func (authority *Authority) Authorize(grantID string, request Request) error {
 
 // Revoke requires an authenticated owner identity from the trusted control
 // plane. Once it returns, subsequent Authorize calls cannot use this grant.
-// In-flight execution cancellation is the consumer's separate responsibility.
+// It also closes the shared consumer lease signal. Consumers must cancel
+// in-flight work and quarantine sessions whose outcome cannot be acknowledged.
 func (authority *Authority) Revoke(ownerID, grantID string) error {
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
+	if authority.closed {
+		return ErrUnavailable
+	}
 	if !validIdentifier(ownerID) || !validGrantID(grantID) {
 		return ErrDenied
 	}
-	grant, exists := authority.grants[grantID]
-	if !exists || grant.Principal.OwnerID != ownerID {
+	lifetime, exists := authority.grants[grantID]
+	if !exists || lifetime.grant.Principal.OwnerID != ownerID {
 		return ErrDenied
 	}
-	delete(authority.grants, grantID)
+	authority.invalidate(grantID)
 	return nil
 }
 
@@ -148,19 +172,25 @@ func (authority *Authority) ReplacePolicy(policy *Policy) error {
 	}
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
+	if authority.closed {
+		return ErrUnavailable
+	}
 	if authority.policy.Revision() != policy.Revision() {
 		authority.policy = policy
-		authority.grants = make(map[string]Grant)
+		for id := range authority.grants {
+			authority.invalidate(id)
+		}
 	}
 	return nil
 }
 
 func (authority *Authority) prune(now time.Time) {
-	for id, grant := range authority.grants {
+	for id, lifetime := range authority.grants {
+		grant := lifetime.grant
 		// time.Now retains a monotonic component in production. The lower bound
 		// also fails closed if an injected clock unexpectedly moves backwards.
 		if now.Before(grant.IssuedAt) || !now.Before(grant.ExpiresAt) {
-			delete(authority.grants, id)
+			authority.invalidate(id)
 		}
 	}
 }

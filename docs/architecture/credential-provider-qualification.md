@@ -307,6 +307,35 @@ Require those independent gates and encrypted activation in the next startup
 admission; do not treat these successful file-delivery checks as full CA2
 completion.
 
+## Private consumer lease lifetime
+
+`credentialbroker.GrantLease` binds one authenticated principal, account and
+policy revision to a specific live grant generation. All borrowers share one
+read-only retirement signal and the original deadline. There is one timer and
+channel per grant, bounded by the existing 64-grant limit. Borrowing creates no
+additional timer, renews no approval, and accepts no replacement identity.
+Every operation must compare the current authenticated caller, account and
+revision to the immutable lease and check origin from trusted live browser or
+connector state; a delayed timer cannot authorize an expired grant.
+
+Owner revocation, effective policy replacement, expiration, authority shutdown
+and private controller failure close the signal. Equivalent normalized policy
+preserves it. A retired lease and its expiry callback cannot bind to or revoke
+a later generation even if the random reference is reused. Authority shutdown
+is permanent; a fresh authority starts without grants.
+
+`approval.LoginLease` retains the immutable provider binding from the authorized
+revision. Binding access checks the live lease and origin again; generic
+formatting and serialization disclose neither provider IDs nor lease state.
+It creates no listener, reads no token, calls no SDK and exposes no model tool.
+
+The concrete isolated consumer must watch retirement, cancel work, acknowledge
+termination and quarantine an unknown outcome. It must also enforce current
+frame/element authority and session checks for cookie-backed reads. A lease
+does not undo an already-dispatched private effect or establish process role,
+host confinement, browser sandboxing, or a safe observation projection. Those
+remain mandatory before credential-browser activation.
+
 ## CA2 protected token loader
 
 The unexported loader under `cmd/mintclaw-credential/internal/startup` reads
