@@ -50,6 +50,41 @@ func TestBuildPlan_DefaultAnyUsesLoopbackProbe(t *testing.T) {
 	}
 }
 
+func TestPlanIsLoopbackOnly(t *testing.T) {
+	if (Plan{}).IsLoopbackOnly() {
+		t.Fatal("empty plan claimed private listeners")
+	}
+	for _, test := range []struct {
+		host string
+		mode DefaultMode
+		want bool
+	}{
+		{host: "", mode: DefaultLoopback, want: true},
+		{host: "", mode: DefaultAny},
+		{host: "localhost", want: true},
+		{host: "127.0.0.1", want: true},
+		{host: "127.0.0.2", want: true},
+		{host: "[::1]", want: true},
+		{host: "[::ffff:127.0.0.1]", want: true},
+		{host: "localhost,127.0.0.1,::1", want: true},
+		{host: "*"},
+		{host: "0.0.0.0"},
+		{host: "::"},
+		{host: "127.0.0.1,*"},
+		{host: "localhost,0.0.0.0"},
+		{host: "127.0.0.1,::"},
+		{host: "127.0.0.1,192.0.2.1"},
+		{host: "localhost,example.test"},
+	} {
+		t.Run(test.host+strconv.Itoa(int(test.mode)), func(t *testing.T) {
+			plan, err := BuildPlan(test.host, test.mode)
+			if err != nil || plan.IsLoopbackOnly() != test.want {
+				t.Fatal("listener classification disagrees with binding plan", plan.IsLoopbackOnly(), err)
+			}
+		})
+	}
+}
+
 func TestOpenPlan_LocalhostSupportsLoopbackCommunication(t *testing.T) {
 	hasIPv4, hasIPv6 := DetectIPFamilies()
 

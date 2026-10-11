@@ -43,6 +43,20 @@ type Plan struct {
 	ProbeHost string
 }
 
+// IsLoopbackOnly describes the listeners, not the probe address: wildcard
+// listeners deliberately use a loopback probe without being private binds.
+func (plan Plan) IsLoopbackOnly() bool {
+	if len(plan.groups) == 0 {
+		return false
+	}
+	for _, group := range plan.groups {
+		if group.kind != groupAdaptiveLoopback && (group.kind != groupExact || !IsLoopbackHost(group.exact.host)) {
+			return false
+		}
+	}
+	return true
+}
+
 type OpenResult struct {
 	Listeners []net.Listener
 	BindHosts []string

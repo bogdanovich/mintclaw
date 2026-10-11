@@ -60,7 +60,10 @@ PRIVATE_HOME/
 Use [conversation.template.json](../../evals/profiles/conversation.template.json) as the public configuration shape.
 Replace its workspace/model placeholders, choose an unused loopback port, and configure a scoped HTTP provider
 (`openai`, `anthropic`, or `gemini`). The alias and provider-native model ID are different fields. The included
-provider is a shape example, not a model recommendation. Use native credential configuration; do not put keys in
+provider is a shape example, not a model recommendation. Every configured gateway listener must bind only to
+loopback; wildcard, unspecified, external, and mixed loopback/external listeners are refused before a runtime probe.
+A loopback probe address alone does not prove a private bind. This eval restriction does not change `agent live`.
+Use native credential configuration; do not put keys in
 case manifests, presets, shell arguments, reports, or git. A native security overlay can provide file references:
 
 ```yaml
