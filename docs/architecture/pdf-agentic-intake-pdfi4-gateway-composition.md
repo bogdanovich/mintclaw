@@ -2,7 +2,7 @@
 
 This packet composes the previously inactive protected intake in the gateway. It depends on the private output
 instruction packet [#1521](https://github.com/bogdanovich/mintclaw/pull/1521), now merged, and the independently requalified
-Poppler security pin packet. It is not deployment or qualification
+Poppler security pin packet [#1528](https://github.com/bogdanovich/mintclaw/pull/1528). It is not deployment or qualification
 evidence. The [PDFI4 goal](pdf-agentic-intake-pdfi4-goal.md) remains the completion contract.
 
 ## One Owner And One Model Role
@@ -34,6 +34,9 @@ The normal Linux integration runner and form-agent smoke explicitly select this 
 an unavailable backend must fail rather than turn its absence into successful qualification by skipping.
 Legacy single-field/navigation/approval regressions explicitly opt their scripted fixtures into the still-supported
 legacy API, rather than representing them as tests of the new grouped production behavior. No assertion is removed.
+
+The existing Windows platform job already executes the complete document package. It also runs the portable tool
+intake, private interpreter/coordinator and gateway composition tests; compilation alone is not runtime evidence.
 
 ## Remaining Mandatory Work
 
