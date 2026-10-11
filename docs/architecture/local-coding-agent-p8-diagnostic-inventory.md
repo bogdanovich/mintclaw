@@ -4,9 +4,8 @@ Roadmap packet:
 [H1a — Evidence inventory and correlation tests](local-coding-agent-p8-hardening.md#h1a--evidence-inventory-and-correlation-tests).
 
 Status: H1a baseline with the H1b terminal-truth, model-attempt, tool-call
-generation, async task/delivery, and human-interaction slices implemented. The
-async task/delivery slice is production-qualified; human-interaction production
-qualification is pending.
+generation, async task/delivery, and human-interaction slices implemented and
+production-qualified.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -75,7 +74,7 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    120-second synthesis deadline plus the 30-second delivery window; any
    earlier direct user message is correlated but only the final synthesized
    outbound settles the trace.
-4. **Interactions (implemented; production qualification pending).** Existing
+4. **Interactions (implemented and production-qualified).** Existing
    interaction runtime events now produce bounded `interaction.lifecycle`
    records with exact interaction/event ID, revision, task, originating tool
    call, and prompt/final delivery joins. Events observed while the originating
@@ -294,6 +293,59 @@ session while the child completed, allowing both final deliveries to reach a
 real client. This negative probe is retained as expected transport evidence;
 it was not counted as a successful-delivery qualification.
 
+### Human-interaction production qualification
+
+The human-interaction slice merged through PR #1537 as merge commit
+`3b9caf108bfa8bb2590dd20d7764eacf275088a9` and was deployed from that exact
+merged-main revision on 2026-10-11. The deployment advanced production from
+`2baad0f755c0fc1ac3de48a76b4a25be887cd602`. The checksum-verifiable rollback
+snapshot is `/home/server/mintclaw-core-backup-20261011T110318Z`; its manifest
+contains 32 files and verifies with SHA-256 digest
+`b212dcbd95abe434fb33c14b81bf74044bc4d28064e8622950e86d7511367dba`.
+
+The installed core/CLI, node, and launcher SHA-256 digests are respectively
+`f3004e04632984ba91eb17c495891ef18080da8fa20f668010c74a049cf4cb5c`,
+`4830af8be247aa953033423605d8f0ec2c99768a6cf72054b5bfa217ac358962`, and
+`0053e44aa1fed4453bfc4aea86eea9d3a630c9e1334100979f57b1cd449f06e3`.
+All five active profile configurations loaded successfully; their doctor exit
+code `2` represented existing policy findings rather than a load or schema
+failure. All ten expected services were active, no failed or legacy processes
+were present, launcher and reviewer-webhook probes returned their expected 302
+and 404 responses, and the final ten-minute error-journal scan was empty.
+
+A harmless live canary created interaction
+`interaction_df22b7bad4ab3c844ebd420c79dc1fa2` from `request_user_input` in
+`main-turn-4`. Parent trace `trace-turn-951d81086943e7ab93ab6d48` retained the
+ordered `created`, `prompt_delivery_bound`, and `waiting` lifecycle records and
+then truthfully finalized as suspended. Four immediate one-record continuation
+traces retained the late lifecycle without holding a trace open during the
+human wait:
+
+- `trace-interaction-2d58cc5b6a1cf0f7d55efa14` retained
+  `answer_claimed`;
+- `trace-interaction-8acb83ca5ce116838e408fb1` retained
+  `resume_started`;
+- `trace-interaction-07235d65f80848b6495d31a1` retained
+  `final_delivery_bound`; and
+- `trace-interaction-f55cdc019f937df566c98d45` retained `resolved`.
+
+Every lifecycle record shares the exact interaction and originating tool-call
+IDs. Revisions, event IDs, and sequences advance monotonically from one through
+seven; each continuation envelope links back to `main-turn-4` through
+`metadata.parent_turn_id`. The prompt and final delivery joins resolve to
+outbox intents `out_136dc5d93cdd59e6ef0880ca5e02a465` and
+`out_1698b0ad1a35b3f89c670431080c677c`; both were delivered in one attempt.
+The authoritative registry independently ended at revision and event sequence
+seven with status `resolved`, outcome `answered`, one resume attempt, and no
+resume or failure detail.
+
+All five traces use `redacted_content`, name the configured redactor, report no
+truncation, and contain no question, answer, approval, execution-context, or
+failure-detail payload. A direct stateless probe was excluded from
+qualification because its standalone SSH process did not inherit the gateway
+service's provider-refresh environment; the live gateway canary and passive
+evidence above are the qualifying path.
+
 ## Evidence map
 
 | Path | Authoritative evidence | Passive evidence | H1b/H1c action |
@@ -302,7 +354,7 @@ it was not counted as a successful-delivery qualification.
 | Provider retry/fallback | Runtime provider outcome | Model retry/fallback records | Model-attempt join complete; retain optional provider request ID separately |
 | Tool/process lifecycle | Tool record, process owner | Tool call/result/skip/loop records | Call/generation join complete; keep PID/process details external |
 | Compaction/resume | Coding JSONL, Seahorse, metadata | Context compaction/snapshot | Add attempt/status and bounded repository re-anchor identity |
-| Human interaction | Interaction registry/events | Bounded lifecycle records in the parent trace or immediate late-event continuation | Interaction/event ID, revision, task, tool-call, and delivery joins implemented; production qualification pending |
+| Human interaction | Interaction registry/events | Bounded lifecycle records in the parent trace or immediate late-event continuation | Interaction/event ID, revision, task, tool-call, and delivery joins implemented and production-qualified |
 | Channel/async delivery | Task registry, outbox, channel receipt | Bounded completion continuation with delivery decision/attempt/outcome | Task/generation, completion, tool-generation, parent-turn, and delivery joins implemented and production-qualified |
 | Remote coding task | Task registry, worker ledger/thread | Parent async/delivery evidence | Add task/generation/worker/thread references and terminal uncertainty |
 | Companion capability | Gateway invocation store, node ledger | Node observation as tool result | Retain invocation ID and safe policy/target aliases |
