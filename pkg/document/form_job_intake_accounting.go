@@ -21,6 +21,13 @@ func formIntakeCurrentFindings(input formIntakeStoredInput) []FormFieldMappingBl
 			}
 		}
 		for _, finding := range pass.Outcome.Findings {
+			prior := current[finding.FieldID]
+			if prior != "" && prior != "field_ambiguous" && prior != "field_confirmation_required" &&
+				(finding.Code == "field_ambiguous" || finding.Code == "field_confirmation_required") {
+				// Advice cannot replace a native blocker. Only accepted or
+				// acknowledged evidence above resolves that field's history.
+				continue
+			}
 			current[finding.FieldID] = finding.Code
 		}
 		for _, id := range pass.Outcome.ResolvedGuidanceIDs {

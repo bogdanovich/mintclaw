@@ -27,6 +27,11 @@ mixed facts, scoped dispositions and current uncertainty also remain pending. Se
 does not change revisions or review scope, does not rebind the original receipt and never authorizes commit.
 The existing separate-current-review and final-approval gates remain mandatory.
 
+Review reproduced a three-pass case: a native conflicting correction, later advisory uncertainty for the same field,
+then a finish-only classification of the original text. The latest advisory must not hide unresolved native history.
+Project native blockers through intervening advice until accepted or acknowledged evidence resolves the field. Test
+the actual apply/restart/replay sequence and every native/advisory code combination; do not discard the correction.
+
 ## Architecture Choice And Validation
 
 Prefer this one accounting correction over a new discard-input command, replacement queue, budget reset, widened
@@ -44,3 +49,12 @@ job to execute native `TestFormIntake` tests, not just compile them or exercise 
 Code still requires exact-head CI, actual
 review and authorized merge, then merged deployment and same-job continuation. Broader clarification and I-134
 qualification remain unfinished; this checkpoint does not waive their gates.
+
+## Stateful Rollback
+
+New readers accept old outcomes, but old readers strictly reject the new optional private outcome property after it
+has been written. This is forward readability, not binary-only downgrade compatibility. Before deployment, stop the
+affected gateway and back up the coherent profile, including encrypted form jobs and their profile key, together with
+the previous binaries. Never restore only an old binary against newer job state or automatically overwrite post-deploy
+user facts with the backup. A data rollback requires an explicit comparison and operator decision; preserve the newer
+snapshot for forward recovery. Existing strict decoding fails closed rather than silently dropping resolution state.

@@ -194,6 +194,98 @@ func TestFormIntakeGuidanceResolutionPreservesNativeFindingsAndTheLatestIntent(t
 	}
 }
 
+func TestFormIntakeGuidanceResolutionCannotHideConflictBehindLaterAdvice(t *testing.T) {
+	store, options, start, mode, review := reviewedIntakeFixture(t)
+	text := "Actually change my name to Casey Paper."
+	admitted, err := store.AdmitFormIntakeMessage(t.Context(), intakeMessage(
+		start, mode.ModeID, review.Job.Revision, "unresolved-correction", text,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict := reserveIntakeApply(t, store, start, admitted.Receipt, admitted.Job.Revision, []int{0}, "conflict")
+	conflict.Proposals = []FormIntakeProposal{intakeProposal(start.Schema, 0, "Casey Paper")}
+	blocked, err := store.ApplyFormIntakePass(t.Context(), conflict)
+	if err != nil || blocked.Consumed || len(blocked.Findings) != 1 ||
+		blocked.Findings[0].Code != "field_conflicting" {
+		t.Fatalf("correction without evidence was not blocked: %v", err)
+	}
+	advice := reserveIntakeApply(t, store, start, admitted.Receipt, blocked.Job.Revision, []int{0}, "advice")
+	advice.Intent = FormIntakeIntentClarify
+	advice.Findings = []FormFieldMappingBlocker{
+		{FieldID: start.Schema.Fields[0].ID, Code: "field_confirmation_required"},
+	}
+	advised, err := store.ApplyFormIntakePass(t.Context(), advice)
+	if err != nil || advised.Consumed {
+		t.Fatal("intervening advice consumed the correction")
+	}
+	finish := reserveIntakeApply(t, store, start, admitted.Receipt, advised.Job.Revision, []int{0}, "finish")
+	finish.Intent, finish.NonData = FormIntakeIntentFinish, []FormIntakeLiteral{intakeLiteral(text)}
+	result, err := store.ApplyFormIntakePass(t.Context(), finish)
+	if err != nil || result.Consumed || result.Progress.PendingInputs != 1 ||
+		result.Job.LedgerRevision != review.Job.LedgerRevision || result.Job.Revision != review.Job.Revision ||
+		result.Job.Fields[0].EventID != review.Job.Fields[0].EventID {
+		t.Fatalf("finish discarded an unresolved correction: consumed=%v pending=%d err=%v",
+			result.Consumed, result.Progress.PendingInputs, err)
+	}
+	store.Close()
+	store, err = OpenFormJobStore(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	input, err := store.ReadFormIntakeInput(t.Context(), admitted.Receipt, start.Owner)
+	if err != nil || input.Text != text || input.Consumed || len(input.Findings) != 1 ||
+		input.Findings[0].Code != "field_conflicting" {
+		t.Fatal("restart lost the original protected correction or native blocker")
+	}
+	replay, err := store.ApplyFormIntakePass(t.Context(), finish)
+	if err != nil || !replay.Reused || replay.Consumed || replay.Progress.PendingInputs != 1 {
+		t.Fatal("replay discarded the unresolved correction")
+	}
+}
+
+func TestFormIntakeGuidanceResolutionPreservesNativeHistoryUntilPositiveResolution(t *testing.T) {
+	for _, native := range []string{"field_invalid", "field_conflicting", "field_unsupported", "field_unresolved"} {
+		for _, advisory := range []string{"field_ambiguous", "field_confirmation_required"} {
+			t.Run(native+"/"+advisory, func(t *testing.T) {
+				input := formIntakeStoredInput{
+					State: formIntakeInputCommitted, Text: "Finish this PDF",
+					Accounted: []formIntakeSpan{{Start: 0, End: len("Finish this PDF")}},
+					Reservations: []formIntakeStoredPass{
+						{Outcome: &formIntakeStoredOutcome{
+							Findings: []FormFieldMappingBlocker{{FieldID: "field_one", Code: native}},
+						}},
+						{Outcome: &formIntakeStoredOutcome{
+							Findings: []FormFieldMappingBlocker{{FieldID: "field_one", Code: advisory}},
+						}},
+						{CandidateIDs: []string{"field_one"}, Outcome: &formIntakeStoredOutcome{
+							Intent: FormIntakeIntentFinish,
+						}},
+					},
+				}
+				findings := formIntakeCurrentFindings(input)
+				if len(findings) != 1 || findings[0].Code != native ||
+					len(formIntakeResolvedGuidanceIDs(input, input.Reservations[2])) != 0 {
+					t.Fatal("advisory projection hid unresolved native history")
+				}
+				for _, acknowledged := range []bool{false, true} {
+					outcome := &formIntakeStoredOutcome{AcceptedIDs: []string{"field_one"}}
+					if acknowledged {
+						outcome.AcceptedIDs, outcome.AcknowledgedIDs = nil, []string{"field_one"}
+					}
+					resolved := input
+					resolved.Reservations = append(append([]formIntakeStoredPass{}, input.Reservations...),
+						formIntakeStoredPass{Outcome: outcome})
+					if len(formIntakeCurrentFindings(resolved)) != 0 {
+						t.Fatal("positive field resolution failed to clear native history")
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestFormIntakeGuidanceResolutionSurvivesAnotherWindowAndRestart(t *testing.T) {
 	store, options := newTestFormJobStore(t)
 	start := intakeApplyFixture(t, store, intakeTextSchema())
