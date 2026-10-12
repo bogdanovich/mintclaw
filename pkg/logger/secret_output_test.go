@@ -15,8 +15,12 @@ import (
 
 func TestRuntimeCredentialGuardAppliesBeforeConsoleAndFileFanout(t *testing.T) {
 	for name, value := range map[string]string{
-		"html":    "logger-canary-91&\"secret",
-		"control": "logger-canary-92&\x00secret",
+		"html":          "logger-canary-91&\"secret",
+		"control":       "logger-canary-92&\x00secret",
+		"boolean true":  "true",
+		"boolean false": "false",
+		"null":          "null",
+		"number":        "913487",
 	} {
 		t.Run(name, func(t *testing.T) { testCredentialLogFanout(t, value) })
 	}
@@ -55,6 +59,13 @@ func testCredentialLogFanout(t *testing.T, value string) {
 	if marshalErr != nil {
 		t.Fatal("nested JSON fixture unavailable")
 	}
+	var primitive any
+	if json.Unmarshal([]byte(value), &primitive) == nil {
+		embedded, marshalErr = json.Marshal(map[string]any{"detail": value, "primitive": primitive})
+		if marshalErr != nil {
+			t.Fatal("nested primitive fixture unavailable")
+		}
+	}
 	InfoCF("credentials", "login finished", map[string]any{
 		"alias": "ebay", "outcome": "failed", "detail": value,
 		"nested":   map[string]string{"note": base64.StdEncoding.EncodeToString([]byte(value))},
@@ -89,9 +100,12 @@ func testCredentialLogFanout(t *testing.T, value string) {
 			t.Fatal("JSON-encoded log field exposed a registered value")
 		}
 		response, ok := record["response"].(string)
-		var inner map[string]string
+		var inner map[string]any
 		if !ok || json.Unmarshal([]byte(response), &inner) != nil || inner["detail"] != secretvalues.Marker {
 			t.Fatal("JSON nested inside a log string exposed a registered value")
+		}
+		if primitiveValue, exists := inner["primitive"]; exists && primitiveValue != secretvalues.Marker {
+			t.Fatal("nested JSON primitive restored a registered credential")
 		}
 	}
 }
