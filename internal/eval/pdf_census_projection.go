@@ -138,19 +138,18 @@ func (domain *pdfConversation) concludeNativeCensus(ctx context.Context, trial *
 	}
 	source, sourceErr := readPDFNativeFile(prepared.scratch, "source.pdf", maxPDFBytes)
 	defer clear(source)
-	if sourceErr != nil {
-		evidence.Code = "census_source_unavailable"
-		return
-	}
-	unchanged := digest(source) == prepared.item.Case.Fixtures[0].SHA256
-	evidence.SourceUnchanged = &unchanged
-	evidence.Code = "native_idle_unproven"
-	if counts.ForeignChanges != 0 {
-		evidence.Code = "census_scope_changed"
+	evidence.Code = "census_source_unavailable"
+	if sourceErr == nil {
+		unchanged := digest(source) == prepared.item.Case.Fixtures[0].SHA256
+		evidence.SourceUnchanged = &unchanged
+		evidence.Code = "native_idle_unproven"
+		if counts.ForeignChanges != 0 {
+			evidence.Code = "census_scope_changed"
+		}
 	}
 	violation := ""
 	switch {
-	case !unchanged:
+	case evidence.SourceUnchanged != nil && !*evidence.SourceUnchanged:
 		violation = "source_changed"
 	case len(beforeProjection.writes) != 0 || beforeProjection.ownedIntents != 0:
 		violation = "preexisting_trial_effects"

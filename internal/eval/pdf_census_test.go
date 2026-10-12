@@ -197,6 +197,8 @@ func TestPDFNativeCensusObservesRealMetadataWithoutGrantingQualification(t *test
 func TestPDFNativeCensusRejectsMalformedForeignWriteAndObservedExtraEffects(t *testing.T) {
 	for _, mode := range []string{
 		"malformed-foreign", "extra-write", "forbidden-write", "source-changed", "preexisting", "extra-delivery",
+		"missing-source", "extra-write-missing-source", "forbidden-write-missing-source",
+		"preexisting-missing-source", "extra-delivery-missing-source",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			domain, settled := settledPDFControl(t)
@@ -219,7 +221,7 @@ func TestPDFNativeCensusRejectsMalformedForeignWriteAndObservedExtraEffects(t *t
 					t.Fatal(err)
 				}
 				wanted = Inconclusive
-			case "extra-write":
+			case "extra-write", "extra-write-missing-source":
 				record := settled.operation
 				record.OperationID = "document_write_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 				// Accept an independent native operation, not a hand-written transition.
@@ -235,11 +237,11 @@ func TestPDFNativeCensusRejectsMalformedForeignWriteAndObservedExtraEffects(t *t
 				); err != nil {
 					t.Fatal(err)
 				}
-			case "forbidden-write":
+			case "forbidden-write", "forbidden-write-missing-source":
 				pdf := *domain.prepared.item.Case.PDF
 				pdf.Output = "forbidden"
 				domain.prepared.item.Case.PDF = &pdf
-			case "extra-delivery":
+			case "extra-delivery", "extra-delivery-missing-source":
 				intent, makeErr := outbox.NewMediaIntent(domain.prepared.workspace, outbox.Identity{
 					SourceID:   "extra-native-receipt",
 					Channel:    "mintclaw",
@@ -275,17 +277,36 @@ func TestPDFNativeCensusRejectsMalformedForeignWriteAndObservedExtraEffects(t *t
 				if err != nil {
 					t.Fatal(err)
 				}
-			case "preexisting":
+			case "preexisting", "preexisting-missing-source":
 				domain.prepared.census = nil
 				if err = domain.prepared.beginNativeCensus(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			case "missing-source":
+				wanted = Inconclusive
+			}
+			if strings.HasSuffix(mode, "missing-source") {
+				if err = domain.prepared.scratch.Remove("source.pdf"); err != nil {
 					t.Fatal(err)
 				}
 			}
 			trial := Trial{PDF: &PDFTrialEvidence{}, SessionKey: domain.owner.RouteSessionKey, Verdict: Inconclusive}
 			domain.concludeNativeCensus(t.Context(), &trial)
 			if trial.Verdict != wanted || trial.EvidenceEligible || trial.PDF.Census == nil ||
-				wanted == Inconclusive && trial.PDF.Census.Counts != nil {
+				mode == "malformed-foreign" && trial.PDF.Census.Counts != nil {
 				t.Fatal("invalid foreign evidence or extra native effects were qualified", trial.PDF.Census)
+			}
+			missingSourceCodes := map[string]string{
+				"missing-source":                 "census_source_unavailable",
+				"extra-write-missing-source":     "multiple_document_writes",
+				"forbidden-write-missing-source": "unexpected_document_write",
+				"preexisting-missing-source":     "preexisting_trial_effects",
+				"extra-delivery-missing-source":  "multiple_document_deliveries",
+			}
+			if code, missing := missingSourceCodes[mode]; missing &&
+				(trial.PDF.Census.Code != code || trial.PDF.Census.SourceUnchanged != nil ||
+					trial.PDF.Census.Counts == nil) {
+				t.Fatal("unknown source hid native violations or became invented source evidence", trial.PDF.Census)
 			}
 		})
 	}
