@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -29,6 +30,10 @@ func (cfg *Config) ValidateCredentials() error {
 		filepath.Clean(c.StateDirectory) != c.StateDirectory || len(c.Accounts) == 0 {
 		return errors.New("credential approval configuration is invalid")
 	}
+	state, err := resolveCredentialPath(c.StateDirectory)
+	if err != nil {
+		return errors.New("credential state directory is invalid")
+	}
 	workspaces := []string{cfg.WorkspacePath()}
 	for _, agent := range cfg.Agents.List {
 		if agent.Workspace != "" {
@@ -36,11 +41,11 @@ func (cfg *Config) ValidateCredentials() error {
 		}
 	}
 	for _, workspace := range workspaces {
-		absolute, err := filepath.Abs(fileutil.ExpandHome(workspace))
+		absolute, err := resolveCredentialPath(fileutil.ExpandHome(workspace))
 		if err != nil {
 			return errors.New("credential state directory is invalid")
 		}
-		relative, err := filepath.Rel(absolute, c.StateDirectory)
+		relative, err := filepath.Rel(absolute, state)
 		if err != nil || relative == "." ||
 			(relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
 			return errors.New("credential state must be outside agent workspaces")
@@ -61,4 +66,37 @@ func (cfg *Config) ValidateCredentials() error {
 		}
 	}
 	return nil
+}
+
+// Resolve existing ancestors before comparing containment. Missing tail
+// components are retained so private setup can validate a directory before
+// creating it. Existing broken links or other resolution errors deny setup.
+// The directory tree is operator-controlled under the trusted-host model.
+func resolveCredentialPath(path string) (string, error) {
+	current, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	var missing []string
+	for {
+		resolved, resolveErr := filepath.EvalSymlinks(current)
+		if resolveErr == nil {
+			for index := len(missing) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missing[index])
+			}
+			return resolved, nil
+		}
+		if !errors.Is(resolveErr, os.ErrNotExist) {
+			return "", resolveErr
+		}
+		if _, statErr := os.Lstat(current); !errors.Is(statErr, os.ErrNotExist) {
+			return "", resolveErr
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", resolveErr
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }

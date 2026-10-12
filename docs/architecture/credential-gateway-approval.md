@@ -49,6 +49,10 @@ prevents two controllers from writing concurrently; file and directory sync
 acknowledge authenticator updates before grant issuance. Ordinary private home
 directories are supported on Linux and macOS; Root-owned ancestry and a
 dedicated service identity are unnecessary under the current trust model.
+Containment resolves existing filesystem ancestors of both state and workspace
+paths, including intermediate symlinks and directories not yet created. Broken
+or otherwise unresolvable aliases fail validation. The tree remains controlled
+by the trusted operator; this adds no privileged-host isolation requirement.
 On Linux the store rejects additional POSIX ACLs. On macOS setup must choose an
 unshared directory without extra ACL grants; the portable runtime checks
 ownership and POSIX permissions, rather than claiming macOS ACL verification.
