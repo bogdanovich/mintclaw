@@ -17,6 +17,7 @@ authority facts. It is a test-only artifact; runtime code never reads it.
 | Shared attachment store | Immutable content-addressed blob bytes | Active, recoverable-trash and fork-quarantine references protect blobs. Separate explicit GC removes only old, unreferenced blobs. |
 | Worktree owner | Allocation/handoff registry and isolated checkout | Separate conservative cleanup checks Git state and effects; thread purge has no worktree-cleanup authority. |
 | Gateway and companion | Task generations, interaction registry, outbox, invocation/worker ledgers, remote thread | Each owner retains its own terminal/recovery evidence. Deleting a local thread does not erase a remote task or receipt. |
+| Configured diagnostic store | Relative overrides and absolute shared trace directories | Separate age/count/byte policy applies. Only paths nested below recognized thread entries participate in automatic thread-root removal; custom top-level names fail closed. |
 | User/operator | Model recents, config/auth, journals, prior support exports | Recents retain at most ten identities. Credentials, service logs and exported copies have separate removal/revocation policies. |
 | Frontend/process | Picker/search/render views and pending paste/attachment drafts | In-memory views are bounded. Draft lifecycle releases temporary payloads; crash leftovers require inspection by their owner. |
 | Project/external service | Source files, Git objects/refs, published commits, deployment/install effects | Their own lifecycle applies. Thread deletion cannot undo these effects. |
@@ -34,6 +35,14 @@ Support bundles default to metadata, omit unrelated traces and credentials,
 hash path/project identities, and declare truncation or missing evidence.
 Rich redacted exports remain sensitive and require explicit selection. See
 [diagnostic support bundles](../operations/diagnostic-support-bundles.md).
+
+An absolute `diagnostics.trace_capture.state_dir` can select a shared store
+outside the thread root; its traces remain governed by that store's retention
+policy after thread purge. A relative override stays inside the thread, but an
+unrecognized top-level directory causes delete/purge to refuse ownership.
+Inspect that state and relocate only verified thread-owned data below the
+standard `diagnostics` directory before retrying. Never delete a shared
+directory as a workaround for an ownership refusal.
 Telemetry does not add source-content export by default; provider requests
 still contain the admitted task context needed to execute the user's task.
 
@@ -44,6 +53,15 @@ root. Repeating the exact ID with `--confirm` takes the writer lease,
 revalidates ownership/project boundaries, and atomically moves the root into
 `coding/trash/threads/<trash-id>`. It removes the thread from the active
 catalogue. A post-move durability error reports the recovery destination.
+
+On Windows, cross-directory rename requires closing the contained writer
+file. The operation retires its one-shot writer lease only after acquiring
+the existing catalogue admission gate, and keeps that gate through move and
+durability checks. Native writer admission cannot observe an unlocked active
+thread during this handoff. A failed Windows publication attempt consumes the
+lease; a later explicit retry must acquire a fresh one. NT rename uses a pinned
+destination-directory handle and a simple leaf name, as required by the
+[Windows rename contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information).
 
 Active canonical threads remain retained until explicitly deleted. Archiving
 only changes visibility. Neither startup nor resume silently expires history.

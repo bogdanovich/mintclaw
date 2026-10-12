@@ -240,6 +240,18 @@
       "project_authority": false
     },
     {
+      "id": "catalog_and_maintenance_locks",
+      "owner": "coding_store",
+      "scope": "store",
+      "locations": ["coding/catalog.lock", "coding/attachment-maintenance"],
+      "description": "Store-wide writer admission and attachment maintenance coordination; OS locks, not persisted owner records, grant authority.",
+      "privacy": "operational_metadata",
+      "export_class": "excluded",
+      "retention": "Fixed lock files with bounded owner records; lock authority releases normally or on process exit.",
+      "deletion": "operator_owned",
+      "project_authority": false
+    },
+    {
       "id": "model_recents",
       "owner": "coding_model_picker",
       "scope": "user",
@@ -294,6 +306,21 @@
       "privacy": "private_content",
       "export_class": "metadata_safe",
       "retention": "separate bounded owner policies; gateway terminal task default 168 hours; never deleted by local thread purge",
+      "deletion": "separate_owner_policy",
+      "project_authority": false
+    },
+    {
+      "id": "diagnostic_state_overrides",
+      "owner": "diagnostic_store",
+      "scope": "configured",
+      "locations": [
+        "coding/threads/<thread-id>/<configured-relative-trace-state-dir>",
+        "configured absolute diagnostic state directory"
+      ],
+      "description": "Explicit trace state overrides: shared absolute stores retain a separate owner; unrecognized relative top-level directories make thread deletion fail closed.",
+      "privacy": "private_content",
+      "export_class": "metadata_safe",
+      "retention": "Separate age/count/byte bounds (24-hour generic default). Relative overrides under recognized thread entries also follow thread trash/purge; custom top-level entries require ownership inspection.",
       "deletion": "separate_owner_policy",
       "project_authority": false
     },

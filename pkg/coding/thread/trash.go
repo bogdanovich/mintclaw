@@ -232,9 +232,27 @@ func (s *Store) TrashThread(
 		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
 			return maintenanceErr
 		}
-		// Reuse the anchored no-replace publication primitive. Its Windows
-		// implementation moves directories while their shared-delete writer
-		// handle remains open; a trash move must never replace another root.
+		writerIdentity, identityErr := lease.file.Stat()
+		if identityErr != nil {
+			return identityErr
+		}
+		renameGate, gateErr := s.acquireThreadTrashRenameGate(lease)
+		if gateErr != nil {
+			return gateErr
+		}
+		defer func() {
+			gateReleaseErr := releaseCatalogLease(renameGate)
+			if gateReleaseErr == nil {
+				return
+			}
+			if result.TrashID != "" {
+				operationErr = &CommittedTrashError{Result: result, Err: errors.Join(operationErr, gateReleaseErr)}
+				return
+			}
+			operationErr = errors.Join(operationErr, gateReleaseErr)
+		}()
+		// A trash move must never replace another root. Windows consumes the
+		// writer lease under the catalog gate; other platforms retain it.
 		if err := s.renameReservation(
 			root,
 			filepath.Join("threads", threadID),
@@ -245,7 +263,7 @@ func (s *Store) TrashThread(
 			// destination before classifying this as a preparation failure.
 			moved, pinErr := openPinnedAttachmentChild(root, filepath.Join("trash", "threads", trashID))
 			if pinErr == nil {
-				leaseErr := validatePinnedAttachmentLease(moved, lease)
+				leaseErr := validateMovedThreadTrashWriter(moved, writerIdentity)
 				_ = moved.Close()
 				if leaseErr == nil {
 					result = TrashResult{ThreadID: threadID, TrashID: trashID, Path: destination, At: at}
@@ -271,6 +289,29 @@ func (s *Store) TrashThread(
 
 func newThreadTrashID(threadID string, at time.Time) string {
 	return fmt.Sprintf("%s-%s-%s", threadID, at.UTC().Format(threadTrashTimeLayout), uuid.NewString())
+}
+
+func validateMovedThreadTrashWriter(root *os.Root, writerIdentity os.FileInfo) error {
+	entry, err := root.Lstat(leaseFileName)
+	if err != nil {
+		return err
+	}
+	if entry.Mode()&os.ModeSymlink != 0 || !entry.Mode().IsRegular() || !os.SameFile(entry, writerIdentity) {
+		return fmt.Errorf("coding thread delete: destination does not identify the retired writer file")
+	}
+	file, err := root.OpenFile(leaseFileName, os.O_RDONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	opened, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(entry, opened) || !os.SameFile(opened, writerIdentity) {
+		return fmt.Errorf("coding thread delete: destination writer file changed while opening")
+	}
+	return validateCatalogMetadataFile(file, opened)
 }
 
 func ensureDirectTrashDirectory(root *os.Root, name string) error {

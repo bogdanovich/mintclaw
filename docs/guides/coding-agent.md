@@ -328,7 +328,9 @@ mintclaw threads gc --older-than 24h --confirm delete-unreferenced-blobs --json
 ```
 
 Thread deletion cannot revoke prior exports or remove service logs, remote
-task ledgers, credentials or worktree checkouts. The
+task ledgers, credentials, worktree checkouts or a configured shared absolute
+diagnostic directory. A custom relative trace directory with an unrecognized
+top-level name requires ownership inspection before thread deletion. The
 [state ownership and retention audit](../architecture/local-coding-agent-p8-state-lifecycle.md)
 lists those separate owners. For an incident, keep the relevant evidence
 until the investigation is complete and use a

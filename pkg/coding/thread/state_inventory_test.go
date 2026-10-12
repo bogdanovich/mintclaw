@@ -93,8 +93,10 @@ func TestCodingStateOwnershipInventoryContract(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"shared_attachment_blobs", "fork_and_gc_quarantine", "model_recents", "config_and_credentials",
-		"worktree_allocation", "gateway_and_companion_ledgers", "service_logs_and_support_exports",
+		"shared_attachment_blobs", "fork_and_gc_quarantine", "catalog_and_maintenance_locks",
+		"model_recents", "config_and_credentials",
+		"worktree_allocation", "gateway_and_companion_ledgers", "diagnostic_state_overrides",
+		"service_logs_and_support_exports",
 		"transient_views_and_drafts", "project_git_and_external_effects",
 	} {
 		if !seen[required] {

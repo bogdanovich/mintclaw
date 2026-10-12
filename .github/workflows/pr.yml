@@ -521,7 +521,7 @@ jobs:
       - name: Run Windows coding thread and lock tests
         run: >-
           go test -tags goolm,stdjson -count=1
-          -run '^(TestThreadLease|TestWindowsThreadLease|TestTrashThread|TestPurgeThreadTrash|TestCodingStateOwnershipInventoryContract|TestAttachment(Maintenance|Inflight|GarbageCollectionDoesNotRecoverLiveQuarantine))'
+          -run '^(TestThreadLease|TestWindowsThread(Lease|Trash)|TestTrashThread|TestPurgeThreadTrash|TestCodingStateOwnershipInventoryContract|TestAttachment(Maintenance|Inflight|GarbageCollectionDoesNotRecoverLiveQuarantine))'
           ./pkg/coding/thread
 
       - name: Qualify Windows headless coding
