@@ -192,6 +192,11 @@ jobs:
           ./internal/credentialipc
           ./cmd/mintclaw-credential/...
 
+      - name: Run private browser credential race regressions
+        run: >-
+          go test -count=1 -race -tags goolm,stdjson
+          -run '^Test(Credential|PrivateCredential)' ./pkg/browser
+
   platform_compile:
     name: Compile ${{ matrix.name }}
     runs-on: ubuntu-latest

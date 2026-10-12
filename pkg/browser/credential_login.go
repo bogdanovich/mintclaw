@@ -154,7 +154,7 @@ func (broker *Broker) LoginCredential(
 	defer func() { cancel(); <-watchDone }()
 	attempted := false
 	outcome := credentialDriverResult{}
-	err = consume(operationCtx, func(username, password []byte) error {
+	consumeValues := func(username, password []byte) error {
 		if bound.check(operationCtx, fields.Origin) != nil {
 			return errCredentialDriver
 		}
@@ -172,7 +172,13 @@ func (broker *Broker) LoginCredential(
 		var submitErr error
 		outcome, submitErr = driver.submitCredential(operationCtx, id, username, password)
 		return submitErr
-	})
+	}
+	// Preparation may await browser work while approval changes. This check
+	// must precede retrieval itself, not only the callback after retrieval.
+	err = bound.check(operationCtx, fields.Origin)
+	if err == nil {
+		err = consume(operationCtx, consumeValues)
+	}
 	if err != nil || bound.check(ctx, fields.Origin) != nil ||
 		(outcome.code != "logged_in" && outcome.code != "handoff_required") {
 		if attempted {

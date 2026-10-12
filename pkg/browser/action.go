@@ -1260,8 +1260,17 @@ func (broker *Broker) actionSessionLocked(
 	if slot == nil {
 		return Session{}, nil, nil, ErrWorkerUnavailable
 	}
-	if slot.credentials != nil && slot.credentials.check(ctx, session.SnapshotOrigin) != nil {
-		return Session{}, nil, nil, ErrDenied
+	if slot.credentials != nil {
+		origin := session.SnapshotOrigin
+		if origin == "" {
+			// An ordinary action invalidates the snapshot. Admission still
+			// checks its original grant; publishing the fresh observation
+			// independently checks the live observed origin.
+			origin = slot.credentials.request.Origin
+		}
+		if slot.credentials.check(ctx, origin) != nil {
+			return Session{}, nil, nil, ErrDenied
+		}
 	}
 	if slot.safeFailure != "" {
 		return Session{}, nil, nil, ErrWorkerUnavailable

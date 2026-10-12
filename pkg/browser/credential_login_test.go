@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -73,7 +74,7 @@ func credentialBrokerFixture(t *testing.T) (
 		"browser_run_code_unsafe": playwrightTextResult(`### Result
 "MINTCLAW_NAV_V1|ok|frame|loader|1"`),
 	}
-	worker := &playwrightWorker{client: client}
+	worker := &playwrightWorker{client: client, limits: broker.config.Limits.Effective()}
 	navigation, err := worker.NavigationIdentity(t.Context())
 	if err != nil {
 		t.Fatal("browser navigation fixture unavailable")
@@ -156,6 +157,56 @@ func TestCredentialRevocationDuringRetrievalNeverInjects(t *testing.T) {
 		})
 	if result.Outcome != "denied" || client.submitted != 0 || client.discarded != 1 {
 		t.Fatal("revoked credential retrieval was allowed to inject")
+	}
+}
+
+func TestCredentialRevocationDuringPreparationNeverRetrieves(t *testing.T) {
+	broker, request, client, authority, lease, grantID := credentialBrokerFixture(t)
+	client.afterPrepare = func() {
+		if authority.Revoke(request.Principal.OwnerID, grantID) != nil {
+			t.Fatal("preparation revocation fixture failed")
+		}
+	}
+	retrieved := false
+	result := broker.LoginCredential(t.Context(), request, lease,
+		func(context.Context, func([]byte, []byte) error) error { retrieved = true; return nil })
+	if result.Outcome != "denied" || retrieved || client.submitted != 0 || client.discarded != 1 {
+		t.Fatal("revocation during preparation reached vault retrieval or retained a capsule")
+	}
+}
+
+func TestCredentialSessionCanObserveAfterSnapshotInvalidationAndChecksLiveOrigin(t *testing.T) {
+	for _, origin := range []string{"https://example.com", "https://other.example.org"} {
+		t.Run(origin, func(t *testing.T) {
+			broker, request, client, _, lease, _ := credentialBrokerFixture(t)
+			result := broker.LoginCredential(t.Context(), request, lease,
+				func(_ context.Context, use func([]byte, []byte) error) error {
+					return use([]byte("observe-account-fixture"), []byte("observe-password-fixture"))
+				})
+			if result.Outcome != "logged_in" {
+				t.Fatal("credential observation fixture login failed")
+			}
+			client.callResults["browser_snapshot"] = playwrightTextResult(
+				"### Page\n- Page URL: " + origin + "/home\n" +
+					"- Page Title: Fixture\n### Snapshot\n```yaml\n- heading \"Ready\"\n```",
+			)
+			broker.mu.Lock()
+			err := broker.invalidateSnapshotLocked(t.Context(), request.SessionID, "")
+			broker.mu.Unlock()
+			if err != nil {
+				t.Fatal("ordinary action snapshot invalidation failed")
+			}
+			observation, err := broker.ObserveContext(t.Context(), ObserveRequest{
+				Owner: request.Owner, SessionID: request.SessionID, TabID: request.TabID,
+			})
+			if origin == "https://example.com" {
+				if err != nil || observation.SnapshotID == "" || observation.Origin != origin {
+					t.Fatal("authenticated session could not publish a fresh observation after an action")
+				}
+			} else if !errors.Is(err, ErrDenied) || observation.SnapshotID != "" {
+				t.Fatal("replacement observation bypassed the live credential origin check")
+			}
+		})
 	}
 }
 
