@@ -18,7 +18,8 @@ import (
 var version = "dev"
 
 var errUsage = errors.New(
-	"usage: mintclaw-credential <provision|enroll|serve-approval|version>; " + "token arguments are not accepted",
+	"usage: mintclaw-credential <provision|enroll|serve-approval|serve-resources|version>; " +
+		"token arguments are not accepted",
 )
 
 func main() {
@@ -55,6 +56,8 @@ func execute(ctx context.Context, args []string, output io.Writer) error {
 		return startup.ServeApproval(ctx)
 	case "bootstrap-browser":
 		return supervision.BootstrapBrowser(ctx)
+	case "serve-resources":
+		return supervision.ServeResources(ctx)
 	default:
 		return errUsage
 	}

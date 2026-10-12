@@ -25,9 +25,28 @@ import (
 // This executable stands in for Node only in the disposable fixture. The same
 // real nsenter/bwrap/setpriv/bootstrap path is exercised before this entry.
 func TestMain(tests *testing.M) {
+	if len(os.Args) == 2 && os.Args[1] == "resource-packet-handoff" {
+		file := os.NewFile(3, "synthetic handed-off packet")
+		connection, err := net.FileConn(file)
+		if err != nil {
+			os.Exit(2)
+		}
+		packet, ok := connection.(*net.UnixConn)
+		if !ok {
+			os.Exit(2)
+		}
+		if _, _, err := packet.WriteMsgUnix([]byte{1, 0}, nil, nil); err != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
+	if len(os.Args) == 4 && os.Args[1] == "resource-broker" {
+		os.Exit(syntheticResourceBroker(os.Args[2], os.Args[3]))
+	}
 	if len(os.Args) == 2 && os.Args[1] == "bootstrap-browser" {
 		_ = BootstrapBrowser(context.Background())
-		os.Exit(2)
+		_, _ = unix.Write(3, []byte{90}) // Fixed fixture-only pre-Node failure witness.
+		os.Exit(90)
 	}
 	if len(os.Args) == 2 && os.Args[1] == "launcher-denied" {
 		if launcher, err := OpenLauncher(context.Background()); launcher != nil || !errors.Is(err, errUnavailable) {
@@ -36,7 +55,11 @@ func TestMain(tests *testing.M) {
 		os.Exit(0)
 	}
 	if len(os.Args) == 2 && os.Args[1] == "/"+runtimeimage.WorkerPath {
-		os.Exit(syntheticNode())
+		result := syntheticNode()
+		if result != 0 {
+			_, _ = unix.Write(3, []byte{80}) // Fixed fixture-only Node failure witness.
+		}
+		os.Exit(result)
 	}
 	os.Exit(tests.Run())
 }

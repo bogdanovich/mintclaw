@@ -1,5 +1,12 @@
 # Credential Phone Approval Verifier Qualification
 
+> Historical component record from the superseded isolated-runtime design.
+> The operator-approved [trusted-runtime design](credential-trusted-runtime-design.md)
+> and [current roadmap](credential-access-roadmap.md) govern new work.
+> Separate-host, VM, Root-helper, service-role, and process/network isolation
+> requirements below are no longer deployment or rollout gates. Reusable
+> component behavior and its exact qualification evidence remain recorded here.
+
 Candidate qualification dated 2026-10-10 for CA3 of the
 [credential access roadmap](credential-access-roadmap.md). This records build
 evidence and required caller behavior. It does not admit a control endpoint,

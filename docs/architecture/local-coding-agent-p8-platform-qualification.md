@@ -1,0 +1,83 @@
+# Local Coding Agent P8 Platform Qualification
+
+Parent plan:
+[P8 hardening and stable release](local-coding-agent-p8-hardening.md).
+
+Status: qualification contract implemented; exact merge and CI evidence is
+recorded by the H3 exit update after the code packet merges.
+
+## Supported release matrix
+
+MintClaw distinguishes an emitted release artifact from a fully qualified
+interactive coding environment. The stable release configuration emits only
+these tuples:
+
+| Artifact | OS | Architecture | Qualification |
+| --- | --- | --- | --- |
+| `mintclaw`, `mintclaw-launcher` | Linux | AMD64 | Build, native tests, interactive TUI, process trees, paths, locks, worktrees |
+| `mintclaw`, `mintclaw-launcher` | Linux | ARM64 | Cross-build; headless runtime expected, hardware-specific TUI behavior not claimed |
+| `mintclaw`, `mintclaw-launcher` | Linux | ARMv7 | Cross-build; headless runtime expected, hardware-specific TUI behavior not claimed |
+| `mintclaw`, `mintclaw-launcher` | macOS | ARM64 | Build, native tests, interactive TUI, process trees, paths, locks, worktrees |
+| `mintclaw`, `mintclaw-launcher` | macOS | AMD64 | Cross-build; platform-sensitive native coding CI currently runs on macOS ARM64 |
+| `mintclaw`, `mintclaw-launcher` | Windows | AMD64 | Build and native headless coding, path, lock, worktree, and Job Object process-tree tests |
+| `mintclaw-node` | Linux | AMD64, ARM64 | Build; use requires an explicitly admitted companion target/profile |
+| `mintclaw-node` | macOS | AMD64, ARM64 | Build; use requires an explicitly admitted companion target/profile |
+| container images | Linux | AMD64, ARM64 | Headless gateway/runtime image |
+
+FreeBSD, NetBSD, Windows ARM64, Linux ARMv6, RISC-V, LoongArch, and S390X are
+not stable release tuples. Developers can experiment with source builds, but
+MintClaw does not publish or imply support without a future focused admission.
+
+## Terminal and shell contract
+
+The interactive coding TUI is stable on Linux and macOS terminals. Its
+qualification reuses the TUI.15 contract and adds native CI coverage for:
+
+- ordinary inline rendering with native scrollback;
+- temporary alternate-screen ownership for overlays;
+- TTY and non-TTY selection, `TERM=dumb`, and no-color fallback;
+- SSH-shaped and tmux environments, narrow geometry, resize/reflow, bracketed
+  paste, Unicode grapheme width, and completed long output;
+- interruption while work is active, signal/error/panic exits, and terminal
+  restoration before controller shutdown; and
+- launch from Bash and Zsh on Unix-like hosts.
+
+Windows AMD64 is a stable native headless coding target. PowerShell launch,
+plain/JSON output, durable threads, worktrees, and worker process containment
+are qualified. A native Windows interactive PTY is not yet claimed; operators
+should use `mintclaw code exec`, `mintclaw resume exec`, or WSL when they need
+the interactive Unix terminal experience.
+
+## Filesystem and process contract
+
+Platform jobs exercise canonical project identity, owner-only thread locks,
+lease recovery, isolated Git worktrees, and owned descendant termination.
+Linux and macOS use process groups. Windows uses a suspended process assigned
+to a kill-on-close Job Object before it is resumed. Cancellation must settle
+without an owned orphan process on every admitted native execution path.
+
+Coding remote IPC and paired-node coding remain Linux/macOS capabilities.
+Windows compilation or headless local coding does not silently admit a Windows
+companion, Unix-domain socket emulation, privileged helper, or interactive PTY.
+
+## CI and release evidence
+
+Pull requests compile the complete tagged Go test graph for every emitted
+binary tuple, including both Darwin architectures. Native macOS and Windows
+jobs run the platform-sensitive contracts above; Linux runs the complete test,
+race, integration, and interactive PTY suites. Nightly and tagged releases use
+the same narrowed GoReleaser and container matrices.
+
+The H3 exit update must cite the exact PR head and merge commit, the complete
+required check run, and a GoReleaser snapshot build from that exact source. H6
+then rechecks the same release path as part of the integrated production exit.
+
+## Residual limits
+
+- Cross-compilation proves build compatibility, not device-specific terminal,
+  memory, kernel, filesystem, or service-manager behavior.
+- Windows interactive PTY and Windows companions are not stable features.
+- ARMv7 receives a core archive but no companion archive or container image.
+- Privileged execution is governed by P7.7 profiles and platform-specific
+  helpers; release availability never grants authority.
+- Community hardware reports do not change this support matrix.
