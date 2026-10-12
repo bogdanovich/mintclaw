@@ -41,3 +41,22 @@ func TestRuntimeCredentialsAreRemovedFromUnclassifiedTraceData(t *testing.T) {
 		}
 	}
 }
+
+func TestNestedJSONTraceTextIsGuardedBeforePreviewTruncation(t *testing.T) {
+	const value = "nested-trace-fixture-A\"B"
+	release, err := secretvalues.Register([]byte(value))
+	if err != nil {
+		t.Fatal("credential guard unavailable")
+	}
+	defer release()
+	payload, _ := json.Marshal(map[string]string{"detail": value})
+	for range 3 {
+		payload, _ = json.Marshal(map[string]string{"nested": string(payload)})
+	}
+	for _, maximum := range []int{64, 4096} {
+		preview := (Redactor{}).RedactText(string(payload), maximum)
+		if strings.Contains(preview, "nested-trace-fixture") {
+			t.Fatal("nested JSON trace preview exposed credential content")
+		}
+	}
+}

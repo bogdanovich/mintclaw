@@ -51,12 +51,21 @@ func testCredentialLogFanout(t *testing.T, value string) {
 	if EnableFileLogging(path) != nil {
 		t.Fatal("private test log unavailable")
 	}
+	embedded, marshalErr := json.Marshal(map[string]string{"detail": value})
+	if marshalErr != nil {
+		t.Fatal("nested JSON fixture unavailable")
+	}
 	InfoCF("credentials", "login finished", map[string]any{
 		"alias": "ebay", "outcome": "failed", "detail": value,
-		"nested": map[string]string{"note": base64.StdEncoding.EncodeToString([]byte(value))},
+		"nested":   map[string]string{"note": base64.StdEncoding.EncodeToString([]byte(value))},
+		"response": string(embedded),
 	})
 	SetTimeFormat(defaultTimeFormat)
-	InfoCF("credentials", "second record", map[string]any{"alias": "ebay", "detail": value})
+	InfoCF(
+		"credentials",
+		"second record",
+		map[string]any{"alias": "ebay", "detail": value, "response": string(embedded)},
+	)
 	DisableFileLogging()
 	data, readErr := os.ReadFile(path)
 	if readErr != nil {
@@ -78,6 +87,11 @@ func testCredentialLogFanout(t *testing.T, value string) {
 		}
 		if record["detail"] != secretvalues.Marker {
 			t.Fatal("JSON-encoded log field exposed a registered value")
+		}
+		response, ok := record["response"].(string)
+		var inner map[string]string
+		if !ok || json.Unmarshal([]byte(response), &inner) != nil || inner["detail"] != secretvalues.Marker {
+			t.Fatal("JSON nested inside a log string exposed a registered value")
 		}
 	}
 }

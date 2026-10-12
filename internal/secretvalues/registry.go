@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"html"
+	"io"
 	"net/url"
 	"sort"
 	"strconv"
@@ -161,7 +162,25 @@ func Redact(text string) string { return runtimeValues.redact(text) }
 
 func (r *registry) redact(text string) string {
 	if snapshot := r.snapshot.Load(); snapshot != nil && text != "" {
-		return snapshot.Replace(text)
+		filtered := snapshot.Replace(text)
+		trimmed := strings.TrimSpace(text)
+		if filtered != Marker && trimmed != "" && strings.ContainsRune(`{["`, rune(trimmed[0])) {
+			if len(text) > 1024*1024 {
+				return Marker
+			}
+			if value, ok := decodeRecordJSON(text); ok {
+				budget := 10000
+				projected, changed := redactRecordValue(value, snapshot, 0, &budget)
+				if changed {
+					encoded, err := json.Marshal(projected)
+					if err != nil {
+						return Marker
+					}
+					return string(encoded)
+				}
+			}
+		}
+		return filtered
 	}
 	return text
 }
@@ -170,16 +189,91 @@ func (r *registry) redact(text string) string {
 // or structural occurrence would break valid JSON, suppress the entire record
 // rather than writing the original value or emitting malformed diagnostics.
 func RedactRecord(data []byte) []byte {
-	if runtimeValues.snapshot.Load() == nil {
+	snapshot := runtimeValues.snapshot.Load()
+	if snapshot == nil {
 		return data
 	}
-	filtered := Redact(string(data))
-	if filtered == string(data) {
-		return data
+	const suppressed = "{\"level\":\"warn\",\"component\":\"credentials\",\"message\":\"log record redacted\"}\n"
+	filtered := []byte(snapshot.Replace(string(data)))
+	if !json.Valid(data) {
+		return filtered
 	}
-	result := []byte(filtered)
-	if json.Valid(data) && !json.Valid(result) {
-		return []byte("{\"level\":\"warn\",\"component\":\"credentials\",\"message\":\"log record redacted\"}\n")
+	if len(data) > 1024*1024 || !json.Valid(filtered) {
+		return []byte(suppressed)
+	}
+	value, ok := decodeRecordJSON(string(data))
+	if !ok {
+		return []byte(suppressed)
+	}
+	budget := 10000
+	value, changed := redactRecordValue(value, snapshot, 0, &budget)
+	if !changed {
+		return filtered
+	}
+	result, err := json.Marshal(value)
+	if err != nil {
+		return []byte(suppressed)
+	}
+	if bytes.HasSuffix(data, []byte{'\n'}) {
+		result = append(result, '\n')
 	}
 	return result
+}
+
+func decodeRecordJSON(text string) (any, bool) {
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	var value any
+	if decoder.Decode(&value) != nil || decoder.Decode(new(any)) != io.EOF {
+		return nil, false
+	}
+	return value, true
+}
+
+// Decode string fields before matching so ordinary JSON-inside-JSON logging
+// does not hide a credential behind another escaping layer. Bound traversal
+// and suppress over-deep payloads rather than leaving them uninspected.
+func redactRecordValue(value any, snapshot *strings.Replacer, depth int, budget *int) (any, bool) {
+	*budget--
+	if depth >= 16 || *budget < 0 {
+		return Marker, true
+	}
+	switch typed := value.(type) {
+	case string:
+		if decoded, ok := decodeRecordJSON(typed); ok {
+			nested, changed := redactRecordValue(decoded, snapshot, depth+1, budget)
+			if changed {
+				encoded, err := json.Marshal(nested)
+				if err != nil {
+					return Marker, true
+				}
+				return string(encoded), true
+			}
+		}
+		filtered := snapshot.Replace(typed)
+		return filtered, filtered != typed
+	case map[string]any:
+		changed := false
+		result := make(map[string]any, len(typed))
+		for key, child := range typed {
+			filteredKey := snapshot.Replace(key)
+			filteredChild, childChanged := redactRecordValue(child, snapshot, depth+1, budget)
+			result[filteredKey] = filteredChild
+			changed = changed || childChanged || filteredKey != key
+		}
+		return result, changed
+	case []any:
+		changed := false
+		for index, child := range typed {
+			filtered, childChanged := redactRecordValue(child, snapshot, depth+1, budget)
+			typed[index] = filtered
+			changed = changed || childChanged
+		}
+		return typed, changed
+	case json.Number:
+		if snapshot.Replace(string(typed)) != string(typed) {
+			return Marker, true
+		}
+	}
+	return value, false
 }
