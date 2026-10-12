@@ -48,7 +48,7 @@ var (
 	playwrightSnapshotRefToken  = regexp.MustCompile(`\[ref=`)
 	playwrightSnapshotTargetRef = regexp.MustCompile(`\[ref=(` + playwrightTargetExpression + `)\]`)
 	playwrightElementPattern    = regexp.MustCompile(
-		`(?m)^\s*-\s+([A-Za-z][A-Za-z0-9_-]*)(?:\s+"([^"]*)")?[^\n]*\[ref=(` +
+		`(?m)^\s*-\s+([A-Za-z][A-Za-z0-9_-]*)(?:\s+"((?:\\.|[^"\\])*)")?[^\n]*\[ref=(` +
 			playwrightTargetExpression + `)\]`,
 	)
 	playwrightDialogPattern = regexp.MustCompile(
@@ -2562,7 +2562,11 @@ func parsePlaywrightObservation(
 	if err != nil {
 		return DriverObservation{}, err
 	}
-	elements := parsePlaywrightElements(projected)
+	encoding := extractPlaywrightLine(text[:start-len(marker)], "- Snapshot encoding: ")
+	if encoding != "" && encoding != "json-names-v1" {
+		return DriverObservation{}, ErrDriverIncompatible
+	}
+	elements := parsePlaywrightElements(projected, encoding == "json-names-v1")
 	var evidence navigationEvidence
 	if raw := extractPlaywrightLine(text[:start-len(marker)], "- Navigation evidence: "); raw != "" {
 		if len(raw) > 256 || json.Unmarshal([]byte(raw), &evidence) != nil || !evidence.valid() {
@@ -2704,11 +2708,17 @@ func validPlaywrightSnapshotTail(lines []string) bool {
 	return true
 }
 
-func parsePlaywrightElements(snapshot string) []DriverElement {
+func parsePlaywrightElements(snapshot string, jsonNames bool) []DriverElement {
 	semantics := make(map[string]DriverElement)
 	for _, match := range playwrightElementPattern.FindAllStringSubmatch(snapshot, -1) {
+		name := match[2]
+		if jsonNames {
+			if decoded, err := strconv.Unquote(`"` + name + `"`); err == nil {
+				name = decoded
+			}
+		}
 		semantics[match[3]] = DriverElement{
-			Target: match[3], Role: strings.ToLower(match[1]), Name: match[2],
+			Target: match[3], Role: strings.ToLower(match[1]), Name: name,
 		}
 	}
 	seen := make(map[string]struct{})

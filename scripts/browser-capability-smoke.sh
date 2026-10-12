@@ -4,7 +4,7 @@ set -eu
 
 usage() {
 	cat >&2 <<'EOF'
-usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|click-recovery|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff> --json-output <path> [options]
+usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff> --json-output <path> [options]
 
 Options:
   --gateway-host <ssh-host>  Run the live client on the gateway over SSH.
@@ -106,7 +106,7 @@ if [ "${#profile}" -gt 64 ]; then
 	exit 2
 fi
 case "$suite" in
-core|click-recovery|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff) ;;
+core|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff) ;;
 *)
 	echo "unsupported browser smoke suite" >&2
 	exit 2
@@ -318,6 +318,12 @@ ephemeral-cleanup)
 	stage_two=ephemeral-verify
 	stage_two_checks='cookie_removed, local_storage_removed, cache_removed, service_worker_removed'
 	stage_two_workflow="Open the verification session with the same target and profile and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check, call browser_observe until it shows cookie=false, local_storage=false, cache=false, and service_worker=false, and close this session."
+	;;
+semantic-observation)
+	stage_one=semantic-observation
+	stage_one_checks='initial_blank, map_context_preserved, decorative_images_not_product_photos, gallery_context_preserved, unlabeled_image_evidence, exact_gallery_control, gallery_open_verified, map_unchanged'
+	stage_one_workflow="Open one session and observe about:blank. Navigate to ${fixture_origin}/browser-smoke/map-only and observe fresh state. Verify a Location map region containing a Full Screen button, with six decorative DOM images in map context and no product gallery or product-photo evidence. Do not count these as listing photos. Navigate to ${fixture_origin}/browser-smoke/gallery and observe fresh state. Verify separate Location map and Product gallery regions, each with a Full Screen button. Verify two gallery images from context, including the unlabeled Front view image in DOM image evidence. Click exactly the Full Screen control inside Product gallery with effect=local_edit using its exact fresh reference, never the map button. Observe fresh state and require GALLERY_OPEN and MAP_INLINE together. Input dispatch alone is not gallery success. Use only browser_targets, browser_session, browser_observe and browser_act; do not use browser_execute or name-based selector workarounds. Keep the same session throughout and close it exactly once."
+	stage_two=""
 	;;
 click-recovery)
 	stage_one=click-recovery
@@ -532,6 +538,11 @@ if [ -n "$prompt_two" ]; then
 fi
 run_live "$cleanup_prompt" "$cleanup_json" false || true
 
+if [ "$suite" = semantic-observation ]; then
+	"$python_command" "$helper" semantic-probe --origin "$fixture_origin" \
+		--output "$smoke_root/semantic-oracle.json"
+fi
+
 stop_pid "$fixture_pid"
 fixture_pid=""
 
@@ -542,6 +553,9 @@ set -- "$helper" report \
 	--live-json "$live_one_json"
 if [ -n "$prompt_two" ]; then
 	set -- "$@" --live-json "$live_two_json"
+fi
+if [ "$suite" = semantic-observation ]; then
+	set -- "$@" --semantic-oracle "$smoke_root/semantic-oracle.json"
 fi
 set -- "$@" \
 	--cleanup-json "$cleanup_json" \

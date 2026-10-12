@@ -1751,6 +1751,8 @@ func (*BrowserObserveTool) RuntimeCapabilities() []runtimecap.CapabilityID {
 
 func (*BrowserObserveTool) Description() string {
 	return "Observe the current page as a bounded accessibility snapshot with scoped element references and optionally retain a PNG screenshot. " +
+		"Preserve surrounding semantic context: DOM images can be decorative, maps, unloaded, or unrelated to the requested content. " +
+		"Do not report raw image counts as product-photo counts or a successful fullscreen click as gallery completion; verify the requested outcome in fresh state, using a screenshot when ambiguous. " +
 		"Before repeating a collection search, verify that its scope can contain the target: inactive, expired, deleted, or historical items require all, old, history, or archive views. " +
 		"After one empty or mismatched search, widen scope; when the snapshot is truncated, ambiguous, or follows a no-progress action, request one bounded screenshot."
 }
@@ -2395,6 +2397,7 @@ func (*BrowserActTool) Description() string {
 		"confirmation=request, and always_commit pauses external_commit or unknown actions plus explicit requests. " +
 		"For non-click actions, omit effect; a redundant value is ignored because the broker derives the fixed effect. " +
 		"Classify from the user request and runtime objective checklist, not from the element role or HTTP method. " +
+		"A succeeded action confirms input dispatch, not the requested outcome; verify fresh page state before claiming completion. " +
 		"Use external_commit immediately before an important external state change such as publishing, submitting an order, " +
 		"sending, deleting, or replying; use navigation for ordinary page/tab/form-step transitions. " +
 		"For top-level navigate, copy the session, tab, snapshot, and snapshot generation from one fresh " +

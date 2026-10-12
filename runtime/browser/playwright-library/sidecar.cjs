@@ -16,7 +16,7 @@ const { chromium, firefox, webkit } = require('playwright');
 
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const MAX_ERROR_BYTES = 2048;
-const REF_ATTRIBUTE = 'data-mintclaw-playwright-ref';
+const MAX_IMAGE_EVIDENCE = 32;
 
 const SPECIAL_IPV4_PREFIXES = [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
@@ -259,85 +259,68 @@ function sameWritableSemantics(before, after) {
     before.type === after.type && before.role === after.role && before.name === after.name;
 }
 
-function snapshotFrameScript({ prefix, target, attribute }) {
-  const prior = document.querySelectorAll(`[${attribute}]`);
-  for (const element of prior) element.removeAttribute(attribute);
-  const visible = element => {
-    const style = getComputedStyle(element);
-    const box = element.getBoundingClientRect();
-    return element.isConnected && style.display !== 'none' && style.visibility !== 'hidden' &&
-      box.width > 0 && box.height > 0;
-  };
-  const name = element => {
-    const labelledBy = String(element.getAttribute('aria-labelledby') || '').trim();
-    if (labelledBy) {
-      const labels = labelledBy.split(/\s+/).map(id => document.getElementById(id))
-        .filter(Boolean).map(label => label.textContent || '').join(' ').trim();
-      if (labels) return labels;
-    }
-    const ariaLabel = element.getAttribute('aria-label');
-    if (ariaLabel) return ariaLabel;
-    if (element.labels && element.labels.length) {
-      const labels = Array.from(element.labels).map(label => label.textContent || '').join(' ').trim();
-      if (labels) return labels;
-    }
-    return element.getAttribute('alt') ||
-      element.getAttribute('placeholder') || element.getAttribute('title') ||
-      element.getAttribute('value') || element.textContent || '';
-  };
-  const implicitRole = element => {
-    const explicit = String(element.getAttribute('role') || '').trim().toLowerCase();
-    if (explicit) return explicit.split(/\s+/)[0];
-    const tag = element.tagName.toLowerCase();
-    if (tag === 'a' && element.hasAttribute('href')) return 'link';
-    if (tag === 'button' || tag === 'summary') return 'button';
-    if (tag === 'textarea') return 'textbox';
-    if (tag === 'select') return element.multiple ? 'listbox' : 'combobox';
-    if (tag === 'option') return 'option';
-    if (tag === 'img') return 'img';
-    if (/^h[1-6]$/.test(tag)) return 'heading';
-    if (tag === 'li') return 'listitem';
-    if (tag === 'input') {
-      const type = String(element.type || 'text').toLowerCase();
-      if (type === 'checkbox') return 'checkbox';
-      if (type === 'radio') return 'radio';
-      if (['button', 'submit', 'reset', 'image'].includes(type)) return 'button';
-      if (type === 'range') return 'slider';
-      if (type === 'number') return 'spinbutton';
-      if (type === 'file') return 'button';
-      if (type !== 'hidden') return 'textbox';
-    }
-    if (element.isContentEditable) return 'textbox';
-    return '';
-  };
-  const clean = value => String(value || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ')
-    .trim().slice(0, 512).replace(/"/g, "'");
+function snapshotString(value) {
+  // Page-authored text is never a reference token in the private wire format.
+  return JSON.stringify(String(value)).replace(/\[ref=/g, '\\u005bref=');
+}
+
+function renderAriaNodes(nodes, indent = '') {
   const lines = [];
-  const elements = Array.from(document.querySelectorAll('*')).slice(0, 12000);
-  let next = 1;
-  for (const element of elements) {
-    if (!visible(element)) continue;
-    const role = implicitRole(element);
-    if (!role) continue;
-    const ref = prefix + 'e' + next++;
-    element.setAttribute(attribute, ref);
-    if (target && target !== ref) continue;
-    const label = clean(name(element));
-    const state = [];
-    if (element.disabled || element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true') state.push('disabled');
-    if (element.checked || element.getAttribute('aria-checked') === 'true') state.push('checked');
-    let value = '';
-    if (['input', 'textarea', 'select'].includes(element.tagName.toLowerCase()) &&
-        String(element.type || '').toLowerCase() !== 'password') {
-      value = clean(element.value);
+  for (const node of nodes) {
+    if (typeof node === 'string') {
+      lines.push(`${indent}- text: ${snapshotString(node)}`);
+      continue;
     }
-    lines.push(`- ${role}${label ? ` "${label}"` : ''}${state.length ? ` [${state.join(', ')}]` : ''} [ref=${ref}]${value ? `: ${value}` : ''}`);
-  }
-  if (!target) {
-    const bodyText = clean(document.body && document.body.innerText || '');
-    if (bodyText) lines.push(`- text: "${bodyText.slice(0, 4096)}"`);
+    // Only serialize semantics supplied by Playwright. Do not reconstruct
+    // roles, accessible names, or element bindings from HTML tags or captions.
+    let line = `${indent}- ${node.role}`;
+    if (node.name) line += ` ${snapshotString(node.name)}`;
+    for (const state of ['checked', 'disabled', 'expanded', 'active', 'invalid', 'level', 'pressed', 'selected']) {
+      if (node[state] !== undefined) {
+        line += node[state] === true ? ` [${state}]` : ` [${state}=${node[state]}]`;
+      }
+    }
+    if (node.ref) line += ` [ref=${node.ref}]`;
+    if (node.cursor) line += ` [cursor=${node.cursor}]`;
+    if (node.text) line += `: ${snapshotString(node.text)}`;
+    else if (node.children && node.children.length) line += ':';
+    lines.push(line);
+    if (node.url) lines.push(`${indent}  - /url: ${snapshotString(node.url)}`);
+    if (node.placeholder) lines.push(`${indent}  - /placeholder: ${snapshotString(node.placeholder)}`);
+    if (node.children) lines.push(...renderAriaNodes(node.children, indent + '  '));
   }
   return lines;
+}
+
+function imageEvidenceScript(root, maximum) {
+  const clean = value => String(value || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  const images = [...(root.matches('img') ? [root] : []), ...root.querySelectorAll('img')];
+  const items = images.slice(0, maximum).map((image, index) => {
+    const box = image.getBoundingClientRect();
+    const rendered = image.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
+      box.width > 0 && box.height > 0;
+    const inViewport = rendered && box.right > 0 && box.bottom > 0 &&
+      box.left < innerWidth && box.top < innerHeight;
+    const x = Math.max(0, Math.min(innerWidth - 1, box.left + box.width / 2));
+    const y = Math.max(0, Math.min(innerHeight - 1, box.top + box.height / 2));
+    const hit = inViewport ? document.elementFromPoint(x, y) : null;
+    const context = [];
+    for (let ancestor = image.parentElement; ancestor && context.length < 3; ancestor = ancestor.parentElement) {
+      const label = ancestor.getAttribute('aria-label');
+      const caption = ancestor.tagName === 'FIGURE' && ancestor.querySelector('figcaption');
+      if (label) context.push(clean(label));
+      else if (caption) context.push(clean(caption.textContent));
+    }
+    let sourceOrigin = '';
+    try { sourceOrigin = new URL(image.currentSrc || image.src, document.baseURI).origin; } catch (_) {}
+    return {
+      index: index + 1, alt: clean(image.getAttribute('alt')), context,
+      source_origin: sourceOrigin, loaded: image.complete && image.naturalWidth > 0,
+      natural_width: image.naturalWidth, natural_height: image.naturalHeight,
+      rendered, in_viewport: inViewport, receives_pointer: inViewport ? hit === image || image.contains(hit) : null,
+    };
+  });
+  return { scope: 'frame_light_dom', dom_image_count: images.length, omitted: images.length - items.length, items };
 }
 
 class Driver {
@@ -534,36 +517,14 @@ class Driver {
     if (!/^(?:f[1-9][0-9]{0,9})?e[1-9][0-9]{0,9}$/.test(ref)) {
       throw new Error('invalid element reference');
     }
-    for (const frame of this.selectedPage().frames()) {
-      const locator = frame.locator(`[${REF_ATTRIBUTE}="${ref}"]`);
-      // Locator resolution is lazy, so returning every-frame candidates would
-      // require a composite locator. Snapshot prefixes make the frame exact.
-      if (!ref.startsWith('f') && frame === this.selectedPage().mainFrame()) return locator;
-      if (ref.startsWith('f') && frame !== this.selectedPage().mainFrame()) {
-        const index = this.selectedPage().frames().filter(item => item !== this.selectedPage().mainFrame()).indexOf(frame) + 1;
-        if (ref.startsWith(`f${index}e`)) return locator;
-      }
-    }
-    return this.selectedPage().locator(`[${REF_ATTRIBUTE}="${ref}"]`);
+    return this.selectedPage().locator(`aria-ref=${ref}`);
   }
 
   async runCode(fn) {
     const page = this.selectedPage();
-    const driver = this;
-    const ownLocator = Object.getOwnPropertyDescriptor(page, 'locator');
-    const nativeLocator = page.locator.bind(page);
-    Object.defineProperty(page, 'locator', {
-      configurable: true,
-      value(selector, options) {
-        const match = /^aria-ref=(.+)$/.exec(String(selector));
-        return match ? driver.locatorFor(match[1]) : nativeLocator(selector, options);
-      },
-    });
     try {
       return await fn(page);
     } finally {
-      if (ownLocator) Object.defineProperty(page, 'locator', ownLocator);
-      else delete page.locator;
       if (page.isClosed()) {
         const remaining = this.context.pages();
         if (remaining.length) {
@@ -581,25 +542,49 @@ class Driver {
     if (page.url() === 'about:blank') {
       return '- Page URL: about:blank\n- Page Title: \n### Snapshot\n```yaml\n\n```';
     }
-    const frames = page.frames();
-    const lines = [];
-    let child = 0;
-    for (const frame of frames) {
-      const prefix = frame === page.mainFrame() ? '' : `f${++child}`;
-      try {
-        const frameLines = await frame.evaluate(snapshotFrameScript, {
-          prefix, target, attribute: REF_ATTRIBUTE,
-        });
-        if (frame !== page.mainFrame() && frameLines.length) {
-          lines.push(`- iframe "${quoteName(frame.name())}"`);
-          lines.push(...frameLines.map(line => `  ${line}`));
-        } else {
-          lines.push(...frameLines);
+    const scope = target ? this.locatorFor(target) : page;
+    const tree = await scope.ariaSnapshotJSON({ mode: 'ai' });
+    const redactPasswords = async nodes => {
+      for (const node of nodes) {
+        if (typeof node === 'string') continue;
+        if (node.ref && node.text) {
+          const password = await this.locatorFor(node.ref).evaluate(element =>
+            element.tagName === 'INPUT' && element.type === 'password');
+          if (password) delete node.text;
         }
-      } catch (_) {
-        if (frame === page.mainFrame()) throw _;
+        if (node.children) await redactPasswords(node.children);
+      }
+    };
+    await redactPasswords(tree);
+    const lines = renderAriaNodes(tree);
+    // Unlabelled images can be meaningful even when intentionally absent from
+    // ARIA. Keep a bounded, non-actionable inventory without inventing img
+    // roles, product-photo counts, gallery controls, or new reference authority.
+    const inventories = [];
+    if (target) {
+      inventories.push(await scope.evaluate(imageEvidenceScript, MAX_IMAGE_EVIDENCE));
+    } else {
+      let remaining = MAX_IMAGE_EVIDENCE;
+      const frames = page.frames();
+      for (const frame of frames.slice(0, 8)) {
+        try {
+          const inventory = await frame.locator('body,frameset').evaluate(imageEvidenceScript, remaining);
+          remaining -= inventory.items.length;
+          inventories.push(inventory);
+        } catch (error) {
+          if (frame === page.mainFrame()) throw error;
+          inventories.push({ unavailable: true });
+        }
+      }
+      if (frames.length > 8) inventories.push({ omitted_frames: frames.length - 8 });
+    }
+    if (inventories.some(item => item.dom_image_count || item.unavailable || item.omitted_frames)) {
+      lines.push('- text: "DOM image evidence is not a product-photo or gallery count. Verify context and visual content; pointer dispatch alone does not confirm the requested outcome."');
+      for (const [frame, inventory] of inventories.entries()) {
+        lines.push(`- text: ${snapshotString('DOM image evidence ' + JSON.stringify({ frame_index: frame, ...inventory }))}`);
       }
     }
+    if (!lines.length) lines.push('- text: "No accessible content"');
     const title = quoteName(await page.title());
     const response = this.navigationResponses.get(page);
     const sameDocument = response && response.url.split('#')[0] === page.url().split('#')[0];
@@ -620,7 +605,7 @@ class Driver {
         return '';
       });
     }
-    return `- Page URL: ${page.url()}\n- Page Title: ${title}\n- Navigation evidence: ${JSON.stringify(evidence)}\n### Snapshot\n\`\`\`yaml\n${lines.join('\n')}\n\`\`\``;
+    return `- Page URL: ${page.url()}\n- Page Title: ${title}\n- Snapshot encoding: json-names-v1\n- Navigation evidence: ${JSON.stringify(evidence)}\n### Snapshot\n\`\`\`yaml\n${lines.join('\n')}\n\`\`\``;
   }
 
   async call(tool, args) {
