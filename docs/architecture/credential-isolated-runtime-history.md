@@ -1,0 +1,404 @@
+# Historical Isolated Credential Access Roadmap
+
+Historical record, superseded by the operator-approved trusted-runtime design on
+2026-10-11. Its separate-host, VM, Root helper, and adversarial-agent requirements
+are not current deployment or rollout gates. See the current
+[design](credential-trusted-runtime-design.md) and
+[roadmap](credential-access-roadmap.md). Earlier component qualification records
+remain evidence for their exact tested behavior, not proof of the new end-to-end
+implementation.
+
+## Status and outcome
+
+Active implementation roadmap, requested on 2026-10-10. The operator uses
+Android and a personal 1Password account, has created a service account, and
+has a token. The token has not been provisioned to this implementation.
+
+The intended flow is: ask MintClaw to use an account alias, approve a bounded
+grant on the phone, and let a trusted local service log in through the
+first-party browser. The model receives account aliases and safe outcomes;
+passwords, service-account tokens, MFA seeds, and session credentials stay
+outside model requests, tool results, transcripts, traces, and artifacts.
+
+An approval lasts at most 20 hours, can be shorter, and can be revoked. It
+authorizes named accounts for one owner, actor, agent, and execution host under
+one exact policy revision. It does not authorize arbitrary secret retrieval
+or automatically approve purchases, messages, posts, or account changes.
+
+Each milestone is a separate reviewable change. CA0 records the contract;
+CA1 starts its implementation. Later milestones must satisfy their admission
+and qualification gates before real credentials become accessible. Until CA6,
+the capability stays unavailable to production agents.
+
+## Deployment simplicity and first usable release
+
+On 2026-10-11, the operator requested a simpler deployment without a fleet of
+machines or microservices. The delivery target is one credential appliance
+on the existing Mac: one small protected Linux VM, one versioned installation,
+and one operator approval/revoke page. The existing MintClaw gateway makes
+typed requests to this appliance. The Mac launcher, local privileged helper,
+and disposable browser workers are internal process roles with one release
+lifecycle; they are not independently deployed network services.
+
+Keep phone approval, grant policy, the 1Password SDK, and session ownership in
+one credential broker process. Keep the privileged launch helper and browser
+in separate OS roles because they have different permissions. Use local IPC
+for those roles. The appliance supplies its own HTTPS endpoint for phone
+approval and an authenticated typed agent interface; route these on the
+same appliance without adding a separate proxy deployment. Final remote
+caller authentication and routing are still implementation and qualification
+work, not capabilities already provided by the local Unix transport.
+
+1Password remains the only vault. Do not introduce another password database,
+a separate Connect deployment, a queue, Redis, Kubernetes, or a new VPS for
+this feature. The optional notification channel must not become another
+operator-managed service. The first release retains Android approval,
+revocation, and the maximum 20-hour grant; approval is enforced by the broker,
+not by a native 1Password service-account phone-unlock feature.
+
+Prioritize the next work as one complete vertical slice: install and qualify
+the single appliance with synthetic data, connect its actual broker to the
+private browser, qualify physical Android approval, and pilot one selected
+account after the CA6 checks. Opening the approval page directly is sufficient
+for the synthetic integration stage; generic notifications remain required
+for the intended seamless release. Defer CA5 connector implementation and
+additional websites until the first browser pilot works. Do not add more
+standalone foundations unless a concrete defect blocks that slice.
+
+Separate processes on a host already controlled by the agent do not protect
+credentials from that agent's administrative access. The VM is useful only
+when its disk, memory, launch controls, and administration are outside that
+access. A native Mac service under a protected account could avoid a VM, but
+would require new macOS browser/process/network qualification; the current
+Linux implementation does not provide it. The ordinary 1Password extension
+is a simpler manual-login option, but unrestricted inspection or scripting of
+the same credential-bearing browser does not meet this isolation contract.
+
+This revision narrows deployment and delivery order. It neither installs a
+VM nor enables real credentials, and it does not claim the remaining host,
+remote caller, browser, phone, or end-to-end gates have passed.
+
+## Existing foundations
+
+Baseline: `origin/main` at `72a236cbbfee21fc2fc10de6a6a8754b3bc58263`.
+
+- Reuse the first-party browser broker, typed actions, current element
+  authority, exact-origin policy, private Playwright adapters, and existing
+  gateway/companion identity boundaries.
+- Reuse the ephemeral input and durable redaction mechanics admitted by
+  [protected fill](browser-capability-bf1-protected-fill-admission.md).
+  That admission explicitly excludes credential injection. Ordinary fill
+  remains separate: credential values must never pass through model-provided
+  arguments, even transiently.
+- Accessibility snapshots can contain values entered earlier. Protected fill
+  already avoids durable storage of those observations, but this is not a
+  guarantee that the model never sees a password. Credential sessions need a
+  stronger observation boundary.
+- Coordinate with the [Android companion roadmap](android-companion-roadmap.md).
+  A small passkey-authenticated phone approval page can ship without waiting
+  for the full native operator application. It must not create a second
+  general chat, node, or interaction protocol.
+
+## Trust and deployment boundaries
+
+1Password remains the encrypted vault. Use a dedicated MintClaw vault and a
+service account with read access only to that vault. Personal/Private vaults
+cannot be granted to service accounts; copy only selected login items into
+the dedicated vault. Validate the existing account's permissions during
+protected setup rather than assuming the token is suitably scoped.
+
+The service-account token is an unattended credential. A phone approval is
+our service's authorization policy; it is not a native 1Password phone-unlock
+operation. Compromise of the service or its token can bypass that policy.
+
+Run the credential service under an identity separate from the agent runtime.
+Keep its token, private IPC, browser profile, and process memory inaccessible
+to agent shell, file, debugging, and process-control capabilities. Merely
+moving retrieval into a tool in the same unrestricted process is insufficient.
+The gateway routes authenticated, typed requests; it receives no raw secrets.
+
+The operator has proposed reusing `ab@ab-ts`. The
+[Mac-host plan](../security/credential-mac-vm-host-plan.md) records a candidate
+protected Linux VM under a separate macOS service identity, including both
+broker and private browser. A private hardware-fingerprint comparison confirms
+that the gateway can reach this workspace Mac's `ab` account. The original alias
+remains unresolved; complete agent administration reach, VM launcher, protected
+console, and actual isolation remain unqualified.
+No host/account/access change or real-token provisioning is authorized by
+this planning choice alone.
+
+The first credential browser runs locally on an explicitly trusted gateway
+host or companion host, under that isolation boundary. Disable credential
+login for cloud browser providers, attached user profiles, generic JavaScript,
+raw CDP/driver access, arbitrary selectors, cookie exports, and storage-state
+exports. Admit any later expansion through a separate trust decision.
+
+Approved websites necessarily receive their own passwords. Browser scripts,
+the browser host, and 1Password are within the necessary trust boundary.
+Account content the operator asks the agent to read may reach the model; the
+goal protects authentication material, not all authenticated page content.
+Do not claim that substring redaction protects against a malicious site
+encoding a credential into arbitrary page content.
+
+## Authorization contract
+
+- Operator configuration maps aliases to exact 1Password vault/item IDs,
+  exact HTTPS login and credential-entry origins, permitted principals, and
+  explicit login field/flow constraints. No wildcard domains, model-selected
+  secret references, or model-supplied destination endpoints.
+- Reuse `browserpolicy.NormalizePublicOrigin`, require HTTPS, and retain live
+  browser DNS/network enforcement. Origin syntax checks alone do not prevent
+  DNS rebinding, redirects, frame substitution, or stale-element attacks.
+- Derive a revision from the entire normalized authority policy. A change of
+  account binding, origin, principal, host, or login constraints invalidates
+  approvals rather than silently widening an existing grant.
+- Verify actor, agent, host, owner, grant, revision, account, live origin,
+  frame, and element authority before retrieval and immediately before fill.
+  Fail closed on cancellation, expiry, revocation, stale authority, or unknown
+  execution outcome. Do not automatically replay a login after restart.
+- Use cryptographically random grant IDs. IDs alone are not authorization;
+  they remain bound to the authenticated principal and approved account set.
+  Bounded in-memory grants disappear on restart in the first release.
+- Use server time with monotonic elapsed-time enforcement. Approval cannot
+  silently renew a grant. An additional account or changed policy requires a
+  new phone approval. Expired/revoked grants block every operation on their
+  authenticated browser sessions, including reads using existing cookies.
+- Quarantine or destroy credential browser sessions at grant expiry or
+  revocation. Lease checks must occur inside the trusted browser service;
+  gateway-only checks permit a bypass through lower-level browser tools.
+- Remote approval requires an enrolled operator passkey, user verification,
+  an expiring single-use challenge, an exact relying-party origin, and binding
+  to the complete requested scope. A notification link is a locator, never a
+  bearer approval or decryption key. The page displays accounts, host, agent,
+  duration, and a revoke control.
+- A grant approves credential use. Login submission, MFA, external effects,
+  and account changes still obey their respective browser policies. MFA and
+  CAPTCHA may require a human handoff; never export a TOTP seed to the model.
+
+## Delivery sequence
+
+| Milestone | Scope | Depends on | Completion evidence |
+| --- | --- | --- | --- |
+| CA0 | Roadmap and indexed authorization contract | None | Local docs validation; merged documentation PR |
+| CA1 | Immutable account/origin/principal policy and bounded in-memory grants | CA0 | Tested default denial, complete scope binding, exact HTTPS origins, deterministic revisions, expiry, revocation, policy invalidation, concurrent access, restart denial, capacity bounds, and fixed safe errors |
+| CA2 | Isolated credential service, private typed IPC, 1Password adapter, protected provisioning | CA1 | Fake-vault integration tests; token absent from agent environment/files/output; pinned provider dependency; process isolation and deployment checks; safe provider failure handling |
+| CA3 | Android passkey enrollment, approval/revoke page, generic notifications | CA2 | Reviewed WebAuthn library; challenge replay/expiry/origin/user-verification tests; approval bound to exact scope; successful Android remote approval and immediate revocation |
+| CA4 | First-party credential browser login and authenticated-session lease enforcement | CA2, CA3 | Real local browser fixture verifies origin/frame/element freshness, private injection, output restrictions, isolation, no bypass through ordinary browser tools, expiry/revocation of existing sessions, and unknown-outcome quarantine |
+| CA5 | Explicitly scoped non-browser connector operations | CA2, CA3 | One concrete connector operation with host/endpoint/action constraints, private credential injection, bounded safe results, independent effect policy, and adversarial egress tests |
+| CA6 | End-to-end qualification and protected personal pilot | CA4; CA5 only for enabled connectors | Canary-secrets suite passes; phone and isolated-host setup documented and verified; dedicated-vault token provisioned privately; one operator-selected login succeeds without secret material in provider requests or durable outputs |
+
+The [protected approval-service implementation](credential-approval-service.md)
+provides concrete native TLS startup and initial enrollment under a dedicated
+Linux identity. It does not complete CA2 or CA3: real-host isolation, private
+caller/provider wiring, generic notifications, and physical Android
+qualification remain required before credential access is activated.
+
+### CA1: policy and grant foundation
+
+Introduce a small `pkg/credentialbroker` package separate from the existing
+provider API-key encryption store. It contains no password fields, provider
+calls, public endpoints, or model tools. Construct and defensively copy
+operator policy; compute a canonical revision; issue grants only from a
+trusted internal approval entry point; check and revoke them under one
+concurrency boundary. Approval verification is added by CA3, not simulated
+with a model-generated approval boolean.
+
+Keep this merge unit bounded. The package is a policy foundation, not a
+claim that 1Password login or phone notifications already work. Security
+tests cover authority and lifecycle invariants rather than mirroring helper
+implementations.
+
+### CA2: service and 1Password access
+
+Qualify the official Go SDK against MintClaw's build/deployment targets before
+choosing it. If its native dependencies are unsuitable, use an operator-pinned
+`op` executable with bounded private pipes, strict structured parsing,
+timeouts, a controlled environment, and fixed errors. No arbitrary command
+wrapper, free-form `op` arguments, or provider stdout in model results.
+
+Provision the token through an owner-only secret file or OS service credential
+facility using a protected local command. Never request it in chat, put it in
+shell history/argv, commit it, or copy it into the agent environment. Enforce
+file ownership and permissions, document rotation/revocation, and test with
+synthetic credentials before accessing the operator's vault.
+
+The IPC API admits operation intents and aliases, not `get_secret`. Its
+authentication binds caller identity to an operator grant; the caller cannot
+choose another actor or host. Credential-bearing byte buffers stay private
+and short-lived. Avoid claiming guaranteed memory zeroization in Go or
+Playwright. Bound retention and access instead.
+
+### CA3: phone approval
+
+Use an established WebAuthn verifier rather than implementing authentication
+cryptography. Serve a minimal mobile approval/revoke page over HTTPS reachable
+from the Android phone; do not require Bluetooth proximity. Enrollment itself
+requires an authenticated owner setup action and excludes arbitrary visitors.
+
+Send generic notifications through an explicitly configured, authorized
+channel or Web Push. Include no password, service token, unlock key, or bearer
+approval. Notification providers may learn that an approval is pending.
+Reopening a notification cannot replay approval or extend the grant.
+
+### CA4 and CA5: consumers
+
+Define a separately reviewed credential-browser admission before modifying
+the protected fill contract. Prefer a typed login operation using a fresh
+semantic password-field reference and trusted account mapping. Return only
+status, approved alias, safe handoff state, and allowed page observations.
+
+The first [credential browser login admission](credential-browser-login-admission.md)
+limits the consumer to a configured private login and fixed outcomes. General
+page observations and subsequent account operations retain separate admission
+gates. It also records the failed actual-server sandbox launch; that host is
+not qualified for real credentials.
+
+Review all live and durable output paths: accessibility/DOM projections,
+screenshots, console/network diagnostics, browser artifacts, session history,
+coding context, interaction records, provider requests, Seahorse state,
+recovery, and traces. Password reveal controls, hidden inputs, page echoes,
+cookie APIs, and encoded output must exercise the boundary. Do not enable
+general browser execution within a credential-bearing session.
+
+Connector support is operation-specific. Add no generic HTTP request or shell
+operation with secret interpolation. Keep independent external-effect
+approval and scope each connector to its concrete endpoint and action.
+
+### CA6: rollout gate
+
+Begin with a dedicated test account and synthetic canary credentials. Capture
+model-facing payloads and durable stores during success, failure, cancellation,
+restart, and malicious-page cases. Tests must detect raw credentials, common
+encodings, tokens, cookies, and MFA secrets without logging their actual values.
+
+Only after these checks pass, provision the real token privately and ask the
+operator to select the first account alias. Verify Android approval, login,
+expiry, revocation, and reapproval on the actual isolated host. Document
+site-specific MFA/CAPTCHA limits. Add Facebook, Craigslist, or eBay only after
+their individual flow and exact origin rules are qualified. No rollout to the
+entire personal vault.
+
+## Progress record
+
+- CA0: merged in [PR #1511](https://github.com/bogdanovich/mintclaw/pull/1511);
+  `make lint-docs` passed.
+- CA1: merged in [PR #1512](https://github.com/bogdanovich/mintclaw/pull/1512).
+  Targeted policy/grant tests, package race tests, changed-package lint, and all
+  16 GitHub checks passed. The exact-origin review finding was fixed, tested,
+  and cleared on the merged head.
+- CA2: the private provider adapter is merged in
+  [PR #1515](https://github.com/bogdanovich/mintclaw/pull/1515). Full local lint,
+  targeted normal/race tests, and all 16 GitHub checks passed; review found no
+  actionable findings. The agent gateway has no SDK dependency.
+  Process/provisioning qualification is recorded in
+  [PR #1514](https://github.com/bogdanovich/mintclaw/pull/1514), with browser
+  startup requirements in [PR #1519](https://github.com/bogdanovich/mintclaw/pull/1519).
+  The protected Linux provisioning command and disposable real-OS qualification
+  are merged in [PR #1525](https://github.com/bogdanovich/mintclaw/pull/1525);
+  [operator setup](../security/credential-broker-setup.md) records the boundary
+  and remaining gates. [PR #1526](https://github.com/bogdanovich/mintclaw/pull/1526)
+  records the observed host boundary and why that host is not yet qualified.
+  The private intent transport is merged in
+  [PR #1530](https://github.com/bogdanovich/mintclaw/pull/1530). Linux normal/race
+  fixtures exercise identity substitution, descriptor handoff, cancellation,
+  capacity, fixed response projection, and actual CA1 grant IDs. All 16 GitHub
+  checks passed and review found no must-fix issues. It creates no listener or
+  model tool by itself. The qualification record includes a disposable
+  actual-host plaintext credential-delivery probe; encrypted activation,
+  isolated startup, trusted process-role admission, and service wiring remain
+  pending. Provisioning and transport alone enable no agent access.
+  The private startup loader, merged in
+  [PR #1534](https://github.com/bogdanovich/mintclaw/pull/1534), validates effective ACL access, read-only mounts,
+  restricted service identity, bounded token data, and single-use consumption.
+  Its synthetic qualification covers both delivery forms and unsafe
+  role/path/data denial; the executable does not invoke it. Full activation
+  and caller/consumer admission remain required before any real token read.
+  The [existing Mac host plan](../security/credential-mac-vm-host-plan.md)
+  selects a protected Linux VM under a separate macOS service identity as
+  the candidate. Hardware preflight is merged in
+  [PR #1594](https://github.com/bogdanovich/mintclaw/pull/1594), and the
+  [fixed Mac VM package](credential-mac-vm-package.md) in
+  [PR #1607](https://github.com/bogdanovich/mintclaw/pull/1607) adds protected
+  input checks, a signed launcher and disabled service definition. Public
+  Darwin permission fixtures and all 16 CI checks passed; review found no
+  actionable findings. No account, VM, key storage or service was installed.
+  Actual host administration, storage/memory/backups, operator-only setup,
+  guest networking and dedicated-account startup remain unqualified.
+- CA3: [verifier candidate qualification](credential-phone-approval-qualification.md)
+  records build and upstream fixture evidence. The private passkey controller
+  and protected owner-key store, merged in
+  [PR #1539](https://github.com/bogdanovich/mintclaw/pull/1539), implement signed enrollment/approval/revoke
+  verification, scope binding, bounded single-use challenges, policy-transition
+  invalidation, and durable counter updates. The embedded mobile enrollment/approval/revoke
+  page and private root-authenticated enrollment console are merged in
+  [PR #1543](https://github.com/bogdanovich/mintclaw/pull/1543),
+  with bounded exact-origin HTTPS handlers and the protected `enroll` command.
+  Synthetic Linux and actual browser WebAuthn fixtures qualify the software
+  boundary. The protected native approval service in
+  [PR #1566](https://github.com/bogdanovich/mintclaw/pull/1566) adds strict root-owned
+  configuration, native TLS startup, a service-created enrollment console and
+  cancellation/restart qualification under the restricted Linux service role.
+  See [approval service startup](credential-approval-service.md).
+  Actual isolated-host deployment, authorized notifications and physical
+  Android end-to-end qualification remain pending.
+- CA4: the consumer lease foundation, merged in
+  [PR #1549](https://github.com/bogdanovich/mintclaw/pull/1549), binds a private login binding to one
+  live grant generation. Consumers share the original expiry signal; revocation,
+  effective policy change, controller failure and shutdown retire the lease.
+  Every use still checks live origin and current authority. This supplies no
+  browser worker, vault retrieval or model tool. The private browser session
+  implementation in [PR #1555](https://github.com/bogdanovich/mintclaw/pull/1555)
+  adds revision-bound single-page login configuration, immutable
+  lease flow snapshots, guarded DOM injection/submission, fixed outcomes and
+  context retirement. Its routed synthetic fixtures exercise browser behavior;
+  they do not qualify TLS, DNS, redirect transport or complete process/host
+  isolation. The private Go/Node channel connects that consumer to current
+  principal/grant callbacks and the provider's single-use consumption path.
+  It rechecks DOM readiness before and after retrieval, cancels retrieval on
+  retirement, and requires acknowledged close plus verified process termination.
+  Its cross-process fixture uses real CA1 grant lifetimes and a synthetic source;
+  it does not initialize the SDK or enroll a physical phone. See the
+  [private channel contract](credential-browser-private-channel.md).
+  The pinned private HTTPS transport, merged in
+  [PR #1561](https://github.com/bogdanovich/mintclaw/pull/1561), independently checks
+  public DNS destinations, ordinary TLS, current scope and the original lease.
+  The [enforcing browser proxy](credential-browser-enforcing-proxy.md) connects
+  that transport to the private browser and constrains the actual HTTP operation
+  across preparation, injection, submission and outcome navigation; its
+  implementation is merged in
+  [PR #1571](https://github.com/bogdanovich/mintclaw/pull/1571).
+  The [whole-process forest and private network namespace](credential-browser-process-forest.md),
+  [immutable runtime admission](credential-browser-runtime.md), and
+  [fixed Root launcher](credential-browser-root-launcher.md) provide separate
+  process, network, image and role boundaries. Their real Linux fixtures use
+  public synthetic workers and do not qualify an authentic Node/Chromium bundle.
+  The [private resource service](credential-browser-resource-service.md) is
+  merged in [PR #1602](https://github.com/bogdanovich/mintclaw/pull/1602), after
+  the bounded interrupted-poll fix in
+  [PR #1601](https://github.com/bogdanovich/mintclaw/pull/1601). Actual Linux
+  normal/race qualification passed all five lifecycle fixtures and all three
+  packet suites again after retargeting to `main`; all 16 CI checks passed.
+  This transfers only the broker's proxy listener and control stream, starts
+  the fixed worker and requires verified retirement. It creates no approval
+  authority and activates no credential deployment.
+  Protected service wiring, actual startup/network/host qualification,
+  remote human handoff and the personal pilot remain pending.
+- CA5–CA6: pending their dependencies and admission/qualification gates.
+  Runtime credential access remains disabled and no real token is provisioned.
+
+Update this record with PRs, validation, and any narrowed admissions as work
+lands. A milestone completes on demonstrated evidence, not on scaffolding.
+
+## Primary references
+
+- [1Password service-account setup](https://www.1password.dev/service-accounts/get-started)
+  and [security](https://www.1password.dev/service-accounts/security): vault
+  scope, permissions, unattended token handling, rotation, and revocation.
+- [1Password service-account rate limits](https://www.1password.dev/service-accounts/rate-limits):
+  bound retrieval and avoid polling credentials for every browser observation.
+- [Official 1Password Go SDK](https://github.com/1Password/onepassword-sdk-go)
+  and [CLI item operations](https://www.1password.dev/cli/reference/management-commands/item):
+  provider-adapter candidates.
+- [go-webauthn](https://github.com/go-webauthn/webauthn) and
+  [Android passkey environments](https://developers.google.com/identity/passkeys/supported-environments):
+  phone approval implementation candidates and platform constraints.

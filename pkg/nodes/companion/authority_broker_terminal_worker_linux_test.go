@@ -40,8 +40,11 @@ func TestAuthorityBrokerTerminalWorkerInteractiveLifecycle(t *testing.T) {
 		"echo-off-1",
 		"stty -echo; printf '\\145cho-off-ready\\n'\n",
 	)
-	waitForTerminalAck(t, events, 1)
-	waitForTerminalOutput(t, events, "echo-off-ready")
+	readyCtx, cancelReady := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelReady()
+	if err := observeTerminalAckAndOutput(readyCtx, events, 1, "echo-off-ready"); err != nil {
+		t.Fatal(err)
+	}
 	drainTerminalEvents(events)
 
 	controls <- terminalInputControl(2, "input-2", "printf 'terminal-marker\\n'\n")
@@ -329,6 +332,116 @@ func terminalInputControl(sequence uint64, key, input string) TerminalBrokerCont
 		Version: AuthorityBrokerProtocolVersion, Sequence: sequence,
 		IdempotencyKey: key,
 		InputBase64:    base64.StdEncoding.EncodeToString([]byte(input)),
+	}
+}
+
+func TestTerminalWorkerReadinessAcceptsAckAndOutputInEitherOrder(t *testing.T) {
+	for _, outputFirst := range []bool{true, false} {
+		name := "ack-first"
+		if outputFirst {
+			name = "output-first"
+		}
+		t.Run(name, func(t *testing.T) {
+			events := make(chan TerminalBrokerEvent, 2)
+			output := TerminalBrokerEvent{
+				Type: TerminalEventOutput, DataBase64: base64.StdEncoding.EncodeToString([]byte("ready-marker")),
+			}
+			ack := TerminalBrokerEvent{Type: TerminalEventAck, AcceptedSequence: 1}
+			if outputFirst {
+				events <- output
+				events <- ack
+			} else {
+				events <- ack
+				events <- output
+			}
+			close(events)
+			if err := observeTerminalAckAndOutput(t.Context(), events, 1, "ready-marker"); err != nil {
+				t.Fatal("readiness observation discarded an event delivered before its counterpart")
+			}
+		})
+	}
+}
+
+func TestTerminalWorkerReadinessRetainsFragmentedOutputAcrossAck(t *testing.T) {
+	events := make(chan TerminalBrokerEvent, 3)
+	events <- TerminalBrokerEvent{
+		Type: TerminalEventOutput, DataBase64: base64.StdEncoding.EncodeToString([]byte("ready-")),
+	}
+	events <- TerminalBrokerEvent{Type: TerminalEventAck, AcceptedSequence: 1}
+	events <- TerminalBrokerEvent{
+		Type: TerminalEventOutput, DataBase64: base64.StdEncoding.EncodeToString([]byte("marker")),
+	}
+	close(events)
+	if err := observeTerminalAckAndOutput(t.Context(), events, 1, "ready-marker"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTerminalWorkerReadinessRequiresBothValidEvents(t *testing.T) {
+	ack := TerminalBrokerEvent{Type: TerminalEventAck, AcceptedSequence: 1}
+	output := TerminalBrokerEvent{
+		Type: TerminalEventOutput, DataBase64: base64.StdEncoding.EncodeToString([]byte("ready-marker")),
+	}
+	for _, test := range []struct {
+		name   string
+		events []TerminalBrokerEvent
+	}{
+		{name: "closed"},
+		{name: "ack-only", events: []TerminalBrokerEvent{ack}},
+		{name: "output-only", events: []TerminalBrokerEvent{output}},
+		{
+			name: "wrong-sequence",
+			events: []TerminalBrokerEvent{
+				{Type: TerminalEventAck, AcceptedSequence: 2}, output,
+			},
+		},
+		{
+			name: "invalid-output",
+			events: []TerminalBrokerEvent{
+				ack, {Type: TerminalEventOutput, DataBase64: "not base64"},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			events := make(chan TerminalBrokerEvent, len(test.events))
+			for _, event := range test.events {
+				events <- event
+			}
+			close(events)
+			if err := observeTerminalAckAndOutput(t.Context(), events, 1, "ready-marker"); err == nil {
+				t.Fatal("incomplete or invalid readiness was accepted")
+			}
+		})
+	}
+}
+
+func observeTerminalAckAndOutput(
+	ctx context.Context, events <-chan TerminalBrokerEvent, sequence uint64, marker string,
+) error {
+	acked := false
+	var text strings.Builder
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				return errors.New("terminal events closed before acknowledgement and readiness output")
+			}
+			if event.Type == TerminalEventAck && event.AcceptedSequence == sequence {
+				acked = true
+			}
+			if event.Type == TerminalEventOutput {
+				data, err := base64.StdEncoding.DecodeString(event.DataBase64)
+				if err != nil {
+					return err
+				}
+				text.Write(data)
+			}
+			if acked && strings.Contains(text.String(), marker) {
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
