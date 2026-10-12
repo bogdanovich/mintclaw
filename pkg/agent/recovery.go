@@ -17,6 +17,14 @@ import (
 // crossed from ingress spool into session history but the process exits before
 // producing the assistant response.
 func (al *AgentLoop) RecoverUnansweredSessions(ctx context.Context) int {
+	if al == nil {
+		return 0
+	}
+	ctx, finish, admitted := al.beginRecovery(ctx)
+	if !admitted {
+		return 0
+	}
+	defer finish()
 	registry := al.GetRegistry()
 	if registry == nil {
 		return 0
