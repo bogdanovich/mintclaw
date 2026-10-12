@@ -14,10 +14,19 @@ import (
 )
 
 func TestRuntimeCredentialGuardAppliesBeforeConsoleAndFileFanout(t *testing.T) {
+	for name, value := range map[string]string{
+		"html":    "logger-canary-91&\"secret",
+		"control": "logger-canary-92&\x00secret",
+	} {
+		t.Run(name, func(t *testing.T) { testCredentialLogFanout(t, value) })
+	}
+}
+
+func testCredentialLogFanout(t *testing.T, value string) {
+	t.Helper()
 	originalLevel := GetLevel()
 	SetLevel(INFO)
 	defer SetLevel(originalLevel)
-	value := "logger-canary-91&\"secret"
 	release, err := secretvalues.Register([]byte(value))
 	if err != nil {
 		t.Fatal("credential guard unavailable")
@@ -63,8 +72,12 @@ func TestRuntimeCredentialGuardAppliesBeforeConsoleAndFileFanout(t *testing.T) {
 		}
 	}
 	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
-		if !json.Valid([]byte(line)) {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) != nil {
 			t.Fatal("guarded log record is not valid JSON")
+		}
+		if record["detail"] != secretvalues.Marker {
+			t.Fatal("JSON-encoded log field exposed a registered value")
 		}
 	}
 }

@@ -4,6 +4,7 @@
 package secretvalues
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -127,9 +128,17 @@ func valueVariants(value string) []string {
 			continue
 		}
 		encoded, _ := json.Marshal(normalized)
+		var unescaped bytes.Buffer
+		encoder := json.NewEncoder(&unescaped)
+		encoder.SetEscapeHTML(false)
+		_ = encoder.Encode(normalized)
+		// Encoder adds a newline after the closing quote. Loggers such as
+		// zerolog use this JSON string encoding with HTML escaping disabled.
+		plainJSON := unescaped.Bytes()
 		quoted := strconv.Quote(normalized)
 		for _, variant := range []string{
 			normalized, string(encoded[1 : len(encoded)-1]), quoted[1 : len(quoted)-1],
+			string(plainJSON[1 : len(plainJSON)-2]),
 			url.QueryEscape(normalized), url.PathEscape(normalized), html.EscapeString(normalized),
 			hex.EncodeToString([]byte(normalized)), strings.ToUpper(hex.EncodeToString([]byte(normalized))),
 			base64.StdEncoding.EncodeToString([]byte(normalized)), base64.RawStdEncoding.EncodeToString([]byte(normalized)),

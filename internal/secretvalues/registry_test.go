@@ -38,6 +38,20 @@ func TestRegisteredValuesAndAccidentalEncodingsPreservePublicMetadata(t *testing
 	}
 }
 
+func TestJSONWithoutHTMLEscapingProtectsCombinedControlCharacters(t *testing.T) {
+	release, err := Register([]byte("fixture-json-A&\x00B"))
+	if err != nil {
+		t.Fatal("registration unavailable")
+	}
+	defer release()
+	const record = `{"alias":"ebay","detail":"fixture-json-A&\u0000B"}`
+	got := RedactRecord([]byte(record))
+	var decoded map[string]string
+	if json.Unmarshal(got, &decoded) != nil || decoded["alias"] != "ebay" || decoded["detail"] != Marker {
+		t.Fatal("non-HTML-escaped JSON leaked a registered value or lost safe metadata")
+	}
+}
+
 func TestSharedAndOverlappingRegistrationLifetime(t *testing.T) {
 	var r registry
 	short := "fixture-prefix-93"
