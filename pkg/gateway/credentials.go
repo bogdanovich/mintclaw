@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/bogdanovich/mintclaw/internal/credentials/approval"
+	"github.com/bogdanovich/mintclaw/internal/credentials/vault"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
@@ -29,10 +30,11 @@ type credentialRoutes interface {
 // credentialRuntime is the gateway's sole approval owner. It creates neither
 // a separate listener nor a model-facing secret retrieval API.
 type credentialRuntime struct {
-	controller *approval.Controller
-	routes     credentialRoutes
-	once       sync.Once
-	closeErr   error
+	controller   *approval.Controller
+	routes       credentialRoutes
+	once         sync.Once
+	closeErr     error
+	consumeLogin func(context.Context, vault.Binding, func([]byte, []byte) error) error
 }
 
 func setupCredentialRuntime(
@@ -55,6 +57,11 @@ func setupCredentialRuntime(
 		return nil, errCredentialsUnavailable
 	}
 	runtime := &credentialRuntime{controller: controller, routes: routes}
+	// Approval setup remains available before the operator provisions a token.
+	// An unavailable SDK never provides a login consumer or value access.
+	if provider, vaultErr := newCredentialVault(cfg.Credentials.StateDirectory, vault.New); vaultErr == nil {
+		runtime.consumeLogin = provider.UseLogin
+	}
 	phone, err := approval.NewPhoneHandler(controller)
 	if err != nil {
 		_ = controller.Close()

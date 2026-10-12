@@ -37,6 +37,13 @@ func (controller *Controller) LeaseLogin(ctx context.Context, grantID string,
 	if err != nil {
 		return LoginLease{}, ErrDenied
 	}
+	return controller.loginLease(grant, request), nil
+}
+
+func (controller *Controller) loginLease(
+	grant credentialbroker.GrantLease,
+	request credentialbroker.Request,
+) LoginLease {
 	account := controller.bindings[request.Account]
 	lease := LoginLease{
 		grant:   grant,
@@ -46,7 +53,7 @@ func (controller *Controller) LeaseLogin(ctx context.Context, grantID string,
 	if flow, flowErr := controller.policy.LoginFlow(request); flowErr == nil {
 		lease.flow = &flow
 	}
-	return lease, nil
+	return lease
 }
 
 func (lease LoginLease) Binding(ctx context.Context, request credentialbroker.Request) (LoginBinding, error) {
@@ -54,6 +61,39 @@ func (lease LoginLease) Binding(ctx context.Context, request credentialbroker.Re
 		return LoginBinding{}, ErrDenied
 	}
 	return lease.binding, nil
+}
+
+func (lease LoginLease) Check(ctx context.Context, request credentialbroker.Request) error {
+	return lease.grant.Check(ctx, request)
+}
+
+// ActiveLogin reuses a current signed grant without exposing grant identifiers
+// to a model tool or maintaining a second grant cache in the gateway. Request
+// identity and origin come from the trusted runtime's authenticated caller.
+func (controller *Controller) ActiveLogin(ctx context.Context, request credentialbroker.Request) (LoginLease, error) {
+	if controller == nil {
+		return LoginLease{}, ErrUnavailable
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if !controller.ready(ctx) {
+		return LoginLease{}, ErrUnavailable
+	}
+	controller.prune()
+	var active LoginLease
+	var expires time.Time
+	for id, approved := range controller.grants {
+		grant, err := controller.authority.Lease(ctx, id, request)
+		if err != nil || !approved.ExpiresAt.After(expires) {
+			continue
+		}
+		active = controller.loginLease(grant, request)
+		expires = approved.ExpiresAt
+	}
+	if expires.IsZero() {
+		return LoginLease{}, ErrDenied
+	}
+	return active, nil
 }
 
 func (lease LoginLease) Done() <-chan struct{} { return lease.grant.Done() }

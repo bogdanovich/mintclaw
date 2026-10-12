@@ -17,6 +17,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
 	"github.com/bogdanovich/mintclaw/internal/credentials/approval"
+	"github.com/bogdanovich/mintclaw/internal/credentials/vault"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/pid"
 )
@@ -27,6 +28,7 @@ type commandDeps struct {
 	loadConfig   func() (*config.Config, error)
 	readGateway  func() *pid.PidFileData
 	openTerminal func() (io.WriteCloser, error)
+	readToken    func() ([]byte, error)
 }
 
 func NewCredentialsCommand() *cobra.Command {
@@ -34,6 +36,7 @@ func NewCredentialsCommand() *cobra.Command {
 		loadConfig:   internal.LoadConfig,
 		readGateway:  func() *pid.PidFileData { return pid.ReadPidFileWithCheck(internal.GetMintClawHome()) },
 		openTerminal: openPrivateTerminal,
+		readToken:    readPrivateToken,
 	})
 }
 
@@ -61,6 +64,23 @@ func newCredentialsCommand(deps commandDeps) *cobra.Command {
 				cmd.OutOrStdout(),
 				"Approval state prepared. Restart the gateway, then run credentials enroll.",
 			)
+			return err
+		},
+	})
+	command.AddCommand(&cobra.Command{
+		Use: "token", Short: "Enter your 1Password service token privately", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := deps.loadConfig()
+			if err != nil || cfg == nil || !cfg.Credentials.Enabled || cfg.ValidateCredentials() != nil ||
+				deps.readToken == nil {
+				return errSetupUnavailable
+			}
+			token, err := deps.readToken()
+			defer clear(token)
+			if err != nil || vault.StoreServiceAccountToken(cfg.Credentials.StateDirectory, token) != nil {
+				return errSetupUnavailable
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), "Private vault token stored. Restart the gateway to use it.")
 			return err
 		},
 	})
