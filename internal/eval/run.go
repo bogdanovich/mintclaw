@@ -202,6 +202,11 @@ func runAdmittedTrial(
 			config: target.config, python: runOptions.PDFOraclePython, retain: report.retainPDFArtifact,
 		}}
 		prepared.filter = roles.filter
+		if censusErr := prepared.beginNativeCensus(caseCtx); errors.Is(censusErr, ErrPrivateEvidence) {
+			_ = prepared.release(true)
+			trial.Verdict, trial.Code = Fail, "private_native_census"
+			return trial
+		}
 		item = prepared.item
 	}
 	client, err := gatewayclient.Connect(caseCtx, target.config, sessionID, options)
