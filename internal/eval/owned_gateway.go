@@ -168,13 +168,22 @@ func validateFreshOwnedProfile(profile preparedProfile) error {
 		if readErr != nil && !errors.Is(readErr, io.EOF) || len(entries) > 128 || closeErr != nil {
 			return ErrOwnedGateway
 		}
-		allowed := []string{"config.json", ".security.yml", ".security", "workspace", "reports"}
+		allowed := []string{
+			"config.json", config.SecurityConfigFile, config.SecurityConfigFile + ".lock",
+			".security", "workspace", "reports",
+		}
 		if directory == "workspace" {
 			allowed = []string{"AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "skills"}
 		}
 		for _, entry := range entries {
 			if !slices.Contains(allowed, entry.Name()) || entry.Type()&os.ModeSymlink != 0 {
 				return ErrOwnedGateway
+			}
+			if directory == "." && entry.Name() == config.SecurityConfigFile+".lock" {
+				info, infoErr := entry.Info()
+				if infoErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() != 0 {
+					return ErrOwnedGateway
+				}
 			}
 		}
 	}

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -36,7 +38,13 @@ func newRunCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, runErr := manualeval.Run(cmd.Context(), preset, selected, manualeval.RunOptions{
+			runContext := cmd.Context()
+			if startTarget {
+				var stopSignals func()
+				runContext, stopSignals = signal.NotifyContext(runContext, os.Interrupt, syscall.SIGTERM)
+				defer stopSignals()
+			}
+			result, runErr := manualeval.Run(runContext, preset, selected, manualeval.RunOptions{
 				Home: manualeval.RuntimeHome(), OutputParent: outputParent, SuiteTimeout: suiteTimeout,
 				PDFOraclePython: python,
 				Repeat:          repeat,

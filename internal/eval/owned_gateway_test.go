@@ -208,6 +208,53 @@ func TestOwnedGatewayRunStopsBeforePublishingCompleteReport(t *testing.T) {
 	}
 }
 
+func TestOwnedGatewayAcceptsFreshProfileSavedByNativeRepository(t *testing.T) {
+	fixture := newOwnedGatewayFixture(t, "normal")
+	if _, err := config.NewRepository(fixture.preset.ConfigPath).Save(fixture.cfg); err != nil {
+		t.Fatal("native profile preparation failed", err)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.home, config.SecurityConfigFile+".lock")); err != nil {
+		t.Fatal("native configuration lock metadata missing", err)
+	}
+	result, err := Run(t.Context(), fixture.preset, []LoadedCase{loadedTestCase(t, "general.owned.native-profile")},
+		RunOptions{Home: fixture.home, OutputParent: fixture.output, StartTarget: true, SuiteTimeout: 15 * time.Second})
+	if err != nil || !result.Complete || result.Verdict != Pass || result.TargetLifecycle == nil ||
+		result.TargetLifecycle.Code != "native_exit_zero" {
+		t.Fatal("fresh native-prepared profile was refused", err)
+	}
+}
+
+func TestOwnedGatewayRefusesInvalidNativeConfigurationLockMetadata(t *testing.T) {
+	for _, mode := range []string{"contents", "permissions", "directory", "symlink"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newOwnedGatewayFixture(t, "normal")
+			lock := filepath.Join(fixture.home, config.SecurityConfigFile+".lock")
+			var err error
+			switch mode {
+			case "directory":
+				err = os.Mkdir(lock, 0o700)
+			case "symlink":
+				err = os.Symlink(fixture.preset.ConfigPath, lock)
+			case "contents":
+				err = os.WriteFile(lock, []byte("not-native-lock-metadata"), 0o600)
+			case "permissions":
+				err = os.WriteFile(lock, nil, 0o600)
+				if err == nil {
+					err = os.Chmod(lock, 0o666)
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, _, err := startOwnedGateway(t.Context(), fixture.preset, fixture.home)
+			registerOwnedGatewayCleanup(t, child)
+			if !errors.Is(err, ErrOwnedGateway) || child != nil {
+				t.Fatal("invalid native configuration lock metadata was admitted")
+			}
+		})
+	}
+}
+
 func TestOwnedGatewayRunPreservesNonzeroExitAndReportFailure(t *testing.T) {
 	for _, mode := range []string{"bad_exit", "report_error"} {
 		t.Run(mode, func(t *testing.T) {

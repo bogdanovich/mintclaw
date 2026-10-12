@@ -84,7 +84,8 @@ stops that child before publishing a complete run report. Attachment to an alrea
 remains the default. The owned mode does not provision a profile or copy any production configuration or state.
 
 Use a fresh private home with only `config.json`, optional native `.security.yml` and `.security` credential-file
-directory, `workspace`, and `reports` at its root.
+directory, `workspace`, and `reports` at its root. The native repository's empty regular `0600`
+`.security.yml.lock` file is permitted; it is not gateway/process ownership.
 The workspace must be the physical `HOME/workspace` directory and may initially contain only reviewed
 `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, and `skills`. Existing native state, sessions, memory,
 PID files, ownership markers, logs, extra roots, and symlink entries are refused before launching. Existing
@@ -97,6 +98,9 @@ service's healthy response is not adopted. Startup is bounded to 30 seconds; cle
 budget even when the scenario is interrupted. Only the owned process handle is signaled. A forced kill or
 nonzero/uncertain exit is non-passing and never means a remote interaction was canceled. The ownership marker
 is retained on abnormal exit. Never delete it to retry an uncertain operation; use a newly prepared profile.
+In owned mode, SIGINT and SIGTERM cancel the eval command's run context while keeping the parent alive for its
+independent cleanup budget. SIGKILL, a crash or host loss cannot execute that cleanup; retained process/domain
+state must be treated as uncertain, not resumed or reported as canceled.
 
 The private `target_lifecycle` receipt records admitted PID, stop/exit observations, exit code, forced exit and
 log truncation. Captured child output is private and bounded to 1 MiB; native runtime logs remain separate
