@@ -253,3 +253,61 @@ func TestDocumentFormIntakeFreshRetriesDoNotResetThePassBudget(t *testing.T) {
 		t.Fatal("fresh executions bypassed the original persisted extraction budget")
 	}
 }
+
+func TestDocumentFormIntakeBusyRetryUsesInboundIdentityAndReplaysExactly(t *testing.T) {
+	model := &intakeWorkflowTestInterpreter{}
+	tool, ctx, _, jobID, _ := intakeWorkflowFixture(t, model)
+	model.interpret = func(view document.FormIntakeInterpretationView) (document.FormIntakeInterpretation, error) {
+		result := document.FormIntakeInterpretation{Intent: document.FormIntakeIntentClarify}
+		if model.intakeCalls > 2 {
+			result.NonData = []document.FormIntakeLiteral{{Text: view.Pass.Input.Text, Occurrence: 1}}
+		}
+		return result, nil
+	}
+	progress, err := tool.FindProtectedFormIntake(ctx)
+	if err != nil || progress == nil {
+		t.Fatal("intake unavailable")
+	}
+	ref, err := tool.AdmitProtectedFormIntake(ctx,
+		bus.InboundDocumentIntakeGuard{JobID: jobID, ModeID: progress.ModeID}, "busy-retry", "Explain the options")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"action": "form", "form_action": "continue", "answer_ref": ref}
+	initialCtx := toolshared.WithToolDocumentIntakeProcessingIdentity(ctx, ref, "initial-inbound")
+	initial := decodeWorkflowResult(t, tool.Execute(initialCtx, args).ForLLM)
+	if initial.Intake == nil || initial.Intake.Progress.PendingInputs != 1 || model.intakeCalls != 2 {
+		t.Fatal("fixture did not retain incomplete windows")
+	}
+	if tool.Execute(initialCtx, args).IsError || model.intakeCalls != 2 {
+		t.Fatal("same inbound replay reinterpreted committed windows")
+	}
+	recoveredCtx := toolshared.WithToolExecutionIdentity(
+		initialCtx,
+		toolshared.ToolWorkspace(initialCtx),
+		"recovered-turn",
+	)
+	if tool.Execute(recoveredCtx, args).IsError || model.intakeCalls != 2 {
+		t.Fatal("transport replay changed processing identity after turn recovery")
+	}
+	retryCtx := toolshared.WithToolDocumentIntakeProcessingIdentity(ctx, ref, "retry-inbound")
+	if toolshared.ToolExecutionID(retryCtx) != toolshared.ToolExecutionID(initialCtx) {
+		t.Fatal("busy retry changed global execution identity")
+	}
+	retried := decodeWorkflowResult(t, tool.Execute(retryCtx, args).ForLLM)
+	if retried.Intake == nil || retried.Intake.Failure != nil || retried.Intake.Progress.PendingInputs != 0 ||
+		retried.Intake.AcceptedCount != 0 || model.intakeCalls != 3 {
+		t.Fatal("same-turn retry skipped incomplete accounting instead of progressing")
+	}
+	if tool.Execute(retryCtx, args).IsError || model.intakeCalls != 3 {
+		t.Fatal("retry replay created another processing attempt")
+	}
+	owner, err := documentFormOwner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := tool.formJobs.ReadFormIntakeInput(ctx, ref, owner)
+	if err != nil || input.Passes != 3 || !input.Consumed || input.Text != "" {
+		t.Fatal("busy retry reset its budget or retained consumed private text")
+	}
+}

@@ -411,11 +411,15 @@ func (tool *DocumentTool) processFormIntakeInput(
 				break
 			}
 		}
-		// Replays within one execution reuse committed windows. A later explicit
-		// retry may finish incomplete accounting, using the same protected input
-		// and native reservation budget instead of skipping those windows forever.
+		// Busy-session retries share the enclosing turn, but retain their own
+		// trusted ingress identity. Replaying that input reuses committed windows;
+		// a new retry uses the same protected input and original reservation budget.
+		processingIdentity := toolshared.ToolDocumentIntakeProcessingIdentity(ctx, trigger)
+		if processingIdentity == "" {
+			processingIdentity = toolshared.ToolExecutionID(ctx)
+		}
 		identityBytes, err := json.Marshal(
-			[]any{clarificationTrigger, toolshared.ToolExecutionID(ctx), ids, input.Context},
+			[]any{clarificationTrigger, processingIdentity, ids, input.Context},
 		)
 		if err != nil {
 			return result, document.ErrFormJobConflict
