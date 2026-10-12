@@ -33,6 +33,7 @@ func TestEnsureSystemBundleMaterializesEmbeddedSkillsIndependentOfCWD(t *testing
 	for _, name := range []string{"imagegen", "mintclaw-agent", "mintclaw-trace-debug", "skill-creator"} {
 		assert.FileExists(t, filepath.Join(activeRoot, name, "SKILL.md"))
 	}
+	assert.FileExists(t, filepath.Join(activeRoot, "mintclaw-trace-debug", "references", "trace-correlations.md"))
 	assert.FileExists(t, filepath.Join(activeRoot, "imagegen", "LICENSE"))
 	assert.FileExists(t, filepath.Join(activeRoot, "imagegen", skillProvenanceName))
 	scriptInfo, err := os.Stat(filepath.Join(activeRoot, "tmux", "scripts", "find-sessions.sh"))
