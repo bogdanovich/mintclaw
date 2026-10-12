@@ -160,6 +160,11 @@ type SubTurnAdmissionPayload struct {
 }
 
 type RuntimeErrorPayload struct {
-	Stage          string `json:"stage,omitempty"`
-	MessagePreview string `json:"message_preview,omitempty"`
+	Stage                string `json:"stage,omitempty"`
+	ErrorCode            string `json:"error_code,omitempty"`
+	ClassificationSource string `json:"classification_source,omitempty"`
+	ProviderErrorKind    string `json:"provider_error_kind,omitempty"`
+	HTTPStatus           int    `json:"http_status,omitempty"`
+	RequestID            string `json:"request_id,omitempty"`
+	MessagePreview       string `json:"message_preview,omitempty"`
 }

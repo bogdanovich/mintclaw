@@ -442,6 +442,11 @@ type SubTurnOrphanPayload struct {
 
 // ErrorPayload describes an execution error inside the agent loop.
 type ErrorPayload struct {
-	Stage   string
-	Message string
+	Stage                string
+	Message              string
+	ErrorCode            string
+	ClassificationSource string
+	ProviderErrorKind    string
+	HTTPStatus           int
+	RequestID            string
 }

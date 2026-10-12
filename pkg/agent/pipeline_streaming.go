@@ -117,6 +117,14 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 		toolDefsForCall,
 	)
 	chatFallback := func() (*providers.LLMResponse, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		p.emitEvent(
+			runtimeevents.KindAgentLLMRetry,
+			ts.eventMeta("runTurn", "turn.llm.retry").withModelAttemptID(llm.modelAttemptID),
+			LLMRetryPayload{Attempt: 1, Reason: "stream_transport_fallback"},
+		)
 		fallbackMessages := freshMessagesForChat()
 		fallbackOpts := withConfiguredPromptCacheLineage(
 			promptCacheEnabled(p.Cfg),
@@ -182,6 +190,12 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 	}
 	if streamErr != nil {
 		if !publisher.Published() {
+			_, authFailure := providers.ClassifyAuthError(streamErr)
+			if authFailure || ctx.Err() != nil || errors.Is(streamErr, context.Canceled) ||
+				errors.Is(streamErr, context.DeadlineExceeded) {
+				publisher.Cancel(ctx)
+				return nil, true, streamErr
+			}
 			logger.WarnCF(
 				"agent",
 				"Streaming failed before visible output; retrying with Chat",
