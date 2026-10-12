@@ -40,10 +40,15 @@ func (al *AgentLoop) recoverHumanInteractionsAt(ctx context.Context, now time.Ti
 	if al == nil || !al.interactions.recoveryRunning.CompareAndSwap(false, true) {
 		return 0
 	}
+	defer al.interactions.recoveryRunning.Store(false)
+	ctx, finish, admitted := al.beginRecovery(ctx)
+	if !admitted {
+		return 0
+	}
+	defer finish()
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	defer al.interactions.recoveryRunning.Store(false)
 	al.loadCatalogedInteractionRegistries()
 	recovered := 0
 	al.interactions.registries.Range(func(key, value any) bool {

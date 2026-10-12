@@ -112,31 +112,32 @@ type safeDocumentFormWindow struct {
 }
 
 type safeDocumentFormReview struct {
-	SchemaVersion        string                          `json:"schema_version"`
-	JobID                string                          `json:"job_id"`
-	State                document.FormJobState           `json:"state"`
-	Revision             int64                           `json:"revision"`
-	ReviewRevision       int64                           `json:"review_revision,omitempty"`
-	FieldSchemaDigest    string                          `json:"field_schema_digest"`
-	AuditPolicyRevision  string                          `json:"audit_policy_revision"`
-	AuditModel           string                          `json:"audit_model,omitempty"`
-	AssignmentDigest     string                          `json:"assignment_digest,omitempty"`
-	ReviewDigest         string                          `json:"review_digest,omitempty"`
-	RequestedAction      string                          `json:"requested_action"`
-	OutputScope          document.FormOutputScope        `json:"output_scope,omitempty"`
-	OutputMode           document.FormOutputMode         `json:"output_mode,omitempty"`
-	DeferredFieldCount   int                             `json:"deferred_field_count,omitempty"`
-	WritableFieldCount   int                             `json:"writable_field_count"`
-	ProvidedFieldCount   int                             `json:"provided_field_count"`
-	BlankFieldCount      int                             `json:"blank_field_count"`
-	ExistingFieldCount   int                             `json:"existing_field_count"`
-	UnresolvedFieldCount int                             `json:"unresolved_field_count"`
-	BlockerCount         int                             `json:"blocker_count"`
-	Fields               []document.FormReviewField      `json:"fields,omitempty"`
-	FieldsTruncated      bool                            `json:"fields_truncated,omitempty"`
-	Blockers             []document.FormJobReviewBlocker `json:"blockers,omitempty"`
-	BlockersTruncated    bool                            `json:"blockers_truncated,omitempty"`
-	Ready                bool                            `json:"ready"`
+	SchemaVersion              string                          `json:"schema_version"`
+	JobID                      string                          `json:"job_id"`
+	State                      document.FormJobState           `json:"state"`
+	Revision                   int64                           `json:"revision"`
+	ReviewRevision             int64                           `json:"review_revision,omitempty"`
+	FieldSchemaDigest          string                          `json:"field_schema_digest"`
+	AuditPolicyRevision        string                          `json:"audit_policy_revision"`
+	AuditModel                 string                          `json:"audit_model,omitempty"`
+	AssignmentDigest           string                          `json:"assignment_digest,omitempty"`
+	ReviewDigest               string                          `json:"review_digest,omitempty"`
+	RequestedAction            string                          `json:"requested_action"`
+	OutputScope                document.FormOutputScope        `json:"output_scope,omitempty"`
+	OutputMode                 document.FormOutputMode         `json:"output_mode,omitempty"`
+	DeferredFieldCount         int                             `json:"deferred_field_count,omitempty"`
+	DeferredRequiredFieldCount int                             `json:"deferred_required_field_count"`
+	WritableFieldCount         int                             `json:"writable_field_count"`
+	ProvidedFieldCount         int                             `json:"provided_field_count"`
+	BlankFieldCount            int                             `json:"blank_field_count"`
+	ExistingFieldCount         int                             `json:"existing_field_count"`
+	UnresolvedFieldCount       int                             `json:"unresolved_field_count"`
+	BlockerCount               int                             `json:"blocker_count"`
+	Fields                     []document.FormReviewField      `json:"fields,omitempty"`
+	FieldsTruncated            bool                            `json:"fields_truncated,omitempty"`
+	Blockers                   []document.FormJobReviewBlocker `json:"blockers,omitempty"`
+	BlockersTruncated          bool                            `json:"blockers_truncated,omitempty"`
+	Ready                      bool                            `json:"ready"`
 }
 
 type safeDocumentFormFailure struct {
@@ -1851,6 +1852,9 @@ func documentFormReviewProjection(review document.FormReview) *safeDocumentFormR
 			projection.UnresolvedFieldCount++
 		case "deferred":
 			projection.DeferredFieldCount++
+			if field.Required {
+				projection.DeferredRequiredFieldCount++
+			}
 		}
 	}
 	slices.SortStableFunc(fields, func(left, right document.FormReviewField) int {
