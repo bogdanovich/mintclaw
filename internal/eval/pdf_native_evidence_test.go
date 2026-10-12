@@ -14,11 +14,18 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/document"
+	"github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 )
 
 func nativePDFPromptFixture(t *testing.T, trial *pdfTrial) (interactions.Record, Event, *document.FormJobStore) {
+	return nativePDFPromptFixtureForRequest(t, trial, nil)
+}
+
+func nativePDFPromptFixtureForRequest(
+	t *testing.T, trial *pdfTrial, request *protocol.MintClawMessage,
+) (interactions.Record, Event, *document.FormJobStore) {
 	t.Helper()
 	route := interactions.Route{
 		AgentID: trial.agent, SessionKey: "eval-session-key", RouteSessionKey: "eval-session-key",
@@ -54,9 +61,14 @@ func nativePDFPromptFixture(t *testing.T, trial *pdfTrial) (interactions.Record,
 		t.Fatal(err)
 	}
 	registry := interactions.NewRegistry(interactions.WorkspaceStorePath(trial.workspace))
+	origin := interactions.Origin{ToolName: "document", ToolCallID: "eval-call", TurnID: "eval-turn"}
+	if request != nil {
+		origin.TurnID = request.ID
+		origin.ExecutionContext = &bus.InboundContext{MessageID: request.ID}
+	}
 	record, err := registry.Create(interactions.CreateRequest{
 		ID: "interaction_eval_control111", Kind: interactions.KindQuestion, Route: route,
-		Origin:          interactions.Origin{ToolName: "document", ToolCallID: "eval-call", TurnID: "eval-turn"},
+		Origin:          origin,
 		Questions:       []interactions.Question{{ID: "contact", Question: "What contact reference should I use?"}},
 		ProtectedAnswer: &binding, ExpiresAt: time.Now().Add(time.Minute),
 	})
@@ -102,6 +114,10 @@ func nativePDFPromptFixture(t *testing.T, trial *pdfTrial) (interactions.Record,
 	prompt := Event{
 		ID: "event-2", Turn: 1, Kind: "question", AgentID: trial.agent, SessionKey: route.SessionKey,
 		InteractionID: record.ID, InteractionShortID: record.ShortID, MessageID: "wire-prompt-message",
+	}
+	if request != nil {
+		prompt.RequestID = request.ID
+		prompt.TraceScopes = []events.TraceScope{{Workspace: trial.workspace, TurnID: origin.TurnID}}
 	}
 	return record, prompt, store
 }

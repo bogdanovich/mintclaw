@@ -34,6 +34,7 @@ type pdfConversation struct {
 	operationID           string
 	artifacts             *pdfArtifactCollector
 	ordinary              *questionConversation
+	protectedCancel       *pdfCancellationObservation
 }
 
 func (domain *pdfConversation) initialTask() string { return domain.prepared.task }
@@ -69,6 +70,11 @@ func (domain *pdfConversation) request(
 	}
 	if prompt.Kind == "question" && domain.ordinary != nil {
 		return domain.ordinary.request(ctx, action, prompt)
+	}
+	if action.Kind == "cancel" && prompt.Kind == "question" {
+		if err := domain.prepareProtectedCancellation(prompt); err != nil {
+			return protocol.MintClawMessage{}, false, err
+		}
 	}
 	// No other intent can grant permission or preserve an old confirmation.
 	return protocol.MintClawMessage{}, false, nil
@@ -132,10 +138,10 @@ func (domain *pdfConversation) observe(ctx context.Context, prompt Event) error 
 }
 
 func (domain *pdfConversation) observeCancellation(ctx context.Context, prompt, reply Event) error {
-	if domain.ordinary == nil {
-		return ErrPDFTrial
+	if domain.ordinary != nil {
+		return domain.ordinary.observeCancellation(ctx, prompt, reply)
 	}
-	return domain.ordinary.observeCancellation(ctx, prompt, reply)
+	return domain.observeProtectedCancellation(ctx, prompt, reply)
 }
 
 func (domain *pdfConversation) conclude(ctx context.Context, trial *Trial) {
@@ -145,6 +151,9 @@ func (domain *pdfConversation) conclude(ctx context.Context, trial *Trial) {
 	trial.PDF = &PDFTrialEvidence{
 		Version: Version, SourceSHA256: domain.prepared.item.Case.Fixtures[0].SHA256,
 		JobID: domain.jobID, State: "unknown", Cleanup: "owned_fixture_retained; native_settlement_unknown",
+	}
+	if domain.protectedCancel != nil {
+		trial.PDF.Cancellation = domain.protectedCancel.proof
 	}
 	if domain.review != nil {
 		trial.PDF.WriteIntent = &PDFWriteIntentEvidence{
