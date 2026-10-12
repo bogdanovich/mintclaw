@@ -192,3 +192,13 @@ func TestCredentialLoginRejectsWrongActorBeforeVaultRetrieval(t *testing.T) {
 		t.Fatal("another actor reached private credential retrieval")
 	}
 }
+
+func TestCredentialLoginRequiresLiveRuntimeAuthorityBeforeRetrieval(t *testing.T) {
+	broker, request, client, _, _, _ := credentialBrokerFixture(t)
+	retrieved := false
+	result := broker.LoginCredential(t.Context(), request, nil,
+		func(context.Context, func([]byte, []byte) error) error { retrieved = true; return nil })
+	if result.Outcome != "denied" || retrieved || client.prepared != 0 {
+		t.Fatal("missing credential authority reached private vault retrieval")
+	}
+}

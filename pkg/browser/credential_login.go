@@ -36,8 +36,16 @@ type CredentialLoginResult struct {
 // runtime implementation is the exact-item vault adapter, after approval.
 type PrivateLoginConsumer func(context.Context, func([]byte, []byte) error) error
 
+// CredentialGrant is the live authority supplied by the trusted runtime.
+// Both the policy authority lease and integrated phone approval lease can
+// implement it without exporting an issuer or private provider binding.
+type CredentialGrant interface {
+	Check(context.Context, credentialbroker.Request) error
+	Done() <-chan struct{}
+}
+
 type credentialSession struct {
-	lease   credentialbroker.GrantLease
+	lease   CredentialGrant
 	request credentialbroker.Request
 	release []func()
 	done    chan struct{}
@@ -66,11 +74,11 @@ func (bound *credentialSession) close() {
 func (broker *Broker) LoginCredential(
 	ctx context.Context,
 	request CredentialLoginRequest,
-	lease credentialbroker.GrantLease,
+	lease CredentialGrant,
 	consume PrivateLoginConsumer,
 ) CredentialLoginResult {
 	result := CredentialLoginResult{Outcome: "denied"}
-	if ctx == nil || ctx.Err() != nil || consume == nil || request.Owner.Validate() != nil ||
+	if ctx == nil || ctx.Err() != nil || lease == nil || consume == nil || request.Owner.Validate() != nil ||
 		!intent.ValidAlias(request.Account) || request.Principal.ActorID != request.Owner.ActorID ||
 		OpaqueAgentID(request.Principal.AgentID) != request.Owner.AgentID {
 		return result
