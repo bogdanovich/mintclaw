@@ -6,16 +6,17 @@ Roadmap packet:
 Status: H1a baseline with the H1b terminal-truth, model-attempt, tool-call
 generation, async task/delivery, and human-interaction slices implemented and
 production-qualified. Companion-invocation correlation is also implemented and
-production-qualified. Remote-coding correlation is implemented; its production
-qualification is pending. Compaction-attempt and repository-snapshot
+production-qualified. Remote-coding correlation and owner lookup are qualified
+by the [H6 exit](local-coding-agent-p8-exit.md)'s live local-owner canary and
+installed-binary channel/companion vertical fixture. Compaction-attempt and repository-snapshot
 correlation are production-qualified. Local-coding trace-store ownership,
 deployment attribution, and privacy-safe project correlation are implemented
 and production-qualified.
 The H1c metadata-only list/show/correlate/export surface is implemented with
 bounded scans and checksummed support directories. Its authoritative-owner and
 presentation summary is implemented and production-qualified for successful
-and failed local coding turns; remote-coding owner qualification remains with
-the wider H6 canary matrix.
+and failed local coding turns, including the H6 exact remote-task/generation
+owner join and metadata-only support bundle.
 
 Audit baseline: `origin/main` at
 `96d5b9d235886f0e478e6d6444476ca0c98d6acd`, 2026-10-10.
@@ -103,8 +104,8 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    identity, or authority-digest content. Success, failure, cancellation,
    timeout, disconnect/uncertainty, and later status observations remain
    distinguishable through observation, state, and safe error code.
-6. **Remote coding generations (implemented; production qualification
-   pending).** A `coding_task` result now projects exact task and task-generation
+6. **Remote coding generations (qualified in H6).** A `coding_task` result now
+   projects exact task and task-generation
    identity into the parent `tool.result`. Terminal gateway delivery creates a
    bounded completion continuation that retains the same task/generation,
    worker generation, remote thread, safe configured scope/profile aliases,
@@ -114,6 +115,9 @@ The following gaps drive H1b work in the existing event/trace pipeline:
    remote monitor may outlive or recover independently of its initiating turn,
    so task plus generation is the exact parent/terminal join; correlation does
    not depend on time matching or an invented parent-turn identity.
+   The local `remote_coding_task` producer also preserves known retained
+   generations, verified by a fresh production task and exact local-store query.
+   Unknown admissions do not manufacture a generation or become asynchronous.
 7. **Compaction and repository observations (production-qualified).**
    Active-turn and standalone compaction lifecycle records retain the
    runtime-owned attempt ID, safe status, revision, counts,

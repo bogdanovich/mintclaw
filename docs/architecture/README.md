@@ -23,7 +23,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   privacy, recovery, and deliberate-defer decisions for the completed C0-C6 program.
 - [Local Coding Agent Roadmap](local-coding-agent-roadmap.md): ordered runtime-boundary, project-thread, coding-profile, terminal UI, compaction, resume, automation, and release work for a native local coding agent.
 - [Local Coding Agent P7.6 Workspace Rewind Decision](local-coding-agent-p7-6-decision.md): explicit deferral, truthful transcript-only fork/revert behavior, and measured safety gates for any later reconsideration.
-- [Local Coding Agent P8 Hardening And Stable Release](local-coding-agent-p8-hardening.md): active diagnostics-first execution plan for performance, platform, privacy, state lifecycle, migration, production qualification, and stable release.
+- [Local Coding Agent P8 Hardening And Stable Release](local-coding-agent-p8-hardening.md): completed diagnostics-first execution plan for performance, platform, privacy, state lifecycle, migration and qualification.
+- [Local Coding Agent P8 Exit Record](local-coding-agent-p8-exit.md): exact-source release/platform and budget evidence, production incident-to-regression closure, task/trace joins, rollback and stable-scope limits.
 - [Local Coding Agent P8 Platform Qualification](local-coding-agent-p8-platform-qualification.md): exact release tuples plus native terminal, shell, filesystem, lock, worktree, and process guarantees.
 - [Local Coding Agent P8.3 State Lifecycle](local-coding-agent-p8-state-lifecycle.md): machine-checked ownership inventory, private-state boundaries, explicit recoverable-trash retention/purge, partial failure receipts and separate blob GC.
 - [Local Coding Agent P8 Diagnostic Evidence Inventory](local-coding-agent-p8-diagnostic-inventory.md): machine-checked map of coding incident paths, authoritative evidence, passive trace coverage, correlation gaps, retention, and H1b/H1c dispositions.
