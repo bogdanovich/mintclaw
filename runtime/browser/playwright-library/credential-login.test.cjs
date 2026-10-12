@@ -75,3 +75,26 @@ test('GET login forms are rejected before any private fill', { timeout: 30000 },
   assert.equal(capsule, null);
   assert.equal(f.submissions(), 0);
 });
+
+test('invalid values dispose the prepared handle and clear the private request', { timeout: 30000 }, async t => {
+  const f = await fixture(t), values = request();
+  const capsule = await prepareCredentialLogin(f.page, values);
+  values.password += '\n';
+  assert.equal(await performCredentialLogin(f.page, capsule, values), 'denied');
+  assert.equal(values.username, ''); assert.equal(values.password, '');
+  assert.equal(f.submissions(), 0);
+  assert.equal(f.page.isClosed(), false);
+  await assert.rejects(capsule.evaluate(() => true), undefined, 'prepared handle was not disposed');
+});
+
+test('submitter destination overrides are checked before vault retrieval', { timeout: 30000 }, async t => {
+  const f = await fixture(t), values = request();
+  for (const [attribute, value] of [
+    ['formmethod', 'get'], ['formaction', 'https://other.example.org/session'], ['formtarget', '_blank'],
+  ]) {
+    await f.page.locator('button').evaluate((button, pair) => button.setAttribute(...pair), [attribute, value]);
+    assert.equal(await prepareCredentialLogin(f.page, values), null, 'unsafe submitter override was admitted');
+    await f.page.locator('button').evaluate((button, name) => button.removeAttribute(name), attribute);
+  }
+  assert.equal(f.submissions(), 0);
+});

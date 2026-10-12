@@ -64,7 +64,11 @@ opaque artifacts or arbitrary browser APIs.
 ## Evidence and remaining integration
 
 Synthetic Chromium tests cover one private form submission, stale document
-rejection, absence of a success marker, context cleanup and GET-form denial.
+rejection, absence of a success marker, context cleanup, GET-form and submitter
+override denial. A separate-process test runs the production JSON-lines loop
+and driver against synthetic HTTPS routes, exercising prepare/submit/discard,
+password-bearing dialog suppression, private cookie handoff and fixed parse
+errors. Invalid-input and expired-request regressions verify capsule disposal.
 Broker race regressions cover alias-only results, guard retention until close,
 actor mismatch before retrieval and revocation during retrieval/after login.
 Existing browser behavior is also exercised by the package suite.

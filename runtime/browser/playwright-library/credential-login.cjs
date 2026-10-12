@@ -35,14 +35,20 @@ async function prepareCredentialLogin(page, request) {
       const writable = input => input instanceof HTMLInputElement && input.isConnected &&
         !input.disabled && !input.matches(':disabled') && !input.readOnly &&
         !['true'].includes(input.getAttribute('aria-disabled'));
+      const postDestination = () => {
+        const method = submit.hasAttribute('formmethod') ? submit.formMethod : form.method;
+        const target = submit.hasAttribute('formtarget') ? submit.formTarget : form.target;
+        const action = new URL(submit.hasAttribute('formaction') ? submit.formAction : form.action);
+        return method.toLowerCase() === 'post' && target === '' &&
+          action.origin === origin && action.protocol === 'https:';
+      };
       const ready = () => location.origin === origin && document === username.ownerDocument &&
         writable(username) && writable(password) && ['text', 'email'].includes(username.type) &&
         password.type === 'password' && form instanceof HTMLFormElement && form.isConnected &&
         password.form === form && submit.form === form && submit.isConnected &&
         !submit.disabled && !submit.matches(':disabled') && submit.type === 'submit' &&
         (submit instanceof HTMLButtonElement || submit instanceof HTMLInputElement) &&
-        form.method.toLowerCase() === 'post' && form.target === '' &&
-        new URL(form.action).origin === origin && new URL(form.action).protocol === 'https:' &&
+        postDestination() &&
         refs.every((ref, index) => find(ref).length === 1 && find(ref)[0] === [username, password, submit][index]);
       return ready() ? { username, password, submit, form, ready } : null;
     }, { origin: request.origin,
@@ -59,14 +65,14 @@ async function prepareCredentialLogin(page, request) {
 }
 
 async function performCredentialLogin(page, capsule, request) {
-  if (!capsule || !validRequest(request) || typeof request.username !== 'string' ||
-      typeof request.password !== 'string' || !request.username || !request.password ||
-      Buffer.byteLength(request.username) > 1024 || Buffer.byteLength(request.password) > 4096 ||
-      /[\x00\r\n]/.test(request.username) || /[\x00\r\n]/.test(request.password)) return 'denied';
-  const timeout = Number.isInteger(request.timeout_ms) && request.timeout_ms >= 100 &&
-    request.timeout_ms <= 15000 ? request.timeout_ms : 10000;
   let attempted = false;
   try {
+    if (!capsule || !validRequest(request) || typeof request.username !== 'string' ||
+        typeof request.password !== 'string' || !request.username || !request.password ||
+        Buffer.byteLength(request.username) > 1024 || Buffer.byteLength(request.password) > 4096 ||
+        /[\x00\r\n]/.test(request.username) || /[\x00\r\n]/.test(request.password)) return 'denied';
+    const timeout = Number.isInteger(request.timeout_ms) && request.timeout_ms >= 100 &&
+      request.timeout_ms <= 15000 ? request.timeout_ms : 10000;
     const entryURL = page.url();
     const navigation = page.waitForURL(url => url.origin === request.origin &&
       url.href !== entryURL, { timeout, waitUntil: 'domcontentloaded' }).catch(() => null);
@@ -115,8 +121,10 @@ async function performCredentialLogin(page, capsule, request) {
     }
     return attempted ? 'outcome_unknown' : 'failed';
   } finally {
-    request.username = ''; request.password = '';
-    await capsule.dispose().catch(() => {});
+    if (request && typeof request === 'object') {
+      request.username = ''; request.password = '';
+    }
+    if (capsule) await capsule.dispose().catch(() => {});
   }
 }
 
