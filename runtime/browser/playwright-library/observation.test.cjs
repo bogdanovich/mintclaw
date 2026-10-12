@@ -9,7 +9,7 @@ const test = require('node:test');
 
 const image = '<img alt="" width="40" height="40" src="/image.svg">';
 const map = `<section aria-label="Location map">${image.repeat(6)}
-  <svg role="img" width="240" height="40"><circle cx="20" cy="20" r="10"/></svg>
+  <svg role="img" aria-label="Location diagram" width="240" height="40"><circle cx="20" cy="20" r="10"/></svg>
   <button onclick="document.querySelector('#map-state').textContent='MAP_FULLSCREEN'">Full Screen</button>
   <output id="map-state">MAP_INLINE</output></section>`;
 const gallery = `<section aria-label="Product gallery"><figure>${image}<figcaption>Front view</figcaption></figure>
@@ -93,8 +93,8 @@ function ref(snapshot, expression) {
 test('native semantics distinguish a map from an independent real gallery', { timeout: 30000 }, async t => {
   const { call, base } = await fixture(t);
   const mapSnapshot = await call('browser_navigate', { url: base + '/map' });
-  assert.match(mapSnapshot, /region "Location map" \[ref=e\d+\]:\n    - img \[ref=e\d+\]\n    - button "Full Screen"/);
-  assert.equal([...mapSnapshot.matchAll(/- img \[ref=/g)].length, 1);
+  assert.match(mapSnapshot, /region "Location map" \[ref=e\d+\]:\n    - img "Location diagram" \[ref=e\d+\]\n    - button "Full Screen"/);
+  assert.equal([...mapSnapshot.matchAll(/- img "Location diagram" \[ref=/g)].length, 1);
   assert.equal(inventory(mapSnapshot).dom_image_count, 6);
   assert.ok(inventory(mapSnapshot).items.every(item => item.context.includes('Location map') && item.loaded));
   const mapRef = ref(mapSnapshot, /button "Full Screen" \[ref=(e\d+)\]/);
