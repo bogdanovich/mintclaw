@@ -11,7 +11,9 @@ import os
 import pathlib
 import sys
 import tempfile
+import threading
 import time
+import urllib.request
 from typing import Any
 
 
@@ -19,6 +21,11 @@ SCHEMA_VERSION = "mintclaw.browser_smoke.v1"
 MAX_INPUT_BYTES = 1024 * 1024
 
 SUITE_CHECKS = {
+    "semantic-observation": (
+        "initial_blank", "map_context_preserved", "decorative_images_not_product_photos",
+        "gallery_context_preserved", "unlabeled_image_evidence", "exact_gallery_control",
+        "gallery_open_verified", "map_unchanged",
+    ),
     "click-recovery": (
         "initial_blank", "navigated_fixture", "click_not_dispatched",
         "same_session_preserved", "no_photo_click", "alternative_control_succeeded",
@@ -100,6 +107,10 @@ SUITE_CHECKS = {
 }
 
 SUITE_STAGES = {
+    "semantic-observation": (
+        ("semantic-observation", SUITE_CHECKS["semantic-observation"],
+         {"browser_targets": 1, "browser_session": 2, "browser_observe": 4, "browser_act": 3}),
+    ),
     "click-recovery": (
         ("click-recovery", SUITE_CHECKS["click-recovery"],
          {"browser_targets": 1, "browser_session": 2, "browser_observe": 4, "browser_act": 3}),
@@ -297,12 +308,46 @@ self.addEventListener('activate', event => event.waitUntil(self.clients.claim())
 self.addEventListener('fetch', () => {});
 """
 
+SEMANTIC_MAP = b"""<section aria-label="Location map">
+  <svg role="img" aria-label="Location diagram" width="240" height="40"><circle cx="20" cy="20" r="10"/></svg>
+  <img alt="" width="40" height="40" src="/browser-smoke/image.svg">
+  <img alt="" width="40" height="40" src="/browser-smoke/image.svg">
+  <img alt="" width="40" height="40" src="/browser-smoke/image.svg">
+  <img alt="" width="40" height="40" src="/browser-smoke/image.svg">
+  <img alt="" width="40" height="40" src="/browser-smoke/image.svg">
+  <img alt="" width="40" height="40" src="/browser-smoke/image.svg">
+  <button onclick="document.querySelector('#map-state').textContent='MAP_FULLSCREEN';fetch('/browser-smoke/semantic-event/map',{method:'POST'})">Full Screen</button>
+  <output id="map-state">MAP_INLINE</output>
+</section>"""
+SEMANTIC_GALLERY = b"""<section aria-label="Product gallery">
+  <figure><img alt="" width="80" height="80" src="/browser-smoke/image.svg"><figcaption>Front view</figcaption></figure>
+  <img alt="Rear view" width="80" height="80" src="/browser-smoke/image.svg">
+  <button onclick="document.querySelector('#gallery-state').textContent='GALLERY_OPEN';fetch('/browser-smoke/semantic-event/gallery',{method:'POST'})">Full Screen</button>
+  <output id="gallery-state">GALLERY_CLOSED</output>
+</section>"""
+
 
 class FixtureHandler(http.server.BaseHTTPRequestHandler):
     server_version = "MintClawBrowserSmoke/1"
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         path = self.path.split("?", 1)[0]
+        if path == "/browser-smoke/semantic-audit":
+            with self.server.semantic_lock:
+                body = json.dumps(self.server.semantic_events).encode()
+            self._reply("application/json", body)
+            return
+        if path in ("/browser-smoke/map-only", "/browser-smoke/gallery"):
+            with self.server.semantic_lock:
+                self.server.semantic_events[path.rsplit("/", 1)[1]] += 1
+            gallery = SEMANTIC_GALLERY if path.endswith("gallery") else b""
+            self._reply("text/html; charset=utf-8", b"<!doctype html><title>Semantic fixture</title><main>"
+                        + SEMANTIC_MAP + gallery + b"</main>")
+            return
+        if path == "/browser-smoke/image.svg":
+            self._reply("image/svg+xml", b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">'
+                        b'<rect width="40" height="40" fill="blue"/></svg>')
+            return
         if path in ("/browser-smoke", "/browser-smoke/", "/browser-smoke/check"):
             self._reply("text/html; charset=utf-8", FIXTURE_HTML)
             return
@@ -313,6 +358,15 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
             self._reply("text/plain; charset=utf-8", b"safe smoke fixture")
             return
         self.send_error(404)
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        event = self.path.removeprefix("/browser-smoke/semantic-event/")
+        if event not in ("map", "gallery") or not self.path.startswith("/browser-smoke/semantic-event/"):
+            self.send_error(404)
+            return
+        with self.server.semantic_lock:
+            self.server.semantic_events[event + "-click"] += 1
+        self._reply("text/plain", b"recorded")
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
@@ -328,6 +382,8 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
 
 def serve(args: argparse.Namespace) -> int:
     server = http.server.ThreadingHTTPServer((args.bind, 0), FixtureHandler)
+    server.semantic_lock = threading.Lock()
+    server.semantic_events = {"map-only": 0, "gallery": 0, "map-click": 0, "gallery-click": 0}
     host = args.advertise_host
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
@@ -342,6 +398,16 @@ def serve(args: argparse.Namespace) -> int:
         pass
     finally:
         server.server_close()
+    return 0
+
+
+def semantic_probe(args: argparse.Namespace) -> int:
+    try:
+        with urllib.request.urlopen(args.origin + "/browser-smoke/semantic-audit", timeout=5) as response:
+            value = json.loads(response.read(4096))
+    except (OSError, ValueError):
+        value = {"unavailable": True}
+    pathlib.Path(args.output).write_text(json.dumps(value), encoding="utf-8")
     return 0
 
 
@@ -640,6 +706,10 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
                 else {"browser_act": 1} if stage_name == "click-recovery"
                 else None,
             )
+            if stage_name == "semantic-observation" and set(evidence["tool_calls"]).difference({
+                "browser_targets", "browser_session", "browser_observe", "browser_act", "tool_search_tool_bm25",
+            }):
+                raise ValueError("invalid_execution_evidence")
             raw_capabilities = result.get("capabilities")
             capability_names = ("navigate", "click", "observe")
             if not isinstance(raw_capabilities, dict) or set(raw_capabilities) != set(
@@ -688,6 +758,14 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         ]
         suite_closed = all(result.get("session_closed") is True for result in stage_results)
         all_checks_passed = all(item["state"] == "passed" for item in report["checks"])
+        if args.suite == "semantic-observation":
+            oracle = load_json(args.semantic_oracle)
+            expected_oracle = {"map-only": 1, "gallery": 1, "map-click": 0, "gallery-click": 1}
+            oracle_passed = oracle == expected_oracle
+            report["fixture_outcome_audit"] = {
+                "state": "passed" if oracle_passed else "failed", "events": oracle,
+            }
+            all_checks_passed = all_checks_passed and oracle_passed
         audit_clean = all(cleanup.values())
         passed = (
             all(result.get("target_ready") is True for result in stage_results)
@@ -764,6 +842,10 @@ def parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--advertise-host", required=True)
     serve_parser.add_argument("--ready-file", required=True)
     serve_parser.set_defaults(handler=serve)
+    probe_parser = subcommands.add_parser("semantic-probe")
+    probe_parser.add_argument("--origin", required=True)
+    probe_parser.add_argument("--output", required=True)
+    probe_parser.set_defaults(handler=semantic_probe)
     report_parser = subcommands.add_parser("report")
     report_parser.add_argument("--suite", choices=tuple(SUITE_CHECKS), required=True)
     report_parser.add_argument("--target", required=True)
@@ -773,6 +855,7 @@ def parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--fixture-state", choices=("stopped", "external"), required=True)
     report_parser.add_argument("--started-ns", required=True)
     report_parser.add_argument("--output", required=True)
+    report_parser.add_argument("--semantic-oracle")
     report_parser.set_defaults(handler=write_report)
     return root
 

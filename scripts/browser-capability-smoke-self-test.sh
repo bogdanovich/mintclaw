@@ -103,6 +103,8 @@ elif printf '%s' "$message" | grep -Eq 'stage (driver-conformance|playwright-lib
 	fi
 elif printf '%s' "$message" | grep -Fq 'stage click-recovery'; then
 	stage=click-recovery
+elif printf '%s' "$message" | grep -Fq 'stage semantic-observation'; then
+	stage=semantic-observation
 elif printf '%s' "$message" | grep -Fq 'stage privileged-execute'; then
 	stage=privileged-execute
 elif printf '%s' "$message" | grep -Fq 'stage provider-open-one'; then
@@ -150,6 +152,13 @@ elif [ "$stage" = ephemeral-verify ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","cookie_removed":"true","local_storage_removed":"true","cache_removed":"true","service_worker_removed":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = click-recovery ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","click_not_dispatched":"true","same_session_preserved":"true","no_photo_click":"true","alternative_control_succeeded":"true","session_closed":"true","safe_error_absent":"true"}'
+elif [ "$stage" = semantic-observation ]; then
+	if ! printf '%s' "$message" | grep -Fq 'GALLERY_OPEN and MAP_INLINE together' ||
+		! printf '%s' "$message" | grep -Fq 'Input dispatch alone is not gallery success'; then
+		echo "semantic smoke did not require independent outcome evidence" >&2
+		exit 1
+	fi
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","map_context_preserved":"true","decorative_images_not_product_photos":"true","gallery_context_preserved":"true","unlabeled_image_evidence":"true","exact_gallery_control":"true","gallery_open_verified":"true","map_unchanged":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = privileged-execute ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","structured_extraction":"true","reversible_dom_restored":"true","artifact_retained":"true","sandbox_denial":"true","runtime_timeout":"true","cleanup_after_timeout":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = provider-open-one ]; then
@@ -202,7 +211,18 @@ fi
 python3 - "$record" "$is_cleanup" "$stage" "$evidence_target" "$evidence_profile" "$message" <<'PY'
 import json
 import os
+import re
 import sys
+import urllib.request
+
+if sys.argv[3] == "semantic-observation":
+    origin = re.search(r"Navigate to (http://[^\s]+?)/browser-smoke/map-only", sys.argv[6]).group(1)
+    for path in ("/browser-smoke/map-only", "/browser-smoke/gallery"):
+        with urllib.request.urlopen(origin + path) as response:
+            response.read()
+    event = "map" if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_WIDGET") == "1" else "gallery"
+    with urllib.request.urlopen(urllib.request.Request(origin + "/browser-smoke/semantic-event/" + event, method="POST")) as response:
+        response.read()
 message = sys.argv[6]
 assert message.count("\nBEGIN_BROWSER_TASK\n") == 1
 assert message.count("\nEND_BROWSER_TASK\n") == 1
@@ -234,6 +254,7 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
         calls = {
             "core": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
             "click-recovery": {"browser_targets": 1, "browser_session": 2, "browser_observe": 4, "browser_act": 3},
+            "semantic-observation": {"browser_targets": 1, "browser_session": 2, "browser_observe": 4, "browser_act": 3},
             "managed-seed": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
             "managed-verify": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
             "ephemeral-seed": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
@@ -328,7 +349,7 @@ PY
 EOF
 chmod +x "$fake"
 
-for suite in core click-recovery managed-reuse ephemeral-cleanup driver-conformance provider-lifecycle playwright-library privileged-execute; do
+for suite in core click-recovery semantic-observation managed-reuse ephemeral-cleanup driver-conformance provider-lifecycle playwright-library privileged-execute; do
 	output="$test_root/$suite.json"
 	if ! MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
 		"$repo_root/scripts/browser-capability-smoke.sh" \
@@ -345,6 +366,7 @@ report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected_primary_calls = {
     "core": {"browser_act": 2, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
     "click-recovery": {"browser_act": 3, "browser_observe": 4, "browser_session": 2, "browser_targets": 1},
+    "semantic-observation": {"browser_act": 3, "browser_observe": 4, "browser_session": 2, "browser_targets": 1},
     "managed-reuse": {"browser_act": 4, "browser_observe": 6, "browser_session": 4, "browser_targets": 2},
     "ephemeral-cleanup": {"browser_act": 3, "browser_observe": 5, "browser_session": 4, "browser_targets": 2},
     "driver-conformance": {"browser_act": 2, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
@@ -352,9 +374,13 @@ expected_primary_calls = {
     "privileged-execute": {"browser_act": 1, "browser_execute": 3, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
     "provider-lifecycle": {"browser_observe": 2, "browser_session": 4, "browser_targets": 2},
 }[sys.argv[2]]
-expected_delegations = 1 if sys.argv[2] in {"core", "click-recovery", "driver-conformance", "playwright-library", "privileged-execute"} else 2
+expected_delegations = 1 if sys.argv[2] in {"core", "click-recovery", "semantic-observation", "driver-conformance", "playwright-library", "privileged-execute"} else 2
 assert report["schema_version"] == "mintclaw.browser_smoke.v1"
 assert report["suite"] == sys.argv[2]
+if sys.argv[2] == "semantic-observation":
+    assert report["fixture_outcome_audit"] == {"state": "passed", "events": {
+        "map-only": 1, "gallery": 1, "map-click": 0, "gallery-click": 1,
+    }}
 assert report["cleanup"] == {"fixture": "stopped", "session_close": "closed", "state": "clean"}
 assert report["process_audit"] == {"immediate_reuse": True, "state": "passed"}
 assert report["execution_audit"] == {
@@ -613,6 +639,25 @@ for failure_mode in missing extra wrong boolean cleanup lost replayed; do
 done
 
 nonterminal_status_output="$test_root/nonterminal-status.json"
+wrong_widget_output="$test_root/wrong-widget.json"
+if MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_WIDGET=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite semantic-observation \
+	--json-output "$wrong_widget_output"; then
+	echo "browser smoke self-test: map input with claimed gallery success unexpectedly passed" >&2
+	exit 1
+fi
+python3 - "$wrong_widget_output" <<'PY'
+import json
+import pathlib
+import sys
+report = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert report["fixture_outcome_audit"]["state"] == "failed"
+assert report["fixture_outcome_audit"]["events"]["map-click"] == 1
+assert report["safe_error"]["code"] == "suite_failed"
+PY
+
 if MINTCLAW_BROWSER_SMOKE_FAKE_NONTERMINAL_STATUS=1 \
 	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
 	"$repo_root/scripts/browser-capability-smoke.sh" \

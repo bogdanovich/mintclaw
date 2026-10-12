@@ -9,6 +9,61 @@ The existing `playwright_mcp` driver remains a supported rollback path. Both
 drivers use the same Go worker, broker, profile lease, network proxy, durable
 receipts, approval policy, artifact boundary, and cleanup state machine.
 
+## Observation Semantics
+
+The library driver uses Playwright's public `ariaSnapshotJSON({mode: "ai"})`
+API for accessible roles, names, state, hierarchy, and exact element refs,
+including child frames. MintClaw serializes that tree into its existing private
+snapshot format; it does not infer roles from HTML tags or associate elements
+by matching names. Playwright resolves `aria-ref` selectors directly. Broker
+snapshot generations and opaque refs remain the action-authority boundary.
+
+The runtime-private credential adapter uses the same exact native refs to
+retain the original form elements before retrieving credentials. Prefixed refs
+may belong to the main document after navigation; prefixes are not frame
+indices. Main-document ownership, origin, form and submit destination checks
+remain mandatory, and detached replacements cannot inherit the prepared
+capsule. This does not change credential grants or allow child-frame injection.
+
+A bounded supplemental DOM image inventory preserves evidence about images
+that accessibility semantics deliberately omit, including empty-alt images.
+It reports load state, intrinsic dimensions, rendering, viewport and pointer
+hit-test evidence in each frame's light DOM, nearby explicit labels or figure captions, and source
+origin (not full source URLs). It includes at most 32 image records across the
+first eight frames and explicitly reports omitted images or frames. Inventory
+indices are **not** action refs. Output is still subject to the configured
+snapshot and tool-result budgets; inspect `truncated` before assuming coverage.
+Password input values are removed from native snapshots. Observations remain
+protected, ephemeral page data.
+The supplemental inventory does not traverse shadow roots or prove whole-page
+actionability through parent-frame overlays. Native ARIA semantics and retained
+screenshots remain available for those cases.
+
+Neither a DOM image count nor a dispatched click proves that product photos
+exist or a gallery opened. Use surrounding context and fresh state; request a
+screenshot when evidence is ambiguous. Maps, icons, broken images, and product
+photos must not be conflated. No domain-specific classification is performed.
+
+Run the safe semantic fixture through either endpoint:
+
+```sh
+scripts/browser-capability-smoke.sh --target gateway --profile managed \
+  --suite semantic-observation --json-output /tmp/gateway-semantics.json
+scripts/browser-capability-smoke.sh --target companion --profile managed \
+  --gateway-host server@oc --fixture-host COMPANION_ADDRESS \
+  --suite semantic-observation \
+  --json-output /tmp/companion-semantics.json
+```
+
+The fixture distinguishes a decorative map from a real two-image gallery,
+including an unlabeled image, with duplicate Full Screen button names. It
+requires fresh evidence of `GALLERY_OPEN` and `MAP_INLINE`, exact gallery
+selection, session closure and immediate profile reuse. The fixture independently
+records which widget received input; a map click fails the suite even if the
+agent claims gallery success. Use a companion address reachable by the gateway;
+run the gateway command on the gateway host with its installed binary. Tests never change
+third-party listings.
+
 ## Install The Pinned Dependency
 
 From an exact MintClaw checkout, run:

@@ -18,11 +18,13 @@ type credentialTestClient struct {
 	fakePlaywrightClient
 	prepared, submitted, discarded int
 	result                         credentialDriverResult
+	preparedFields                 CredentialFields
 	afterPrepare                   func()
 }
 
-func (client *credentialTestClient) prepareCredential(context.Context, CredentialFields) (string, error) {
+func (client *credentialTestClient) prepareCredential(_ context.Context, fields CredentialFields) (string, error) {
 	client.prepared++
+	client.preparedFields = fields
 	if client.afterPrepare != nil {
 		client.afterPrepare()
 	}
@@ -143,6 +145,53 @@ func TestCredentialLoginReturnsAliasAndKeepsValuesGuardedUntilSessionClose(t *te
 	}
 	if secretvalues.Redact(string(password)) != string(password) {
 		t.Fatal("closed session retained its credential output registration")
+	}
+}
+
+func TestCredentialLoginPreservesNativeMainDocumentRefPrefixes(t *testing.T) {
+	broker, request, client, _, lease, _ := credentialBrokerFixture(t)
+	for ref, element := range broker.slots[request.SessionID].refs {
+		element.Target = "f17" + element.Target
+		broker.slots[request.SessionID].refs[ref] = element
+	}
+	result := broker.LoginCredential(t.Context(), request, lease,
+		func(_ context.Context, use func([]byte, []byte) error) error {
+			return use([]byte("native-ref-user"), []byte("native-ref-password"))
+		})
+	if result.Outcome != "logged_in" || client.submitted != 1 ||
+		client.preparedFields.UsernameRef != "f17e1" || client.preparedFields.PasswordRef != "f17e2" ||
+		client.preparedFields.SubmitRef != "f17e3" {
+		t.Fatal("native main-document refs did not retain exact private-driver bindings")
+	}
+}
+
+func TestCredentialLoginRejectsSelectedFrameBeforePrivatePreparation(t *testing.T) {
+	broker, request, client, _, lease, _ := credentialBrokerFixture(t)
+	session, err := broker.store.GetSession(t.Context(), request.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := testContextCatalog()
+	catalog.SelectedTabID = session.TabID
+	catalog.Tabs = catalog.Tabs[:1]
+	catalog.Tabs[0].ID = session.TabID
+	catalog.SelectedFrameID = "frame_child"
+	session.ContextAuthority = &catalog
+	session.FrameID = catalog.SelectedFrameID
+	if err = session.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// Seed a valid selected-frame fixture, not a context transition that would
+	// itself require invalidating the already-populated snapshot authority.
+	store := broker.store.(*MemoryStore)
+	store.mu.Lock()
+	store.sessions[session.ID] = cloneSession(session)
+	store.mu.Unlock()
+	retrieved := false
+	result := broker.LoginCredential(t.Context(), request, lease,
+		func(context.Context, func([]byte, []byte) error) error { retrieved = true; return nil })
+	if result.Outcome != "denied" || retrieved || client.prepared != 0 {
+		t.Fatal("selected frame reached private credential preparation or retrieval")
 	}
 }
 

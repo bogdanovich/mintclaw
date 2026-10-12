@@ -2,8 +2,7 @@
 
 // Runtime-private form handling. Return fixed outcomes only: never Playwright
 // exceptions, page content, credential values, or authentication cookies.
-const REF_ATTRIBUTE = 'data-mintclaw-playwright-ref';
-const REF = /^e[1-9][0-9]{0,9}$/;
+const REF = /^(?:f[1-9][0-9]{0,9})?e[1-9][0-9]{0,9}$/;
 const MARKER = /^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/;
 
 function validOrigin(value) {
@@ -25,12 +24,18 @@ function validRequest(request) {
 async function prepareCredentialLogin(page, request) {
   if (!validRequest(request) || new URL(page.url()).origin !== request.origin) return null;
   let capsule;
+  const elements = [];
   try {
-    capsule = await page.evaluateHandle(({ origin, refs, attribute }) => {
-      const find = ref => document.querySelectorAll(`[${attribute}="${ref}"]`);
-      const groups = refs.map(find);
-      if (location.origin !== origin || groups.some(group => group.length !== 1)) return null;
-      const [username, password, submit] = groups.map(group => group[0]);
+    // Resolve exact native refs once, before retrieving credentials. The
+    // capsule retains these elements, never replacements with matching labels.
+    for (const ref of [request.username_ref, request.password_ref, request.submit_ref]) {
+      const element = await page.locator(`aria-ref=${ref}`).elementHandle({ timeout: 500 });
+      if (!element) return null;
+      elements.push(element);
+    }
+    capsule = await page.evaluateHandle(({ origin, elements }) => {
+      if (location.origin !== origin) return null;
+      const [username, password, submit] = elements;
       const form = username.form;
       const writable = input => input instanceof HTMLInputElement && input.isConnected &&
         !input.disabled && !input.matches(':disabled') && !input.readOnly &&
@@ -48,11 +53,9 @@ async function prepareCredentialLogin(page, request) {
         password.form === form && submit.form === form && submit.isConnected &&
         !submit.disabled && !submit.matches(':disabled') && submit.type === 'submit' &&
         (submit instanceof HTMLButtonElement || submit instanceof HTMLInputElement) &&
-        postDestination() &&
-        refs.every((ref, index) => find(ref).length === 1 && find(ref)[0] === [username, password, submit][index]);
+        postDestination();
       return ready() ? { username, password, submit, form, ready } : null;
-    }, { origin: request.origin,
-      refs: [request.username_ref, request.password_ref, request.submit_ref], attribute: REF_ATTRIBUTE });
+    }, { origin: request.origin, elements });
     if (!(await capsule.evaluate(value => value !== null))) {
       await capsule.dispose();
       return null;
@@ -61,6 +64,8 @@ async function prepareCredentialLogin(page, request) {
   } catch (_) {
     if (capsule) await capsule.dispose().catch(() => {});
     return null;
+  } finally {
+    await Promise.all(elements.map(element => element.dispose().catch(() => {})));
   }
 }
 

@@ -18,7 +18,8 @@ const cookie = 'protocol-private-cookie-F47';
 const bootstrap = `
   const { Driver, runProtocol } = require('./sidecar.cjs');
   (async () => {
-    const driver = new Driver({ browser: 'chromium', headless: true });
+    const driver = new Driver({ browser: 'chromium', headless: true,
+      executablePath: process.env.MINTCLAW_BROWSER_TEST_EXECUTABLE || '' });
     await driver.start();
     let submissions = 0;
     await driver.context.route('https://credential-protocol.example.org/**', async route => {
@@ -85,8 +86,15 @@ async function wireFixture(t) {
   } };
 }
 
-const prepare = () => ({ origin, username_ref: 'e1', password_ref: 'e2', submit_ref: 'e3',
-  success_url: `${origin}/home`, success_marker_id: 'signed-in' });
+const prepare = snapshot => {
+  const refs = Object.fromEntries([['username_ref', 'Account'], ['password_ref', 'Password'], ['submit_ref', 'Sign in']]
+    .map(([key, name]) => {
+      const match = snapshot.content[0].text.match(new RegExp(`- (?:textbox|button) "${name}"[^\\n]*\\[ref=((?:f\\d+)?e\\d+)\\]`));
+      assert.ok(match, 'native credential target unavailable');
+      return [key, match[1]];
+    }));
+  return { origin, ...refs, success_url: `${origin}/home`, success_marker_id: 'signed-in' };
+};
 const envelope = result => {
   assert.equal(result.is_error, false, 'private response unexpectedly denied');
   assert.equal(result.content.length, 1);
@@ -96,8 +104,11 @@ const envelope = result => {
 test('private JSON-lines transaction suppresses dialogs and returns only fixed outcome plus private cookies',
   { timeout: 30000 }, async t => {
     const wire = await wireFixture(t);
-    await wire.call('browser_navigate', { url: `${origin}/login` });
-    const ready = envelope(await wire.call('mintclaw_credential_prepare', prepare()));
+    await wire.call('browser_navigate', { url: `${origin}/home` });
+    const snapshot = await wire.call('browser_navigate', { url: `${origin}/login` });
+    const fields = prepare(snapshot);
+    assert.match(fields.username_ref, /^f\d+e\d+$/);
+    const ready = envelope(await wire.call('mintclaw_credential_prepare', fields));
     assert.match(ready.id, /^[a-f0-9]{64}$/); assert.equal(ready.origin, origin);
     const pending = await wire.call('browser_snapshot', {});
     assert.equal(pending.is_error, true);
@@ -117,8 +128,8 @@ test('private JSON-lines transaction suppresses dialogs and returns only fixed o
 test('discarded capsules cannot submit and malformed JSON never echoes private input',
   { timeout: 30000 }, async t => {
     const wire = await wireFixture(t);
-    await wire.call('browser_navigate', { url: `${origin}/login` });
-    const ready = envelope(await wire.call('mintclaw_credential_prepare', prepare()));
+    const snapshot = await wire.call('browser_navigate', { url: `${origin}/login` });
+    const ready = envelope(await wire.call('mintclaw_credential_prepare', prepare(snapshot)));
     const discarded = await wire.call('mintclaw_credential_discard', { id: ready.id });
     assert.equal(discarded.content[0].text, 'discarded');
     const denied = envelope(await wire.call('mintclaw_credential_submit', { id: ready.id, username, password }));
