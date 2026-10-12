@@ -115,7 +115,7 @@ func (p *CodexProvider) chatResponses(
 	useNativeSearch := p.enableWebSearch && (options["native_search"] == true)
 	params := buildCodexParams(messages, tools, resolvedModel, options, useNativeSearch)
 
-	stream := p.client.Responses.NewStreaming(ctx, params, opts...)
+	stream := newCodexResponseStream(ctx, &p.client.Responses, params, opts...)
 	defer func() { _ = stream.Close() }()
 
 	var resp *responses.Response
