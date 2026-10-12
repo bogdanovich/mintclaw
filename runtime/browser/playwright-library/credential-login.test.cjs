@@ -8,11 +8,12 @@ const { prepareCredentialLogin, performCredentialLogin } = require('./credential
 const origin = 'https://credential-fixture.example.org';
 const username = 'private-fixture-account@example.org';
 const password = 'private-browser-fixture-A9&secret';
-const request = () => ({ origin, username_ref: 'e1', password_ref: 'e2', submit_ref: 'e3',
+const request = refs => ({ origin, ...refs,
   username, password, success_url: `${origin}/home`, success_marker_id: 'signed-in', timeout_ms: 1000 });
 
 async function fixture(t, extra = '') {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true,
+    executablePath: process.env.MINTCLAW_BROWSER_TEST_EXECUTABLE || undefined });
   t.after(() => browser.close());
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -22,9 +23,9 @@ async function fixture(t, extra = '') {
     assert.equal(url.origin, origin, 'unexpected fixture destination');
     if (url.pathname === '/login') {
       await route.fulfill({ contentType: 'text/html', body: `<form method="post" action="/session">
-        <input type="email" name="username" data-mintclaw-playwright-ref="e1">
-        <input type="password" name="password" data-mintclaw-playwright-ref="e2">
-        <button type="submit" data-mintclaw-playwright-ref="e3">Sign in</button>
+        <input type="email" name="username" aria-label="Account">
+        <input type="password" name="password" aria-label="Password">
+        <button type="submit">Sign in</button>
         </form>${extra}` });
     } else if (url.pathname === '/session') {
       submissions++;
@@ -37,11 +38,17 @@ async function fixture(t, extra = '') {
     }
   });
   await page.goto(`${origin}/login`);
-  return { page, context, submissions: () => submissions };
+  const tree = await page.locator(':root').ariaSnapshotJSON({ mode: 'ai' });
+  const nodes = tree.flatMap(function flatten(node) {
+    return typeof node === 'string' ? [] : [node, ...(node.children || []).flatMap(flatten)];
+  });
+  const refs = Object.fromEntries([['username_ref', 'Account'], ['password_ref', 'Password'], ['submit_ref', 'Sign in']]
+    .map(([key, name]) => [key, nodes.find(node => node.name === name).ref]));
+  return { page, context, refs, submissions: () => submissions };
 }
 
 test('private login submits once and returns only fixed authentication evidence', { timeout: 30000 }, async t => {
-  const f = await fixture(t), values = request();
+  const f = await fixture(t), values = request(f.refs);
   const capsule = await prepareCredentialLogin(f.page, values);
   assert.ok(capsule, 'private readiness unavailable');
   const result = await performCredentialLogin(f.page, capsule, values);
@@ -51,7 +58,7 @@ test('private login submits once and returns only fixed authentication evidence'
 });
 
 test('origin changes before injection do not submit credentials', { timeout: 30000 }, async t => {
-  const f = await fixture(t), values = request();
+  const f = await fixture(t), values = request(f.refs);
   const capsule = await prepareCredentialLogin(f.page, values);
   await f.page.setContent('<p>Different document</p>');
   const result = await performCredentialLogin(f.page, capsule, values);
@@ -60,7 +67,7 @@ test('origin changes before injection do not submit credentials', { timeout: 300
 });
 
 test('unproven authentication closes the affected context', { timeout: 30000 }, async t => {
-  const f = await fixture(t), values = request();
+  const f = await fixture(t), values = request(f.refs);
   values.success_marker_id = 'not-present';
   const capsule = await prepareCredentialLogin(f.page, values);
   assert.equal(await performCredentialLogin(f.page, capsule, values), 'outcome_unknown');
@@ -69,7 +76,7 @@ test('unproven authentication closes the affected context', { timeout: 30000 }, 
 });
 
 test('GET login forms are rejected before any private fill', { timeout: 30000 }, async t => {
-  const f = await fixture(t), values = request();
+  const f = await fixture(t), values = request(f.refs);
   await f.page.locator('form').evaluate(form => { form.method = 'get'; });
   const capsule = await prepareCredentialLogin(f.page, values);
   assert.equal(capsule, null);
@@ -77,7 +84,7 @@ test('GET login forms are rejected before any private fill', { timeout: 30000 },
 });
 
 test('invalid values dispose the prepared handle and clear the private request', { timeout: 30000 }, async t => {
-  const f = await fixture(t), values = request();
+  const f = await fixture(t), values = request(f.refs);
   const capsule = await prepareCredentialLogin(f.page, values);
   values.password += '\n';
   assert.equal(await performCredentialLogin(f.page, capsule, values), 'denied');
@@ -88,7 +95,7 @@ test('invalid values dispose the prepared handle and clear the private request',
 });
 
 test('submitter destination overrides are checked before vault retrieval', { timeout: 30000 }, async t => {
-  const f = await fixture(t), values = request();
+  const f = await fixture(t), values = request(f.refs);
   for (const [attribute, value] of [
     ['formmethod', 'get'], ['formaction', 'https://other.example.org/session'], ['formtarget', '_blank'],
   ]) {
@@ -96,5 +103,34 @@ test('submitter destination overrides are checked before vault retrieval', { tim
     assert.equal(await prepareCredentialLogin(f.page, values), null, 'unsafe submitter override was admitted');
     await f.page.locator('button').evaluate((button, name) => button.removeAttribute(name), attribute);
   }
+  assert.equal(f.submissions(), 0);
+});
+
+test('a matching replacement form cannot inherit prepared native credential targets', { timeout: 30000 }, async t => {
+  const f = await fixture(t), values = request(f.refs);
+  const capsule = await prepareCredentialLogin(f.page, values);
+  assert.ok(capsule);
+  await f.page.locator('form').evaluate(form => form.replaceWith(form.cloneNode(true)));
+  assert.equal(await performCredentialLogin(f.page, capsule, values), 'denied');
+  assert.equal(f.submissions(), 0);
+});
+
+test('frame refs cannot move private credential injection into a child document', { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  await f.page.locator('form').evaluate(form => {
+    const frame = document.createElement('iframe');
+    frame.srcdoc = form.outerHTML;
+    form.replaceWith(frame);
+  });
+  const frame = f.page.frames()[1];
+  await frame.locator('button').waitFor();
+  const tree = await f.page.locator(':root').ariaSnapshotJSON({ mode: 'ai' });
+  const nodes = tree.flatMap(function flatten(node) {
+    return typeof node === 'string' ? [] : [node, ...(node.children || []).flatMap(flatten)];
+  });
+  const refs = Object.fromEntries([['username_ref', 'Account'], ['password_ref', 'Password'], ['submit_ref', 'Sign in']]
+    .map(([key, name]) => [key, nodes.find(node => node.name === name).ref]));
+  assert.match(refs.username_ref, /^f\d+e\d+$/);
+  assert.equal(await prepareCredentialLogin(f.page, request(refs)), null);
   assert.equal(f.submissions(), 0);
 });

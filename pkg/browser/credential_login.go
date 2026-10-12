@@ -2,7 +2,6 @@ package browser
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/internal/secretvalues"
@@ -106,7 +105,10 @@ func (broker *Broker) LoginCredential(
 		fields.SubmitRef:   &fields.SubmitRef,
 	} {
 		element, found := slot.refs[ref]
-		if !found || !playwrightTargetPattern.MatchString(element.Target) || strings.HasPrefix(element.Target, "f") {
+		// Native Playwright may prefix main-document refs after navigation too.
+		// Frame authority remains excluded by session.FrameID above and the
+		// private driver's exact main-document/form validation before retrieval.
+		if !found || !playwrightTargetPattern.MatchString(element.Target) {
 			return result
 		}
 		*destination = element.Target

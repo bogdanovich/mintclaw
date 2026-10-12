@@ -18,6 +18,13 @@ snapshot format; it does not infer roles from HTML tags or associate elements
 by matching names. Playwright resolves `aria-ref` selectors directly. Broker
 snapshot generations and opaque refs remain the action-authority boundary.
 
+The runtime-private credential adapter uses the same exact native refs to
+retain the original form elements before retrieving credentials. Prefixed refs
+may belong to the main document after navigation; prefixes are not frame
+indices. Main-document ownership, origin, form and submit destination checks
+remain mandatory, and detached replacements cannot inherit the prepared
+capsule. This does not change credential grants or allow child-frame injection.
+
 A bounded supplemental DOM image inventory preserves evidence about images
 that accessibility semantics deliberately omit, including empty-alt images.
 It reports load state, intrinsic dimensions, rendering, viewport and pointer
