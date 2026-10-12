@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
@@ -478,8 +480,104 @@ func TestPipelineChannelStreamingConfigUsesConfig(t *testing.T) {
 	}
 }
 
+func TestConfiguredStreamingAuthenticationFailureDoesNotRetryAndKeepsSafeTrace(t *testing.T) {
+	const secret = "synthetic-auth-secret"
+	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
+	// Keep the active route unconfigured so the injected provider remains the
+	// only execution backend; the disabled route exercises config redaction.
+	cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
+		ModelName: "redaction-only", Provider: "openai", Model: "redaction-only",
+		APIKeys: config.SimpleSecureStrings(secret), Enabled: false,
+	})
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "metadata_only"
+	msgBus := bus.NewMessageBus()
+	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: &recordingStreamer{}})
+	provider := &configuredStreamingProvider{streamPlan: []configuredStreamingCall{{
+		err: &providers.ProviderError{
+			Kind: providers.ProviderErrorAuthentication, HTTPStatus: 401,
+			SafeMessage: "authentication timeout " + secret, RequestID: "request-" + secret,
+		},
+	}}}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	_, err := al.runAgentLoop(
+		context.Background(), al.GetRegistry().GetDefaultAgent(), configuredStreamingTurnSpec("mintclaw"),
+	)
+	al.Close()
+	if err == nil || provider.streamCalls != 1 || provider.chatCalls != 0 {
+		t.Fatalf("auth outcome: error=%v stream=%d chat=%d", err, provider.streamCalls, provider.chatCalls)
+	}
+	files, err := filepath.Glob(
+		filepath.Join(cfg.Agents.Defaults.Workspace, "state", "diagnostics", "traces", "trace-*.json"),
+	)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("trace files=%v error=%v", files, err)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Fatal("metadata-only error trace contains configured secret")
+	}
+	var trace diagnostictrace.Trace
+	if err = json.Unmarshal(data, &trace); err != nil {
+		t.Fatal(err)
+	}
+	requestAttempt, failureAttempt := "", ""
+	for _, record := range trace.Records {
+		switch record.Kind {
+		case diagnostictrace.RecordModelRequest:
+			requestAttempt = record.Correlation.ModelAttemptID
+		case diagnostictrace.RecordModelRetry:
+			t.Fatal("authentication failure emitted a retry")
+		case diagnostictrace.RecordRuntimeError:
+			failureAttempt = record.Correlation.ModelAttemptID
+			var payload diagnostictrace.RuntimeErrorPayload
+			if err = json.Unmarshal(record.Data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Stage != "llm" || payload.ErrorCode != "auth" || payload.HTTPStatus != 401 ||
+				payload.ProviderErrorKind != "authentication" || payload.ClassificationSource != "provider_structured" ||
+				payload.MessagePreview != "" {
+				t.Fatalf("safe auth diagnostic = %+v", payload)
+			}
+		}
+	}
+	if requestAttempt == "" || failureAttempt != requestAttempt {
+		t.Fatalf("model/error correlation = %q/%q", requestAttempt, failureAttempt)
+	}
+	safe, err := diagnostictrace.Summarize(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range safe.Records {
+		if record.Kind == diagnostictrace.RecordRuntimeError &&
+			(record.Facts["error_code"] != "auth" || record.Facts["provider_error_kind"] != "authentication") {
+			t.Fatalf("safe support failure facts = %+v", record.Facts)
+		}
+	}
+}
+
+func TestConfiguredStreamingCanceledBeforeOutputDoesNotCallChat(t *testing.T) {
+	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
+	msgBus := bus.NewMessageBus()
+	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: &recordingStreamer{}})
+	provider := &configuredStreamingProvider{streamPlan: []configuredStreamingCall{{err: context.Canceled}}}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	defer al.Close()
+	_, err := al.runAgentLoop(
+		context.Background(), al.GetRegistry().GetDefaultAgent(), configuredStreamingTurnSpec("mintclaw"),
+	)
+	if !errors.Is(err, context.Canceled) || provider.streamCalls != 1 || provider.chatCalls != 0 {
+		t.Fatalf("canceled outcome: error=%v stream=%d chat=%d", err, provider.streamCalls, provider.chatCalls)
+	}
+}
+
 func TestConfiguredStreamingPreChunkFailureFallsBackToChat(t *testing.T) {
 	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "metadata_only"
 	msgBus := bus.NewMessageBus()
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: &recordingStreamer{}})
 	provider := &configuredStreamingProvider{
@@ -512,6 +610,39 @@ func TestConfiguredStreamingPreChunkFailureFallsBackToChat(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected fallback outbound after pre-chunk stream failure")
+	}
+	al.Close()
+	files, err := filepath.Glob(
+		filepath.Join(cfg.Agents.Defaults.Workspace, "state", "diagnostics", "traces", "trace-*.json"),
+	)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("trace files=%v error=%v", files, err)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trace diagnostictrace.Trace
+	if err = json.Unmarshal(data, &trace); err != nil {
+		t.Fatal(err)
+	}
+	requestAttempt, retryAttempt := "", ""
+	for _, record := range trace.Records {
+		if record.Kind == diagnostictrace.RecordModelRequest {
+			requestAttempt = record.Correlation.ModelAttemptID
+		}
+		if record.Kind == diagnostictrace.RecordModelRetry {
+			var payload diagnostictrace.ModelPayload
+			if err = json.Unmarshal(record.Data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Reason == "stream_transport_fallback" {
+				retryAttempt = record.Correlation.ModelAttemptID
+			}
+		}
+	}
+	if requestAttempt == "" || retryAttempt != requestAttempt {
+		t.Fatalf("stream/chat transport correlation = %q/%q", requestAttempt, retryAttempt)
 	}
 }
 
