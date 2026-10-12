@@ -546,3 +546,9 @@ jobs:
           go test -tags goolm,stdjson -count=1
           -run '^(TestDocumentIntake|TestDocumentFormIntake|TestGatewayDocumentIntakeComposition|TestGatewayDisabledDocument)'
           ./pkg/tools ./pkg/agent
+
+      - name: Run native protected form intake on Windows
+        run: >-
+          go test -tags goolm,stdjson -count=1
+          -run '^TestFormIntake'
+          ./pkg/document

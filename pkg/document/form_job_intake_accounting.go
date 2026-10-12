@@ -7,6 +7,9 @@ import (
 )
 
 func formIntakeCurrentFindings(input formIntakeStoredInput) []FormFieldMappingBlocker {
+	if input.State == formIntakeInputConsumed {
+		return nil
+	}
 	current := make(map[string]string, MaxFormIntakeCandidates)
 	for _, pass := range input.Reservations {
 		if pass.Outcome == nil {
@@ -20,6 +23,13 @@ func formIntakeCurrentFindings(input formIntakeStoredInput) []FormFieldMappingBl
 		for _, finding := range pass.Outcome.Findings {
 			current[finding.FieldID] = finding.Code
 		}
+		for _, id := range pass.Outcome.ResolvedGuidanceIDs {
+			// Only advisory uncertainty in this exact window may settle.
+			// Native invalid/conflicting facts still require their own resolution.
+			if current[id] == "field_ambiguous" || current[id] == "field_confirmation_required" {
+				delete(current, id)
+			}
+		}
 	}
 	findings := make([]FormFieldMappingBlocker, 0, len(current))
 	for fieldID, code := range current {
@@ -27,6 +37,40 @@ func formIntakeCurrentFindings(input formIntakeStoredInput) []FormFieldMappingBl
 	}
 	slices.SortFunc(findings, func(a, b FormFieldMappingBlocker) int { return strings.Compare(a.FieldID, b.FieldID) })
 	return findings
+}
+
+// Resolution is derived once at native apply, not retroactively inferred from
+// later accounting. It persists with the existing encrypted pass outcome.
+func formIntakeResolvedGuidanceIDs(input formIntakeStoredInput, pass formIntakeStoredPass) []string {
+	if pass.Outcome == nil || !formIntakeGuidanceOnlyOutcome(*pass.Outcome) ||
+		!formIntakeTextAccounted(input.Text, input.Accounted) ||
+		slices.ContainsFunc(input.Accounted, func(span formIntakeSpan) bool {
+			return span.FieldID != "" || span.ScopedInstruction
+		}) {
+		return nil
+	}
+	var ids []string
+	for _, finding := range formIntakeCurrentFindings(input) {
+		if slices.Contains(pass.CandidateIDs, finding.FieldID) &&
+			(finding.Code == "field_ambiguous" || finding.Code == "field_confirmation_required") {
+			ids = append(ids, finding.FieldID)
+		}
+	}
+	return ids
+}
+
+func formIntakeGuidanceOnlyOutcome(outcome formIntakeStoredOutcome) bool {
+	if outcome.ScopedInstruction ||
+		len(outcome.AcceptedIDs)+len(outcome.AcknowledgedIDs)+len(outcome.ScopedIDs)+len(outcome.Findings) != 0 {
+		return false
+	}
+	switch outcome.Intent {
+	case FormIntakeIntentClarify, FormIntakeIntentBack, FormIntakeIntentPause, FormIntakeIntentResume,
+		FormIntakeIntentCancel, FormIntakeIntentReview, FormIntakeIntentFinish:
+		return true
+	default:
+		return false
+	}
 }
 
 func formIntakeAccountedLiterals(input formIntakeStoredInput) []FormIntakeAccountedLiteral {
@@ -93,13 +137,20 @@ func validateFormIntakeOutcome(record FormJobRecord, pass formIntakeStoredPass) 
 			outcome.Findings,
 		)+len(
 			outcome.ScopedIDs,
+		)+len(
+			outcome.ResolvedGuidanceIDs,
 		) > len(
 			pass.CandidateIDs,
 		) {
 		return ErrFormJobRecordCorrupt
 	}
 	seen := make(map[string]bool, len(pass.CandidateIDs))
-	for _, ids := range [][]string{outcome.AcceptedIDs, outcome.AcknowledgedIDs, outcome.ScopedIDs} {
+	if len(outcome.ResolvedGuidanceIDs) != 0 && !formIntakeGuidanceOnlyOutcome(*outcome) {
+		return ErrFormJobRecordCorrupt
+	}
+	for _, ids := range [][]string{
+		outcome.AcceptedIDs, outcome.AcknowledgedIDs, outcome.ScopedIDs, outcome.ResolvedGuidanceIDs,
+	} {
 		if !slices.IsSorted(ids) {
 			return ErrFormJobRecordCorrupt
 		}
