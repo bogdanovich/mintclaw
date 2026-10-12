@@ -324,8 +324,11 @@ bounded retention, safe export, and complete derived-state deletion.
 The [user guide](../guides/coding-agent.md) covers provider onboarding,
 instruction precedence, chat/coding authority separation and symptom-first
 diagnostics. The [upgrade guide](../operations/coding-state-upgrades.md)
-defines stopped-state backups, migration, canaries and rollback. H5 still
-requires alignment and deployment of the bundled trace-debug skill.
+defines stopped-state backups, migration, canaries and rollback. The bundled
+trace-debug skill and shadowing workspace packages are aligned and deployed;
+[H5 production evidence](../operations/local-coding-agent-p8-documentation-production-evidence.md)
+records the exact revisions, package digests, preservation and runtime checks.
+H5 is complete; final integrated H6 qualification remains active.
 
 - Document `mintclaw code`, resume/fork behavior, keybindings, storage, trust,
   provider/model setup, compaction, recovery, remote companion capabilities,
