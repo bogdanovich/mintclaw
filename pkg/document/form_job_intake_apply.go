@@ -67,6 +67,8 @@ type formIntakeStoredOutcome struct {
 	Intent            FormIntakeDialogIntent    `json:"intent,omitempty"`
 	ScopedInstruction bool                      `json:"scoped_instruction,omitempty"`
 	ScopedIDs         []string                  `json:"scoped_ids,omitempty"`
+	// Native-derived settlement of advisory uncertainty, never a value or approval.
+	ResolvedGuidanceIDs []string `json:"resolved_guidance_ids,omitempty"`
 }
 
 // ApplyFormIntakePass publishes accepted ledger events, raw-input accounting
@@ -155,6 +157,7 @@ func (store *FormJobStore) ApplyFormIntakePass(
 			ScopedInstruction: selection.ScopedInstruction,
 			ScopedIDs:         selection.ScopedIDs,
 		}
+		pass.Outcome.ResolvedGuidanceIDs = formIntakeResolvedGuidanceIDs(*input, *pass)
 		consumed := len(formIntakeCurrentFindings(*input)) == 0 && (input.Intent != interactions.ProtectedAnswerValue ||
 			formIntakeTextAccounted(input.Text, input.Accounted))
 		if consumed && formIntakeHasScopedInstruction(*input) {
