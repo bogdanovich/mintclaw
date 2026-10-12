@@ -411,7 +411,12 @@ func (tool *DocumentTool) processFormIntakeInput(
 				break
 			}
 		}
-		identityBytes, err := json.Marshal([]any{clarificationTrigger, ids, input.Context})
+		// Replays within one execution reuse committed windows. A later explicit
+		// retry may finish incomplete accounting, using the same protected input
+		// and native reservation budget instead of skipping those windows forever.
+		identityBytes, err := json.Marshal(
+			[]any{clarificationTrigger, toolshared.ToolExecutionID(ctx), ids, input.Context},
+		)
 		if err != nil {
 			return result, document.ErrFormJobConflict
 		}

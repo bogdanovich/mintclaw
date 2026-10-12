@@ -122,3 +122,134 @@ func TestDocumentFormIntakePendingGuidanceDoesNotClaimReviewOrRequestReceivedFac
 		t.Fatal("pending input invited a fake review checkpoint or another data message")
 	}
 }
+
+func TestDocumentFormIntakeRetryRevisitsIncompleteAccountingWithoutReapplyingFacts(t *testing.T) {
+	model := &intakeWorkflowTestInterpreter{}
+	tool, ctx, schema, jobID, _ := intakeWorkflowFixture(t, model)
+	model.interpret = func(view document.FormIntakeInterpretationView) (document.FormIntakeInterpretation, error) {
+		result := document.FormIntakeInterpretation{Intent: document.FormIntakeIntentFacts}
+		if model.intakeCalls == 1 {
+			result.Proposals = []document.FormIntakeProposal{{
+				FieldID:  schema.Fields[0].ID,
+				Literals: []document.FormIntakeLiteral{{Text: "Casey", Occurrence: 1}},
+			}}
+		} else if model.intakeCalls > 2 {
+			result.NonData = []document.FormIntakeLiteral{{Text: "I am", Occurrence: 1}}
+		}
+		return result, nil
+	}
+	progress, err := tool.FindProtectedFormIntake(ctx)
+	if err != nil || progress == nil {
+		t.Fatal("intake unavailable")
+	}
+	guard := bus.InboundDocumentIntakeGuard{JobID: jobID, ModeID: progress.ModeID}
+	ref, err := tool.AdmitProtectedFormIntake(ctx, guard, "accounting-retry", "I am Casey")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"action": "form", "form_action": "continue", "answer_ref": ref}
+	first := tool.Execute(ctx, args)
+	initial := decodeWorkflowResult(t, first.ForLLM)
+	if first.IsError || initial.Intake == nil || initial.Intake.Failure != nil ||
+		initial.Intake.AcceptedCount != 1 || initial.Intake.Progress.PendingInputs != 1 || model.intakeCalls != 2 {
+		t.Fatal("fixture did not retain incomplete accounting after accepting one fact")
+	}
+	replayed := tool.Execute(ctx, args)
+	if replayed.IsError || model.intakeCalls != 2 {
+		t.Fatal("same-execution replay reinterpreted committed windows")
+	}
+	owner, err := documentFormOwner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := tool.formJobs.Get(ctx, jobID, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard.Reference = ref
+	resolved, err := tool.RetryProtectedFormIntake(ctx, guard)
+	if err != nil || resolved != ref {
+		t.Fatal("retry did not preserve its original receipt")
+	}
+	retryCtx := toolshared.WithToolExecutionIdentity(ctx, "workspace", "accounting-explicit-retry")
+	second := tool.Execute(retryCtx, args)
+	finished := decodeWorkflowResult(t, second.ForLLM)
+	if second.IsError || finished.Intake == nil || finished.Intake.Failure != nil ||
+		finished.Intake.Progress.PendingInputs != 0 || finished.Intake.AcceptedCount != 0 || model.intakeCalls != 3 {
+		t.Fatal("retry reused completed windows forever instead of processing newly accounted input")
+	}
+	after, err := tool.formJobs.Get(ctx, jobID, owner)
+	if err != nil || after.Revision != before.Revision || after.LedgerRevision != before.LedgerRevision ||
+		!reflect.DeepEqual(before.Fields, after.Fields) {
+		t.Fatal("accounting retry reapplied or changed an accepted fact")
+	}
+	input, err := tool.formJobs.ReadFormIntakeInput(ctx, ref, owner)
+	if err != nil || !input.Consumed || input.Passes != 3 || input.Text != "" {
+		t.Fatal("accounting retry lost retention cleanup or reset its bounded budget")
+	}
+}
+
+func TestDocumentFormIntakeRetryCanFinishAnEmptyOutcome(t *testing.T) {
+	model := &intakeWorkflowTestInterpreter{}
+	tool, ctx, _, jobID, _ := intakeWorkflowFixture(t, model)
+	model.interpret = func(view document.FormIntakeInterpretationView) (document.FormIntakeInterpretation, error) {
+		result := document.FormIntakeInterpretation{Intent: document.FormIntakeIntentClarify}
+		if model.intakeCalls > 2 {
+			result.NonData = []document.FormIntakeLiteral{{Text: view.Pass.Input.Text, Occurrence: 1}}
+		}
+		return result, nil
+	}
+	progress, err := tool.FindProtectedFormIntake(ctx)
+	if err != nil || progress == nil {
+		t.Fatal("intake unavailable")
+	}
+	ref, err := tool.AdmitProtectedFormIntake(ctx,
+		bus.InboundDocumentIntakeGuard{JobID: jobID, ModeID: progress.ModeID}, "empty-outcome", "Explain the options")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"action": "form", "form_action": "continue", "answer_ref": ref}
+	first := decodeWorkflowResult(t, tool.Execute(ctx, args).ForLLM)
+	if first.Intake == nil || first.Intake.Failure != nil || first.Intake.Progress.PendingInputs != 1 ||
+		first.Intake.AcceptedCount != 0 || model.intakeCalls != 2 {
+		t.Fatal("fixture did not retain an empty committed outcome")
+	}
+	retryCtx := toolshared.WithToolExecutionIdentity(ctx, "workspace", "empty-outcome-retry")
+	second := decodeWorkflowResult(t, tool.Execute(retryCtx, args).ForLLM)
+	if second.Intake == nil || second.Intake.Failure != nil || second.Intake.Progress.PendingInputs != 0 ||
+		second.Intake.AcceptedCount != 0 || model.intakeCalls != 3 {
+		t.Fatal("fresh retry could not complete accounting without an earlier accepted fact")
+	}
+}
+
+func TestDocumentFormIntakeFreshRetriesDoNotResetThePassBudget(t *testing.T) {
+	model := &intakeWorkflowTestInterpreter{}
+	tool, ctx, _, jobID, _ := intakeWorkflowFixture(t, model)
+	model.interpret = func(document.FormIntakeInterpretationView) (document.FormIntakeInterpretation, error) {
+		return document.FormIntakeInterpretation{Intent: document.FormIntakeIntentFacts}, nil
+	}
+	progress, err := tool.FindProtectedFormIntake(ctx)
+	if err != nil || progress == nil {
+		t.Fatal("intake unavailable")
+	}
+	ref, err := tool.AdmitProtectedFormIntake(ctx,
+		bus.InboundDocumentIntakeGuard{JobID: jobID, ModeID: progress.ModeID}, "bounded-retry", "PRIVATE_PENDING_INPUT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"action": "form", "form_action": "continue", "answer_ref": ref}
+	for index := 0; index < document.MaxFormIntakeExtractionPasses/2; index++ {
+		retryCtx := toolshared.WithToolExecutionIdentity(ctx, "workspace", fmt.Sprintf("bounded-retry-%d", index))
+		projection := decodeWorkflowResult(t, tool.Execute(retryCtx, args).ForLLM)
+		if projection.Intake == nil || projection.Intake.Failure != nil {
+			t.Fatal("fresh retry failed before the existing pass budget was exhausted")
+		}
+	}
+	retryCtx := toolshared.WithToolExecutionIdentity(ctx, "workspace", "exhausted-retry")
+	projection := decodeWorkflowResult(t, tool.Execute(retryCtx, args).ForLLM)
+	if projection.Intake == nil || projection.Intake.Failure == nil ||
+		projection.Intake.Failure.Stage != "reservation" || projection.Intake.Progress.PendingInputs != 1 ||
+		projection.Intake.AcceptedCount != 0 || model.intakeCalls != document.MaxFormIntakeExtractionPasses {
+		t.Fatal("fresh executions bypassed the original persisted extraction budget")
+	}
+}
