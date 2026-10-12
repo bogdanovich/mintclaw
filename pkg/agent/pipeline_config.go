@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/internal/secretvalues"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
@@ -106,6 +107,7 @@ func (p *Pipeline) shouldFinalizeAfterToolLoop(exec *turnExecution, llm *LLMIter
 }
 
 func (p *Pipeline) filterToolContentForLLM(content string) string {
+	content = secretvalues.Redact(content)
 	if p == nil || !p.turnPolicy.filterSensitiveData || len(content) < p.turnPolicy.filterMinLength ||
 		p.turnPolicy.sensitiveDataReplacer == nil {
 		return content
