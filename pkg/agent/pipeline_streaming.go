@@ -117,6 +117,9 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 		toolDefsForCall,
 	)
 	chatFallback := func() (*providers.LLMResponse, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		p.emitEvent(
 			runtimeevents.KindAgentLLMRetry,
 			ts.eventMeta("runTurn", "turn.llm.retry").withModelAttemptID(llm.modelAttemptID),

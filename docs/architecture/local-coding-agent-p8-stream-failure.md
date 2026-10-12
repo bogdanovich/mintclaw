@@ -20,6 +20,8 @@ effect or sending production credentials.
 - Authentication failures and caller cancellation/deadline do not trigger the
   stream-to-Chat transport fallback. Existing eligible pre-output fallback and
   post-visible-output no-replay behavior remain intact.
+  The shared fallback also checks cancellation after a successful stream with
+  an unpublished update error, before emitting a retry or invoking Chat.
 - A structured authentication classification takes precedence over incidental
   timeout wording when deciding the outer LLM retry.
 - An actual stream-to-Chat fallback emits the existing `model.retry` record

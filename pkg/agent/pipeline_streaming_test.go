@@ -574,6 +574,34 @@ func TestConfiguredStreamingCanceledBeforeOutputDoesNotCallChat(t *testing.T) {
 	}
 }
 
+func TestConfiguredStreamingCanceledAfterUnpublishedUpdateFailureDoesNotCallChat(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
+	msgBus := bus.NewMessageBus()
+	streamer := &failingUpdateStreamer{err: errors.New("draft failed before publication")}
+	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
+	provider := &configuredStreamingProvider{
+		streamPlan: []configuredStreamingCall{{
+			chunks:   []providers.StreamChunk{{Content: "unpublished answer"}},
+			response: &providers.LLMResponse{Content: "stream response"},
+		}},
+		afterEvents: cancel,
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	defer al.Close()
+	_, err := al.runAgentLoop(
+		ctx, al.GetRegistry().GetDefaultAgent(), configuredStreamingTurnSpec("mintclaw"),
+	)
+	if !errors.Is(err, context.Canceled) || provider.streamCalls != 1 || provider.chatCalls != 0 ||
+		len(streamer.updates) != 1 || streamer.canceled != 1 {
+		t.Fatalf(
+			"canceled update outcome: error=%v stream=%d chat=%d updates=%d canceled=%d",
+			err, provider.streamCalls, provider.chatCalls, len(streamer.updates), streamer.canceled,
+		)
+	}
+}
+
 func TestConfiguredStreamingPreChunkFailureFallsBackToChat(t *testing.T) {
 	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
 	cfg.Diagnostics.TraceCapture.Enabled = true
