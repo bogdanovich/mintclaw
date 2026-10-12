@@ -1,7 +1,9 @@
 # Local Coding Agent P8.3 State Lifecycle
 
-Status: H4 implementation and qualification in progress. Production rollout
-and its disposable-state canary remain required before H4 closes.
+Status: H4 implementation merged in PR `#1618` and production-qualified.
+See the [production evidence](../operations/local-coding-agent-p8-state-lifecycle-production-evidence.md)
+for exact revisions, native Windows qualification, disposable-state receipts,
+runtime trace, health and rollback. H6 retains the integrated release gate.
 
 ## Ownership and privacy audit
 

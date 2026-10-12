@@ -3,8 +3,12 @@
 Parent plan:
 [P8 hardening and stable release](local-coding-agent-p8-hardening.md).
 
-Status: qualification contract implemented; exact merge and CI evidence is
-recorded by the H3 exit update after the code packet merges.
+Status: qualification contract merged in PR `#1604`, exact head
+`d1025ea549d46f855a88c7c604fde68fa820be31`, merge
+`5b87df2b55a25486c06db7001c0dc46704e33bea`. All 17 required checks passed,
+including native macOS and Windows platform contracts, with a clean exact-head
+review and owner merge approval. H6 retains the exact-source release snapshot
+and integrated production exit.
 
 ## Supported release matrix
 
@@ -68,9 +72,9 @@ jobs run the platform-sensitive contracts above; Linux runs the complete test,
 race, integration, and interactive PTY suites. Nightly and tagged releases use
 the same narrowed GoReleaser and container matrices.
 
-The H3 exit update must cite the exact PR head and merge commit, the complete
-required check run, and a GoReleaser snapshot build from that exact source. H6
-then rechecks the same release path as part of the integrated production exit.
+PR `#1604` provides the exact-head required check run. H6 must record a
+GoReleaser snapshot from its final qualified source; cross-compilation alone
+does not replace that release-path check.
 
 ## Residual limits
 

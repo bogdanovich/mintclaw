@@ -4,6 +4,48 @@ MintClaw can work in a repository as an interactive, durable coding agent or
 as a noninteractive command for scripts. Coding threads belong to the current
 project, survive process restarts, and keep their state outside the checkout.
 
+## Configure a model first
+
+Use the same active home and config for authentication and coding. Set
+`MINTCLAW_HOME` and `MINTCLAW_CONFIG` explicitly when operating multiple
+profiles; an optional `MINTCLAW_AUTH_FILE` selects a shared authentication
+store. Do not copy a production config into a public checkout.
+
+For OpenAI device authentication:
+
+```console
+mintclaw auth login --provider openai --device-code
+mintclaw auth status
+mintclaw auth models
+mintclaw model
+```
+
+Follow the URL and code printed by login. The model chosen by onboarding is a
+starting default, not a promise that every account can use it. `auth models`
+shows authentication-backed choices; `model` shows the enabled routes in the
+loaded config. Select an available configured alias with
+`mintclaw model <configured-alias>`, or override a new coding thread with
+`mintclaw code --model <configured-alias>`.
+
+For another provider, configure an enabled `model_list` route with its
+provider, native model ID, endpoint where required, and protected credential
+binding. An OpenAI-compatible endpoint can be onboarded with
+`mintclaw model add --help`; `--model` skips network discovery, and `--name`
+defines the local alias and changes the default. Its `--api-key` argument can
+appear in shell history or process listings: use a private credential binding
+in config for routine operation, not a real key pasted into a shared command
+or issue. See [configuration](configuration.md).
+
+Check configuration without starting an agent:
+
+```console
+mintclaw doctor --config /path/to/config.json
+```
+
+Exit 1 means a command/config load error; exit 2 means reported policy
+findings, not necessarily a parser failure. Resolve the relevant findings and
+try a harmless read-only prompt before admitting repository mutations.
+
 ## Start and resume
 
 Run these commands from the repository or subdirectory you want MintClaw to
@@ -71,14 +113,49 @@ The always-running gateway agent can delegate a coding task to a configured
 repository on a paired Linux or macOS development machine. The gateway owns
 the Telegram conversation and durable task; the thin `mintclaw-node`
 companion starts the same native coding core through a private
-`mintclaw _worker` child. Investigations are read-only, mutations use isolated
-worktrees, and released threads appear in the normal local resume catalogue.
+`mintclaw _worker` child. Investigations are read-only. Repository `mutate`
+and `project-yolo` profiles use isolated worktrees; `machine-yolo` operates
+directly in its configured machine scope, which need not be a Git repository.
+Released threads appear in the normal local resume catalogue.
 
 This surface is deny-by-default and accepts only operator-defined target and
 project aliases plus exact requester grants. It never accepts a model-authored
 path, repository URL, executable, provider credential, or cleanup policy. See
 [Remote coding tasks](../operations/remote-coding-tasks.md) for setup and
 operations.
+
+An ordinary gateway chat session owns channel history and delivery, not a
+repository checkout or a local coding transcript. A delegated worker owns its
+own coding thread, model context, process lifecycle and worktree/machine
+effects. The gateway retains a durable task link and can report status, relay
+a question, steer or cancel that same task; it does not merge the worker's
+history into the chat. Ask for the existing task ID after uncertainty instead
+of creating a replacement mutation.
+
+A local coding session can also use already-paired companions through an
+optional same-user gateway broker on Linux/macOS. This requires a running
+gateway, owner-only IPC configuration and an exact local-coding grant. It does
+not pair nodes itself or inherit every chat permission. Direct capabilities
+keep the local thread as the reasoning owner; a remote coding task gives the
+remote worker its own thread. See
+[companion access and setup](../architecture/local-coding-agent-p7-5-companion-access.md).
+
+## Project instructions and trust
+
+For each admitted directory, MintClaw selects one instruction file in this
+order: `AGENTS.override.md`, `AGENTS.md`, then `CLAUDE.md`. It does not merge
+same-directory `AGENTS.md` and `CLAUDE.md`. Configured global instructions and
+the project-root-to-working-directory chain are combined in scope order;
+deeper instructions apply to their subtree. The scoped loader also checks
+new file targets rather than treating every sibling's instructions as global.
+Instruction reads are bounded (16 KiB per file, 64 KiB total by default), and
+`/status` reports admitted sources and warnings without showing their content.
+
+Repository instructions and skills guide behavior; they cannot grant a new
+filesystem root, companion, credential or privilege. Local coding is
+autonomous within its admitted authority, not an OS security sandbox. Treat
+untrusted repositories accordingly. Remote project/machine/root profiles are
+separate operator grants; neither a prompt nor `--yolo` creates one.
 
 ## Interactive and noninteractive modes
 
@@ -376,6 +453,37 @@ instead of uploading the private state directory.
   Scroll with the wheel/trackpad or Page Up to revisit earlier compact cells.
   `Ctrl+T` shows the complete retained copy-safe evidence and hydrates older
   history on demand.
+
+For reliability incidents, start with the active profile, approximate time and
+exact thread/task/trace ID. Use metadata before private history:
+
+```console
+mintclaw diagnostics list --since 2h
+mintclaw diagnostics correlate --thread <thread-id>
+mintclaw diagnostics correlate --task <task-id>
+mintclaw diagnostics show <trace-id>
+mintclaw diagnostics export --trace <trace-id> --output ./support-new-directory
+```
+
+These commands never resume work or replay tools. Default export excludes
+prompts, responses, command/source/diff content, credentials, absolute paths
+and unrelated traces. Keep the bundle private until its contents and
+destination policy have been verified.
+
+| Symptom | First evidence boundary |
+| --- | --- |
+| No response, duplicate response, or completed task with no channel result | Compare task terminal state, completion and delivery IDs with the durable outbox; model completion alone is not delivery proof. |
+| Wrong tool or repeated tool calls | Compare model attempt, tool-call ID/generation, result and loop decision; a successful tool can still be irrelevant. |
+| Provider/authentication failure | Check sanitized attempt/retry/fallback status and credential availability in the same profile; do not replay a turn that already produced effects. |
+| Remote task is uncertain | Inspect the same task/generation, invocation and worker ledger before deciding whether to continue; uncertainty is not safe-to-retry. |
+| Thread busy or output differs from history | Compare the writer owner and canonical history with the content-free presentation checkpoint; do not delete a live lock. |
+| Compaction/resume failed | Preserve canonical JSONL, inspect the checkpoint/reconciliation boundary and recover through the normal runtime; do not rewrite history to repair a derivative. |
+| No matching trace | Check capture enablement, store selection, retention, scan bounds, truncation and drops; missing evidence is not proof that execution did not happen. |
+
+See [diagnostic support bundles](../operations/diagnostic-support-bundles.md)
+for exact selectors, authoritative `owners.json`, privacy and the
+incident-to-regression loop. For upgrades and rollback, use the
+[coding-state operations guide](../operations/coding-state-upgrades.md).
 
 ## Deliberate differences from Codex
 
