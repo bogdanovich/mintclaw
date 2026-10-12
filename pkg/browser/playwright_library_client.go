@@ -364,6 +364,7 @@ func (client *playwrightLibraryClient) call(
 	client.mu.Unlock()
 
 	encoded, err := json.Marshal(playwrightLibraryWireRequest{ID: id, Method: method, Params: params})
+	defer clear(encoded)
 	if err == nil {
 		encoded = append(encoded, '\n')
 		client.writeMu.Lock()

@@ -193,6 +193,11 @@ jobs:
           ./internal/credentialipc
           ./cmd/mintclaw-credential/...
 
+      - name: Run private browser credential race regressions
+        run: >-
+          go test -count=1 -race -tags goolm,stdjson
+          -run '^Test(Credential|PrivateCredential)' ./pkg/browser
+
   platform_compile:
     name: Compile ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -444,6 +449,13 @@ jobs:
 
       - name: Qualify private enrollment console and browser passkey UI
         run: bash ./scripts/qualify-credential-phone.sh
+
+      - name: Qualify direct private credential browser transactions
+        run: >-
+          env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
+          node --test runtime/browser/playwright-library/credential-login.test.cjs
+          runtime/browser/playwright-library/credential-protocol.test.cjs
+          runtime/browser/playwright-library/navigation-evidence.test.cjs
 
       - name: Install pinned document runtime
         run: |

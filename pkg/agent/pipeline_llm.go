@@ -612,12 +612,26 @@ func (p *Pipeline) invokeLLMWithRetry(
 	}
 
 	if err != nil {
+		diagnosticOptions := providers.FailureDiagnosticOptions{}
+		if p.Cfg != nil {
+			diagnosticOptions.Filter = p.Cfg.SensitiveDataReplacer().Replace
+		}
+		diagnostic := (providers.FallbackAttempt{Error: err}).Diagnostic(diagnosticOptions)
+		errorCode := ""
+		if failure := providers.ClassifyError(err, "", ""); failure != nil {
+			errorCode = string(failure.Reason)
+		}
 		p.emitEvent(
 			runtimeevents.KindAgentError,
-			ts.eventMeta("runTurn", "turn.error"),
+			ts.eventMeta("runTurn", "turn.error").withModelAttemptID(llm.modelAttemptID),
 			ErrorPayload{
-				Stage:   "llm",
-				Message: err.Error(),
+				Stage:                "llm",
+				Message:              err.Error(),
+				ErrorCode:            errorCode,
+				ClassificationSource: string(diagnostic.ClassificationSource),
+				ProviderErrorKind:    diagnostic.ProviderErrorKind,
+				HTTPStatus:           diagnostic.HTTPStatus,
+				RequestID:            diagnostic.RequestID,
 			},
 		)
 		logger.ErrorCF("agent", "LLM call failed",
@@ -1198,6 +1212,8 @@ func transientLLMRetryReason(err error) (string, bool) {
 
 	if failErr := providers.ClassifyError(err, "", ""); failErr != nil {
 		switch failErr.Reason {
+		case providers.FailoverAuth:
+			return "", false
 		case providers.FailoverTimeout:
 			if failErr.Status >= 500 {
 				return "server_error", true

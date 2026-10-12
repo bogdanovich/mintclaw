@@ -39,6 +39,9 @@ func (broker *Broker) CaptureScreenshot(
 	if err != nil {
 		return ScreenshotCapture{}, err
 	}
+	if slot.credentials != nil {
+		return ScreenshotCapture{}, ErrDenied
+	}
 	if session.SnapshotID != request.SnapshotID ||
 		session.SnapshotGeneration != request.SnapshotGeneration ||
 		!sessionMatchesContextBinding(

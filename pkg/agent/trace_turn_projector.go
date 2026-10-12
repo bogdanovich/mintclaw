@@ -1048,7 +1048,12 @@ func runtimeEventRecord(
 		}
 		kind = diagnostictrace.RecordRuntimeError
 		payload = diagnostictrace.RuntimeErrorPayload{
-			Stage: safeCode(value.Stage),
+			Stage:                safeCode(value.Stage),
+			ErrorCode:            safeCode(value.ErrorCode),
+			ClassificationSource: safeCode(value.ClassificationSource),
+			ProviderErrorKind:    safeCode(value.ProviderErrorKind),
+			HTTPStatus:           value.HTTPStatus,
+			RequestID:            captureMetadataPreview(settings, value.RequestID, 240),
 			MessagePreview: captureTextPreview(
 				settings, value.Message, diagnosticErrorBytes,
 			),

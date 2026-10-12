@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/internal/secretvalues"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
@@ -224,6 +225,7 @@ func (broker *Broker) persistDriverObservationLocked(
 	driverObservation DriverObservation,
 	navigationID string,
 ) (Observation, error) {
+	driverObservation = redactCredentialObservation(driverObservation)
 	var err error
 	if err = validateBlankObservation(driverObservation, ""); err != nil {
 		return Observation{}, err
@@ -307,6 +309,21 @@ func (broker *Broker) persistDriverObservationLocked(
 		observation.ContextGeneration = session.ContextAuthority.Generation
 	}
 	return observation, nil
+}
+
+func redactCredentialObservation(observation DriverObservation) DriverObservation {
+	observation.URL = secretvalues.Redact(observation.URL)
+	observation.Title = secretvalues.Redact(observation.Title)
+	observation.Snapshot = secretvalues.Redact(observation.Snapshot)
+	observation.Elements = append([]DriverElement(nil), observation.Elements...)
+	for index := range observation.Elements {
+		observation.Elements[index].Name = secretvalues.Redact(observation.Elements[index].Name)
+	}
+	if observation.PendingDialog != nil {
+		observation.PendingDialog = cloneDialogObservation(observation.PendingDialog)
+		observation.PendingDialog.Message = secretvalues.Redact(observation.PendingDialog.Message)
+	}
+	return observation
 }
 
 func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRequest) (Preparation, error) {
@@ -1243,6 +1260,18 @@ func (broker *Broker) actionSessionLocked(
 	if slot == nil {
 		return Session{}, nil, nil, ErrWorkerUnavailable
 	}
+	if slot.credentials != nil {
+		origin := session.SnapshotOrigin
+		if origin == "" {
+			// An ordinary action invalidates the snapshot. Admission still
+			// checks its original grant; publishing the fresh observation
+			// independently checks the live observed origin.
+			origin = slot.credentials.request.Origin
+		}
+		if slot.credentials.check(ctx, origin) != nil {
+			return Session{}, nil, nil, ErrDenied
+		}
+	}
 	if slot.safeFailure != "" {
 		return Session{}, nil, nil, ErrWorkerUnavailable
 	}
@@ -1870,6 +1899,10 @@ func actionHasSensitiveInput(action Action) bool {
 }
 
 func (broker *Broker) originAllowed(session Session, origin string) bool {
+	if slot := broker.slots[session.ID]; slot != nil && slot.credentials != nil &&
+		slot.credentials.check(context.Background(), origin) != nil {
+		return false
+	}
 	if origin == initialBlankOrigin {
 		return true
 	}
@@ -2027,6 +2060,7 @@ func hashPreparedAction(prepared PreparedAction) (string, error) {
 }
 
 func browserPageStateHash(observation DriverObservation) (string, error) {
+	observation = redactCredentialObservation(observation)
 	snapshot := observation.Snapshot
 	for _, element := range observation.Elements {
 		if element.Target != "" {

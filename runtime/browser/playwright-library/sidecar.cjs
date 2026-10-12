@@ -9,6 +9,8 @@ const readline = require('node:readline');
 const path = require('node:path');
 const dns = require('node:dns').promises;
 const net = require('node:net');
+const { randomBytes } = require('node:crypto');
+const { prepareCredentialLogin, performCredentialLogin } = require('./credential-login.cjs');
 const { Worker } = require('node:worker_threads');
 const { chromium, firefox, webkit } = require('playwright');
 
@@ -354,6 +356,8 @@ class Driver {
     this.executionNetworkGuards = new Set();
     this.remoteDNSCache = new Map();
     this.navigationResponses = new WeakMap();
+    this.credentialPending = null;
+    this.credentialActive = false;
   }
 
   async start() {
@@ -445,6 +449,10 @@ class Driver {
       });
     });
     page.on('dialog', dialog => {
+      if (this.credentialActive || this.credentialPending) {
+        dialog.dismiss().catch(() => {});
+        return;
+      }
       if (!this.pendingDialog) {
         this.pendingDialog = { handle: dialog, type: dialog.type(), message: dialog.message() };
         for (const resolve of this.dialogWaiters) resolve({ kind: 'dialog' });
@@ -617,6 +625,12 @@ class Driver {
 
   async call(tool, args) {
     if (this.closed && tool !== 'browser_close') throw new Error('driver is closed');
+    if (tool === 'mintclaw_credential_prepare') return await this.prepareCredential(args);
+    if (tool === 'mintclaw_credential_submit') return await this.submitCredential(args);
+    if (tool === 'mintclaw_credential_discard') return await this.discardCredential(args);
+    if (this.credentialPending && tool !== 'browser_close' && tool !== 'browser_ping') {
+      return textResult('private credential operation pending', true);
+    }
     if (this.pendingDialog && tool !== 'browser_handle_dialog') {
       return textResult(modalText(this.pendingDialog), true);
     }
@@ -744,6 +758,68 @@ class Driver {
     } catch (error) {
       const response = this.pendingDialog ? modalText(this.pendingDialog) : `### Error\n${boundedError(error)}`;
       return textResult(response, !this.pendingDialog);
+    }
+  }
+
+  async prepareCredential(args) {
+    if (this.credentialPending || this.pendingDialog || this.executionActive || this.closed) {
+      return textResult('private credential operation denied', true);
+    }
+    const page = this.selectedPage();
+    const capsule = await prepareCredentialLogin(page, args);
+    if (!capsule) return textResult('private credential operation denied', true);
+    const id = randomBytes(32).toString('hex');
+    const pending = { id, page, capsule, request: { ...args }, deadline: Date.now() + 15000 };
+    this.credentialPending = pending;
+    pending.timer = setTimeout(() => {
+      if (this.credentialPending === pending) {
+        this.credentialPending = null;
+        pending.capsule.dispose().catch(() => {});
+      }
+    }, 15000);
+    pending.timer.unref();
+    return textResult(JSON.stringify({ id, origin: args.origin }));
+  }
+
+  async discardCredential(args) {
+    const pending = this.credentialPending;
+    if (!pending || args.id !== pending.id) return textResult('private credential operation denied', true);
+    this.credentialPending = null;
+    clearTimeout(pending.timer);
+    await pending.capsule.dispose().catch(() => {});
+    return textResult('discarded');
+  }
+
+  async submitCredential(args) {
+    const pending = this.credentialPending;
+    let code = 'denied';
+    if (!pending || args.id !== pending.id || Date.now() >= pending.deadline) {
+      args.username = ''; args.password = '';
+      if (pending && Date.now() >= pending.deadline) {
+        this.credentialPending = null;
+        clearTimeout(pending.timer);
+        await pending.capsule.dispose().catch(() => {});
+      }
+      return textResult(JSON.stringify({ code, cookies: [] }));
+    }
+    this.credentialPending = null;
+    clearTimeout(pending.timer);
+    this.credentialActive = true;
+    const request = { ...pending.request, username: args.username, password: args.password };
+    try {
+      code = await performCredentialLogin(pending.page, pending.capsule, request);
+      const cookies = ['logged_in', 'handoff_required'].includes(code)
+        ? (await pending.page.context().cookies()).map(cookie => cookie.value).filter(Boolean) : [];
+      // This response goes only to the trusted runtime's private parser. Cookie
+      // values must be registered before allowing any later observations.
+      return textResult(JSON.stringify({ code, cookies }));
+    } catch (_) {
+      await pending.page.context().close().catch(() => {});
+      return textResult(JSON.stringify({ code: 'outcome_unknown', cookies: [] }));
+    } finally {
+      args.username = ''; args.password = '';
+      request.username = ''; request.password = '';
+      this.credentialActive = false;
     }
   }
 
@@ -1206,6 +1282,11 @@ class Driver {
   async closeBrowser() {
     if (this.closed) return;
     this.closed = true;
+    if (this.credentialPending) {
+      clearTimeout(this.credentialPending.timer);
+      await this.credentialPending.capsule.dispose().catch(() => {});
+      this.credentialPending = null;
+    }
     this.executionNetworkGuards.clear();
     let failure = null;
     if (this.pendingDialog) {
@@ -1225,10 +1306,8 @@ class Driver {
   }
 }
 
-async function main() {
-  const driver = new Driver(parseArguments(process.argv.slice(2)));
-  await driver.start();
-  const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+async function runProtocol(driver, input, output) {
+  const lines = readline.createInterface({ input, crlfDelay: Infinity });
   for await (const line of lines) {
     let id = null;
     try {
@@ -1241,19 +1320,29 @@ async function main() {
       }
       if (request.method === 'shutdown') {
         await driver.closeBrowser();
-        process.stdout.write(`${JSON.stringify({ id, result: textResult('closed') })}\n`);
+        output.write(`${JSON.stringify({ id, result: textResult('closed') })}\n`);
         return;
       }
       const result = await driver.call(request.method, request.params);
-      process.stdout.write(`${JSON.stringify({ id, result })}\n`);
-    } catch (error) {
-      process.stdout.write(`${JSON.stringify({ id, error: boundedError(error) })}\n`);
+      output.write(`${JSON.stringify({ id, result })}\n`);
+    } catch (_) {
+      output.write(`${JSON.stringify({ id, error: 'private driver request failed' })}\n`);
     }
   }
   await driver.closeBrowser();
 }
 
-main().catch(error => {
-  process.stderr.write(`playwright library sidecar: ${boundedError(error)}\n`);
-  process.exitCode = 1;
-});
+async function main() {
+  const driver = new Driver(parseArguments(process.argv.slice(2)));
+  await driver.start();
+  await runProtocol(driver, process.stdin, process.stdout);
+}
+
+if (require.main === module) {
+  main().catch(() => {
+    process.stderr.write('playwright library sidecar unavailable\n');
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { Driver, runProtocol };
