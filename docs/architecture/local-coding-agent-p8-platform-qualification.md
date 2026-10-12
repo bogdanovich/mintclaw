@@ -76,6 +76,26 @@ PR `#1604` provides the exact-head required check run. H6 must record a
 GoReleaser snapshot from its final qualified source; cross-compilation alone
 does not replace that release-path check.
 
+### Non-publishing release qualification
+
+Use the manual `Release Qualification` workflow on `main` with one full,
+40-character merged-main `commit`. It rejects non-main dispatches and source
+outside main's ancestry before running project hooks. It is not an additional
+job on every pull request.
+
+The workflow uses the normal release configuration to produce archives,
+Linux installers, SBOMs and both AMD64/ARM64 core/launcher container images.
+GoReleaser's [snapshot container mode](https://goreleaser.com/customization/package/dockers_v2/#testing-locally)
+builds local per-platform images without publishing. Signing/notarization is
+excluded from this unsigned qualification; release tags, public assets and
+registries are not modified. The workflow has read-only repository permissions,
+no registry login and no publishing credential passed to GoReleaser.
+
+The three-day evidence artifact records the exact source, generated release
+metadata, archives/installers/SBOMs, verified payload checksums and four local
+container image identities. Record the run URL and artifact digest in the H6
+exit. Device-specific behavior and production signing remain separate gates.
+
 ## Residual limits
 
 - Cross-compilation proves build compatibility, not device-specific terminal,

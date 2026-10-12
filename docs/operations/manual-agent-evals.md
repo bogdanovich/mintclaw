@@ -212,6 +212,11 @@ in the same isolated native profile; their credentials are resolved by the nativ
 intent in the same target session. `finish` sends one last request and requires a final response; `stop` never passes.
 An absent/unsupported user model skips the case without sending its task. Missing required judging cannot pass.
 
+Each successfully parsed and privacy-checked user decision retains only its enum `action_kind` in the role-call
+metadata, even if domain admission later refuses it or the driver chooses `stop`. It does not retain action text,
+fact handles, raw model output or authority. Invalid/private outputs have no known kind. Older reports without
+this optional field keep an unknown decision kind; historical decisions are never reconstructed or filled in.
+
 Model roles are tools-disabled and separate from the target. The native runner binds navigation to the observed
 prompt and refuses unbound grants. Facts/fixtures require domain-specific admission; merely adding those fields does
 not make protected intake or artifacts available. Optional judge findings never hide transport or mandatory-check

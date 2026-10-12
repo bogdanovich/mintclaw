@@ -240,6 +240,12 @@ func redactRecordValue(value any, snapshot *strings.Replacer, depth int, budget 
 	}
 	switch typed := value.(type) {
 	case string:
+		filtered := snapshot.Replace(typed)
+		// An exact private string remains a string marker, even when its
+		// spelling is also a JSON primitive such as true, null or an OTP.
+		if filtered == Marker {
+			return filtered, filtered != typed
+		}
 		if decoded, ok := decodeRecordJSON(typed); ok {
 			nested, changed := redactRecordValue(decoded, snapshot, depth+1, budget)
 			if changed {
@@ -250,7 +256,6 @@ func redactRecordValue(value any, snapshot *strings.Replacer, depth int, budget 
 				return string(encoded), true
 			}
 		}
-		filtered := snapshot.Replace(typed)
 		return filtered, filtered != typed
 	case map[string]any:
 		changed := false
@@ -270,8 +275,9 @@ func redactRecordValue(value any, snapshot *strings.Replacer, depth int, budget 
 			changed = changed || childChanged
 		}
 		return typed, changed
-	case json.Number:
-		if snapshot.Replace(string(typed)) != string(typed) {
+	case json.Number, bool, nil:
+		encoded, err := json.Marshal(typed)
+		if err != nil || snapshot.Replace(string(encoded)) != string(encoded) {
 			return Marker, true
 		}
 	}

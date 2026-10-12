@@ -43,3 +43,20 @@ external resource state, or byte identity of the running executable. Build field
 are the binary's native build metadata, not the checkout's current revision.
 
 CI tests use synthetic configs and stub providers, never live model calls.
+
+## Recovery Drain Prerequisite
+
+Native interaction recovery runs independently of inbound turn workers, and startup unanswered-session recovery
+can also hold runtime-owned providers and stores. `CloseContext` must seal recovery enrollment under the same
+lifecycle lock used for Run, cancel admitted recovery contexts, and wait for both kinds before closing those
+resources. The interaction coordinator still owns its existing single-flight gate and durable state transitions.
+
+A close deadline leaves shared resources open and recovery enrollment sealed, permitting a later close attempt
+to finish teardown after the original work retires. Retries share one drain completion signal; they do not start
+new recovery, replay input, or create another document/browser lifecycle. A late recovery after sealing returns
+before loading or mutating native registries or session stores.
+
+This fixes a native shutdown prerequisite, not a dynamic idle extension of `/runtime`. An eval still needs owned
+target identity, complete native settlement and admitted private-surface/resource witnesses before it can grant
+positive no-write, delivery, privacy or cleanup checks. A final reply, zero active-turn count or disappeared PID
+alone cannot substitute for those observations.
