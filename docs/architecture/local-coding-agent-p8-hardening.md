@@ -3,7 +3,8 @@
 Roadmap phase:
 [P8 — Hardening and release](local-coding-agent-roadmap.md#p8--hardening-and-release).
 
-Status: implementation admitted; execute the packets below sequentially.
+Status: complete. The [P8 exit record](local-coding-agent-p8-exit.md) closes H0-H6
+with exact-source release, performance, privacy and production evidence.
 
 Admission baseline: `origin/main` at
 `63804ea1f2652338861e224fbbe0b391504514c9`, 2026-10-10.

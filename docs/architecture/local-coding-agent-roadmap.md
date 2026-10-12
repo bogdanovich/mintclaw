@@ -1,7 +1,8 @@
 # Local Coding Agent Roadmap
 
-Status: implementation in progress. P0-P7 foundations are implemented, P7.6
-is explicitly deferred, and P8 hardening is active.
+Status: all admitted P0-P8 packets are complete. The coding surface is stable
+within the [P8 exit record](local-coding-agent-p8-exit.md)'s qualified scope.
+P6.5 LSP is not admitted; P7.6 workspace rewind remains explicitly deferred.
 
 MintClaw audit baseline: `origin/main` at `7b886f1a`, 2026-08-08
 
@@ -2007,7 +2008,9 @@ capabilities used *from* a local coding session and P7.6 workspace rewind.
 
 Goal: make the coding surface supportable as a stable MintClaw feature.
 
-Status: active. The focused
+Status: complete. The [P8 exit record](local-coding-agent-p8-exit.md) records
+exact-source release, performance, privacy and integrated production evidence.
+The focused
 [`P8 hardening and stable-release plan`](local-coding-agent-p8-hardening.md)
 starts with passive diagnostic correlation and an incident-to-regression loop,
 then executes P8.1-P8.4 and integrated production qualification.
