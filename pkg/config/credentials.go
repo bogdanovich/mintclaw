@@ -50,6 +50,9 @@ func (cfg *Config) ValidateCredentials() error {
 			(relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
 			return errors.New("credential state must be outside agent workspaces")
 		}
+		if outside, identityErr := credentialStateOutsideWorkspace(state, absolute); identityErr != nil || !outside {
+			return errors.New("credential state must be outside agent workspaces")
+		}
 	}
 	if _, err := credentialbroker.NewPolicy(c.Accounts); err != nil {
 		return errors.New("credential account policy is invalid")
@@ -66,6 +69,29 @@ func (cfg *Config) ValidateCredentials() error {
 		}
 	}
 	return nil
+}
+
+// EvalSymlinks preserves spelling on case-insensitive volumes. Compare the
+// workspace's filesystem identity to every existing state ancestor as well;
+// missing state components do not hide an existing workspace alias. Distinct
+// case-sensitive directories retain their actual identities and remain valid.
+func credentialStateOutsideWorkspace(state, workspace string) (bool, error) {
+	workspaceInfo, err := os.Stat(workspace)
+	if err != nil || !workspaceInfo.IsDir() {
+		return false, errors.New("credential workspace identity unavailable")
+	}
+	for current := state; ; current = filepath.Dir(current) {
+		info, statErr := os.Stat(current)
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return false, statErr
+		}
+		if statErr == nil && os.SameFile(workspaceInfo, info) {
+			return false, nil
+		}
+		if filepath.Dir(current) == current {
+			return true, nil
+		}
+	}
 }
 
 // Resolve existing ancestors before comparing containment. Missing tail

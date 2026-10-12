@@ -50,7 +50,11 @@ acknowledge authenticator updates before grant issuance. Ordinary private home
 directories are supported on Linux and macOS; Root-owned ancestry and a
 dedicated service identity are unnecessary under the current trust model.
 Containment resolves existing filesystem ancestors of both state and workspace
-paths, including intermediate symlinks and directories not yet created. Broken
+paths, including intermediate symlinks and state directories not yet created.
+Configured workspaces must already exist so their filesystem identities can be
+checked against every existing state ancestor; case aliases on macOS cannot
+bypass this check. Distinct directories on case-sensitive volumes remain valid.
+Prepare normal workspace directories before enabling credentials. Broken
 or otherwise unresolvable aliases fail validation. The tree remains controlled
 by the trusted operator; this adds no privileged-host isolation requirement.
 On Linux the store rejects additional POSIX ACLs. On macOS setup must choose an
