@@ -1,5 +1,12 @@
 # Credential Broker Setup
 
+> Historical component record from the superseded isolated-runtime design.
+> The operator-approved [trusted-runtime design](../architecture/credential-trusted-runtime-design.md)
+> and [current roadmap](../architecture/credential-access-roadmap.md) govern new work.
+> Separate-host, VM, Root-helper, service-role, and process/network isolation
+> requirements below are no longer deployment or rollout gates. Reusable
+> component behavior and its exact qualification evidence remain recorded here.
+
 ## Current admission
 
 The Linux `mintclaw-credential provision` command stores an OS-encrypted

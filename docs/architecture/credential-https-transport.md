@@ -1,5 +1,12 @@
 # Private Credential HTTPS Transport
 
+> Historical component record from the superseded isolated-runtime design.
+> The operator-approved [trusted-runtime design](credential-trusted-runtime-design.md)
+> and [current roadmap](credential-access-roadmap.md) govern new work.
+> Separate-host, VM, Root-helper, service-role, and process/network isolation
+> requirements below are no longer deployment or rollout gates. Reusable
+> component behavior and its exact qualification evidence remain recorded here.
+
 The standalone credential command's private `egress.Transport` supplies the
 upstream HTTPS connection primitive for a qualified credential consumer. Its
 public constructor requires the actual signed `approval.LoginLease`, one

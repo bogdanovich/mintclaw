@@ -1,5 +1,12 @@
 # Private credential browser enforcing proxy
 
+> Historical component record from the superseded isolated-runtime design.
+> The operator-approved [trusted-runtime design](credential-trusted-runtime-design.md)
+> and [current roadmap](credential-access-roadmap.md) govern new work.
+> Separate-host, VM, Root-helper, service-role, and process/network isolation
+> requirements below are no longer deployment or rollout gates. Reusable
+> component behavior and its exact qualification evidence remain recorded here.
+
 The private browser channel requires `egress.LoginProxy` from the same original
 approved `approval.LoginLease`. It derives the proxy endpoint and certificate
 pin from that object; a caller cannot select a generic forwarding proxy. The
