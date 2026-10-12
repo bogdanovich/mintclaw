@@ -1,0 +1,112 @@
+name: Release Qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact merged-main commit to qualify (40 lowercase hex characters)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    name: Non-publishing release snapshot
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Admit only an exact merged-main commit
+        env:
+          QUALIFY_COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          [[ "$QUALIFY_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$QUALIFY_COMMIT"
+          git merge-base --is-ancestor HEAD origin/main
+          test -z "$(git status --porcelain)"
+
+      - name: Setup Go from go.mod
+        id: setup-go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/frontend/pnpm-lock.yaml
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0.24.2
+
+      - name: Validate release configuration
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: check
+
+      - name: Build archives, installers, SBOMs and container snapshots
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: release --snapshot --skip=sign,notarize --parallelism=2 --timeout=45m
+        env:
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GOVERSION: ${{ steps.setup-go.outputs.go-version }}
+
+      - name: Verify checksums and record image identities
+        env:
+          IMAGE_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum --check *_checksums.txt
+          docker image ls --no-trunc --digests \
+            --filter "reference=ghcr.io/$IMAGE_OWNER/mintclaw:*" > p8-container-images.txt
+          test "$(docker image ls --filter "reference=ghcr.io/$IMAGE_OWNER/mintclaw:*" \
+            --format '{{.ID}}' | sort -u | wc -l)" -eq 4
+          git rev-parse HEAD > p8-source-commit.txt
+
+      - name: Preserve qualification evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-qualification-${{ inputs.commit }}-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 3
+          path: |
+            dist/artifacts.json
+            dist/metadata.json
+            dist/*_checksums.txt
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.deb
+            dist/*.rpm
+            dist/*.sbom.json
+            dist/p8-container-images.txt
+            dist/p8-source-commit.txt
