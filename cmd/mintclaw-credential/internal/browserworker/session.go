@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/egress"
-	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/vault"
 	"github.com/bogdanovich/mintclaw/internal/credentials/approval"
+	"github.com/bogdanovich/mintclaw/internal/credentials/vault"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/credentialbroker"
 	"github.com/bogdanovich/mintclaw/pkg/credentialbroker/intent"

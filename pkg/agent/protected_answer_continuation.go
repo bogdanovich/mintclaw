@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -24,14 +25,15 @@ type protectedAnswerContinuationState struct {
 	setupErr        error
 	invalidAttempts int
 	modelCalls      int
+	intakeSpoolID   string
 }
 
 func newProtectedAnswerContinuationState(
 	opts turnInput,
 	registry *tools.ToolRegistry,
 ) protectedAnswerContinuationState {
-	if reference := documentIntakeReferenceForTurn(opts); reference != "" {
-		return newDocumentIntakeContinuationState(reference, registry)
+	if reference, spoolID := documentIntakeInputForTurn(opts); reference != "" {
+		return newDocumentIntakeContinuationState(reference, spoolID, registry)
 	}
 	continuation := opts.InteractionContinuation
 	if strings.TrimSpace(continuation.ProtectedAnswer) == "" {
@@ -65,18 +67,19 @@ func newProtectedAnswerContinuationState(
 	}
 }
 
-func documentIntakeReferenceForTurn(opts turnInput) string {
-	reference := opts.DocumentIntakeReference
+func documentIntakeInputForTurn(opts turnInput) (string, string) {
+	reference, spoolID := opts.DocumentIntakeReference, opts.DocumentIntakeSpoolID
 	for _, message := range opts.InitialSteeringMessages {
 		if message.DocumentIntakeReference != "" {
 			reference = message.DocumentIntakeReference
+			spoolID = message.InboundSpoolID
 		}
 	}
-	return reference
+	return reference, spoolID
 }
 
 func newDocumentIntakeContinuationState(
-	reference string,
+	reference, spoolID string,
 	registry *tools.ToolRegistry,
 ) protectedAnswerContinuationState {
 	if registry == nil {
@@ -91,7 +94,17 @@ func newDocumentIntakeContinuationState(
 	if err != nil || !strings.HasPrefix(reference, "form_intake.") {
 		return protectedAnswerContinuationState{setupErr: errors.New("protected document continuation is invalid")}
 	}
-	return protectedAnswerContinuationState{enabled: true, toolName: "document", arguments: arguments}
+	return protectedAnswerContinuationState{
+		enabled: true, toolName: "document", arguments: arguments, intakeSpoolID: spoolID,
+	}
+}
+
+func (state *protectedAnswerContinuationState) documentIntakeProcessingContext(ctx context.Context) context.Context {
+	if state.awaitingInitialExecution() && state.toolName == "document" && state.intakeSpoolID != "" {
+		reference, _ := state.arguments["answer_ref"].(string)
+		return toolshared.WithToolDocumentIntakeProcessingIdentity(ctx, reference, state.intakeSpoolID)
+	}
+	return ctx
 }
 
 func (state *protectedAnswerContinuationState) pending() bool {

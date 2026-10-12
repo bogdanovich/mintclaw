@@ -757,7 +757,7 @@ func TestClientRoutesAuthenticatedTransferFramesToBoundedHandler(t *testing.T) {
 	runCtx, cancelRun := context.WithCancel(t.Context())
 	runDone := make(chan error, 1)
 	go func() { runDone <- client.Run(runCtx) }()
-	waitForNodeState(t, registry, identity.ID, nodes.StateConnected)
+	waitForConnectedNodeSession(t, registry, sessions, identity.ID)
 
 	digest := sha256.Sum256([]byte("payload"))
 	binding := nodews.TransferBinding{

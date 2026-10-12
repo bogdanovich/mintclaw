@@ -22,6 +22,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
@@ -39,6 +40,7 @@ type dependencies struct {
 	runPicker       func(context.Context, codingpicker.Source, tui.PickerOptions) (tui.PickerSelection, error)
 	reviewContext   func(context.Context) (context.Context, context.CancelFunc)
 	workerBuildID   func() (string, error)
+	loadConfig      func() (*config.Config, error)
 }
 
 func defaultDependencies() dependencies {
@@ -56,6 +58,7 @@ func defaultDependencies() dependencies {
 		runPicker:       tui.RunPicker,
 		reviewContext:   newReviewSignalContext,
 		workerBuildID:   worker.CurrentExecutableBuildID,
+		loadConfig:      internal.LoadConfig,
 	}
 }
 
@@ -174,6 +177,9 @@ func completeDependencies(deps dependencies) dependencies {
 	}
 	if deps.workerBuildID == nil {
 		deps.workerBuildID = worker.CurrentExecutableBuildID
+	}
+	if deps.loadConfig == nil {
+		deps.loadConfig = internal.LoadConfig
 	}
 	return deps
 }
@@ -906,15 +912,19 @@ func resolveEnvironment(ctx context.Context, deps dependencies) (thread.ProjectI
 	if err != nil {
 		return thread.ProjectIdentity{}, nil, &projectResolutionError{err: err}
 	}
-	home := strings.TrimSpace(deps.home())
-	if home == "" {
-		return thread.ProjectIdentity{}, nil, fmt.Errorf("coding command: MintClaw home is required")
-	}
-	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	store, err := resolveCodingStore(deps)
 	if err != nil {
 		return thread.ProjectIdentity{}, nil, err
 	}
 	return project, store, nil
+}
+
+func resolveCodingStore(deps dependencies) (*thread.Store, error) {
+	home := strings.TrimSpace(deps.home())
+	if home == "" {
+		return nil, fmt.Errorf("coding command: MintClaw home is required")
+	}
+	return thread.NewStore(filepath.Join(home, "coding"))
 }
 
 type projectResolutionError struct {

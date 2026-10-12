@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
 // NewThreadsCommand creates explicit administrative coding-thread operations.
@@ -23,8 +24,171 @@ func newThreadsCommand(deps dependencies) *cobra.Command {
 		Use:   "threads",
 		Short: "Manage durable coding threads",
 	}
-	cmd.AddCommand(newDeleteThreadCommand(deps), newForkThreadCommand(deps), newGCThreadsCommand(deps))
+	cmd.AddCommand(
+		newDeleteThreadCommand(deps),
+		newForkThreadCommand(deps),
+		newGCThreadsCommand(deps),
+		newTrashThreadsCommand(deps),
+	)
 	return cmd
+}
+
+const threadTrashPurgeConfirmation = "purge-expired-thread-trash"
+
+func newTrashThreadsCommand(deps dependencies) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "trash",
+		Short: "Manage recoverable coding thread trash",
+	}
+	cmd.AddCommand(newPurgeThreadTrashCommand(deps))
+	return cmd
+}
+
+func newPurgeThreadTrashCommand(deps dependencies) *cobra.Command {
+	deps = completeDependencies(deps)
+	var olderThan time.Duration
+	var confirmation string
+	var jsonOutput bool
+	cmd := &cobra.Command{
+		Use:   "purge",
+		Short: "Plan or permanently remove expired recoverable coding thread trash",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runPurgeThreadTrash(
+				cmd.Context(),
+				cmd.OutOrStdout(),
+				deps,
+				olderThan,
+				confirmation,
+				jsonOutput,
+			)
+		},
+	}
+	cmd.Flags().DurationVar(
+		&olderThan,
+		"older-than",
+		0,
+		"Override coding.state.trash_retention_hours (for example 720h)",
+	)
+	cmd.Flags().StringVar(
+		&confirmation,
+		"confirm",
+		"",
+		"Permanently delete after rescanning by passing "+threadTrashPurgeConfirmation,
+	)
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit machine-readable JSON")
+	return cmd
+}
+
+type purgeThreadTrashOutput struct {
+	OlderThan string                        `json:"older_than"`
+	Action    string                        `json:"action"`
+	Result    thread.ThreadTrashPurgeResult `json:"result"`
+	Notice    string                        `json:"notice"`
+}
+
+func runPurgeThreadTrash(
+	ctx context.Context,
+	out io.Writer,
+	deps dependencies,
+	olderThan time.Duration,
+	confirmation string,
+	jsonOutput bool,
+) error {
+	if confirmation != "" && confirmation != threadTrashPurgeConfirmation {
+		return fmt.Errorf(
+			"coding thread trash purge: --confirm must exactly match %q",
+			threadTrashPurgeConfirmation,
+		)
+	}
+	retention := olderThan
+	if retention == 0 {
+		cfg, err := deps.loadConfig()
+		if err != nil {
+			return fmt.Errorf("coding thread trash purge: load retention config: %w", err)
+		}
+		if err := cfg.ValidateCodingState(); err != nil {
+			return err
+		}
+		retention = cfg.Coding.State.TrashRetention()
+	}
+	minimum := time.Duration(config.MinCodingTrashRetentionHours) * time.Hour
+	maximum := time.Duration(config.MaxCodingTrashRetentionHours) * time.Hour
+	if retention < minimum || retention > maximum {
+		return fmt.Errorf(
+			"coding thread trash purge: --older-than must be between %s and %s",
+			minimum,
+			maximum,
+		)
+	}
+	store, err := resolveCodingStore(deps)
+	if err != nil {
+		return err
+	}
+	deleting := confirmation == threadTrashPurgeConfirmation
+	result, purgeErr := store.PurgeThreadTrash(ctx, thread.ThreadTrashPurgeOptions{
+		Before: deps.now().Add(-retention),
+		Delete: deleting,
+	})
+	action := "planned"
+	if deleting {
+		action = "purged"
+	}
+	output := purgeThreadTrashOutput{
+		Action:    action,
+		OlderThan: retention.String(),
+		Result:    result,
+		Notice: "Only expired MintClaw-owned recoverable thread roots are in scope. " +
+			"Shared attachment blobs remain until a separate `mintclaw threads gc` pass.",
+	}
+	if purgeErr != nil && !thread.IsCommittedThreadTrashPurgeError(purgeErr) {
+		return purgeErr
+	}
+	completionErr := errors.Join(purgeErr, renderPurgeThreadTrash(out, output, jsonOutput))
+	if completionErr != nil && len(result.AttemptedTrashIDs) > 0 &&
+		!thread.IsCommittedThreadTrashPurgeError(completionErr) {
+		return &thread.CommittedThreadTrashPurgeError{Result: result, Err: completionErr}
+	}
+	return completionErr
+}
+
+func renderPurgeThreadTrash(out io.Writer, output purgeThreadTrashOutput, jsonOutput bool) error {
+	if jsonOutput {
+		return writeJSON(out, output)
+	}
+	if _, err := fmt.Fprintf(
+		out,
+		"Coding thread trash purge %s (store-wide; cutoff %s).\n"+
+			"Scanned %d recoverable thread roots; %d expired candidates; %d permanently deleted.\n",
+		output.Action,
+		output.Result.Before.Format(time.RFC3339),
+		output.Result.Scanned,
+		len(output.Result.Candidates),
+		output.Result.Deleted,
+	); err != nil {
+		return err
+	}
+	if output.Action == "planned" && len(output.Result.Candidates) > 0 {
+		if _, err := fmt.Fprintf(
+			out,
+			"Rescan and permanently delete with: mintclaw threads trash purge --older-than %s --confirm %s\n",
+			output.OlderThan,
+			threadTrashPurgeConfirmation,
+		); err != nil {
+			return err
+		}
+	}
+	if output.Result.IncompleteTrashID != "" {
+		if _, err := fmt.Fprintf(
+			out,
+			"Removal started but did not complete for trash ID %s; inspect it before retrying.\n",
+			output.Result.IncompleteTrashID,
+		); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintln(out, output.Notice)
+	return err
 }
 
 const attachmentGCConfirmation = "delete-unreferenced-blobs"
