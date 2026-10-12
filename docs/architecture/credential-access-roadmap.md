@@ -22,6 +22,54 @@ CA1 starts its implementation. Later milestones must satisfy their admission
 and qualification gates before real credentials become accessible. Until CA6,
 the capability stays unavailable to production agents.
 
+## Deployment simplicity and first usable release
+
+On 2026-10-11, the operator requested a simpler deployment without a fleet of
+machines or microservices. The delivery target is one credential appliance
+on the existing Mac: one small protected Linux VM, one versioned installation,
+and one operator approval/revoke page. The existing MintClaw gateway makes
+typed requests to this appliance. The Mac launcher, local privileged helper,
+and disposable browser workers are internal process roles with one release
+lifecycle; they are not independently deployed network services.
+
+Keep phone approval, grant policy, the 1Password SDK, and session ownership in
+one credential broker process. Keep the privileged launch helper and browser
+in separate OS roles because they have different permissions. Use local IPC
+for those roles. The appliance supplies its own HTTPS endpoint for phone
+approval and an authenticated typed agent interface; route these on the
+same appliance without adding a separate proxy deployment. Final remote
+caller authentication and routing are still implementation and qualification
+work, not capabilities already provided by the local Unix transport.
+
+1Password remains the only vault. Do not introduce another password database,
+a separate Connect deployment, a queue, Redis, Kubernetes, or a new VPS for
+this feature. The optional notification channel must not become another
+operator-managed service. The first release retains Android approval,
+revocation, and the maximum 20-hour grant; approval is enforced by the broker,
+not by a native 1Password service-account phone-unlock feature.
+
+Prioritize the next work as one complete vertical slice: install and qualify
+the single appliance with synthetic data, connect its actual broker to the
+private browser, qualify physical Android approval, and pilot one selected
+account after the CA6 checks. Opening the approval page directly is sufficient
+for the synthetic integration stage; generic notifications remain required
+for the intended seamless release. Defer CA5 connector implementation and
+additional websites until the first browser pilot works. Do not add more
+standalone foundations unless a concrete defect blocks that slice.
+
+Separate processes on a host already controlled by the agent do not protect
+credentials from that agent's administrative access. The VM is useful only
+when its disk, memory, launch controls, and administration are outside that
+access. A native Mac service under a protected account could avoid a VM, but
+would require new macOS browser/process/network qualification; the current
+Linux implementation does not provide it. The ordinary 1Password extension
+is a simpler manual-login option, but unrestricted inspection or scripting of
+the same credential-bearing browser does not meet this isolation contract.
+
+This revision narrows deployment and delivery order. It neither installs a
+VM nor enables real credentials, and it does not claim the remaining host,
+remote caller, browser, phone, or end-to-end gates have passed.
+
 ## Existing foundations
 
 Baseline: `origin/main` at `72a236cbbfee21fc2fc10de6a6a8754b3bc58263`.
