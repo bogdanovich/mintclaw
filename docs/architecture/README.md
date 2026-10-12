@@ -2,9 +2,6 @@
 
 Internal architecture notes for major runtime mechanisms and subsystem design.
 
-- [Protected Mac Credential VM Package](credential-mac-vm-package.md): fixed Virtualization launcher,
-  protected input contract, disabled system service, public qualification, and remaining host activation gates.
-
 - [Steering](steering.md): injecting messages into a running agent loop between tool calls.
 - [Codex-Style Steering Roadmap](codex-style-steering-roadmap.md): incompatible replacement of pending-tool classification with same-turn post-batch user-input steering.
 - [Code Health Architecture State](code-health.md): current ownership,
@@ -127,9 +124,15 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   artifacts, human handoff, companion placement, profiles, providers, and
   computer fallback.
 - [Credential Access Roadmap](credential-access-roadmap.md): scoped 1Password
-  access, Android passkey approval, 20-hour revocable grants, isolated browser
-  login, and qualification gates for keeping authentication material outside
-  model context.
+  access, Android passkey approval, 20-hour revocable grants, integrated browser
+  login and connectors, and model/log/trace privacy under a trusted runtime.
+- [Trusted Runtime Credential Design](credential-trusted-runtime-design.md): alias-only operations,
+  private credential use, integrated phone approval, browser observation suppression,
+  safe diagnostics, and replacement of the earlier appliance architecture.
+- [Historical Isolated Credential Roadmap](credential-isolated-runtime-history.md): superseded
+  deployment design and preserved component PR/qualification evidence.
+- [Historical Mac Credential VM Package](credential-mac-vm-package.md): retired candidate launcher
+  and input qualification; not a current deployment requirement.
 - [Credential Provider And Isolation Qualification](credential-provider-qualification.md):
   pinned official 1Password SDK build evidence, private service and caller
   isolation requirements, protected provisioning, and planned CA2 merge units.
