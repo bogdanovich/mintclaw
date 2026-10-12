@@ -48,6 +48,10 @@ var (
 	playwrightSnapshotRefToken  = regexp.MustCompile(`\[ref=`)
 	playwrightSnapshotTargetRef = regexp.MustCompile(`\[ref=(` + playwrightTargetExpression + `)\]`)
 	playwrightElementPattern    = regexp.MustCompile(
+		`(?m)^\s*-\s+([A-Za-z][A-Za-z0-9_-]*)(?:\s+"([^"]*)")?[^\n]*\[ref=(` +
+			playwrightTargetExpression + `)\]`,
+	)
+	playwrightJSONElementPattern = regexp.MustCompile(
 		`(?m)^\s*-\s+([A-Za-z][A-Za-z0-9_-]*)(?:\s+"((?:\\.|[^"\\])*)")?[^\n]*\[ref=(` +
 			playwrightTargetExpression + `)\]`,
 	)
@@ -2710,7 +2714,11 @@ func validPlaywrightSnapshotTail(lines []string) bool {
 
 func parsePlaywrightElements(snapshot string, jsonNames bool) []DriverElement {
 	semantics := make(map[string]DriverElement)
-	for _, match := range playwrightElementPattern.FindAllStringSubmatch(snapshot, -1) {
+	pattern := playwrightElementPattern
+	if jsonNames {
+		pattern = playwrightJSONElementPattern
+	}
+	for _, match := range pattern.FindAllStringSubmatch(snapshot, -1) {
 		name := match[2]
 		if jsonNames {
 			if decoded, err := strconv.Unquote(`"` + name + `"`); err == nil {

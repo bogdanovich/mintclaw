@@ -542,7 +542,7 @@ class Driver {
     if (page.url() === 'about:blank') {
       return '- Page URL: about:blank\n- Page Title: \n### Snapshot\n```yaml\n\n```';
     }
-    const scope = target ? this.locatorFor(target) : page;
+    const scope = target ? this.locatorFor(target) : page.locator(':root');
     const tree = await scope.ariaSnapshotJSON({ mode: 'ai' });
     const redactPasswords = async nodes => {
       await Promise.all(nodes.map(async node => {
@@ -570,17 +570,20 @@ class Driver {
     // roles, product-photo counts, gallery controls, or new reference authority.
     const inventories = [];
     if (target) {
-      inventories.push(await scope.evaluate(imageEvidenceScript, MAX_IMAGE_EVIDENCE));
+      try {
+        inventories.push(await scope.evaluate(imageEvidenceScript, MAX_IMAGE_EVIDENCE, { timeout: 500 }));
+      } catch (_) {
+        inventories.push({ unavailable: true });
+      }
     } else {
       let remaining = MAX_IMAGE_EVIDENCE;
       const frames = page.frames();
       for (const frame of frames.slice(0, 8)) {
         try {
-          const inventory = await frame.locator('body,frameset').evaluate(imageEvidenceScript, remaining);
+          const inventory = await frame.locator(':root').evaluate(imageEvidenceScript, remaining, { timeout: 500 });
           remaining -= inventory.items.length;
           inventories.push(inventory);
-        } catch (error) {
-          if (frame === page.mainFrame()) throw error;
+        } catch (_) {
           inventories.push({ unavailable: true });
         }
       }

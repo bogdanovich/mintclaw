@@ -38,10 +38,12 @@ func TestPlaywrightNativeObservationPreservesHierarchyAndExactSemantics(t *testi
 }
 
 func TestPlaywrightObservationRetainsLegacyLiteralNames(t *testing.T) {
-	text := "- Page URL: https://example.com/\n- Page Title: Fixture\n### Snapshot\n```yaml\n" +
-		`- button "C:\temp" [ref=e1]` + "\n```"
-	observation, err := parsePlaywrightObservation(text, 1024, 2, testPlaywrightToolResultBytes)
-	if err != nil || len(observation.Elements) != 1 || observation.Elements[0].Name != `C:\temp` {
-		t.Fatalf("legacy driver name changed: %+v, %v", observation, err)
+	for _, name := range []string{`C:\temp`, `C:\`, `C:\\`} {
+		text := "- Page URL: https://example.com/\n- Page Title: Fixture\n### Snapshot\n```yaml\n" +
+			`- button "` + name + `" [ref=e1]` + "\n```"
+		observation, err := parsePlaywrightObservation(text, 1024, 2, testPlaywrightToolResultBytes)
+		if err != nil || len(observation.Elements) != 1 || observation.Elements[0].Name != name {
+			t.Fatalf("legacy driver name %q changed: %+v, %v", name, observation, err)
+		}
 	}
 }

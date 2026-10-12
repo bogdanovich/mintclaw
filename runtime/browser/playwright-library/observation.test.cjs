@@ -19,8 +19,10 @@ const gallery = `<section aria-label="Product gallery"><figure>${image}<figcapti
 
 async function fixture(t) {
   const server = http.createServer((request, response) => {
-    response.setHeader('content-type', request.url === '/image.svg' ? 'image/svg+xml' : 'text/html');
-    if (request.url === '/image.svg') {
+    response.setHeader('content-type', ['/image.svg', '/document.svg'].includes(request.url) ? 'image/svg+xml' : 'text/html');
+    if (request.url === '/document.svg') {
+      response.end('<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagram" width="80" height="80"><circle cx="40" cy="40" r="20"/></svg>');
+    } else if (request.url === '/image.svg') {
       response.end('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="blue"/></svg>');
     } else if (request.url === '/map') {
       response.end(`<title>Map only</title><main><h1>Listing</h1>${map}</main>`);
@@ -93,7 +95,7 @@ function ref(snapshot, expression) {
 test('native semantics distinguish a map from an independent real gallery', { timeout: 30000 }, async t => {
   const { call, base } = await fixture(t);
   const mapSnapshot = await call('browser_navigate', { url: base + '/map' });
-  assert.match(mapSnapshot, /region "Location map" \[ref=e\d+\]:\n    - img "Location diagram" \[ref=e\d+\]\n    - button "Full Screen"/);
+  assert.match(mapSnapshot, /region "Location map" \[ref=e\d+\]:\n      - img "Location diagram" \[ref=e\d+\]\n      - button "Full Screen"/);
   assert.equal([...mapSnapshot.matchAll(/- img "Location diagram" \[ref=/g)].length, 1);
   assert.equal(inventory(mapSnapshot).dom_image_count, 6);
   assert.ok(inventory(mapSnapshot).items.every(item => item.context.includes('Location map') && item.loaded));
@@ -163,9 +165,10 @@ test('source removal during auxiliary text inspection does not lose the browser 
   const { call, base } = await fixture(t);
   await call('browser_navigate', { url: base + '/evidence' });
   await call('browser_run_code_unsafe', { code: `async page => {
-    const snapshot = page.ariaSnapshotJSON.bind(page);
-    page.ariaSnapshotJSON = async options => {
-      const tree = await snapshot(options);
+    const prototype = Object.getPrototypeOf(page.locator(':root'));
+    const snapshot = prototype.ariaSnapshotJSON;
+    prototype.ariaSnapshotJSON = async function(options) {
+      const tree = await snapshot.call(this, options);
       await page.locator('input[type=password]').evaluateAll(elements => elements.forEach(element => element.remove()));
       return tree;
     };
@@ -174,6 +177,34 @@ test('source removal during auxiliary text inspection does not lose the browser 
   const snapshot = await call('browser_snapshot');
   assert.doesNotMatch(snapshot, /private-secret|role-button-secret|role-combobox-secret/);
   assert.match(snapshot, /Product gallery/);
+  assert.equal(await call('browser_ping'), 'pong');
+  await call('shutdown');
+});
+
+test('document-root native observation supports standalone SVG without an HTML body', { timeout: 15000 }, async t => {
+  const { call, base } = await fixture(t);
+  const snapshot = await call('browser_navigate', { url: base + '/document.svg' });
+  const imageRef = ref(snapshot, /img "Diagram"[^\n]*\[ref=((?:f\d+)?e\d+)\]/);
+  assert.match(await call('browser_snapshot', { target: imageRef }), /img "Diagram"/);
+  assert.equal(await call('browser_ping'), 'pong');
+  await call('shutdown');
+});
+
+test('unavailable auxiliary image inspection preserves native semantics and live control', { timeout: 15000 }, async t => {
+  const { call, base } = await fixture(t);
+  await call('browser_navigate', { url: base + '/gallery' });
+  await call('browser_run_code_unsafe', { code: `async page => {
+    const prototype = Object.getPrototypeOf(page.locator(':root'));
+    const evaluate = prototype.evaluate;
+    prototype.evaluate = async function(fn, ...args) {
+      if (fn.name === 'imageEvidenceScript') throw new Error('fixture image inspection unavailable');
+      return evaluate.call(this, fn, ...args);
+    };
+    return true;
+  }` });
+  const snapshot = await call('browser_snapshot');
+  assert.match(snapshot, /Product gallery/);
+  assert.equal(inventory(snapshot).unavailable, true);
   assert.equal(await call('browser_ping'), 'pong');
   await call('shutdown');
 });
