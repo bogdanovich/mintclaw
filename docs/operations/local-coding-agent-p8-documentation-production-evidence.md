@@ -2,8 +2,9 @@
 
 Packet: [H5 / P8.4](../architecture/local-coding-agent-p8-hardening.md#h5--p84--user-documentation-and-migration).
 
-Status: complete on 2026-10-12. Integrated H6 qualification remains active;
-this record does not declare the complete P8 release stable.
+Status: complete on 2026-10-12. H6 was still active at this packet's close;
+the subsequent [P8 exit](../architecture/local-coding-agent-p8-exit.md)
+records the complete integrated qualification and stable-scope boundaries.
 
 ## Merged guidance
 
@@ -86,5 +87,5 @@ policy. H5 does not claim to remediate those pre-existing deployment findings.
 Private before/after receipts remain in
 `/home/server/mintclaw-p8-h5-validation-ae8HDW`.
 
-H6 still owns the final integrated matrix, exact-source release snapshot,
-stream-failure and local-task correlation repairs, and stable exit record.
+The subsequent H6 exit records the final integrated matrix, exact-source
+release snapshot, stream-failure and local-task correlation repairs.
