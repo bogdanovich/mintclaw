@@ -1,0 +1,348 @@
+{
+  "schema_version": "mintclaw.coding_state_inventory.v1",
+  "baseline_commit": "5b87df2b55a25486c06db7001c0dc46704e33bea",
+  "classes": [
+    {
+      "id": "canonical_transcript",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "sessions",
+      "locations": [
+        "coding/threads/<thread-id>/sessions",
+        "coding/trash/threads/<trash-id>/sessions"
+      ],
+      "description": "session JSONL and canonical metadata",
+      "privacy": "private_content",
+      "export_class": "excluded",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "seahorse_context",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "context",
+      "locations": [
+        "coding/threads/<thread-id>/context",
+        "coding/trash/threads/<trash-id>/context"
+      ],
+      "description": "per-thread SQLite summaries, indexes, WAL/SHM, checkpoints",
+      "privacy": "private_content",
+      "export_class": "excluded",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "thread_memory",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "memory",
+      "locations": [
+        "coding/threads/<thread-id>/memory",
+        "coding/trash/threads/<trash-id>/memory"
+      ],
+      "description": "coding-scoped long-term and daily memory",
+      "privacy": "private_content",
+      "export_class": "excluded",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "thread_metadata",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "thread.meta.json",
+      "locations": [
+        "coding/threads/<thread-id>/thread.meta.json",
+        "coding/trash/threads/<trash-id>/thread.meta.json"
+      ],
+      "description": "identity, model, project paths, title and preview",
+      "privacy": "private_content",
+      "export_class": "metadata_safe",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "thread_writer_lease",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "thread.lock",
+      "locations": [
+        "coding/threads/<thread-id>/thread.lock",
+        "coding/trash/threads/<trash-id>/thread.lock"
+      ],
+      "description": "thread writer identity and lock",
+      "privacy": "operational_metadata",
+      "export_class": "excluded",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "repository_evidence",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "repository",
+      "locations": [
+        "coding/threads/<thread-id>/repository",
+        "coding/trash/threads/<trash-id>/repository"
+      ],
+      "description": "baselines and typed review results; no Git objects",
+      "privacy": "private_content",
+      "export_class": "metadata_safe",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "presentation_state",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "presentation",
+      "locations": [
+        "coding/threads/<thread-id>/presentation",
+        "coding/trash/threads/<trash-id>/presentation"
+      ],
+      "description": "plan, frontend checkpoint and retained views",
+      "privacy": "private_content",
+      "export_class": "metadata_safe",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "thread_runtime",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "runtime",
+      "locations": [
+        "coding/threads/<thread-id>/runtime",
+        "coding/trash/threads/<trash-id>/runtime"
+      ],
+      "description": "runtime state, task/interaction registries and interaction signing key",
+      "privacy": "credential_and_private_content",
+      "export_class": "excluded",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "thread_diagnostics",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "diagnostics",
+      "locations": [
+        "coding/threads/<thread-id>/diagnostics",
+        "coding/trash/threads/<trash-id>/diagnostics"
+      ],
+      "description": "bounded passive diagnostic traces",
+      "privacy": "private_content",
+      "export_class": "metadata_safe",
+      "retention": "diagnostic capture disabled by default; configured age/count/byte bounds while active; thread trash cutoff also applies",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "thread_media",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "media",
+      "locations": [
+        "coding/threads/<thread-id>/media",
+        "coding/trash/threads/<trash-id>/media"
+      ],
+      "description": "retained media and generated files",
+      "privacy": "private_content",
+      "export_class": "excluded",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "attachment_manifests",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "attachments",
+      "locations": [
+        "coding/threads/<thread-id>/attachments",
+        "coding/trash/threads/<trash-id>/attachments"
+      ],
+      "description": "thread-owned immutable blob references",
+      "privacy": "private_content",
+      "export_class": "excluded",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "document_artifacts",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "document-artifacts",
+      "locations": [
+        "coding/threads/<thread-id>/document-artifacts",
+        "coding/trash/threads/<trash-id>/document-artifacts"
+      ],
+      "description": "retained document results",
+      "privacy": "private_content",
+      "export_class": "excluded",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "document_write_journal",
+      "owner": "coding_thread",
+      "scope": "thread",
+      "thread_entry": "document-writes",
+      "locations": [
+        "coding/threads/<thread-id>/document-writes",
+        "coding/trash/threads/<trash-id>/document-writes"
+      ],
+      "description": "private document write journal and protected bindings",
+      "privacy": "private_content",
+      "export_class": "excluded",
+      "retention": "retained while active; explicit trash then explicit age-bounded purge (30-day default)",
+      "deletion": "thread_trash_then_purge",
+      "project_authority": false
+    },
+    {
+      "id": "shared_attachment_blobs",
+      "owner": "attachment_store",
+      "scope": "store",
+      "locations": [
+        "coding/blobs/sha256"
+      ],
+      "description": "immutable content-addressed bytes shared across active, trashed, and fork-quarantined references",
+      "privacy": "private_content",
+      "export_class": "excluded",
+      "retention": "bounded per-admission bytes; retained while referenced; explicit GC cutoff (24-hour CLI default)",
+      "deletion": "attachment_gc",
+      "project_authority": false
+    },
+    {
+      "id": "fork_and_gc_quarantine",
+      "owner": "thread_store",
+      "scope": "store",
+      "locations": [
+        "coding/threads/<fork-quarantine>",
+        "coding/blobs/sha256/<shard>/<gc-quarantine>"
+      ],
+      "description": "incomplete publication/recovery state; never mistaken for recoverable thread trash",
+      "privacy": "private_content",
+      "export_class": "excluded",
+      "retention": "recovery validates identity and ownership before cleanup; no blind age deletion",
+      "deletion": "owner_recovery",
+      "project_authority": false
+    },
+    {
+      "id": "model_recents",
+      "owner": "coding_model_picker",
+      "scope": "user",
+      "locations": [
+        "coding/model-recents.v1.json"
+      ],
+      "description": "recent configured provider/model identities",
+      "privacy": "operational_metadata",
+      "export_class": "excluded",
+      "retention": "at most ten identities; stale routes hidden; explicit operator removal",
+      "deletion": "operator_owned",
+      "project_authority": false
+    },
+    {
+      "id": "config_and_credentials",
+      "owner": "config_and_auth",
+      "scope": "user",
+      "locations": [
+        "config.json",
+        "credential stores"
+      ],
+      "description": "configuration, auth tokens, signing keys and external credential references",
+      "privacy": "credentials",
+      "export_class": "excluded",
+      "retention": "operator/provider-owned lifetime; revocation and cleanup belong to their owners",
+      "deletion": "operator_owned",
+      "project_authority": false
+    },
+    {
+      "id": "worktree_allocation",
+      "owner": "worktree_store",
+      "scope": "store",
+      "locations": [
+        "coding/worktrees"
+      ],
+      "description": "allocation and handoff registry; isolated checkout lifecycle is separate",
+      "privacy": "private_content",
+      "export_class": "metadata_safe",
+      "retention": "retained until conservative worktree cleanup validates ownership and effects",
+      "deletion": "worktree_cleanup",
+      "project_authority": true
+    },
+    {
+      "id": "gateway_and_companion_ledgers",
+      "owner": "gateway_and_companion",
+      "scope": "remote",
+      "locations": [
+        "gateway task/interaction/outbox/invocation stores",
+        "companion worker/invocation ledgers"
+      ],
+      "description": "remote task generations, terminal outcomes, delivery receipts and worker ownership",
+      "privacy": "private_content",
+      "export_class": "metadata_safe",
+      "retention": "separate bounded owner policies; gateway terminal task default 168 hours; never deleted by local thread purge",
+      "deletion": "separate_owner_policy",
+      "project_authority": false
+    },
+    {
+      "id": "service_logs_and_support_exports",
+      "owner": "operator",
+      "scope": "user",
+      "locations": [
+        "service journals",
+        "explicit support bundle destination"
+      ],
+      "description": "service log retention and exported diagnostic copies",
+      "privacy": "private_content",
+      "export_class": "metadata_safe",
+      "retention": "journal policy and explicit exported-copy lifetime; deleting a thread cannot revoke a prior export",
+      "deletion": "operator_owned",
+      "project_authority": false
+    },
+    {
+      "id": "transient_views_and_drafts",
+      "owner": "frontend",
+      "scope": "process",
+      "locations": [
+        "in-memory picker/search/render projections",
+        "private draft temporary files"
+      ],
+      "description": "bounded views and pending paste/attachment data",
+      "privacy": "private_content",
+      "export_class": "excluded",
+      "retention": "bounded in-process views; draft release on submit/remove/exit; crash leftovers require operator inspection",
+      "deletion": "process_exit",
+      "project_authority": false
+    },
+    {
+      "id": "project_git_and_external_effects",
+      "owner": "project_or_external_service",
+      "scope": "external",
+      "locations": [
+        "project files",
+        "Git objects and refs",
+        "isolated checkout",
+        "remote publication/deploy/install effects"
+      ],
+      "description": "user repository and effects created by tools",
+      "privacy": "external_content",
+      "export_class": "excluded",
+      "retention": "user/service lifecycle; never part of thread state deletion or trash purge",
+      "deletion": "external_owner",
+      "project_authority": true
+    }
+  ]
+}

@@ -4,6 +4,9 @@
     "capabilities": {
       "document": true,
       "browser": true
+    },
+    "state": {
+      "trash_retention_hours": 720
     }
   },
   "agents": {

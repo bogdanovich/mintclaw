@@ -286,6 +286,55 @@ Provider retry and fallback are visible as sanitized warning rows. A fallback
 before visible output can complete the same turn once; a failure after visible
 output stays a failure and is not silently replayed through another provider.
 
+## Delete and retain coding state
+
+Archiving hides a thread; it does not delete its history. To inspect a deletion
+plan and then move one thread into recoverable MintClaw trash, run these from
+the thread's project:
+
+```console
+mintclaw threads delete <thread-id> --json
+mintclaw threads delete <thread-id> --confirm <thread-id> --json
+```
+
+The complete known thread state moves together, including canonical history,
+Seahorse state, previews, runtime state, diagnostics and artifacts. The receipt
+names its recovery location. Project files and Git state have their own
+lifecycle and are outside this operation.
+
+Recoverable trash becomes eligible for explicit purge after 30 days by
+default. Set `coding.state.trash_retention_hours` to change that window
+(24–8760 hours; omitted or zero means 720). Nothing expires automatically
+during startup or resume. Preview the store-wide pass before confirming it:
+
+```console
+mintclaw threads trash purge --json
+mintclaw threads trash purge --older-than 720h --confirm purge-expired-thread-trash --json
+```
+
+These commands can run outside a repository. Purge is permanent. Its JSON
+receipt reports attempted and completed opaque trash IDs; an
+`incomplete_trash_id` means a recursive removal failed after it began. Inspect
+that root before retrying. Unknown or linked top-level entries abort the pass
+so they can be inspected separately.
+
+Shared attachment bytes remain until no active, trashed or fork-quarantined
+thread refers to them. Reclaim old, unreferenced blobs with a separate plan and
+confirmation:
+
+```console
+mintclaw threads gc --older-than 24h --json
+mintclaw threads gc --older-than 24h --confirm delete-unreferenced-blobs --json
+```
+
+Thread deletion cannot revoke prior exports or remove service logs, remote
+task ledgers, credentials or worktree checkouts. The
+[state ownership and retention audit](../architecture/local-coding-agent-p8-state-lifecycle.md)
+lists those separate owners. For an incident, keep the relevant evidence
+until the investigation is complete and use a
+[diagnostic support bundle](../operations/diagnostic-support-bundles.md)
+instead of uploading the private state directory.
+
 ## Terminal, SSH, tmux, and accessibility
 
 - `--no-color` or `NO_COLOR=1` keeps the interactive layout but removes color.

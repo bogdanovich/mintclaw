@@ -25,6 +25,7 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Local Coding Agent P7.6 Workspace Rewind Decision](local-coding-agent-p7-6-decision.md): explicit deferral, truthful transcript-only fork/revert behavior, and measured safety gates for any later reconsideration.
 - [Local Coding Agent P8 Hardening And Stable Release](local-coding-agent-p8-hardening.md): active diagnostics-first execution plan for performance, platform, privacy, state lifecycle, migration, production qualification, and stable release.
 - [Local Coding Agent P8 Platform Qualification](local-coding-agent-p8-platform-qualification.md): exact release tuples plus native terminal, shell, filesystem, lock, worktree, and process guarantees.
+- [Local Coding Agent P8.3 State Lifecycle](local-coding-agent-p8-state-lifecycle.md): machine-checked ownership inventory, private-state boundaries, explicit recoverable-trash retention/purge, partial failure receipts and separate blob GC.
 - [Local Coding Agent P8 Diagnostic Evidence Inventory](local-coding-agent-p8-diagnostic-inventory.md): machine-checked map of coding incident paths, authoritative evidence, passive trace coverage, correlation gaps, retention, and H1b/H1c dispositions.
 - [Diagnostic Queries And Support Bundles](../operations/diagnostic-support-bundles.md): H1c read-only trace discovery,
   safe correlation timelines, checksum-verifiable export, and privacy boundaries.

@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -1496,6 +1497,9 @@ func testDependencies(home, cwd string, now *time.Time) dependencies {
 		cwd:         func() (string, error) { return cwd, nil },
 		now:         func() time.Time { return *now },
 		newThreadID: thread.NewThreadID,
+		loadConfig: func() (*config.Config, error) {
+			return config.DefaultConfig(), nil
+		},
 		resolveModel: func(model string) (string, string, error) {
 			resolved := strings.TrimSpace(model)
 			if resolved == "" {

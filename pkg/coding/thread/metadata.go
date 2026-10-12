@@ -331,6 +331,7 @@ type Store struct {
 	renameUnpublishedFork   func(*os.Root, string, string) error
 	validateQuarantinedFork func(*os.Root, string, *Lease) error
 	retainReservationLease  func(*Lease)
+	removeThreadTrash       func(*os.Root, string) error
 
 	afterAttachmentGCCommitValidation  func()
 	afterAttachmentGCQuarantinePublish func()
@@ -370,6 +371,9 @@ func NewStore(root string) (*Store, error) {
 		},
 		validateQuarantinedFork: validateQuarantinedForkLease,
 		retainReservationLease:  retainFailedReservationLease,
+		removeThreadTrash: func(root *os.Root, name string) error {
+			return root.RemoveAll(name)
+		},
 		closeReservationRoots: func(threadRoot, threadsRoot *os.Root) error {
 			return errors.Join(threadRoot.Close(), threadsRoot.Close())
 		},

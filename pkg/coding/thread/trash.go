@@ -14,7 +14,26 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
-const maxDeletePlanEntries = 32
+const (
+	maxDeletePlanEntries  = 32
+	threadTrashTimeLayout = "20060102T150405.000000000Z"
+)
+
+var ownedThreadEntries = map[string]struct{}{
+	metadataFileName:      {},
+	leaseFileName:         {},
+	repositoryDirectory:   {},
+	presentationDirectory: {},
+	"sessions":            {},
+	"context":             {},
+	"memory":              {},
+	"runtime":             {},
+	"diagnostics":         {},
+	"media":               {},
+	attachmentDirectory:   {},
+	"document-artifacts":  {},
+	"document-writes":     {},
+}
 
 // CommittedTrashError reports that the thread move committed, but directory
 // durability could not be confirmed. Result always names the recovery path.
@@ -143,14 +162,8 @@ func validateDeleteProjectBoundaries(threadRoot string, project ProjectIdentity)
 }
 
 func ownedThreadEntry(name string) bool {
-	switch name {
-	case metadataFileName, leaseFileName, repositoryDirectory, presentationDirectory,
-		"sessions", "context", "memory", "runtime", "diagnostics", "media",
-		attachmentDirectory, "document-artifacts", "document-writes":
-		return true
-	default:
-		return false
-	}
+	_, owned := ownedThreadEntries[name]
+	return owned
 }
 
 // TrashThread atomically removes a thread from the active catalog by moving
@@ -218,7 +231,7 @@ func (s *Store) TrashThread(
 			return fmt.Errorf("coding thread delete: sync trash hierarchy before move: %w", err)
 		}
 		at := now.UTC()
-		trashID := fmt.Sprintf("%s-%s-%s", threadID, at.Format("20060102T150405.000000000Z"), uuid.NewString())
+		trashID := newThreadTrashID(threadID, at)
 		destination := filepath.Join(trashRoot, trashID)
 		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
 			return maintenanceErr
@@ -242,6 +255,10 @@ func (s *Store) TrashThread(
 		return nil
 	})
 	return result, err
+}
+
+func newThreadTrashID(threadID string, at time.Time) string {
+	return fmt.Sprintf("%s-%s-%s", threadID, at.UTC().Format(threadTrashTimeLayout), uuid.NewString())
 }
 
 func ensureDirectTrashDirectory(root *os.Root, name string) error {
