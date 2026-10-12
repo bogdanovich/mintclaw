@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +76,7 @@ func TestCodingRemoteTaskToolUsesExactStartAndControlAuthority(t *testing.T) {
 		t.Fatalf("start = %#v", started)
 	}
 	startResult := decodeCodingRemoteTaskResult(t, started)
+	assertCodingRemoteTaskIdentity(t, started, startResult.TaskID, startResult.GenerationID)
 	if startResult.Outcome != "observed" || startResult.TaskID == "" ||
 		startResult.BindingDiscoveryRevision != "discovery-v1" ||
 		startResult.ScopeRevision != "scope-v1" {
@@ -103,6 +105,7 @@ func TestCodingRemoteTaskToolUsesExactStartAndControlAuthority(t *testing.T) {
 		map[string]any{"action": "status", "task_id": startResult.TaskID},
 	)
 	statusResult := decodeCodingRemoteTaskResult(t, status)
+	assertCodingRemoteTaskIdentity(t, status, startResult.TaskID, startResult.GenerationID)
 	if status.IsError || statusResult.Question == nil || statusResult.Question.Revision != 3 ||
 		client.taskCalls[1].DiscoveryRevision != "discovery-v1" || len(client.discoverCalls) != 1 {
 		t.Fatalf("status = %#v; calls = %#v", statusResult, client.taskCalls)
@@ -193,6 +196,7 @@ func TestCodingRemoteTaskToolRetainsUncertainStartAcrossRestartAndIsolatesFork(t
 		t.Fatalf("uncertain start = %#v", uncertain)
 	}
 	uncertainResult := decodeCodingRemoteTaskResult(t, uncertain)
+	assertCodingRemoteTaskIdentity(t, uncertain, "", "")
 	if uncertainResult.Outcome != "uncertain" || !uncertainResult.Retained ||
 		uncertainResult.TaskID != recoveryResult.TaskID || len(client.discoverCalls) != 1 ||
 		!strings.Contains(uncertainResult.RecoveryAction, "do not replay") ||
@@ -307,6 +311,7 @@ func TestCodingRemoteTaskToolDefinitiveControlErrorClearsLiveQuestion(t *testing
 	if !deniedStatus.IsError || decodeCodingRemoteTaskResult(t, deniedStatus).Outcome != "stale" {
 		t.Fatalf("definitive status error = %#v", deniedStatus)
 	}
+	assertCodingRemoteTaskIdentity(t, deniedStatus, taskID, "generation_1")
 	liveContinuity := tool.CodingContinuityContext()
 	if !strings.Contains(liveContinuity, "state=stale") ||
 		strings.Contains(liveContinuity, "state=waiting_for_input") {
@@ -382,6 +387,55 @@ func TestCodingRemoteTaskToolFailsClosedOnIdentityQuestionAndRetentionBounds(t *
 			tool.taskRetained("coding-overflow"),
 			tool.CodingContinuityContext(),
 		)
+	}
+}
+
+func TestCodingRemoteTaskResultCorrelatesOnlyKnownRetainedGenerations(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		outcome    string
+		retained   bool
+		generation string
+		wantLinked bool
+	}{
+		{"observed", "observed", true, "generation_1", true},
+		{"retained uncertain", "uncertain", true, "generation_1", true},
+		{"retained stale", "stale", true, "generation_1", true},
+		{"unknown admission", "uncertain", true, "", false},
+		{"denied admission", "denied", false, "", false},
+		{"unretained projection", "denied", false, "generation_1", false},
+		{"invalid projection", "uncertain", true, "invalid generation", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := codingRemoteTaskTestLocalResult(codingRemoteTaskTestAuthority(), "coding-task_1")
+			result.Outcome = test.outcome
+			result.Retained = test.retained
+			result.GenerationID = test.generation
+			if test.generation != "" {
+				result.TaskStatus = "running"
+			}
+			if test.outcome == "observed" {
+				result.ErrorCode, result.RecoveryAction = "", ""
+			}
+			projected := codingRemoteTaskResultForTool(result)
+			taskID, generationID := "", ""
+			if test.wantLinked {
+				taskID, generationID = result.TaskID, result.GenerationID
+			}
+			assertCodingRemoteTaskIdentity(t, projected, taskID, generationID)
+			if projected.IsError != (test.outcome != "observed") {
+				t.Fatalf("error flag = %v for outcome %q", projected.IsError, test.outcome)
+			}
+		})
+	}
+}
+
+func assertCodingRemoteTaskIdentity(t *testing.T, result *toolshared.ToolResult, taskID, generationID string) {
+	t.Helper()
+	wantControl := toolshared.ToolControl{TaskID: taskID, TaskGenerationID: generationID}
+	if result == nil || !reflect.DeepEqual(result.Control, wantControl) ||
+		!reflect.DeepEqual(result.Delivery, toolshared.ToolDelivery{}) {
+		t.Fatalf("result changed execution/delivery semantics or task identity: %#v", result)
 	}
 }
 

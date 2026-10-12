@@ -31,6 +31,7 @@ type pdfTrial struct {
 	parent    *os.Root
 	directory string
 	filter    *strings.Replacer
+	census    *pdfNativeCensus
 }
 
 func preparePDFTrial(item LoadedCase, home, workspace, sessionID, agent string) (*pdfTrial, error) {
@@ -152,6 +153,10 @@ func (trial *pdfTrial) resolvedPDF() PDFCase {
 // caller must establish native terminal settlement, not infer it from timeout.
 // It removes only the owned source and empty directory, not arbitrary contents.
 func (trial *pdfTrial) release(settled bool) error {
+	if trial.census != nil {
+		trial.census.before.close()
+		trial.census = nil
+	}
 	clear(trial.source)
 	trial.source = nil
 	trial.item.Case.Driver.Facts = nil

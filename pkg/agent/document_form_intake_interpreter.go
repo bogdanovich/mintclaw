@@ -11,8 +11,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/document"
-	"github.com/bogdanovich/mintclaw/pkg/providers"
-	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
 const maxDocumentIntakeWireBytes = 64 * 1024
@@ -34,11 +32,7 @@ func (auditor *documentFormAuditor) InterpretFormIntake(
 		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
 	}
 	defer clear(payload)
-	options := map[string]any{"temperature": 0, "native_search": false}
-	protocoltypes.DisablePromptCache(options)
-	response, err := resolved.provider.Chat(protocoltypes.WithSensitiveRequest(ctx), []providers.Message{
-		{Role: "system", Content: documentIntakeSystemPrompt}, {Role: "user", Content: string(payload)},
-	}, nil, resolved.model, options)
+	response, err := callDocumentPrivateModel(ctx, resolved, documentIntakeSystemPrompt, payload)
 	if err != nil || response == nil || len(response.ToolCalls) != 0 {
 		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
 	}
@@ -57,6 +51,11 @@ const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance
 	`Omit output unless the utterance explicitly requests complete filling or an editable partial draft. ` +
 	`A clear request to finish remaining fields manually is a draft request even without that exact terminology; ` +
 	`a question about the available options is clarification, not a scope change. ` +
+	`For an explicit request to create or deliver the filled PDF, use intent finish, including an editable or partial draft. ` +
+	`Use intent draft for choosing partial scope or deferring completion, not for requesting creation of the selected output. ` +
+	`A finish interpretation is only advisory: native code still requires a separate current review and final approval. ` +
+	`For finish requests referring to the current or already selected result/review, preserve its output scope. ` +
+	`Omit output unless this utterance explicitly changes complete-versus-draft scope; finish alone is not a scope change. ` +
 	`Arrays may be empty. Occurrences count exact token-aligned non-overlapping matches, starting at 1. ` +
 	`Use only literal text from the utterance, never generate, rephrase, infer or case-fold a value. ` +
 	`For explicit operator instructions to leave a field blank or mark a section inapplicable, use disposition with ` +

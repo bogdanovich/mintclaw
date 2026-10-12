@@ -34,6 +34,7 @@ type RoleCall struct {
 	DurationMS    int64                `json:"duration_ms"`
 	Attempted     bool                 `json:"attempted"`
 	Code          string               `json:"code"`
+	ActionKind    string               `json:"action_kind,omitempty"`
 	UsageSource   string               `json:"usage_source"`
 	Usage         *providers.UsageInfo `json:"usage,omitempty"`
 }
