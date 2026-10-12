@@ -32,12 +32,29 @@ func documentFormIntakeFollowup(
 			},
 		}, nil
 	}
-	if intake := projection.Intake; intake != nil &&
-		(projection.FormAction == "collect" || projection.FormAction == "pause" || projection.FormAction == "resume" ||
-			intake.Failure != nil || intake.Progress.PendingInputs > 0) {
+	if intake := projection.Intake; intake != nil && intake.Failure != nil {
 		return &toolshared.ToolOnlyFollowup{
 			ResponseOnly: true,
-			Instruction:  "Render the trusted protected form progress in the user's language. For collect, present its form summary, grouped collection plan and question. Invite one free-text paragraph or several ordinary messages; never require /answer, labels, field IDs or one answer per field. Do not echo personal values. Never ask again for confirmed/provided/preserved facts. If pending input or uncertainty remains, explain that accepted fields are preserved and ask only a focused clarification, or suggest retrying the same job. Do not claim complete filling, restart intake or request the attachment again. Wait for the user's next message.",
+			Instruction: "Explain the trusted processing failure and its stage without echoing private values or raw errors. " +
+				"The input was received and retained; processing failure is not evidence of missing operator information. " +
+				"Never ask the user to resend already received facts, restart intake or provide the attachment again. " +
+				"Ask only a specific clarification justified by native intake findings, not by the unresolved-field list. " +
+				"With no finding, report that accepted fields are preserved and offer /retry_form to process retained " +
+				"input without sending another data message. " +
+				"For editable_output_unavailable, explain the limitation and offer complete filling or cancellation. " +
+				"Do not claim completion, approve output or invoke another tool. Wait for the user's next message.",
+		}, nil
+	}
+	if intake := projection.Intake; intake != nil &&
+		(projection.FormAction == "collect" || projection.FormAction == "pause" || projection.FormAction == "resume" ||
+			intake.Progress.PendingInputs > 0) {
+		return &toolshared.ToolOnlyFollowup{
+			ResponseOnly: true,
+			Instruction: "Render the trusted protected form progress in the user's language. For collect, present its form summary, grouped collection plan and question. Invite one free-text paragraph or several ordinary messages; never require /answer, labels, field IDs or one answer per field. Do not echo personal values. Never ask again for confirmed/provided/preserved facts. " +
+				"Pending inputs still block review and output: do not claim a review checkpoint or ask to finish. " +
+				"With pending input, ask only a clarification justified by native findings; otherwise offer /retry_form " +
+				"without requesting received facts again. Do not claim complete filling, restart intake or request " +
+				"the attachment again. Wait for the user's next message.",
 		}, nil
 	}
 	if projection.Mapping == nil {

@@ -173,6 +173,7 @@ func (al *AgentLoop) buildInboundMessageTurnForTargetWithOptions(
 	opts := newTurnSpec(turnModeInbound, dispatch, modelBinding)
 	opts.SenderDisplayName = msg.Sender.DisplayName
 	opts.DocumentIntakeReference = msg.Context.DocumentIntake.Reference
+	opts.DocumentIntakeSpoolID = msg.SpoolID
 
 	return inboundMessageTurn{
 		Message:      msg,

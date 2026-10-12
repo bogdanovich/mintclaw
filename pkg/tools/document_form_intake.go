@@ -115,6 +115,36 @@ func (tool *DocumentTool) FindProtectedFormIntake(ctx context.Context) (*documen
 	return tool.formJobs.FindFormIntake(ctx, owner)
 }
 
+// RetryProtectedFormIntake resolves an existing receipt for a typed same-route
+// recovery control. It never admits input or resets the extraction budget.
+func (tool *DocumentTool) RetryProtectedFormIntake(
+	ctx context.Context, guard bus.InboundDocumentIntakeGuard,
+) (string, error) {
+	if !guard.Valid() || tool == nil || tool.readOnly || tool.formJobs == nil {
+		return "", document.ErrFormJobConflict
+	}
+	owner, err := documentFormOwner(ctx)
+	if err != nil {
+		return "", document.ErrFormJobUnauthorized
+	}
+	progress, err := tool.formJobs.FindFormIntake(ctx, owner)
+	if err != nil || progress == nil || progress.State != document.FormIntakeActive ||
+		progress.JobID != guard.JobID || progress.ModeID != guard.ModeID {
+		return "", document.ErrFormJobConflict
+	}
+	references, err := tool.formJobs.FormIntakeReferences(ctx, guard.JobID, guard.ModeID, owner)
+	if err != nil || len(references) == 0 {
+		return "", document.ErrFormJobConflict
+	}
+	if guard.Reference != "" {
+		if !slices.Contains(references, guard.Reference) {
+			return "", document.ErrFormJobConflict
+		}
+		return guard.Reference, nil
+	}
+	return references[0], nil
+}
+
 // AdmitProtectedFormIntake runs only after the coordinator persists the exact
 // document guard. Source/schema loading uses the existing immutable media owner.
 func (tool *DocumentTool) AdmitProtectedFormIntake(
@@ -320,11 +350,13 @@ func (tool *DocumentTool) continueFormIntake(
 			intake.Failure = &safeDocumentFormFailure{
 				Code:    "intake_pending",
 				Message: "Some protected input remains pending. Accepted fields are preserved; retry or clarify without repeating them.",
+				Stage:   result.failureStage,
 			}
 			if errors.Is(processErr, document.ErrFormEditableOutputUnavailable) {
 				intake.Failure = &safeDocumentFormFailure{
 					Code:    "editable_output_unavailable",
 					Message: "Verified editable output is unavailable for this job. Protected input and accepted fields are preserved; continue complete filling or cancel. No draft was produced.",
+					Stage:   result.failureStage,
 				}
 			}
 			// A retained older error must not suppress a later admitted control or
@@ -353,6 +385,7 @@ type formIntakeProcessedInput struct {
 	scoped       int
 	findings     []document.FormFieldMappingBlocker
 	intent       document.FormIntakeDialogIntent
+	failureStage string
 }
 
 func (tool *DocumentTool) processFormIntakeInput(
@@ -362,6 +395,7 @@ func (tool *DocumentTool) processFormIntakeInput(
 	var result formIntakeProcessedInput
 	windows := formIntakeCandidateWindows(schema, progress.Context.CandidateFieldIDs)
 	for _, ids := range windows {
+		result.failureStage = "input"
 		input, err := tool.formJobs.ReadFormIntakeInput(ctx, reference, owner)
 		if err != nil {
 			return result, err
@@ -377,7 +411,16 @@ func (tool *DocumentTool) processFormIntakeInput(
 				break
 			}
 		}
-		identityBytes, err := json.Marshal([]any{clarificationTrigger, ids, input.Context})
+		// Busy-session retries share the enclosing turn, but retain their own
+		// trusted ingress identity. Replaying that input reuses committed windows;
+		// a new retry uses the same protected input and original reservation budget.
+		processingIdentity := toolshared.ToolDocumentIntakeProcessingIdentity(ctx, trigger)
+		if processingIdentity == "" {
+			processingIdentity = toolshared.ToolExecutionID(ctx)
+		}
+		identityBytes, err := json.Marshal(
+			[]any{clarificationTrigger, processingIdentity, ids, input.Context},
+		)
 		if err != nil {
 			return result, document.ErrFormJobConflict
 		}
@@ -391,11 +434,13 @@ func (tool *DocumentTool) processFormIntakeInput(
 			result.intent = old.Intent
 			continue
 		}
+		result.failureStage = "evidence"
 		evidence, err := tool.privateFormIntakeEvidence(ctx, owner, input.JobID, schema, ids)
 		if err != nil {
 			return result, err
 		}
 		for attempt := 0; attempt < 2; attempt++ {
+			result.failureStage = "reservation"
 			input, err = tool.formJobs.ReadFormIntakeInput(ctx, reference, owner)
 			if err != nil {
 				return result, err
@@ -455,10 +500,12 @@ func (tool *DocumentTool) processFormIntakeInput(
 					view.FieldStates = append(view.FieldStates, state)
 				}
 			}
+			result.failureStage = "interpretation"
 			proposal, err := tool.interpretFormIntake(ctx, view)
 			if err != nil {
 				return result, err
 			}
+			result.failureStage = "apply"
 			applied, err := tool.formJobs.ApplyFormIntakePass(ctx, document.FormIntakeApplyRequest{
 				Reference:        reference,
 				PassID:           pass.ID,
@@ -484,11 +531,13 @@ func (tool *DocumentTool) processFormIntakeInput(
 			break
 		}
 	}
+	result.failureStage = "input"
 	input, err := tool.formJobs.ReadFormIntakeInput(ctx, reference, owner)
 	if err != nil {
 		return result, err
 	}
 	result.findings = input.Findings
+	result.failureStage = ""
 	return result, nil
 }
 

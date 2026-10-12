@@ -23,7 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/approval"
-	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/vault"
+	"github.com/bogdanovich/mintclaw/internal/credentials/vault"
 	"github.com/bogdanovich/mintclaw/pkg/credentialbroker"
 	"github.com/bogdanovich/mintclaw/pkg/credentialbroker/intent"
 )

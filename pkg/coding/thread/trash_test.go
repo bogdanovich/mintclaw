@@ -340,3 +340,38 @@ func TestDeletePlanRejectsHardLinkedMetadata(t *testing.T) {
 		t.Fatalf("PlanDelete() error = %v", err)
 	}
 }
+
+func TestTrashThreadReportsCommittedPublicationCloseFailure(t *testing.T) {
+	root := t.TempDir()
+	project, _ := purgeTestProject(t, root, "project")
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := NewMetadata(NewThreadID(), project, "publication failure", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lease.Release() }()
+	original := store.renameReservation
+	store.renameReservation = func(root *os.Root, oldName, newName string) error {
+		if err := original(root, oldName, newName); err != nil {
+			return err
+		}
+		return errors.New("fixture publication handle-close failure")
+	}
+	result, err := store.TrashThread(lease, metadata.ThreadID, time.Now())
+	if !IsCommittedTrashError(err) || result.ThreadID != metadata.ThreadID || result.Path == "" {
+		t.Fatalf("publication close result = %+v, error = %v", result, err)
+	}
+	if _, err := os.Stat(result.Path); err != nil {
+		t.Fatalf("committed recovery root is missing: %v", err)
+	}
+}

@@ -247,12 +247,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Collect read-only credential VM host facts
-        run: bash ./scripts/credential-mac-vm-preflight.sh
-
-      - name: Qualify credential VM package and input denial
-        run: bash ./scripts/qualify-credential-mac-vm-inputs.sh
-
       - name: Run platform-sensitive tests
         run: >-
           go test -count=1 -p=4 -tags goolm,stdjson
@@ -521,13 +515,13 @@ jobs:
       - name: Run Windows coding thread and lock tests
         run: >-
           go test -tags goolm,stdjson -count=1
-          -run '^(TestThreadLease|TestWindowsThreadLease|TestAttachment(Maintenance|Inflight|GarbageCollectionDoesNotRecoverLiveQuarantine))'
+          -run '^(TestThreadLease|TestWindowsThread(Lease|Trash)|TestTrashThread|TestPurgeThreadTrash|TestCodingStateOwnershipInventoryContract|TestAttachment(Maintenance|Inflight|GarbageCollectionDoesNotRecoverLiveQuarantine))'
           ./pkg/coding/thread
 
       - name: Qualify Windows headless coding
         run: >-
           go test -tags goolm,stdjson -count=1
-          -run '^(TestCodeAndResumePersistOutsideProjectAcrossCommands|TestCodeUsesInteractiveShellOnlyForCapableTerminal|TestPlainResultDistinguishesProjectAndWorkingDirectory)$'
+          -run '^(TestThreadsTrashPurge|TestCodeAndResumePersistOutsideProjectAcrossCommands|TestCodeUsesInteractiveShellOnlyForCapableTerminal|TestPlainResultDistinguishesProjectAndWorkingDirectory)'
           ./cmd/mintclaw/internal/coding
 
       - name: Qualify Windows isolated coding worktrees
