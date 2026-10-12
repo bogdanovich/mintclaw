@@ -34,6 +34,9 @@ func DefaultConfig() *Config {
 				Document: true,
 				Browser:  true,
 			},
+			State: CodingStateConfig{
+				TrashRetentionHours: DefaultCodingTrashRetentionHours,
+			},
 		},
 		// Isolation is opt-in so existing installations keep their current behavior
 		// until the user explicitly enables subprocess sandboxing.

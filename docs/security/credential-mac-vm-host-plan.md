@@ -1,5 +1,12 @@
 # Credential Host on an Existing Mac
 
+> Historical component record from the superseded isolated-runtime design.
+> The operator-approved [trusted-runtime design](../architecture/credential-trusted-runtime-design.md)
+> and [current roadmap](../architecture/credential-access-roadmap.md) govern new work.
+> Separate-host, VM, Root-helper, service-role, and process/network isolation
+> requirements below are no longer deployment or rollout gates. Reusable
+> component behavior and its exact qualification evidence remain recorded here.
+
 ## Candidate and current status
 
 The operator proposed `ab@ab-ts` as a place to host the credential keys. A

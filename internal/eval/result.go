@@ -66,7 +66,7 @@ type Trial struct {
 	Cancellation     *QuestionCancellationEvidence `json:"question_cancellation,omitempty"`
 }
 
-// This records one ordinary question's terminal state, not runtime quiescence
+// This records one native question's terminal state, not runtime quiescence
 // or cleanup of every resource owned by the session.
 type QuestionCancellationEvidence struct {
 	Version          int    `json:"version"`
@@ -87,15 +87,16 @@ type QuestionCancellationEvidence struct {
 }
 
 type PDFTrialEvidence struct {
-	Version      int                     `json:"version"`
-	SourceSHA256 string                  `json:"source_sha256"`
-	JobID        string                  `json:"job_id,omitempty"`
-	State        string                  `json:"state"`
-	Cleanup      string                  `json:"cleanup"`
-	WriteIntent  *PDFWriteIntentEvidence `json:"write_intent,omitempty"`
-	Settlement   *PDFSettlementEvidence  `json:"settlement,omitempty"`
-	Artifact     *PDFArtifactEvidence    `json:"artifact,omitempty"`
-	Census       *PDFCensusEvidence      `json:"census,omitempty"`
+	Version      int                      `json:"version"`
+	SourceSHA256 string                   `json:"source_sha256"`
+	JobID        string                   `json:"job_id,omitempty"`
+	State        string                   `json:"state"`
+	Cleanup      string                   `json:"cleanup"`
+	WriteIntent  *PDFWriteIntentEvidence  `json:"write_intent,omitempty"`
+	Settlement   *PDFSettlementEvidence   `json:"settlement,omitempty"`
+	Artifact     *PDFArtifactEvidence     `json:"artifact,omitempty"`
+	Census       *PDFCensusEvidence       `json:"census,omitempty"`
+	Cancellation *PDFCancellationEvidence `json:"cancellation,omitempty"`
 }
 
 // This records bounded native observations, not an idle or privacy proof.
@@ -114,6 +115,14 @@ type PDFCensusCounts struct {
 	MediaIntents       int `json:"media_intents"`
 	PendingOperations  int `json:"pending_operations"`
 	ForeignChanges     int `json:"foreign_changes"`
+}
+
+// A canceled job and question do not prove whole-runtime idle or no-write safety.
+type PDFCancellationEvidence struct {
+	Question            QuestionCancellationEvidence `json:"question"`
+	JobWaitingRevision  int64                        `json:"job_waiting_revision"`
+	JobTerminalRevision int64                        `json:"job_terminal_revision"`
+	JobTerminalAt       int64                        `json:"job_terminal_at"`
 }
 
 type PDFArtifactEvidence struct {

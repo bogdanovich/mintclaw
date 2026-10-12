@@ -86,6 +86,28 @@ claim of artifact correctness, no-write safety, complete privacy coverage or rem
 fixtures are conservatively retained while native settlement is unknown. PDF evidence is not yet eligible for
 judge-only regrading. Later write/delivery witnesses must replace these explicit unknowns before E3 exits.
 
+## Question Cancellation Receipts
+
+An ordinary `request_user_input` cancellation uses the shared native question observer. A protected document
+question additionally requires a source-pinned, authenticated job owned by the admitted route. The waiting prompt
+must match its native execution request, complete workspace/turn scope, and delivered prompt receipt before the
+shared runner sends one prompt-bound cancel. Observation never invokes a form-store lifecycle operation.
+
+A protected cancellation final can omit LLM trace scopes, but must retain the expected agent/session and question
+controls-removal metadata. Its corresponding native question must advance to `cancelled` with unchanged origin,
+route, questions and protected binding, no answer, and the native stop failure code. The authenticated job must
+advance to `canceled`, retain its owner/schema/source identity, and have its public fields and review/assignment
+digests erased. Both terminal timestamps must fall after cancel preparation and before observation.
+
+The value-free `pdf.cancellation` receipt records question/request/delivery identities and question/job revisions.
+A final message alone, only one terminal record, changed identity/source, or unavailable evidence cannot establish
+cancel completion. Known private values in raw native evidence are hard failures before projection. An unsettled
+observation remains inconclusive; no input is replayed and no timeout is interpreted as cancellation.
+
+This proves cancellation of one native question and its bound job, not whole-runtime idle, absence of other writes
+or deliveries, complete privacy coverage, or owned-resource cleanup. Those required checks remain independent and
+unknown without their own witnesses. Offline native controls are not live PDF case qualification.
+
 ## Reviewed Write Intent
 
 For a case requiring PDF output, the PDF-specific user prompt may return a typed `confirm` after a visible review,

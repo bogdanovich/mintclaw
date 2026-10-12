@@ -295,6 +295,14 @@ and terminal failures restore a usable shell.
 
 ### H4 / P8.3 — Privacy and local-state lifecycle
 
+Implementation and production qualification are complete in the
+[state-lifecycle packet](local-coding-agent-p8-state-lifecycle.md). Existing
+thread trash and shared-blob GC supply the deletion foundations; this packet
+adds a checked ownership inventory and explicit bounded retention/purge with
+truthful partial-failure receipts. The
+[production evidence](../operations/local-coding-agent-p8-state-lifecycle-production-evidence.md)
+records exact-head CI/review, deployment and synthetic-state isolation.
+
 - Audit canonical transcripts, Seahorse summaries/indexes, metadata/catalogue,
   picker/search previews, prompts, logs, commands, diffs, artifacts, runtime
   events, traces, support bundles, remote projections, and crash leftovers.
@@ -312,6 +320,12 @@ Done when a state-ownership inventory and tests prove cross-project isolation,
 bounded retention, safe export, and complete derived-state deletion.
 
 ### H5 / P8.4 — User documentation and migration
+
+The [user guide](../guides/coding-agent.md) covers provider onboarding,
+instruction precedence, chat/coding authority separation and symptom-first
+diagnostics. The [upgrade guide](../operations/coding-state-upgrades.md)
+defines stopped-state backups, migration, canaries and rollback. H5 still
+requires alignment and deployment of the bundled trace-debug skill.
 
 - Document `mintclaw code`, resume/fork behavior, keybindings, storage, trust,
   provider/model setup, compaction, recovery, remote companion capabilities,

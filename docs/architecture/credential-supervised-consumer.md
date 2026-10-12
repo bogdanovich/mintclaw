@@ -1,5 +1,12 @@
 # Supervised Credential Browser Consumer
 
+> Historical component record from the superseded isolated-runtime design.
+> The operator-approved [trusted-runtime design](credential-trusted-runtime-design.md)
+> and [current roadmap](credential-access-roadmap.md) govern new work.
+> Separate-host, VM, Root-helper, service-role, and process/network isolation
+> requirements below are no longer deployment or rollout gates. Reusable
+> component behavior and its exact qualification evidence remain recorded here.
+
 ## Status and ordering
 
 The private `browserworker.StartSupervised` entry composes the fixed Root

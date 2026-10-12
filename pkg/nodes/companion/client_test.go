@@ -273,7 +273,7 @@ func TestClientKeepsApprovedSessionUntilContextCancellation(t *testing.T) {
 }
 
 func TestClientExecutesCorrelatedInvocationOverAuthenticatedSession(t *testing.T) {
-	registry, admission := testGatewayAdmission(t)
+	registry, admission, sessions := testGatewayAdmissionWithSessions(t)
 	server := httptest.NewTLSServer(admission)
 	defer server.Close()
 	identity := testIdentity(t)
@@ -302,7 +302,7 @@ func TestClientExecutesCorrelatedInvocationOverAuthenticatedSession(t *testing.T
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- client.Run(ctx) }()
-	waitForNodeState(t, registry, identity.ID, nodes.StateConnected)
+	waitForConnectedNodeSession(t, registry, sessions, identity.ID)
 
 	registration, exists, err := registry.Registration(identity.ID)
 	if err != nil || !exists {
@@ -367,7 +367,7 @@ func TestClientExecutesCorrelatedInvocationOverAuthenticatedSession(t *testing.T
 	reconnectCtx, reconnectCancel := context.WithCancel(t.Context())
 	reconnectDone := make(chan error, 1)
 	go func() { reconnectDone <- reconnectedClient.Run(reconnectCtx) }()
-	waitForNodeState(t, registry, identity.ID, nodes.StateConnected)
+	waitForConnectedNodeSession(t, registry, sessions, identity.ID)
 
 	record, err := admission.Invocation(t.Context(), identity.ID, plan.InvocationID)
 	if err != nil {
@@ -757,7 +757,7 @@ func TestClientRoutesAuthenticatedTransferFramesToBoundedHandler(t *testing.T) {
 	runCtx, cancelRun := context.WithCancel(t.Context())
 	runDone := make(chan error, 1)
 	go func() { runDone <- client.Run(runCtx) }()
-	waitForNodeState(t, registry, identity.ID, nodes.StateConnected)
+	waitForConnectedNodeSession(t, registry, sessions, identity.ID)
 
 	digest := sha256.Sum256([]byte("payload"))
 	binding := nodews.TransferBinding{
@@ -1347,6 +1347,27 @@ func testConnectProxy(t *testing.T, backendAddress string) (*httptest.Server, *a
 		}),
 	)
 	return proxy, requests
+}
+
+func waitForConnectedNodeSession(
+	t *testing.T,
+	registry *nodes.FileRegistry,
+	sessions *nodews.SessionHub,
+	id nodes.ID,
+) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		registration, exists, err := registry.Registration(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if exists && registration.Snapshot.State == nodes.StateConnected && sessions.Connected(id) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("authenticated node session did not become connected")
 }
 
 func waitForNodeState(

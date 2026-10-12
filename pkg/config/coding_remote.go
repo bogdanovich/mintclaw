@@ -25,6 +25,7 @@ const (
 type CodingConfig struct {
 	Capabilities CodingCapabilityConfig `json:"capabilities,omitempty"`
 	Remote       CodingRemoteClient     `json:"remote,omitempty"`
+	State        CodingStateConfig      `json:"state,omitempty"`
 }
 
 // CodingCapabilityConfig selects optional first-party surfaces before the

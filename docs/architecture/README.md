@@ -2,9 +2,6 @@
 
 Internal architecture notes for major runtime mechanisms and subsystem design.
 
-- [Protected Mac Credential VM Package](credential-mac-vm-package.md): fixed Virtualization launcher,
-  protected input contract, disabled system service, public qualification, and remaining host activation gates.
-
 - [Steering](steering.md): injecting messages into a running agent loop between tool calls.
 - [Codex-Style Steering Roadmap](codex-style-steering-roadmap.md): incompatible replacement of pending-tool classification with same-turn post-batch user-input steering.
 - [Code Health Architecture State](code-health.md): current ownership,
@@ -28,6 +25,7 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Local Coding Agent P7.6 Workspace Rewind Decision](local-coding-agent-p7-6-decision.md): explicit deferral, truthful transcript-only fork/revert behavior, and measured safety gates for any later reconsideration.
 - [Local Coding Agent P8 Hardening And Stable Release](local-coding-agent-p8-hardening.md): active diagnostics-first execution plan for performance, platform, privacy, state lifecycle, migration, production qualification, and stable release.
 - [Local Coding Agent P8 Platform Qualification](local-coding-agent-p8-platform-qualification.md): exact release tuples plus native terminal, shell, filesystem, lock, worktree, and process guarantees.
+- [Local Coding Agent P8.3 State Lifecycle](local-coding-agent-p8-state-lifecycle.md): machine-checked ownership inventory, private-state boundaries, explicit recoverable-trash retention/purge, partial failure receipts and separate blob GC.
 - [Local Coding Agent P8 Diagnostic Evidence Inventory](local-coding-agent-p8-diagnostic-inventory.md): machine-checked map of coding incident paths, authoritative evidence, passive trace coverage, correlation gaps, retention, and H1b/H1c dispositions.
 - [Diagnostic Queries And Support Bundles](../operations/diagnostic-support-bundles.md): H1c read-only trace discovery,
   safe correlation timelines, checksum-verifiable export, and privacy boundaries.
@@ -127,9 +125,15 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   artifacts, human handoff, companion placement, profiles, providers, and
   computer fallback.
 - [Credential Access Roadmap](credential-access-roadmap.md): scoped 1Password
-  access, Android passkey approval, 20-hour revocable grants, isolated browser
-  login, and qualification gates for keeping authentication material outside
-  model context.
+  access, Android passkey approval, 20-hour revocable grants, integrated browser
+  login and connectors, and model/log/trace privacy under a trusted runtime.
+- [Trusted Runtime Credential Design](credential-trusted-runtime-design.md): alias-only operations,
+  private credential use, integrated phone approval, browser observation suppression,
+  safe diagnostics, and replacement of the earlier appliance architecture.
+- [Historical Isolated Credential Roadmap](credential-isolated-runtime-history.md): superseded
+  deployment design and preserved component PR/qualification evidence.
+- [Historical Mac Credential VM Package](credential-mac-vm-package.md): retired candidate launcher
+  and input qualification; not a current deployment requirement.
 - [Credential Provider And Isolation Qualification](credential-provider-qualification.md):
   pinned official 1Password SDK build evidence, private service and caller
   isolation requirements, protected provisioning, and planned CA2 merge units.
