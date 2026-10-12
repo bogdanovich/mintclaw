@@ -2562,7 +2562,7 @@ func TestRunTurn_MaxIterations(t *testing.T) {
 
 func TestRunTurn_HardAbort(t *testing.T) {
 	// Provider simulates a slow response, but we'll abort mid-turn
-	slowProvider := &slowMockProvider{delay: 10 * time.Second}
+	slowProvider := newBlockingInteractionProvider()
 	al, agent, cleanup := newTurnCoordTestLoop(t, slowProvider)
 	defer cleanup()
 
@@ -2583,9 +2583,16 @@ func TestRunTurn_HardAbort(t *testing.T) {
 		}
 		close(done)
 	}()
+	defer func() {
+		close(slowProvider.release)
+		<-done
+	}()
 
-	// Give it a moment to start
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-slowProvider.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runTurn did not reach its provider before abort")
+	}
 
 	// Request hard abort
 	ts.requestHardAbort()
