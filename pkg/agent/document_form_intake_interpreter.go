@@ -70,6 +70,10 @@ const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance
 	`Output capability is metadata, not an instruction to silently flatten an editable request. ` +
 	`Associate facts with the explicitly intended person/role. If unclear, emit a finding, not an assignment. ` +
 	`Accounted evidence must not be copied to a different field. Facts outside this field view must NOT be non_data. ` +
+	`Finish accounting ordinary connective or role-setting prose containing no additional supplied field value, ` +
+	`even when every supplied fact is already accounted. Return exact non_data fragments for remaining prose; ` +
+	`do not reclassify accepted facts, uncertain facts or scoped instructions. A pending utterance requires ` +
+	`complete literal accounting; an empty proposal list alone does not mean the utterance has been consumed. ` +
 	`Do not overlap non_data, proposed facts or correction evidence. Correct or replace existing data only when the ` +
 	`utterance explicitly requests it; supply exact correction evidence and the supplied current event id. ` +
 	`For dispositions only, the same exact blanking instruction may also serve as correction evidence. ` +
