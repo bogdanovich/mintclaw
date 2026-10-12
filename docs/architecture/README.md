@@ -134,6 +134,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   credential values guarded in model-facing config filtering, diagnostic previews, and logger output.
 - [Runtime-Internal 1Password Adapter](credential-runtime-vault-adapter.md): relocated private
   exact-item adapter reused by the integrated runtime, preserving value and error projection.
+- [Private Browser Credential Login](credential-private-browser-login.md): scoped private form transactions,
+  session-owned output guards, grant-driven retirement, and explicit rollout limits.
 - [Historical Isolated Credential Roadmap](credential-isolated-runtime-history.md): superseded
   deployment design and preserved component PR/qualification evidence.
 - [Historical Mac Credential VM Package](credential-mac-vm-package.md): retired candidate launcher
