@@ -1,7 +1,7 @@
-// Package vault is private to the standalone credential-service command.
-// Gateway and model-tool packages cannot import it. It performs only exact
-// login-item retrieval; authentication, approval, and browser injection are
-// separate service admission gates. There is no transport or executable here.
+// Package vault is a runtime-internal adapter for exact 1Password login reads.
+// Trusted MintClaw code may use it after approval; secret values must stay
+// outside model-facing results, diagnostics and durable output. It supplies
+// no model tool, transport, setup command, or direct grant-issuing API.
 package vault
 
 import (
@@ -54,8 +54,8 @@ type Provider struct {
 	slot   chan struct{}
 }
 
-// New is called only after the service has qualified its process boundary and
-// privately provisioned a token. It does not read the agent environment. The
+// New is called by the trusted runtime after private operator token setup.
+// It does not read the agent environment or publish a credential result. The
 // caller owns token; the SDK retains its own copy for its private lifetime.
 func New(ctx context.Context, token []byte) (result Provider, resultErr error) {
 	defer func() {
