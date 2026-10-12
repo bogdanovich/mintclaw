@@ -2,6 +2,7 @@ package document
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -246,7 +247,7 @@ func TestFormIntakeGuidanceResolutionOutcomeRemainsBoundedAndAdvisory(t *testing
 	pass := formIntakeStoredPass{
 		Revision: 1, CandidateIDs: []string{"field_a", "field_b"},
 		Outcome: &formIntakeStoredOutcome{
-			Digest: stringsOf('a', 64), AppliedRevision: 1, Intent: FormIntakeIntentFinish,
+			Digest: strings.Repeat("a", 64), AppliedRevision: 1, Intent: FormIntakeIntentFinish,
 			ResolvedGuidanceIDs: []string{"field_a"},
 		},
 	}
