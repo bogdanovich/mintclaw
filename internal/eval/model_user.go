@@ -40,6 +40,7 @@ func nextModelAction(
 		result.Code = "invalid_user_action"
 		return result
 	}
+	call.ActionKind = action.Kind
 	result.Action, result.Code = action, "user_action_received"
 	return result
 }

@@ -11,14 +11,18 @@ var (
 	errAgentLoopClosing        = errors.New("agent loop is closing")
 )
 
-// agentLoopRunLifecycle serializes Run ownership with resource teardown.
-// CloseContext seals the lifecycle before it waits, so a late Run cannot start
-// against stores that are already being closed.
+// Run and recovery must retire before their shared stores are closed.
+// Enrollment and shutdown sealing use the same lock, preventing late work.
 type agentLoopRunLifecycle struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	done    chan struct{}
 	closing bool
+
+	recoveryWorkers sync.WaitGroup
+	recoveryContext context.Context
+	recoveryCancel  context.CancelFunc
+	recoveryDone    chan struct{}
 }
 
 func (al *AgentLoop) beginRun(parent context.Context) (context.Context, chan struct{}, error) {
@@ -58,6 +62,36 @@ func (al *AgentLoop) stopRun() {
 	}
 }
 
+func (al *AgentLoop) beginRecovery(parent context.Context) (context.Context, func(), bool) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	lifecycle := &al.runLife
+	lifecycle.mu.Lock()
+	if lifecycle.closing || parent.Err() != nil {
+		lifecycle.mu.Unlock()
+		return nil, nil, false
+	}
+	if lifecycle.recoveryContext == nil {
+		closingCtx, cancel := context.WithCancel(context.Background())
+		lifecycle.recoveryContext, lifecycle.recoveryCancel = closingCtx, cancel
+	}
+	closing := lifecycle.recoveryContext
+	lifecycle.recoveryWorkers.Add(1)
+	lifecycle.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(closing, cancel)
+	var once sync.Once
+	return ctx, func() {
+		once.Do(func() {
+			stop()
+			cancel()
+			lifecycle.recoveryWorkers.Done()
+		})
+	}, true
+}
+
 func (al *AgentLoop) stopAndWaitRun(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -66,18 +100,32 @@ func (al *AgentLoop) stopAndWaitRun(ctx context.Context) error {
 	al.runLife.closing = true
 	cancel := al.runLife.cancel
 	done := al.runLife.done
+	cancelRecovery := al.runLife.recoveryCancel
+	if al.runLife.recoveryDone == nil {
+		al.runLife.recoveryDone = make(chan struct{})
+		go func(drained chan struct{}) {
+			al.runLife.recoveryWorkers.Wait()
+			close(drained)
+		}(al.runLife.recoveryDone)
+	}
+	recoveryDone := al.runLife.recoveryDone
 	al.runLife.mu.Unlock()
 	al.running.Store(false)
 	if cancel != nil {
 		cancel()
 	}
-	if done == nil {
-		return nil
+	if cancelRecovery != nil {
+		cancelRecovery()
 	}
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	for _, drained := range []chan struct{}{done, recoveryDone} {
+		if drained == nil {
+			continue
+		}
+		select {
+		case <-drained:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+	return nil
 }

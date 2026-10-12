@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/bogdanovich/mintclaw/internal/secretvalues"
 )
 
 type Redactor struct {
@@ -115,11 +117,13 @@ func (r Redactor) RedactText(value string, maxBytes int) (preview string) {
 	if maxBytes <= 0 {
 		return ""
 	}
+	value = secretvalues.Redact(value)
 	value = boundRedactionInput(value, maxBytes)
 	value = scrubString(value)
 	if r.Filter != nil {
 		value = r.Filter(value)
 	}
+	value = secretvalues.Redact(value)
 	return truncateUTF8(value, maxBytes)
 }
 
@@ -141,7 +145,11 @@ func (r Redactor) RedactJSON(value any, maxBytes int) (preview string) {
 	if err != nil {
 		return `"[UNSUPPORTED]"`
 	}
-	return truncateUTF8(string(data), maxBytes)
+	filtered := secretvalues.Redact(string(data))
+	if !json.Valid([]byte(filtered)) {
+		return `"[REDACTED]"`
+	}
+	return truncateUTF8(filtered, maxBytes)
 }
 
 func (r Redactor) sanitizeJSON(value any, maxBytes int, nodes *int) any {

@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"sync/atomic"
+
+	"github.com/bogdanovich/mintclaw/internal/secretvalues"
 )
 
 // rrCounter is a global counter for round-robin load balancing across models.
@@ -62,8 +64,10 @@ type ExposePath struct {
 // FilterSensitiveData filters sensitive values from content before sending to LLM.
 // This prevents the LLM from seeing its own credentials.
 // Uses strings.Replacer for O(n+m) performance (computed once per SecurityConfig).
-// Short content (below FilterMinLength) is returned unchanged for performance.
+// Runtime-registered credentials are always filtered. The toggle and short
+// content threshold apply only to the ordinary configured-value filter.
 func (c *Config) FilterSensitiveData(content string) string {
+	content = secretvalues.Redact(content)
 	if c == nil {
 		return content
 	}

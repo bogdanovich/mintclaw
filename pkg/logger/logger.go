@@ -79,7 +79,7 @@ func init() {
 
 		writers = append(writers, consoleWriter)
 
-		logger = zerolog.New(io.MultiWriter(writers...)).With().Timestamp().Caller().Logger()
+		logger = zerolog.New(loggerOutput()).With().Timestamp().Caller().Logger()
 	})
 }
 
@@ -132,7 +132,7 @@ func SetTimeFormat(format string) {
 	// rebuild the logger unless the console was explicitly disabled.
 	if _, ok := writers[0].(zerolog.ConsoleWriter); ok {
 		writers[0] = consoleWriter
-		logger = logger.Output(io.MultiWriter(writers...))
+		logger = logger.Output(loggerOutput())
 	}
 }
 
@@ -140,14 +140,14 @@ func DisableConsole() {
 	mu.Lock()
 	defer mu.Unlock()
 	writers[0] = io.Discard
-	logger = logger.Output(io.MultiWriter(writers...))
+	logger = logger.Output(loggerOutput())
 }
 
 func EnableConsole() {
 	mu.Lock()
 	defer mu.Unlock()
 	writers[0] = consoleWriter
-	logger = logger.Output(io.MultiWriter(writers...))
+	logger = logger.Output(loggerOutput())
 }
 
 func GetLevel() LogLevel {
@@ -211,7 +211,7 @@ func EnableFileLogging(filePath string) error {
 	}
 
 	writers = append(writers, logFile)
-	logger = logger.Output(io.MultiWriter(writers...))
+	logger = logger.Output(loggerOutput())
 
 	return nil
 }
@@ -226,7 +226,7 @@ func DisableFileLogging() {
 	}
 	if len(writers) > 1 {
 		writers = writers[:1]
-		logger = logger.Output(io.MultiWriter(writers...))
+		logger = logger.Output(loggerOutput())
 	}
 }
 

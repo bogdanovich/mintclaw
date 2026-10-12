@@ -44,11 +44,15 @@ func decodeDocument[T any](data []byte, maximum int) (T, error) {
 }
 
 func decodeValue(decoder *json.Decoder, depth int) (any, error) {
+	return decodeJSONValue(decoder, depth, false)
+}
+
+func decodeJSONValue(decoder *json.Decoder, depth int, allowNull bool) (any, error) {
 	if depth > 24 {
 		return nil, ErrInvalidJSON
 	}
 	token, err := decoder.Token()
-	if err != nil || token == nil {
+	if err != nil || token == nil && !allowNull {
 		return nil, ErrInvalidJSON
 	}
 	delimiter, isDelimiter := token.(json.Delim)
@@ -70,7 +74,7 @@ func decodeValue(decoder *json.Decoder, depth int) (any, error) {
 			if _, duplicate := object[key]; duplicate {
 				return nil, ErrInvalidJSON
 			}
-			child, childErr := decodeValue(decoder, depth+1)
+			child, childErr := decodeJSONValue(decoder, depth+1, allowNull)
 			if childErr != nil {
 				return nil, childErr
 			}
@@ -83,7 +87,7 @@ func decodeValue(decoder *json.Decoder, depth int) (any, error) {
 	case '[':
 		values := make([]any, 0)
 		for decoder.More() {
-			child, childErr := decodeValue(decoder, depth+1)
+			child, childErr := decodeJSONValue(decoder, depth+1, allowNull)
 			if childErr != nil {
 				return nil, childErr
 			}
