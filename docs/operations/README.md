@@ -17,9 +17,14 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Diagnostic queries and support bundles](diagnostic-support-bundles.md):
   bounded metadata-only list/show/correlate workflows, checksummed export,
   private rich-mode admission, and the incident-to-regression loop.
+- [Coding-state upgrades and recovery](coding-state-upgrades.md): stopped-owner
+  backups, schema/path migration, profile canaries, and matched rollback.
 - [Local coding agent P8 support-bundle production evidence](local-coding-agent-p8-support-bundle-production-evidence.md):
   deployed exact-trace query, metadata-only export, checksum, permission,
   privacy, fail-closed rich-export, health, backup, and rollback evidence.
+- [Local coding agent P8 state-lifecycle production evidence](local-coding-agent-p8-state-lifecycle-production-evidence.md):
+  native platform qualification, synthetic purge/GC isolation, receipts,
+  runtime trace and rollback.
 - [Prompt-cache diagnostics and rollback](prompt-cache.md): privacy-safe
   prefix, cache-usage, canary, and provider-planner rollback procedures shared
   by gateway and coding runtimes.
