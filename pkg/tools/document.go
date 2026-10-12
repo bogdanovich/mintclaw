@@ -670,6 +670,9 @@ func documentFormReviewToolOnlyFollowup(
 		return &toolshared.ToolOnlyFollowup{
 			ResponseOnly: true,
 			Instruction: "Summarize the value-free review counts and tell the user that no blockers remain. " +
+				"For editable_draft, explicitly say the form is not complete: report deferred_field_count and " +
+				"deferred_required_field_count, and warn that those required fields still need manual completion. " +
+				"Draft readiness does not mean all required information is supplied or the form is submission-ready. " +
 				"Ask the user to confirm whether to finish and receive the verified PDF. Do not call any tool, " +
 				"request or repeat a field value, expose IDs or values, claim the PDF was generated, or decide " +
 				"commit/cancel on the user's behalf.",
