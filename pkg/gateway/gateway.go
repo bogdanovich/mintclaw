@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -81,6 +82,7 @@ type services struct {
 	CodingRemote      *codingremote.Server
 	browserMu         sync.RWMutex
 	Browser           *browserRuntime
+	Credentials       *credentialRuntime
 	HealthServer      *health.Server
 	VoiceAgentCancel  context.CancelFunc
 	VoiceAgentDone    <-chan struct{}
@@ -1135,6 +1137,13 @@ func setupAndStartServicesWithHooks(
 		listenAddr,
 		runningServices.HealthServer,
 	)
+	runningServices.Credentials, err = setupCredentialRuntime(cfg, authToken, runningServices.ChannelManager)
+	if err != nil {
+		return nil, errCredentialsUnavailable
+	}
+	if runningServices.Credentials != nil {
+		cleanup.add("credential approval", generation.Credentials.Close)
+	}
 	runningServices.NodeAdmission, err = setupNodeAdmission(cfg, runningServices.ChannelManager)
 	if err != nil {
 		return nil, fmt.Errorf("error setting up node admission: %w", err)
@@ -1270,6 +1279,11 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	}
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
+	if !isReload && runningServices.Credentials != nil {
+		if err := runningServices.Credentials.Close(shutdownCtx); err != nil {
+			cleanupErrors = append(cleanupErrors, errCredentialsUnavailable)
+		}
+	}
 	if err := closeBrowserRuntime(shutdownCtx, runningServices); err != nil {
 		logger.WarnCF("browser", "Browser sessions did not close cleanly", map[string]any{
 			"reason": "worker_unavailable",
@@ -1707,6 +1721,9 @@ func preflightConfigReload(al *agent.AgentLoop, newCfg *config.Config) error {
 	}
 	if currentCfg.Gateway.HotReload != newCfg.Gateway.HotReload {
 		return fmt.Errorf("gateway hot reload mode changes require a gateway restart")
+	}
+	if !reflect.DeepEqual(currentCfg.Credentials, newCfg.Credentials) {
+		return fmt.Errorf("credential approval configuration changes require a gateway restart")
 	}
 	if currentCfg.Nodes.Enabled != newCfg.Nodes.Enabled {
 		return fmt.Errorf("node admission enablement changes require a gateway restart")

@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const https = require("node:https");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const {chromium} = require("../../../../runtime/browser/playwright-library/node_modules/playwright");
+const {chromium} = require("../../../runtime/browser/playwright-library/node_modules/playwright");
 const origin = "https://approval.example.org";
 let stage = "fixture-input";
 
@@ -11,6 +11,8 @@ let stage = "fixture-input";
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   const config = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  const pagePath = config.page_path;
+  assert.ok(pagePath === "/" || pagePath === "/credentials/");
   const backend = new URL(config.backend);
   assert.equal(backend.hostname, "127.0.0.1");
   const request = (pathname, method, headers, body) => new Promise((resolve, reject) => {
@@ -42,7 +44,7 @@ let stage = "fixture-input";
     await context.route("**/*", async route => {
       const source = route.request(), target = new URL(source.url());
       if (target.origin !== origin || target.hash || target.search) { await route.abort(); return; }
-      if (target.pathname.startsWith("/api/")) apiPaths.push(target.pathname);
+      if (target.pathname.startsWith(`${pagePath}api/`)) apiPaths.push(target.pathname);
       const response = await request(target.pathname, source.method(), await source.allHeaders(), source.postDataBuffer());
       const headers = {...response.headers};
       delete headers["transfer-encoding"];
@@ -64,7 +66,7 @@ let stage = "fixture-input";
     await page.getByRole("status").filter({hasText: "Passkey enrolled."}).waitFor();
     stage = "approval-page";
     const pending = await fixture("/_fixture/request");
-    const link = `${origin}/#request=${pending.id}`;
+    const link = `${origin}${pagePath}#request=${pending.id}`;
     await page.goto(link);
     await page.getByRole("button", {name: "Approve with passkey"}).waitFor();
     assert.equal(await page.locator("#accounts").innerText(), "facebook");
@@ -81,7 +83,7 @@ let stage = "fixture-input";
     }
     let grantID = "";
     page.on("response", async response => {
-      if (new URL(response.url()).pathname === "/api/approve/finish" && response.ok()) grantID = (await response.json()).grant_id;
+      if (new URL(response.url()).pathname === `${pagePath}api/approve/finish` && response.ok()) grantID = (await response.json()).grant_id;
     });
     stage = "approval-passkey";
     await page.getByRole("button", {name: "Approve with passkey"}).click();
@@ -99,7 +101,7 @@ let stage = "fixture-input";
     assert.equal(await page.getByRole("button", {name: "Approve with passkey"}).isVisible(), false);
     assert.deepEqual(errors, []);
     for (const pathname of ["enroll/begin", "enroll/finish", "approve/begin", "approve/finish", "revoke/begin", "revoke/finish"])
-      assert.equal(apiPaths.includes(`/api/${pathname}`), true);
+      assert.equal(apiPaths.includes(`${pagePath}api/${pathname}`), true);
     await context.close();
   } finally { await browser.close(); }
   process.stdout.write("phone browser qualification: OK\n");

@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin
 
 package approval
 
@@ -25,32 +25,15 @@ type fileStore struct {
 
 func openOwnerStore(directory string) (ownerStore, error) {
 	uid, gid := os.Geteuid(), os.Getegid()
-	if uid == 0 || gid == 0 || uid != os.Getuid() || gid != os.Getgid() ||
-		len(directory) < 2 || len(directory) > 4096 || !filepath.IsAbs(directory) ||
-		filepath.Clean(directory) != directory || strings.Count(directory, "/") > 16 {
+	if uid != os.Getuid() || gid != os.Getgid() || len(directory) < 2 || len(directory) > 4096 ||
+		!filepath.IsAbs(directory) || filepath.Clean(directory) != directory || strings.ContainsRune(directory, 0) {
 		return nil, ErrUnavailable
 	}
-	for _, character := range []byte(directory) {
-		if character < 0x21 || character > 0x7e {
-			return nil, ErrUnavailable
-		}
-	}
-	descriptor, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	// The host and runtime are trusted. An ordinary private owner directory
+	// under the operator's home is sufficient; Root-owned ancestry is not needed.
+	descriptor, err := unix.Open(directory, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, ErrUnavailable
-	}
-	for _, part := range strings.Split(strings.TrimPrefix(directory, "/"), "/") {
-		var parent unix.Stat_t
-		if unix.Fstat(descriptor, &parent) != nil || parent.Uid != 0 || parent.Mode&0o022 != 0 {
-			_ = unix.Close(descriptor)
-			return nil, ErrUnavailable
-		}
-		next, openErr := unix.Openat(descriptor, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-		_ = unix.Close(descriptor)
-		if openErr != nil {
-			return nil, ErrUnavailable
-		}
-		descriptor = next
 	}
 	store := &fileStore{
 		dir: os.NewFile(uintptr(descriptor), "private owner directory"),
@@ -77,12 +60,7 @@ func (store *fileStore) check(descriptor int, directory bool) error {
 		stat.Size <= 0 || stat.Size > maxOwnerRecordBytes {
 		return ErrUnavailable
 	}
-	var acl [128]byte
-	_, err := unix.Fgetxattr(descriptor, "system.posix_acl_access", acl[:])
-	if !errors.Is(err, unix.ENODATA) && !errors.Is(err, unix.ENOTSUP) {
-		return ErrUnavailable
-	}
-	return nil
+	return checkOwnerACL(descriptor)
 }
 
 func (store *fileStore) load() (ownerRecord, error) {

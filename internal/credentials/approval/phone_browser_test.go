@@ -33,7 +33,15 @@ func TestPhoneBrowserFixture(t *testing.T) {
 	if os.Getenv("MINTCLAW_SYNTHETIC_PHONE_BROWSER_FIXTURE") != "1" {
 		t.Skip("synthetic browser fixture only")
 	}
+	for _, pagePath := range []string{"/", "/credentials/"} {
+		t.Run(pagePath, func(t *testing.T) { testPhoneBrowserFixture(t, pagePath) })
+	}
+}
+
+func testPhoneBrowserFixture(t *testing.T, pagePath string) {
+	t.Helper()
 	fixture := newFixture(t)
+	fixture.controller.pagePath = pagePath
 	enrollment, err := NewEnrollment(fixture.setup)
 	if err != nil {
 		t.Fatal("enrollment unavailable")
@@ -78,7 +86,7 @@ func TestPhoneBrowserFixture(t *testing.T) {
 				return
 			}
 			writePhoneResponse(writer, phoneResponse{Status: "active"})
-		case "/api/enroll/begin", "/api/enroll/finish":
+		case pagePath + "api/enroll/begin", pagePath + "api/enroll/finish":
 			enrollment.ServeHTTP(writer, request)
 		default:
 			handler.ServeHTTP(writer, request)
@@ -101,6 +109,7 @@ func TestPhoneBrowserFixture(t *testing.T) {
 		"backend":            server.URL,
 		"ca":                 string(ca),
 		"invite":             string(invite),
+		"page_path":          pagePath,
 		"artifact_directory": os.Getenv("MINTCLAW_PHONE_BROWSER_ARTIFACT_DIR"),
 	}
 	input := marshalFixture(t, config)

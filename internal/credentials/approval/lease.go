@@ -12,7 +12,7 @@ import (
 )
 
 // LoginLease holds an immutable provider binding and live grant generation for
-// the isolated consumer. It supplies no plaintext or model-facing projection.
+// the trusted runtime consumer. It supplies no plaintext or model-facing projection.
 // Consumers must watch Done and check trusted origin/frame/element authority
 // before every retrieval, injection and cookie-backed session operation.
 type LoginLease struct {

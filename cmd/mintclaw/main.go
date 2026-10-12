@@ -23,6 +23,7 @@ import (
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/cliui"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/coding"
 	configcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/config"
+	credentialscmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/credentials"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/cron"
 	diagnosticscmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/diagnostics"
 	doctorcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/doctor"
@@ -168,6 +169,7 @@ mintclaw --no-color status`,
 
 	cmd.AddCommand(
 		configcmd.NewConfigCommand(),
+		credentialscmd.NewCredentialsCommand(),
 		coding.NewCodeCommand(),
 		coding.NewResumeCommand(),
 		coding.NewReviewCommand(),

@@ -189,6 +189,7 @@ jobs:
         run: >-
           go test -count=1 -race -tags goolm,stdjson
           ./pkg/credentialbroker/...
+          ./internal/credentials/...
           ./internal/credentialipc
           ./cmd/mintclaw-credential/...
 
@@ -263,6 +264,11 @@ jobs:
           ./pkg/updater
           ./pkg/workspace
           ./internal/eval
+
+      - name: Check credential state filesystem aliases
+        run: >-
+          go test -count=1 -tags goolm,stdjson
+          -run '^TestCredentialStateContainment' ./pkg/config
 
       - name: Run workspace identity recovery tests
         shell: bash

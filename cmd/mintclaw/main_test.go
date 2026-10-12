@@ -39,6 +39,7 @@ func TestNewMintClawCommand(t *testing.T) {
 		"auth",
 		"code",
 		"config",
+		"credentials",
 		"cron",
 		"diagnostics",
 		"document",

@@ -25,7 +25,7 @@ case "$architecture" in
 esac
 env -u OP_SERVICE_ACCOUNT_TOKEN CGO_ENABLED=0 GOOS=linux GOARCH="$target_arch" \
   go test -c -tags goolm,stdjson -o "$qualification_dir/approval.test" \
-  "$repo_root/cmd/mintclaw-credential/internal/approval"
+  "$repo_root/internal/credentials/approval"
 fixture_volume="$(docker volume create)"
 docker run --rm --network none --cap-drop ALL --cap-add CHOWN \
   --security-opt no-new-privileges=true --entrypoint /bin/sh \

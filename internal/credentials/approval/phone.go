@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -20,6 +21,8 @@ var phoneAssets embed.FS
 
 type phoneBoundary struct {
 	origin, authority, hostname string
+	pagePath                    string
+	tlsProxy                    bool
 	slots                       chan struct{}
 }
 
@@ -39,17 +42,44 @@ func NewPhoneHandler(controller *Controller) (*PhoneHandler, error) {
 	if !controller.usable(context.Background()) {
 		return nil, ErrUnavailable
 	}
-	return &PhoneHandler{boundary: newPhoneBoundary(controller.origin), controller: controller}, nil
+	return &PhoneHandler{
+		boundary:   newPhoneBoundary(controller.origin, controller.pagePath, controller.tlsProxy),
+		controller: controller,
+	}, nil
 }
 
-func newPhoneBoundary(origin string) phoneBoundary {
+func newPhoneBoundary(origin, pagePath string, tlsProxy bool) phoneBoundary {
 	parsed, _ := url.Parse(origin) // Origin was already validated by the controller.
 	return phoneBoundary{
 		origin:    origin,
 		authority: parsed.Host,
 		hostname:  parsed.Hostname(),
+		pagePath:  pagePath,
+		tlsProxy:  tlsProxy,
 		slots:     make(chan struct{}, 8),
 	}
+}
+
+// The proxy option is explicit operator configuration for a local HTTPS
+// terminator. Forwarded headers alone never establish trusted transport.
+func (boundary phoneBoundary) secureTransport(request *http.Request) bool {
+	if request.TLS != nil {
+		return request.TLS.Version >= tls.VersionTLS13 && request.TLS.ServerName == boundary.hostname
+	}
+	if !boundary.tlsProxy || len(request.Header.Values("X-Forwarded-Proto")) != 1 ||
+		request.Header.Get("X-Forwarded-Proto") != "https" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	ip := net.ParseIP(host)
+	return err == nil && ip != nil && ip.IsLoopback()
+}
+
+func (boundary phoneBoundary) routePath(request *http.Request) string {
+	if !strings.HasPrefix(request.URL.Path, boundary.pagePath) {
+		return ""
+	}
+	return "/" + strings.TrimPrefix(request.URL.Path, boundary.pagePath)
 }
 
 func (boundary phoneBoundary) admit(writer http.ResponseWriter, request *http.Request, post bool) bool {
@@ -62,8 +92,7 @@ func (boundary phoneBoundary) admit(writer http.ResponseWriter, request *http.Re
 	writer.Header().Set("Strict-Transport-Security", "max-age=31536000")
 	writer.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; "+
 		"connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
-	if boundary.origin == "" || request.TLS == nil || request.TLS.Version < tls.VersionTLS13 ||
-		request.TLS.ServerName != boundary.hostname ||
+	if boundary.origin == "" || !boundary.secureTransport(request) ||
 		request.Host != boundary.authority ||
 		request.URL == nil ||
 		request.URL.RawQuery != "" ||
@@ -232,9 +261,10 @@ func (handler *PhoneHandler) ServeHTTP(writer http.ResponseWriter, request *http
 	if !handler.boundary.admit(writer, request, post) {
 		return
 	}
+	routePath := handler.boundary.routePath(request)
 	if request.Method == http.MethodGet {
 		var asset, contentType string
-		switch request.URL.Path {
+		switch routePath {
 		case "/":
 			asset, contentType = "phone/index.html", "text/html; charset=utf-8"
 		case "/app.js":
@@ -264,7 +294,7 @@ func (handler *PhoneHandler) ServeHTTP(writer http.ResponseWriter, request *http
 	}
 	defer cancel()
 	fields := []string{"id"}
-	finish := request.URL.Path == "/api/approve/finish" || request.URL.Path == "/api/revoke/finish"
+	finish := routePath == "/api/approve/finish" || routePath == "/api/revoke/finish"
 	if finish {
 		fields = append(fields, "credential")
 	}
@@ -273,7 +303,7 @@ func (handler *PhoneHandler) ServeHTTP(writer http.ResponseWriter, request *http
 		writePhoneError(writer, http.StatusBadRequest)
 		return
 	}
-	switch request.URL.Path {
+	switch routePath {
 	case "/api/approve/begin":
 		ceremony, beginErr := handler.controller.BeginApproval(ctx, body.ID)
 		serveCeremony(writer, ceremony, beginErr)
@@ -316,13 +346,14 @@ func (enrollment *Enrollment) ServeHTTP(writer http.ResponseWriter, request *htt
 		writePhoneError(writer, http.StatusMethodNotAllowed)
 		return
 	}
+	routePath := enrollment.boundary.routePath(request)
 	ctx, cancel, admitted := enrollment.boundary.startPost(writer, request)
 	if !admitted {
 		return
 	}
 	defer cancel()
 	fields := []string{"token"}
-	if request.URL.Path == "/api/enroll/finish" {
+	if routePath == "/api/enroll/finish" {
 		fields = append(fields, "id", "credential")
 	}
 	body, err := decodePhoneRequest(writer, request, fields...)
@@ -330,7 +361,7 @@ func (enrollment *Enrollment) ServeHTTP(writer http.ResponseWriter, request *htt
 		writePhoneError(writer, http.StatusBadRequest)
 		return
 	}
-	switch request.URL.Path {
+	switch routePath {
 	case "/api/enroll/begin":
 		ceremony, beginErr := enrollment.begin(ctx, body.Token)
 		serveCeremony(writer, ceremony, beginErr)

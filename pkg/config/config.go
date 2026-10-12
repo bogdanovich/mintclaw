@@ -37,6 +37,7 @@ type Config struct {
 	Heartbeat   HeartbeatConfig   `json:"heartbeat"               yaml:"-"`
 	Devices     DevicesConfig     `json:"devices"                 yaml:"-"`
 	Nodes       NodesConfig       `json:"nodes,omitempty"         yaml:"-"`
+	Credentials CredentialConfig  `json:"credentials,omitempty"   yaml:"-"`
 	Voice       VoiceConfig       `json:"voice"                   yaml:"-"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty" yaml:"-"`
