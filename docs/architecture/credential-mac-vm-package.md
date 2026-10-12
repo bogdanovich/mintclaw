@@ -7,6 +7,11 @@
 > requirements below are no longer deployment or rollout gates. Reusable
 > component behavior and its exact qualification evidence remain recorded here.
 
+The unused VM scripts, Swift launcher/input fixtures, and launchd package have
+been retired from the current source and CI. No installation was performed.
+Their reviewed historical source is available at
+[commit 6c57c5c](https://github.com/bogdanovich/mintclaw/tree/6c57c5cd37135748bec3b645af5bbb1568a92450/scripts/internal/credential-mac-vm).
+
 This package prepares the fixed host launcher for the
 [existing Mac candidate](../security/credential-mac-vm-host-plan.md). It does
 not install a service account, start a guest, read a key, or qualify that
