@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -64,6 +65,42 @@ func TestCodingRuntimeLayoutStatePathOwnership(t *testing.T) {
 	}
 	if !reflect.DeepEqual(paths, wants) {
 		t.Fatalf("StatePaths() = %#v, want %#v", paths, wants)
+	}
+	assertCodingStateInventoryCoversLayout(t, layout)
+}
+
+func assertCodingStateInventoryCoversLayout(t *testing.T, layout CodingRuntimeLayout) {
+	t.Helper()
+	data, err := os.ReadFile("../coding/thread/testdata/state_ownership_inventory.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inventory struct {
+		Classes []struct {
+			ThreadEntry string `json:"thread_entry"`
+			Deletion    string `json:"deletion"`
+		} `json:"classes"`
+	}
+	if err := json.Unmarshal(data, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	owned := make(map[string]bool)
+	for _, class := range inventory.Classes {
+		if class.Deletion == "thread_trash_then_purge" {
+			owned[class.ThreadEntry] = true
+		}
+	}
+	paths := reflect.ValueOf(layout.StatePaths())
+	for index := range paths.NumField() {
+		path := paths.Field(index).String()
+		relative, err := filepath.Rel(layout.StateRoot(), path)
+		if err != nil || !filepath.IsLocal(relative) {
+			t.Fatalf("runtime state path %q escapes its owned root: %v", path, err)
+		}
+		entry := strings.Split(relative, string(filepath.Separator))[0]
+		if !owned[entry] {
+			t.Fatalf("runtime state path %q has no inventoried thread deletion owner", path)
+		}
 	}
 }
 

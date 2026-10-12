@@ -521,13 +521,13 @@ jobs:
       - name: Run Windows coding thread and lock tests
         run: >-
           go test -tags goolm,stdjson -count=1
-          -run '^(TestThreadLease|TestWindowsThreadLease|TestAttachment(Maintenance|Inflight|GarbageCollectionDoesNotRecoverLiveQuarantine))'
+          -run '^(TestThreadLease|TestWindowsThread(Lease|Trash)|TestTrashThread|TestPurgeThreadTrash|TestCodingStateOwnershipInventoryContract|TestAttachment(Maintenance|Inflight|GarbageCollectionDoesNotRecoverLiveQuarantine))'
           ./pkg/coding/thread
 
       - name: Qualify Windows headless coding
         run: >-
           go test -tags goolm,stdjson -count=1
-          -run '^(TestCodeAndResumePersistOutsideProjectAcrossCommands|TestCodeUsesInteractiveShellOnlyForCapableTerminal|TestPlainResultDistinguishesProjectAndWorkingDirectory)$'
+          -run '^(TestThreadsTrashPurge|TestCodeAndResumePersistOutsideProjectAcrossCommands|TestCodeUsesInteractiveShellOnlyForCapableTerminal|TestPlainResultDistinguishesProjectAndWorkingDirectory)'
           ./cmd/mintclaw/internal/coding
 
       - name: Qualify Windows isolated coding worktrees

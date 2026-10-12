@@ -295,6 +295,12 @@ and terminal failures restore a usable shell.
 
 ### H4 / P8.3 — Privacy and local-state lifecycle
 
+Implementation/qualification is active in the
+[state-lifecycle packet](local-coding-agent-p8-state-lifecycle.md). Existing
+thread trash and shared-blob GC supply the deletion foundations; this packet
+adds a checked ownership inventory and explicit bounded retention/purge with
+truthful partial-failure receipts. Production evidence remains pending.
+
 - Audit canonical transcripts, Seahorse summaries/indexes, metadata/catalogue,
   picker/search previews, prompts, logs, commands, diffs, artifacts, runtime
   events, traces, support bundles, remote projections, and crash leftovers.
