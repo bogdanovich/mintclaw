@@ -257,6 +257,17 @@ entire personal vault.
   Its synthetic qualification covers both delivery forms and unsafe
   role/path/data denial; the executable does not invoke it. Full activation
   and caller/consumer admission remain required before any real token read.
+  The [existing Mac host plan](../security/credential-mac-vm-host-plan.md)
+  selects a protected Linux VM under a separate macOS service identity as
+  the candidate. Hardware preflight is merged in
+  [PR #1594](https://github.com/bogdanovich/mintclaw/pull/1594), and the
+  [fixed Mac VM package](credential-mac-vm-package.md) in
+  [PR #1607](https://github.com/bogdanovich/mintclaw/pull/1607) adds protected
+  input checks, a signed launcher and disabled service definition. Public
+  Darwin permission fixtures and all 16 CI checks passed; review found no
+  actionable findings. No account, VM, key storage or service was installed.
+  Actual host administration, storage/memory/backups, operator-only setup,
+  guest networking and dedicated-account startup remain unqualified.
 - CA3: [verifier candidate qualification](credential-phone-approval-qualification.md)
   records build and upstream fixture evidence. The private passkey controller
   and protected owner-key store, merged in
@@ -297,8 +308,23 @@ entire personal vault.
   public DNS destinations, ordinary TLS, current scope and the original lease.
   The [enforcing browser proxy](credential-browser-enforcing-proxy.md) connects
   that transport to the private browser and constrains the actual HTTP operation
-  across preparation, injection, submission and outcome navigation. Its current
-  implementation is undergoing real Chromium and Linux CI qualification.
+  across preparation, injection, submission and outcome navigation; its
+  implementation is merged in
+  [PR #1571](https://github.com/bogdanovich/mintclaw/pull/1571).
+  The [whole-process forest and private network namespace](credential-browser-process-forest.md),
+  [immutable runtime admission](credential-browser-runtime.md), and
+  [fixed Root launcher](credential-browser-root-launcher.md) provide separate
+  process, network, image and role boundaries. Their real Linux fixtures use
+  public synthetic workers and do not qualify an authentic Node/Chromium bundle.
+  The [private resource service](credential-browser-resource-service.md) is
+  merged in [PR #1602](https://github.com/bogdanovich/mintclaw/pull/1602), after
+  the bounded interrupted-poll fix in
+  [PR #1601](https://github.com/bogdanovich/mintclaw/pull/1601). Actual Linux
+  normal/race qualification passed all five lifecycle fixtures and all three
+  packet suites again after retargeting to `main`; all 16 CI checks passed.
+  This transfers only the broker's proxy listener and control stream, starts
+  the fixed worker and requires verified retirement. It creates no approval
+  authority and activates no credential deployment.
   Protected service wiring, actual startup/network/host qualification,
   remote human handoff and the personal pilot remain pending.
 - CA5–CA6: pending their dependencies and admission/qualification gates.
