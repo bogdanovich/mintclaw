@@ -158,3 +158,22 @@ test('image evidence has an aggregate image and frame bound with explicit omissi
   assert.doesNotMatch(snapshot, /frame-secret/);
   await call('shutdown');
 });
+
+test('source removal during auxiliary text inspection does not lose the browser session', { timeout: 30000 }, async t => {
+  const { call, base } = await fixture(t);
+  await call('browser_navigate', { url: base + '/evidence' });
+  await call('browser_run_code_unsafe', { code: `async page => {
+    const snapshot = page.ariaSnapshotJSON.bind(page);
+    page.ariaSnapshotJSON = async options => {
+      const tree = await snapshot(options);
+      await page.locator('input[type=password]').evaluateAll(elements => elements.forEach(element => element.remove()));
+      return tree;
+    };
+    return true;
+  }` });
+  const snapshot = await call('browser_snapshot');
+  assert.doesNotMatch(snapshot, /private-secret|role-button-secret|role-combobox-secret/);
+  assert.match(snapshot, /Product gallery/);
+  assert.equal(await call('browser_ping'), 'pong');
+  await call('shutdown');
+});

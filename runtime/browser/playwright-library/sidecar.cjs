@@ -545,15 +545,23 @@ class Driver {
     const scope = target ? this.locatorFor(target) : page;
     const tree = await scope.ariaSnapshotJSON({ mode: 'ai' });
     const redactPasswords = async nodes => {
-      for (const node of nodes) {
-        if (typeof node === 'string') continue;
+      await Promise.all(nodes.map(async node => {
+        if (typeof node === 'string') return;
         if (node.ref && node.text) {
-          const password = await this.locatorFor(node.ref).evaluate(element =>
-            element.tagName === 'INPUT' && element.type === 'password');
-          if (password) delete node.text;
+          let password = null;
+          try {
+            // Auxiliary inspection must not wait an action-sized timeout for
+            // removed elements or ever bind replacements by matching captions.
+            password = await this.locatorFor(node.ref).evaluate(element => {
+              if (!element.isConnected) return null;
+              return element.tagName === 'INPUT' && element.type === 'password';
+            }, undefined, { timeout: 500 });
+          } catch (_) {}
+          if (password === true) delete node.text;
+          else if (password === null) node.text = '[text withheld: source changed during observation]';
         }
         if (node.children) await redactPasswords(node.children);
-      }
+      }));
     };
     await redactPasswords(tree);
     const lines = renderAriaNodes(tree);
