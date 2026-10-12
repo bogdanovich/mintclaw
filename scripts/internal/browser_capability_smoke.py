@@ -309,6 +309,7 @@ self.addEventListener('fetch', () => {});
 """
 
 SEMANTIC_MAP = b"""<section aria-label="Location map">
+  <svg role="img" width="240" height="40"><circle cx="20" cy="20" r="10"/></svg>
   <img alt="" width="40" height="40" src="/browser-smoke/image.svg">
   <img alt="" width="40" height="40" src="/browser-smoke/image.svg">
   <img alt="" width="40" height="40" src="/browser-smoke/image.svg">
