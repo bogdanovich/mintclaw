@@ -132,6 +132,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   safe diagnostics, and replacement of the earlier appliance architecture.
 - [Gateway Credential Approval](credential-gateway-approval.md): runtime-owned passkey approval
   in the existing application and private operator enrollment.
+- [Runtime Credential Output Privacy](credential-runtime-output-privacy.md): dynamically registered
+  credential values guarded in model-facing config filtering, diagnostic previews, and logger output.
 - [Runtime-Internal 1Password Adapter](credential-runtime-vault-adapter.md): relocated private
   exact-item adapter reused by the integrated runtime, preserving value and error projection.
 - [Historical Isolated Credential Roadmap](credential-isolated-runtime-history.md): superseded
