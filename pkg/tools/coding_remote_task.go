@@ -833,6 +833,9 @@ func codingRemoteTaskResultForTool(result codingRemoteTaskToolResult) *toolshare
 	toolResult.IsError = result.Outcome != "observed" ||
 		slices.Contains([]string{"failed", "timed_out", "lost"}, result.TaskStatus)
 	toolResult.WithObservation(codingRemoteTaskObservation(result))
+	if result.Retained && result.GenerationID != "" {
+		toolResult.WithTaskIdentity(result.TaskID, result.GenerationID)
+	}
 	return toolResult
 }
 
