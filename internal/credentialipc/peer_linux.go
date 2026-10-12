@@ -53,8 +53,7 @@ func (lifetime Lifetime) Alive() bool {
 		return false
 	}
 	fds := []unix.PollFd{{Fd: int32(lifetime.state.fd), Events: unix.POLLIN}}
-	_, err := unix.Poll(fds, 0)
-	return err == nil && fds[0].Revents == 0
+	return pollNow(fds) && fds[0].Revents == 0
 }
 
 func (lifetime Lifetime) Close() {

@@ -34,6 +34,7 @@ type pdfConversation struct {
 	operationID           string
 	artifacts             *pdfArtifactCollector
 	censusOwner           *document.Authority
+	ordinary              *questionConversation
 }
 
 func (domain *pdfConversation) initialTask() string { return domain.prepared.task }
@@ -67,6 +68,9 @@ func (domain *pdfConversation) request(
 			}
 		}
 	}
+	if prompt.Kind == "question" && domain.ordinary != nil {
+		return domain.ordinary.request(ctx, action, prompt)
+	}
 	// No other intent can grant permission or preserve an old confirmation.
 	return protocol.MintClawMessage{}, false, nil
 }
@@ -89,6 +93,16 @@ func (domain *pdfConversation) observe(ctx context.Context, prompt Event) error 
 		if err != nil && prompt.Kind == "question" {
 			public, publicErr := domain.prepared.observePromptOrigin(prompt, "request_user_input")
 			if publicErr == nil && public.ProtectedAnswer == nil {
+				ordinary := &questionConversation{
+					home: domain.prepared.home, workspace: domain.prepared.workspace,
+					sessionID: domain.prepared.sessionID, agent: domain.prepared.agent,
+					started: domain.prepared.started, filter: domain.prepared.filter,
+					facts: domain.prepared.item.Case.Driver.Facts,
+				}
+				if ordinaryErr := ordinary.observe(ctx, prompt); ordinaryErr != nil {
+					return ordinaryErr
+				}
+				domain.ordinary = ordinary
 				return nil
 			}
 			if errors.Is(publicErr, ErrPrivateEvidence) {
@@ -96,6 +110,7 @@ func (domain *pdfConversation) observe(ctx context.Context, prompt Event) error 
 			}
 		}
 		if err == nil {
+			domain.ordinary = nil
 			if record.Kind == interactions.KindApproval {
 				return nil
 			}
@@ -120,7 +135,17 @@ func (domain *pdfConversation) observe(ctx context.Context, prompt Event) error 
 	}
 }
 
+func (domain *pdfConversation) observeCancellation(ctx context.Context, prompt, reply Event) error {
+	if domain.ordinary == nil {
+		return ErrPDFTrial
+	}
+	return domain.ordinary.observeCancellation(ctx, prompt, reply)
+}
+
 func (domain *pdfConversation) conclude(ctx context.Context, trial *Trial) {
+	if domain.ordinary != nil {
+		domain.ordinary.conclude(ctx, trial)
+	}
 	trial.PDF = &PDFTrialEvidence{
 		Version: Version, SourceSHA256: domain.prepared.item.Case.Fixtures[0].SHA256,
 		JobID: domain.jobID, State: "unknown", Cleanup: "owned_fixture_retained; native_settlement_unknown",

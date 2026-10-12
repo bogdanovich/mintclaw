@@ -21,6 +21,7 @@ type questionConversation struct {
 	task, home, workspace, sessionID, agent string
 	started, cancelAt                       time.Time
 	filter                                  *strings.Replacer
+	facts                                   map[string]string
 	prompt                                  Event
 	waiting                                 interactions.Record
 	cancellation                            *QuestionCancellationEvidence
@@ -188,7 +189,7 @@ func (domain *questionConversation) read(path, name string, maximum int64) ([]by
 	defer func() { _ = root.Close() }()
 	data, err := readNativeEvidenceFile(root, name, maximum)
 	if err == nil {
-		err = inspectNativeJSON(data, nil, domain.filter)
+		err = inspectNativeJSON(data, domain.facts, domain.filter)
 	}
 	if err != nil {
 		clear(data)

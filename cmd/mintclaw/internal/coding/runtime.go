@@ -1458,11 +1458,25 @@ func (s *codingMetadataState) accumulatedError() error {
 	return s.err
 }
 
+func (s *codingMetadataState) checkpointState() (*thread.Store, thread.Metadata, time.Time) {
+	if s == nil {
+		return nil, thread.Metadata{}, time.Time{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	return s.store, s.metadata, now().UTC()
+}
+
 type nativeControllerRuntime struct {
 	*nativeCodingRuntime
-	lease         *thread.Lease
-	projector     *frontend.Projector
-	metadataState *codingMetadataState
+	lease          *thread.Lease
+	projector      *frontend.Projector
+	metadataState  *codingMetadataState
+	checkpointOnce sync.Once
 }
 
 // nativeWorkerController keeps worker-only capabilities at the native process
@@ -1926,11 +1940,75 @@ func (r *nativeControllerRuntime) persistTurnOutcome(
 }
 
 func (r *nativeControllerRuntime) Close() error {
-	return errors.Join(
-		r.nativeCodingRuntime.Close(),
-		r.lease.Release(),
-		r.metadataState.accumulatedError(),
-	)
+	runtimeErr := r.nativeCodingRuntime.Close()
+	r.checkpointOnce.Do(func() {
+		if err := r.persistPresentationCheckpoint(); err != nil {
+			logger.WarnCF("coding", "Coding presentation diagnostic checkpoint is unavailable", map[string]any{
+				"error": err.Error(),
+			})
+		}
+	})
+	return errors.Join(runtimeErr, r.lease.Release(), r.metadataState.accumulatedError())
+}
+
+func (r *nativeControllerRuntime) persistPresentationCheckpoint() error {
+	if r == nil || r.projector == nil || r.metadataState == nil || r.lease == nil {
+		return errors.New("coding presentation checkpoint dependencies are unavailable")
+	}
+	snapshot, err := r.projector.Snapshot(context.Background())
+	if err != nil {
+		return err
+	}
+	store, metadata, capturedAt := r.metadataState.checkpointState()
+	if store == nil {
+		return errors.New("coding presentation checkpoint store is unavailable")
+	}
+	checkpoint := presentationCheckpointFromSnapshot(snapshot, capturedAt)
+	return store.SavePresentationCheckpoint(context.Background(), r.lease, metadata, checkpoint)
+}
+
+func presentationCheckpointFromSnapshot(
+	snapshot frontend.ThreadSnapshot,
+	capturedAt time.Time,
+) thread.PresentationCheckpoint {
+	checkpoint := thread.PresentationCheckpoint{
+		SchemaVersion:        thread.PresentationCheckpointSchemaVersion,
+		ThreadID:             snapshot.ThreadID,
+		CapturedAt:           capturedAt.UTC(),
+		PresentationRevision: snapshot.PresentationRevision,
+		Activity:             string(snapshot.Activity),
+		ActiveTurnID:         snapshot.ActiveTurnID,
+		ItemCount:            len(snapshot.Items),
+		KindCounts:           make(map[string]int),
+		LifecycleCounts:      make(map[string]int),
+		PendingInputCount:    len(snapshot.PendingInputs),
+		ContextUsedTokens:    snapshot.ContextUsage.UsedTokens,
+		ContextLimitTokens:   snapshot.ContextUsage.LimitTokens,
+		HasOlderEntries:      snapshot.HasOlderEntries,
+	}
+	if snapshot.LastTurn != nil {
+		checkpoint.LastTurn = &thread.SafeTurnState{
+			TurnID: snapshot.LastTurn.TurnID, Outcome: string(snapshot.LastTurn.Outcome),
+		}
+	}
+	for _, item := range snapshot.Items {
+		checkpoint.KindCounts[string(item.Kind)]++
+		checkpoint.LifecycleCounts[string(item.Lifecycle)]++
+		checkpoint.MaximumSequence = max(checkpoint.MaximumSequence, item.Sequence)
+		checkpoint.MaximumItemRevision = max(checkpoint.MaximumItemRevision, item.Revision)
+	}
+	if snapshot.LastCompaction != nil {
+		checkpoint.LastCompaction = &thread.SafeCompactionState{
+			Status:              string(snapshot.LastCompaction.Status),
+			TranscriptRevision:  snapshot.LastCompaction.TranscriptRevision,
+			TranscriptCount:     snapshot.LastCompaction.TranscriptCount,
+			TokensBefore:        snapshot.LastCompaction.TokensBefore,
+			TokensAfter:         snapshot.LastCompaction.TokensAfter,
+			TokenCountsObserved: snapshot.LastCompaction.TokenCountsObserved,
+			SummariesCreated:    snapshot.LastCompaction.SummariesCreated,
+		}
+	}
+	return checkpoint
 }
 
 func newNativeCodingControllerWithDependencies(

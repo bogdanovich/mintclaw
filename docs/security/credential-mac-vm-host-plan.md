@@ -46,7 +46,23 @@ The existing VPN VPS is currently unsuitable because MintClaw has admin
 access. Reusing it would require a separate reviewed migration that removes
 all equivalent access, including credentials that can restore it.
 
+The [protected Mac VM package](../architecture/credential-mac-vm-package.md)
+adds a fixed, signed Virtualization launcher, a disabled system-service
+definition, and disposable public input checks. It supplies reviewable host
+software, without installing it or completing the dedicated-account,
+operator-console, guest-network, administration, or real-browser gates.
+
 ## What lives in the VM
+
+The deployment target is one appliance on this existing Mac, managed and
+updated as one installation. Phone approval, grant checks, 1Password access,
+and private session ownership belong to one broker process. The local Root
+launch helper and disposable Chromium workers use separate OS roles inside
+the same guest. They require no additional machines or separately deployed
+microservices. No extra vault database, Connect server, queue, or VPS is
+planned. See the roadmap's
+[deployment simplicity decision](../architecture/credential-access-roadmap.md#deployment-simplicity-and-first-usable-release)
+for the first-pilot scope and deferred connectors.
 
 1Password remains the vault. The VM stores the narrowly scoped service-account
 token in the protected OS credential store, immutable account mappings,

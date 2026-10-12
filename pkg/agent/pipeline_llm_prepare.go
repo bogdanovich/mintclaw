@@ -46,6 +46,13 @@ func (p *Pipeline) prepareLLMRequest(
 	}
 
 	llm.gracefulTerminal, _ = ts.gracefulInterruptRequested()
+	// A durable continuation can outlive discovery visibility (for example
+	// across restart). Restore only its trusted origin for this restricted call.
+	continuation := &exec.protectedAnswerContinuation
+	if continuation.pending() && !continuation.responseOnly() &&
+		turnProfileToolAllowed(ts.profile, continuation.toolName) {
+		ts.agent.Tools.RestoreToolVisibility(continuation.toolName)
+	}
 	llm.providerToolDefs = filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
 	llm.useNativeSearch = p.nativeSearchEnabled(ts.profile, exec.model.activeProvider)
 	if exec.protectedAnswerContinuation.pending() {

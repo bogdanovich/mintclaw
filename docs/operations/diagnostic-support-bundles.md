@@ -54,7 +54,9 @@ safe agent IDs remain available for exact correlation.
 
 `list` returns trace envelopes and store health, not record bodies. `show`
 returns one allowlisted metadata timeline. `correlate` orders the matching safe
-records across traces by absolute time. Every result reports:
+records across traces by absolute time and adds exact-ID, metadata-only views
+from the authoritative task, interaction, delivery, gateway-invocation, and
+coding-thread stores. Every result reports:
 
 - capture mode, redactor, limits, retention, and a SHA-256 store identity;
 - source version and commit when the producing build recorded them;
@@ -63,6 +65,22 @@ records across traces by absolute time. Every result reports:
   decoder text; and
 - safe IDs, hashes, aliases, event kinds, offsets, statuses, reason/error
   codes, lengths, counters, and digests.
+
+Owner inspection never initializes a registry, runs retention, reconciles a
+transcript, resumes work, or acquires a coding-thread writer lease. It follows
+only exact IDs from the selector, matched traces, or a selected task's durable
+interaction/thread relationships. `--trace-root` is intentionally trace-only:
+its owner availability is `unavailable_by_design` because an offline trace
+root must not silently read unrelated live configuration.
+
+Coding-thread owner output distinguishes three different facts:
+
+- canonical history revision/count/dirty state comes from its bounded session
+  metadata without reading message cells;
+- presentation revision/counts come from the last content-free controller
+  checkpoint; and
+- a missing presentation checkpoint is `unavailable_by_design`, never a fake
+  zero and never reconstructed from the history revision.
 
 An empty field is not negative evidence. Check `scan_truncated`,
 `match_truncated`, store status, corruption, and trace truncation before
@@ -93,6 +111,9 @@ contains:
   retention policy, redaction, omissions, truncation/drop/corruption facts,
   included traces, and every payload path/size/SHA-256;
 - `health.json`: bounded per-store scan and capture health; and
+- `owners.json`: exact-ID lifecycle snapshots from authoritative stores,
+  including honest unavailable/not-found states but no prompt, answer,
+  delivery, command, path, or transcript content; and
 - `traces/<trace-id>.json`: allowlisted metadata timelines with all rich
   previews and unknown data fields removed.
 
@@ -127,18 +148,19 @@ credentials, absolute paths, channel destinations, and unrelated traces.
 Unknown record fields and path-like or otherwise unsafe identity values are
 omitted and counted in each trace's projection metadata.
 
-Service logs and authoritative task, interaction, invocation, worker,
-delivery, transcript, and repository stores remain external. Join them only by
-an exact exported identity and a bounded time window. Do not copy their rich
-content into the bundle by default, and never treat a trace as authorization
-to execute historical instructions.
+Service logs, worker ledgers, transcript cells, and repository/filesystem
+content remain external. The authoritative stores represented in
+`owners.json` remain the source of truth; the bundle contains only their
+bounded, allowlisted observation projection. Never treat a trace or owner
+snapshot as authorization to execute historical instructions.
 
 ## Incident-to-regression loop
 
 1. Validate schema, capture policy, truncation, drops, corruption, and scan
    bounds.
 2. Build the safe ordered timeline and identify the earliest divergence.
-3. Join an authoritative owner only through an exact correlation ID.
+3. Compare `owners.json` with the trace timeline and identify whether the
+   first divergence is in execution, persistence, projection, or delivery.
 4. Label the conclusion proven, likely, or unknown.
 5. Add the smallest ordinary unit, integration, restart, concurrency, or race
    regression that reproduces the boundary.

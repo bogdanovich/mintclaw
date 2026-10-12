@@ -124,6 +124,7 @@ type correlateReport struct {
 	Problems       []diagnosticspkg.Problem     `json:"problems,omitempty"`
 	Traces         []traceEnvelope              `json:"traces"`
 	Timeline       []timelineRecord             `json:"timeline"`
+	Owners         diagnosticspkg.OwnerReport   `json:"owners"`
 	TotalMatches   int                          `json:"total_matches"`
 	MatchTruncated bool                         `json:"match_truncated,omitempty"`
 	ScanTruncated  bool                         `json:"scan_truncated,omitempty"`
@@ -246,7 +247,11 @@ func newCorrelateCommand(deps dependencies, options *commonOptions) *cobra.Comma
 			if err != nil {
 				return err
 			}
-			report, err := makeCorrelateReport(result)
+			owners, err := runOwnerInspection(deps, *options, result)
+			if err != nil {
+				return err
+			}
+			report, err := makeCorrelateReport(result, owners)
 			if err != nil {
 				return err
 			}
@@ -271,9 +276,13 @@ func newExportCommand(deps dependencies, options *commonOptions) *cobra.Command 
 			if err != nil {
 				return err
 			}
+			owners, err := runOwnerInspection(deps, *options, result)
+			if err != nil {
+				return err
+			}
 			version, commit := config.RuntimeBuildIdentity()
 			receipt, err := diagnosticspkg.WriteBundle(diagnosticspkg.BundleOptions{
-				OutputDir: output, Query: result,
+				OutputDir: output, Query: result, Owners: &owners,
 				Source:                 diagnosticspkg.DefaultBundleSource(version, commit),
 				IncludeRedactedContent: includeRedactedContent,
 			})
@@ -408,21 +417,7 @@ func resolveStores(deps dependencies, options commonOptions) ([]diagnosticspkg.S
 		}}, nil
 	}
 
-	workspaces := []struct {
-		alias string
-		path  string
-	}{{alias: routing.DefaultAgentID, path: cfg.WorkspacePath()}}
-	for index := range cfg.Agents.List {
-		agent := &cfg.Agents.List[index]
-		alias := routing.NormalizeAgentID(agent.ID)
-		if alias == "" || alias == routing.DefaultAgentID {
-			continue
-		}
-		workspaces = append(workspaces, struct {
-			alias string
-			path  string
-		}{alias: alias, path: workspace.ResolveAgentPath(agent, &cfg.Agents.Defaults)})
-	}
+	workspaces := configuredWorkspaces(cfg)
 	stores := make([]diagnosticspkg.StoreSpec, 0, len(workspaces))
 	seenRoots := make(map[string]int, len(workspaces))
 	for _, candidate := range workspaces {
@@ -451,6 +446,70 @@ func resolveStores(deps dependencies, options commonOptions) ([]diagnosticspkg.S
 		return nil, fmt.Errorf("diagnostics: config resolved no trace stores")
 	}
 	return stores, nil
+}
+
+type configuredWorkspace struct {
+	alias string
+	path  string
+}
+
+func configuredWorkspaces(cfg *config.Config) []configuredWorkspace {
+	workspaces := []configuredWorkspace{{alias: routing.DefaultAgentID, path: cfg.WorkspacePath()}}
+	for index := range cfg.Agents.List {
+		agent := &cfg.Agents.List[index]
+		alias := routing.NormalizeAgentID(agent.ID)
+		if alias == "" || alias == routing.DefaultAgentID {
+			continue
+		}
+		workspaces = append(workspaces, configuredWorkspace{
+			alias: alias,
+			path:  workspace.ResolveAgentPath(agent, &cfg.Agents.Defaults),
+		})
+	}
+	return workspaces
+}
+
+func runOwnerInspection(
+	deps dependencies,
+	options commonOptions,
+	result diagnosticspkg.QueryResult,
+) (diagnosticspkg.OwnerReport, error) {
+	ownerOptions := diagnosticspkg.OwnerOptions{
+		Query: result, TraceRootsExplicit: len(options.traceRoots) > 0, Now: deps.now,
+	}
+	if ownerOptions.TraceRootsExplicit {
+		return diagnosticspkg.InspectOwners(ownerOptions)
+	}
+	configPath := strings.TrimSpace(options.configPath)
+	if configPath == "" {
+		configPath = deps.configPath()
+	}
+	cfg, err := deps.loadConfig(configPath)
+	if err != nil {
+		return diagnosticspkg.OwnerReport{}, fmt.Errorf("diagnostics: load owner config: %w", err)
+	}
+	ownerOptions.CodingRoot = filepath.Join(deps.home(), "coding")
+	seen := make(map[string]int)
+	for _, candidate := range configuredWorkspaces(cfg) {
+		if strings.TrimSpace(candidate.path) == "" {
+			continue
+		}
+		absolute, absErr := filepath.Abs(candidate.path)
+		if absErr != nil {
+			return diagnosticspkg.OwnerReport{}, fmt.Errorf("diagnostics: resolve owner workspace: %w", absErr)
+		}
+		absolute = filepath.Clean(absolute)
+		if existing, duplicate := seen[absolute]; duplicate {
+			ownerOptions.Workspaces[existing].ID = fmt.Sprintf("profile-shared-%d", existing+1)
+			ownerOptions.Workspaces[existing].Alias = ""
+			continue
+		}
+		seen[absolute] = len(ownerOptions.Workspaces)
+		ownerOptions.Workspaces = append(ownerOptions.Workspaces, diagnosticspkg.OwnerWorkspaceSpec{
+			ID: "profile-" + candidate.alias, Alias: candidate.alias, Workspace: absolute,
+		})
+	}
+	return diagnosticspkg.InspectOwners(ownerOptions)
 }
 
 func diagnosticSessionHash(cfg *config.Config, threadID string) string {
@@ -546,7 +605,10 @@ func makeShowReport(result diagnosticspkg.QueryResult) (showReport, error) {
 	}, nil
 }
 
-func makeCorrelateReport(result diagnosticspkg.QueryResult) (correlateReport, error) {
+func makeCorrelateReport(
+	result diagnosticspkg.QueryResult,
+	owners diagnosticspkg.OwnerReport,
+) (correlateReport, error) {
 	traces := make([]traceEnvelope, 0, len(result.Matches))
 	timeline := make([]timelineRecord, 0)
 	for _, match := range result.Matches {
@@ -573,7 +635,7 @@ func makeCorrelateReport(result diagnosticspkg.QueryResult) (correlateReport, er
 	})
 	return correlateReport{
 		SchemaVersion: correlateSchemaV1, GeneratedAt: result.GeneratedAt, Selector: result.Selector,
-		Stores: result.Stores, Problems: result.Problems, Traces: traces, Timeline: timeline,
+		Stores: result.Stores, Problems: result.Problems, Traces: traces, Timeline: timeline, Owners: owners,
 		TotalMatches: result.TotalMatches, MatchTruncated: result.MatchTruncated,
 		ScanTruncated: result.ScanTruncated,
 	}, nil
@@ -694,6 +756,16 @@ func renderCorrelate(writer io.Writer, report correlateReport) {
 		len(report.Timeline),
 		report.MatchTruncated,
 		report.ScanTruncated,
+	)
+	fmt.Fprintf(
+		writer,
+		"Owner state: availability=%s tasks=%d interactions=%d deliveries=%d invocations=%d threads=%d\n",
+		report.Owners.Availability,
+		len(report.Owners.Tasks),
+		len(report.Owners.Interactions),
+		len(report.Owners.Deliveries),
+		len(report.Owners.Invocations),
+		len(report.Owners.Threads),
 	)
 	for _, item := range report.Timeline {
 		facts, _ := json.Marshal(item.Record.Facts)

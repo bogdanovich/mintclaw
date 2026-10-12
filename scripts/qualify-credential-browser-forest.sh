@@ -25,10 +25,15 @@ sudo systemd-run --quiet --wait --pipe --collect --service-type=exec \
   --property=MemoryMax=512M --property=RuntimeMaxSec=40s --property=LimitCORE=0 \
   /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 \
   MINTCLAW_SYNTHETIC_WORKER_FOREST_FIXTURE=1 \
-  "$qualification_dir/supervision.test" -test.run '^Test(Forest|Network|Launcher|LauncherFailure)Fixture$' \
+  "$qualification_dir/supervision.test" \
+  -test.run '^Test(Forest|Network|Launcher|LauncherFailure|Resource)Fixture$|^TestResourcePacket' \
   -test.timeout 30s -test.v \
   | tee "$qualification_result"
 grep -Fq -- '--- PASS: TestForestFixture (' "$qualification_result"
 grep -Fq -- '--- PASS: TestNetworkFixture (' "$qualification_result"
 grep -Fq -- '--- PASS: TestLauncherFixture (' "$qualification_result"
 grep -Fq -- '--- PASS: TestLauncherFailureFixture (' "$qualification_result"
+grep -Fq -- '--- PASS: TestResourceFixture (' "$qualification_result"
+grep -Fq -- '--- PASS: TestResourcePacketRightsAndRejection (' "$qualification_result"
+grep -Fq -- '--- PASS: TestResourcePacketRevokedIdentity (' "$qualification_result"
+grep -Fq -- '--- PASS: TestResourcePacketRejectsProcessHandoff (' "$qualification_result"
