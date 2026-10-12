@@ -212,11 +212,7 @@ func (s *Store) TrashThread(
 		if _, planErr := s.PlanDelete(threadID); planErr != nil {
 			return planErr
 		}
-		root, rootErr := os.OpenRoot(s.root)
-		if rootErr != nil {
-			return fmt.Errorf("coding thread delete: anchor store root: %w", rootErr)
-		}
-		defer func() { _ = root.Close() }()
+		root := maintenance.root
 		if err := ensureDirectTrashDirectory(root, "trash"); err != nil {
 			return err
 		}
@@ -236,10 +232,26 @@ func (s *Store) TrashThread(
 		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
 			return maintenanceErr
 		}
-		if err := root.Rename(
+		// Reuse the anchored no-replace publication primitive. Its Windows
+		// implementation moves directories while their shared-delete writer
+		// handle remains open; a trash move must never replace another root.
+		if err := s.renameReservation(
+			root,
 			filepath.Join("threads", threadID),
 			filepath.Join("trash", "threads", trashID),
 		); err != nil {
+			// The publication primitive can report handle-close failure after
+			// the rename committed. Verify the held writer file at the exact
+			// destination before classifying this as a preparation failure.
+			moved, pinErr := openPinnedAttachmentChild(root, filepath.Join("trash", "threads", trashID))
+			if pinErr == nil {
+				leaseErr := validatePinnedAttachmentLease(moved, lease)
+				_ = moved.Close()
+				if leaseErr == nil {
+					result = TrashResult{ThreadID: threadID, TrashID: trashID, Path: destination, At: at}
+					return &CommittedTrashError{Result: result, Err: err}
+				}
+			}
 			return fmt.Errorf("coding thread delete: move to trash: %w", err)
 		}
 		result = TrashResult{ThreadID: threadID, TrashID: trashID, Path: destination, At: at}
