@@ -17,6 +17,7 @@ func newRunCommand() *cobra.Command {
 	python := os.Getenv("MINTCLAW_EVAL_PDF_ORACLE_PYTHON")
 	suiteTimeout := time.Hour
 	repeat := 1
+	startTarget := false
 	command := &cobra.Command{
 		Use: "run", Short: "Run selected scenarios against a prepared isolated gateway", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -39,6 +40,7 @@ func newRunCommand() *cobra.Command {
 				Home: manualeval.RuntimeHome(), OutputParent: outputParent, SuiteTimeout: suiteTimeout,
 				PDFOraclePython: python,
 				Repeat:          repeat,
+				StartTarget:     startTarget,
 			})
 			if result.ID == "" {
 				return runErr
@@ -65,6 +67,8 @@ func newRunCommand() *cobra.Command {
 	command.Flags().StringVar(&outputParent, "out", "", "Existing private report directory outside the workspace")
 	command.Flags().DurationVar(&suiteTimeout, "suite-timeout", suiteTimeout, "Whole run limit (maximum 4h)")
 	command.Flags().IntVar(&repeat, "repeat", repeat, "Independent serial trials per case (1-64; at most 256 total)")
+	command.Flags().
+		BoolVar(&startTarget, "start-target", false, "Own a new gateway using a fresh prepared private profile")
 	command.Flags().
 		StringVar(&python, "pdf-oracle-python", python, "Absolute executable of the pinned independent PDF oracle")
 	_ = command.MarkFlagRequired("preset")

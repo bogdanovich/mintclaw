@@ -109,6 +109,28 @@ func TestGradeRetainsAndRejudgesEveryIndependentRepetition(t *testing.T) {
 	}
 }
 
+func TestGradeRetainsOwnedGatewayCleanupUncertaintyWithoutTargetWork(t *testing.T) {
+	fixture, item, source, count := gradeFixture(t, false)
+	exitCode := 9
+	source.TargetLifecycle = &TargetLifecycle{
+		Mode: "owned_gateway", PID: 1234, Admitted: true, StopRequested: true,
+		ExitObserved: true, ExitCode: &exitCode, Code: "abnormal_exit",
+	}
+	writeAdmissionJSON(t, filepath.Join(source.ReportDir, "run.json"), source)
+	tasks, probes := fixture.tasks.Load(), fixture.probes.Load()
+	result, err := Grade(t.Context(), fixture.preset, []LoadedCase{item}, source.ReportDir, RunOptions{
+		Home: fixture.home, OutputParent: fixture.output, StartTarget: true,
+	})
+	if !errors.Is(err, ErrNotPassed) || result.Verdict != Inconclusive || !result.Complete ||
+		result.TargetLifecycle == nil || result.TargetLifecycle.Code != "abnormal_exit" ||
+		result.Coverage[Pass] != 1 || count.Load() != 1 || fixture.tasks.Load() != tasks || fixture.probes.Load() != probes {
+		t.Fatal("regrade erased source cleanup uncertainty or started target work", err)
+	}
+	if _, err = Compare(result.ReportDir, result.ReportDir); err != nil {
+		t.Fatal("retained regrade lifecycle could not be compared", err)
+	}
+}
+
 func TestGradeRejectsMissingDuplicatedOrMismatchedRepetitionsBeforeAnyCall(t *testing.T) {
 	for _, change := range []string{
 		"missing", "duplicate-id", "duplicate-session", "duplicate-ordinal", "ordinal", "trial-ordinal", "budget",

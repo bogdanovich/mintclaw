@@ -25,10 +25,11 @@ type RunOptions struct {
 	SuiteTimeout    time.Duration
 	PDFOraclePython string
 	Repeat          int
+	StartTarget     bool
 }
 
-// Run attaches only after prepared-target admission. It never provisions or
-// restarts a target, replays a task, or treats disconnected work as canceled.
+// Run defaults to attachment after prepared-target admission. StartTarget owns
+// one fresh gateway child, never adopts/restarts a PID or replays a task.
 func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOptions) (RunReport, error) {
 	if len(cases) == 0 || len(cases) > MaxCorpusCases {
 		return RunReport{}, ErrRunOptions
@@ -55,7 +56,25 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	suiteCtx, cancel := context.WithTimeout(ctx, options.SuiteTimeout)
 	defer cancel()
-	target, err := admitPreparedTarget(suiteCtx, preset, options.Home)
+	var child *ownedGateway
+	var target admittedTarget
+	var err error
+	if options.StartTarget {
+		child, target, err = startOwnedGateway(suiteCtx, preset, options.Home)
+	} else {
+		target, err = admitPreparedTarget(suiteCtx, preset, options.Home)
+	}
+	var lifecycle *TargetLifecycle
+	stopTarget := func() {
+		if child == nil || lifecycle != nil {
+			return
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 35*time.Second)
+		defer cleanupCancel()
+		receipt := child.stopAndWait(cleanupCtx)
+		lifecycle = &receipt
+	}
+	defer stopTarget()
 	if err != nil {
 		return RunReport{}, err
 	}
@@ -126,6 +145,15 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			result.Verdict = combineVerdicts(result.Verdict, Error)
 			result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 			return result, ErrReport
+		}
+	}
+	stopTarget()
+	if lifecycle != nil {
+		result.TargetLifecycle = lifecycle
+		result.Cleanup = "owned_gateway_stopped; domain_resources_unknown"
+		if lifecycle.Code != "native_exit_zero" {
+			result.Verdict = combineVerdicts(result.Verdict, Inconclusive)
+			result.Cleanup = "owned_gateway_cleanup_uncertain"
 		}
 	}
 	result.DurationMS = time.Since(result.StartedAt).Milliseconds()
