@@ -107,6 +107,9 @@ func (broker *Broker) PrepareExecution(
 	if err != nil {
 		return ExecutionPreparation{}, err
 	}
+	if slot.credentials != nil {
+		return ExecutionPreparation{}, ErrDenied
+	}
 	profile, ok := broker.browserProfile(session)
 	if !ok || !profile.PrivilegedExecution.Enabled || profile.Revision != session.ProfileRevision {
 		return ExecutionPreparation{}, ErrDenied
@@ -257,6 +260,9 @@ func (broker *Broker) ExecuteExecution(
 	session, slot, worker, err := broker.actionSessionLocked(ctx, owner, invocation.SessionID, binding.TabID)
 	if err != nil {
 		return Invocation{}, err
+	}
+	if slot.credentials != nil {
+		return Invocation{}, ErrDenied
 	}
 	profile, ok := broker.browserProfile(session)
 	if !ok || !profile.PrivilegedExecution.Enabled || profile.Revision != binding.ProfileRevision ||

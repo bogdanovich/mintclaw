@@ -558,6 +558,7 @@ type InvocationExecutor func(context.Context) (json.RawMessage, error)
 // is remembered separately from durable session completion so a CAS retry never
 // requires Worker.Close to be idempotent.
 type workerSlot struct {
+	credentials        *credentialSession
 	worker             Worker
 	refs               map[string]DriverElement
 	refPositions       map[string]uint32
@@ -2201,6 +2202,10 @@ func (broker *Broker) cleanupSlot(ctx context.Context, slot *workerSlot) error {
 	defer cancelCleanup()
 	if err := slot.worker.Close(cleanupCtx); err != nil {
 		return err
+	}
+	if slot.credentials != nil {
+		slot.credentials.close()
+		slot.credentials = nil
 	}
 	slot.cleanupComplete = true
 	return nil
