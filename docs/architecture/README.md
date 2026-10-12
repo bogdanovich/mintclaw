@@ -130,6 +130,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Trusted Runtime Credential Design](credential-trusted-runtime-design.md): alias-only operations,
   private credential use, integrated phone approval, browser observation suppression,
   safe diagnostics, and replacement of the earlier appliance architecture.
+- [Runtime-Internal 1Password Adapter](credential-runtime-vault-adapter.md): relocated private
+  exact-item adapter reused by the integrated runtime, preserving value and error projection.
 - [Historical Isolated Credential Roadmap](credential-isolated-runtime-history.md): superseded
   deployment design and preserved component PR/qualification evidence.
 - [Historical Mac Credential VM Package](credential-mac-vm-package.md): retired candidate launcher
