@@ -255,6 +255,7 @@ func (session *Session) login(ctx context.Context, provider loginSource) (result
 		}
 	}()
 	if ctx == nil || ctx.Err() != nil || session == nil || session.worker == nil || provider == nil ||
+		session.worker.ctx.Err() != nil ||
 		!session.used.CompareAndSwap(false, true) {
 		return intent.Denied
 	}

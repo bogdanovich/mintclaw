@@ -1,12 +1,27 @@
-# 🖥️ MintClaw Hardware Compatibility List
+# MintClaw Hardware And Release Compatibility
 
-MintClaw runs on virtually any Linux device. This page tracks verified chips, products, and development boards.
+MintClaw publishes a deliberately bounded stable release matrix. A Go port or a
+community-reported device is not automatically a supported release target.
 
-**Your hardware not listed?** Submit a PR to add it! Hardware vendors are welcome to contribute and co-promote.
+| Artifact | Stable release targets | Coding qualification |
+| --- | --- | --- |
+| `mintclaw` and `mintclaw-launcher` archives | Linux AMD64, ARM64, ARMv7; macOS AMD64, ARM64; Windows AMD64 | Interactive TUI and process lifecycle are qualified on Linux and macOS. Native Windows supports headless coding; its interactive PTY remains unqualified. |
+| `mintclaw-node` archive | Linux AMD64/ARM64; macOS AMD64/ARM64 | Remote coding companions are admitted only where their separately documented target/profile policy allows them. |
+| Container images | Linux AMD64/ARM64 | Headless gateway/runtime deployment. |
+
+Linux ARM64/ARMv7 and macOS AMD64 release builds are compile-qualified. Linux
+AMD64 and macOS ARM64 receive the broadest native runtime coverage. Windows
+AMD64 additionally runs native path, lock, worktree, worker-process, and
+headless-coding tests. Unsupported or unqualified combinations are not emitted
+by the stable release configuration.
+
+The inventory below records historical or community hardware reports inherited
+from PicoClaw. It can be useful when building from source, but does not expand
+the stable MintClaw release matrix above.
 
 ---
 
-## 1. Verified Chip Support
+## 1. Community-Reported Chip Compatibility
 
 ### x86
 
@@ -55,9 +70,9 @@ MintClaw runs on virtually any Linux device. This page tracks verified chips, pr
 
 ---
 
-## 2. Verified Products (by release date)
+## 2. Community-Reported Products (by release date)
 
-Consumer products, routers, and industrial devices that have been tested with MintClaw.
+Consumer products, routers, and industrial devices reported by contributors.
 
 | Year | Product | Arch | SoC | RAM | Category |
 |------|---------|------|-----|-----|----------|
@@ -73,7 +88,7 @@ Consumer products, routers, and industrial devices that have been tested with Mi
 
 ---
 
-## 3. Verified Development Boards (by release date)
+## 3. Community-Reported Development Boards (by release date)
 
 | Year | Board | Arch | SoC | RAM | Buy Link |
 |------|-------|------|-----|-----|----------|
@@ -103,12 +118,13 @@ Any ARM64 Android phone (2015+) with 1GB+ RAM. Install [Termux](https://github.c
 
 | Platform | Notes |
 |----------|-------|
-| x86_64 Linux | Native binary, no dependencies |
-| x86_64 Windows | Native binary |
-| macOS (Intel / Apple Silicon) | Native binary |
-| Docker (any platform) | `docker compose` one-liner, see [Docker Guide](docker.md) |
-| OpenWrt routers | MIPS/ARM builds, requires >32MB free RAM |
-| FreeBSD / NetBSD | x86_64 and arm64 builds available |
+| x86_64 Linux | Stable native archive and container image |
+| ARM64 Linux | Stable native archive and container image |
+| ARMv7 Linux | Stable native archive |
+| x86_64 Windows | Stable native archive; headless coding is qualified |
+| macOS (Intel / Apple Silicon) | Stable native archives |
+| Docker | Linux AMD64/ARM64; see the [Docker Guide](docker.md) |
+| Other Go targets | Build-from-source experiments; no stable artifact or support claim |
 
 ---
 
@@ -138,7 +154,8 @@ tar xzf mintclaw_Linux_arm64.tar.gz
 ./mintclaw agent -m "Hello, what board am I running on?"
 ```
 
-Available builds: `linux-amd64`, `linux-arm64`, `linux-arm`, `linux-riscv64`, `linux-loong64`, `linux-mipsle`
+Stable archives: `Linux_x86_64`, `Linux_arm64`, `Linux_armv7`,
+`Darwin_x86_64`, `Darwin_arm64`, and `Windows_x86_64`.
 
 ### Add Your Hardware
 

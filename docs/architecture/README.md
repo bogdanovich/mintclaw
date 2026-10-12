@@ -2,6 +2,9 @@
 
 Internal architecture notes for major runtime mechanisms and subsystem design.
 
+- [Protected Mac Credential VM Package](credential-mac-vm-package.md): fixed Virtualization launcher,
+  protected input contract, disabled system service, public qualification, and remaining host activation gates.
+
 - [Steering](steering.md): injecting messages into a running agent loop between tool calls.
 - [Codex-Style Steering Roadmap](codex-style-steering-roadmap.md): incompatible replacement of pending-tool classification with same-turn post-batch user-input steering.
 - [Code Health Architecture State](code-health.md): current ownership,
@@ -24,6 +27,7 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Local Coding Agent Roadmap](local-coding-agent-roadmap.md): ordered runtime-boundary, project-thread, coding-profile, terminal UI, compaction, resume, automation, and release work for a native local coding agent.
 - [Local Coding Agent P7.6 Workspace Rewind Decision](local-coding-agent-p7-6-decision.md): explicit deferral, truthful transcript-only fork/revert behavior, and measured safety gates for any later reconsideration.
 - [Local Coding Agent P8 Hardening And Stable Release](local-coding-agent-p8-hardening.md): active diagnostics-first execution plan for performance, platform, privacy, state lifecycle, migration, production qualification, and stable release.
+- [Local Coding Agent P8 Platform Qualification](local-coding-agent-p8-platform-qualification.md): exact release tuples plus native terminal, shell, filesystem, lock, worktree, and process guarantees.
 - [Local Coding Agent P8 Diagnostic Evidence Inventory](local-coding-agent-p8-diagnostic-inventory.md): machine-checked map of coding incident paths, authoritative evidence, passive trace coverage, correlation gaps, retention, and H1b/H1c dispositions.
 - [Diagnostic Queries And Support Bundles](../operations/diagnostic-support-bundles.md): H1c read-only trace discovery,
   safe correlation timelines, checksum-verifiable export, and privacy boundaries.
@@ -144,6 +148,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Fixed Root Credential Browser Launcher](credential-browser-root-launcher.md):
   immutable runtime, private namespaces, fixed role drop and pre-Node descriptor
   cleanup, verified forest retirement, and pending broker integration.
+- [Supervised Credential Browser Consumer](credential-supervised-consumer.md): owned Root allocation,
+  actual approval lease, enforcing proxy and private channel composition.
+- [Private Browser Resource Service](credential-browser-resource-service.md): fixed authenticated Root/broker
+  allocation transport, pinned process lifetimes, endpoint ownership and verified retirement.
 - [Private Credential Browser Channel](credential-browser-private-channel.md):
   bounded broker/worker commands, current lease callbacks, private provider
   consumption, verified retirement, and synthetic qualification limits.
