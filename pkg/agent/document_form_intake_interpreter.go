@@ -11,8 +11,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/document"
-	"github.com/bogdanovich/mintclaw/pkg/providers"
-	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
 const maxDocumentIntakeWireBytes = 64 * 1024
@@ -34,11 +32,7 @@ func (auditor *documentFormAuditor) InterpretFormIntake(
 		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
 	}
 	defer clear(payload)
-	options := map[string]any{"temperature": 0, "native_search": false}
-	protocoltypes.DisablePromptCache(options)
-	response, err := resolved.provider.Chat(protocoltypes.WithSensitiveRequest(ctx), []providers.Message{
-		{Role: "system", Content: documentIntakeSystemPrompt}, {Role: "user", Content: string(payload)},
-	}, nil, resolved.model, options)
+	response, err := callDocumentPrivateModel(ctx, resolved, documentIntakeSystemPrompt, payload)
 	if err != nil || response == nil || len(response.ToolCalls) != 0 {
 		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
 	}
