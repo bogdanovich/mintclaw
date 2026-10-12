@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,8 +25,14 @@ func newVerifier(origin string) (*webauthn.WebAuthn, error) {
 		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.Path != "" ||
 		parsed.RawPath != "" || parsed.Hostname() == "" || net.ParseIP(parsed.Hostname()) != nil ||
 		strings.ToLower(parsed.Host) != parsed.Host || strings.HasSuffix(parsed.Hostname(), ".") ||
-		parsed.String() != origin || parsed.Port() != "" {
+		parsed.String() != origin || parsed.Port() == "443" {
 		return nil, ErrUnavailable
+	}
+	if port := parsed.Port(); port != "" {
+		number, portErr := strconv.Atoi(port)
+		if portErr != nil || number < 1 || number > 65535 || strconv.Itoa(number) != port {
+			return nil, ErrUnavailable
+		}
 	}
 	for _, character := range []byte(parsed.Hostname()) {
 		if (character < 'a' || character > 'z') && (character < '0' || character > '9') &&

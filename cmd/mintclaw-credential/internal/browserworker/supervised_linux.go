@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/approval"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/egress"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/runtimeimage"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/supervision"
+	"github.com/bogdanovich/mintclaw/internal/credentials/approval"
 )
 
 type supervisedAllocation interface {

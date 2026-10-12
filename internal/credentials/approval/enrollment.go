@@ -37,7 +37,16 @@ func NewEnrollment(setup *OwnerSetup) (*Enrollment, error) {
 	if !controller.usable(context.Background()) || !controller.enrollmentAllowed() {
 		return nil, ErrUnavailable
 	}
-	return &Enrollment{setup: setup, now: time.Now, boundary: newPhoneBoundary(controller.origin)}, nil
+	return &Enrollment{
+		setup: setup, now: time.Now,
+		boundary: newPhoneBoundary(controller.origin, controller.pagePath, controller.tlsProxy),
+	}, nil
+}
+
+// Issue returns an expiring initial-enrollment link only to trusted operator
+// setup. Callers must keep it out of model results, logs and captured terminals.
+func (enrollment *Enrollment) Issue(ctx context.Context) ([]byte, error) {
+	return enrollment.issue(ctx)
 }
 
 func (enrollment *Enrollment) issue(ctx context.Context) ([]byte, error) {
@@ -63,7 +72,7 @@ func (enrollment *Enrollment) issue(ctx context.Context) ([]byte, error) {
 	}
 	enrollment.secret = hex.EncodeToString(nonce[:])
 	enrollment.issued = enrollment.now()
-	return []byte(controller.origin + "/#enroll=" + enrollment.secret), nil
+	return []byte(controller.origin + controller.pagePath + "#enroll=" + enrollment.secret), nil
 }
 
 func (enrollment *Enrollment) accepts(secret string) bool {

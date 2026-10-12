@@ -14,7 +14,7 @@ case "$architecture" in
 esac
 env -u OP_SERVICE_ACCOUNT_TOKEN CGO_ENABLED=0 GOOS=linux GOARCH="$target_arch" \
   go test -c -tags goolm,stdjson -o "$qualification_dir/approval.test" \
-  "$repo_root/cmd/mintclaw-credential/internal/approval"
+  "$repo_root/internal/credentials/approval"
 fixture_status=0
 docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
   --cap-add DAC_OVERRIDE --cap-add KILL --cap-add FOWNER \
@@ -42,4 +42,4 @@ if [[ "$fixture_status" != 0 ]]; then exit "$fixture_status"; fi
 # Install the repository's pinned Node dependencies and Chromium before running.
 env -u OP_SERVICE_ACCOUNT_TOKEN MINTCLAW_SYNTHETIC_PHONE_BROWSER_FIXTURE=1 \
   go test -tags goolm,stdjson -run '^TestPhoneBrowserFixture$' -count=1 -timeout=110s \
-  "$repo_root/cmd/mintclaw-credential/internal/approval"
+  "$repo_root/internal/credentials/approval"

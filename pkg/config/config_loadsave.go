@@ -221,7 +221,7 @@ func finalizeLoadedConfig(
 	if cfg.Agents.Defaults.Workspace == "" {
 		cfg.Agents.Defaults.Workspace = filepath.Join(GetHome(), pkg.WorkspaceName)
 	}
-	return nil
+	return cfg.ValidateCredentials()
 }
 
 func applySkillsRegistryEnvOverrides(cfg *Config) {

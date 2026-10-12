@@ -35,6 +35,10 @@ type Config struct {
 	Origin         string
 	StateDirectory string
 	Accounts       []credentialbroker.AccountRule
+	// PagePath is "/" for the legacy standalone handler, or "/credentials/"
+	// when mounted in the existing application.
+	PagePath              string
+	TrustLoopbackTLSProxy bool
 }
 
 // LoginBinding is private service-consumer metadata, never a model result. It
@@ -105,6 +109,8 @@ type Controller struct {
 	mu         sync.Mutex
 	ownerID    string
 	origin     string
+	pagePath   string
+	tlsProxy   bool
 	policy     *credentialbroker.Policy
 	bindings   map[string]binding
 	authority  *credentialbroker.Authority
@@ -127,9 +133,9 @@ type Controller struct {
 // It is neither a model tool nor evidence that the holder is a human operator.
 type OwnerSetup struct{ controller *Controller }
 
-// New opens the protected owner store. Directory ownership is only one admission
-// check: startup must independently prove the service role, complete agent
-// isolation, and a private owner setup channel before exposing either result.
+// New opens the private owner store for the trusted runtime. Startup must
+// retain OwnerSetup outside model tools and expose enrollment only through a
+// private operator setup path. No separate host or service role is required.
 func New(config Config) (*Controller, *OwnerSetup, error) {
 	store, err := openOwnerStore(config.StateDirectory)
 	if err != nil {
@@ -144,6 +150,12 @@ func New(config Config) (*Controller, *OwnerSetup, error) {
 
 func newController(config Config, store ownerStore) (*Controller, *OwnerSetup, error) {
 	if store == nil || !intent.ValidAlias(config.OwnerID) {
+		return nil, nil, ErrUnavailable
+	}
+	if config.PagePath == "" {
+		config.PagePath = "/"
+	}
+	if config.PagePath != "/" && config.PagePath != "/credentials/" {
 		return nil, nil, ErrUnavailable
 	}
 	policy, bindings, err := freezePolicy(config.OwnerID, config.Accounts)
@@ -173,6 +185,7 @@ func newController(config Config, store ownerStore) (*Controller, *OwnerSetup, e
 	}
 	controller := &Controller{
 		ownerID: config.OwnerID, origin: config.Origin, policy: policy, bindings: bindings,
+		pagePath: config.PagePath, tlsProxy: config.TrustLoopbackTLSProxy,
 		authority: authority, owner: owner, store: store, verifier: verifier,
 		requests: make(map[string]*pendingRequest), ceremonies: make(map[string]pendingCeremony),
 		grants: make(map[string]credentialbroker.Grant), now: time.Now, random: rand.Reader,

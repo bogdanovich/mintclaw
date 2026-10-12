@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/approval"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/provisioning"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/startup"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/supervision"
+	"github.com/bogdanovich/mintclaw/internal/credentials/approval"
 )
 
 var version = "dev"

@@ -10,7 +10,8 @@
     location.reload();
   });
   const original = location.hash;
-  history.replaceState(null, "", "/");
+  const pagePath = location.pathname;
+  history.replaceState(null, "", pagePath);
   const match = /^#(request|enroll|revoke)=([a-f0-9]{64})$/.exec(original);
   if (!match) return;
   let mode = match[1], reference = match[2], ceremony, grantID = "";
@@ -18,7 +19,7 @@
   const encode = buffer => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
   const decode = value => Uint8Array.from(atob(value.replaceAll("-", "+").replaceAll("_", "/")), char => char.charCodeAt(0));
   const post = async (path, body) => {
-    const response = await fetch(path, {method: "POST", credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer",
+    const response = await fetch(pagePath + path.slice(1), {method: "POST", credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer",
       headers: {"Content-Type": "application/json"}, body: JSON.stringify(body), signal: lifetime.signal});
     if (!response.ok) throw new Error("unavailable");
     return await response.json();

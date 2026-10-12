@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/approval"
+	"github.com/bogdanovich/mintclaw/internal/credentials/approval"
 )
 
 const (

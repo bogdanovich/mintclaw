@@ -129,6 +129,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Trusted Runtime Credential Design](credential-trusted-runtime-design.md): alias-only operations,
   private credential use, integrated phone approval, browser observation suppression,
   safe diagnostics, and replacement of the earlier appliance architecture.
+- [Gateway Credential Approval](credential-gateway-approval.md): runtime-owned passkey approval
+  in the existing application and private operator enrollment.
 - [Historical Isolated Credential Roadmap](credential-isolated-runtime-history.md): superseded
   deployment design and preserved component PR/qualification evidence.
 - [Historical Mac Credential VM Package](credential-mac-vm-package.md): retired candidate launcher

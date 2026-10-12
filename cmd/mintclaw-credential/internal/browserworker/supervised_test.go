@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/bogdanovich/mintclaw/cmd/mintclaw-credential/internal/approval"
+	"github.com/bogdanovich/mintclaw/internal/credentials/approval"
 	"github.com/bogdanovich/mintclaw/pkg/credentialbroker"
 )
 
