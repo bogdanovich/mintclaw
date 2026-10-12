@@ -51,6 +51,11 @@ const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance
 	`Omit output unless the utterance explicitly requests complete filling or an editable partial draft. ` +
 	`A clear request to finish remaining fields manually is a draft request even without that exact terminology; ` +
 	`a question about the available options is clarification, not a scope change. ` +
+	`For an explicit request to create or deliver the filled PDF, use intent finish, including an editable or partial draft. ` +
+	`Use intent draft for choosing partial scope or deferring completion, not for requesting creation of the selected output. ` +
+	`A finish interpretation is only advisory: native code still requires a separate current review and final approval. ` +
+	`For finish requests referring to the current or already selected result/review, preserve its output scope. ` +
+	`Omit output unless this utterance explicitly changes complete-versus-draft scope; finish alone is not a scope change. ` +
 	`Arrays may be empty. Occurrences count exact token-aligned non-overlapping matches, starting at 1. ` +
 	`Use only literal text from the utterance, never generate, rephrase, infer or case-fold a value. ` +
 	`For explicit operator instructions to leave a field blank or mark a section inapplicable, use disposition with ` +
