@@ -5,7 +5,7 @@ the declared platform and trust boundaries. P6.5 LSP remains unadmitted and
 P7.6 workspace rewind remains deferred.
 
 This closes [P8](local-coding-agent-p8-hardening.md), not every later MintClaw
-feature. The frozen qualification/production source is
+feature. The frozen P8 qualification/rollout source is
 `b1b4c0384c32c95bf246223810e496aa401af7e1`. Subsequent main merges for credential
 approval/private-browser transactions and Codex SSE heartbeat handling belong
 to separate packets. They do not change the coding ownership architecture and
@@ -165,6 +165,14 @@ findings and no new load/error/fail IDs. No config/schema/data migration was
 needed. Restart completed at 05:15:53 UTC. The post-ten-minute observation
 found all ten services active, zero failed/legacy processes, zero error-level
 journal entries and expected HTTP 302/404 responses.
+
+During closeout, an independent rollout advanced the server to
+`d281d4053c029675f0e906313b8dc35950d9f553`. The final 05:50 UTC check again
+found all ten units active, no failed/legacy process or error-level journal
+entry, and expected HTTP probes. The P8 parent and successful status traces
+both still identify `b1b4c038` exactly. This later healthy deployment does not
+relabel the immutable P8 release/performance receipts as tests of its new
+credential/provider features; their qualification is separately owned.
 
 Live-gateway trace `trace-turn-4238e807e77bb1fe964c05f5` has the qualified
 source, completed outcome, eight records, no tools/truncation/drops and
