@@ -320,11 +320,13 @@ func (tool *DocumentTool) continueFormIntake(
 			intake.Failure = &safeDocumentFormFailure{
 				Code:    "intake_pending",
 				Message: "Some protected input remains pending. Accepted fields are preserved; retry or clarify without repeating them.",
+				Stage:   result.failureStage,
 			}
 			if errors.Is(processErr, document.ErrFormEditableOutputUnavailable) {
 				intake.Failure = &safeDocumentFormFailure{
 					Code:    "editable_output_unavailable",
 					Message: "Verified editable output is unavailable for this job. Protected input and accepted fields are preserved; continue complete filling or cancel. No draft was produced.",
+					Stage:   result.failureStage,
 				}
 			}
 			// A retained older error must not suppress a later admitted control or
@@ -353,6 +355,7 @@ type formIntakeProcessedInput struct {
 	scoped       int
 	findings     []document.FormFieldMappingBlocker
 	intent       document.FormIntakeDialogIntent
+	failureStage string
 }
 
 func (tool *DocumentTool) processFormIntakeInput(
@@ -362,6 +365,7 @@ func (tool *DocumentTool) processFormIntakeInput(
 	var result formIntakeProcessedInput
 	windows := formIntakeCandidateWindows(schema, progress.Context.CandidateFieldIDs)
 	for _, ids := range windows {
+		result.failureStage = "input"
 		input, err := tool.formJobs.ReadFormIntakeInput(ctx, reference, owner)
 		if err != nil {
 			return result, err
@@ -391,11 +395,13 @@ func (tool *DocumentTool) processFormIntakeInput(
 			result.intent = old.Intent
 			continue
 		}
+		result.failureStage = "evidence"
 		evidence, err := tool.privateFormIntakeEvidence(ctx, owner, input.JobID, schema, ids)
 		if err != nil {
 			return result, err
 		}
 		for attempt := 0; attempt < 2; attempt++ {
+			result.failureStage = "reservation"
 			input, err = tool.formJobs.ReadFormIntakeInput(ctx, reference, owner)
 			if err != nil {
 				return result, err
@@ -455,10 +461,12 @@ func (tool *DocumentTool) processFormIntakeInput(
 					view.FieldStates = append(view.FieldStates, state)
 				}
 			}
+			result.failureStage = "interpretation"
 			proposal, err := tool.interpretFormIntake(ctx, view)
 			if err != nil {
 				return result, err
 			}
+			result.failureStage = "apply"
 			applied, err := tool.formJobs.ApplyFormIntakePass(ctx, document.FormIntakeApplyRequest{
 				Reference:        reference,
 				PassID:           pass.ID,
@@ -484,11 +492,13 @@ func (tool *DocumentTool) processFormIntakeInput(
 			break
 		}
 	}
+	result.failureStage = "input"
 	input, err := tool.formJobs.ReadFormIntakeInput(ctx, reference, owner)
 	if err != nil {
 		return result, err
 	}
 	result.findings = input.Findings
+	result.failureStage = ""
 	return result, nil
 }
 

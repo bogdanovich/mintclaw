@@ -142,6 +142,7 @@ type safeDocumentFormReview struct {
 type safeDocumentFormFailure struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	Stage   string `json:"stage,omitempty"`
 }
 
 type safeDocumentFormResult struct {
