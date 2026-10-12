@@ -119,23 +119,29 @@ func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 		)
 		return true
 	}
-	identity, err := protectedAnswerIdempotencyKey("", msg)
-	if err != nil {
-		c.rejectDocumentIntakeInbound(
-			ctx,
-			msg,
-			target,
-			"This message has no durable identity. Form details were not applied; please resend them.",
-		)
-		return true
+	var reference string
+	if control == "/retry_form" {
+		reference, err = documentTool.RetryProtectedFormIntake(toolCtx, guard)
+	} else {
+		var identity string
+		identity, err = protectedAnswerIdempotencyKey("", msg)
+		if err != nil {
+			c.rejectDocumentIntakeInbound(
+				ctx,
+				msg,
+				target,
+				"This message has no durable identity. Form details were not applied; please resend them.",
+			)
+			return true
+		}
+		reference, err = documentTool.AdmitProtectedFormIntake(toolCtx, guard, identity, msg.Content)
 	}
-	reference, err := documentTool.AdmitProtectedFormIntake(toolCtx, guard, identity, msg.Content)
 	if err != nil || guard.Reference != "" && guard.Reference != reference {
 		c.rejectDocumentIntakeInbound(
 			ctx,
 			msg,
 			target,
-			"Form details could not be admitted. Accepted data are preserved; retry, or use /resume_form if paused, /pause_form or /cancel_form.",
+			"Form details could not be admitted or retried. Accepted data are preserved; use /retry_form for retained input, /resume_form if paused, /pause_form or /cancel_form.",
 		)
 		return true
 	}

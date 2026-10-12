@@ -1193,6 +1193,7 @@ func (runner *toolLoopRunner) approveToolCall(
 	call.protectedResult = toolRegistry.ProtectedDurableResult(toolName, toolArgs)
 
 	execCtx := toolExecutionContextForTurn(turnCtx, ts)
+	execCtx = runner.exec.protectedAnswerContinuation.documentIntakeProcessingContext(execCtx)
 	execCtx = toolshared.WithToolCallID(execCtx, tc.ID)
 	approvalBypass, trustedExecution := toolApprovalBypass(p.Cfg, toolRegistry, toolName, toolArgs)
 	if p.trustAllTools {
