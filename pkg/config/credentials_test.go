@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -8,10 +9,15 @@ import (
 )
 
 func TestCredentialConfigurationRequiresDedicatedVaultAndPrivateStateLocation(t *testing.T) {
-	for _, kind := range []string{"valid", "workspace", "agent-workspace", "different-vault", "different-owner"} {
+	for _, kind := range []string{
+		"valid", "workspace", "agent-workspace", "different-vault", "different-owner", "missing-workspace",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			cfg := DefaultConfig()
 			cfg.Agents.Defaults.Workspace = filepath.Join(t.TempDir(), "workspace")
+			if os.Mkdir(cfg.WorkspacePath(), 0o700) != nil {
+				t.Fatal("workspace identity fixture unavailable")
+			}
 			cfg.Credentials = CredentialConfig{
 				Enabled: true, OwnerID: "owner", Origin: "https://approval.example.org", StateDirectory: t.TempDir(),
 				Accounts: []credentialbroker.AccountRule{
@@ -27,6 +33,10 @@ func TestCredentialConfigurationRequiresDedicatedVaultAndPrivateStateLocation(t 
 				},
 			}
 			switch kind {
+			case "missing-workspace":
+				if os.Remove(cfg.WorkspacePath()) != nil {
+					t.Fatal("missing workspace fixture unavailable")
+				}
 			case "workspace":
 				cfg.Credentials.StateDirectory = filepath.Join(cfg.WorkspacePath(), "credential-state")
 			case "agent-workspace":

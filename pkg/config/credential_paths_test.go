@@ -66,3 +66,41 @@ func TestCredentialStateContainmentResolvesExistingFilesystemAliases(t *testing.
 		})
 	}
 }
+
+func TestCredentialStateContainmentUsesFilesystemIdentityForCaseAliases(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "Workspace")
+	alias := filepath.Join(root, "WORKSPACE")
+	if os.Mkdir(workspace, 0o700) != nil {
+		t.Fatal("case alias fixture unavailable")
+	}
+	actual, err := os.Stat(workspace)
+	if err != nil {
+		t.Fatal("workspace identity unavailable")
+	}
+	other, aliasErr := os.Stat(alias)
+	caseInsensitive := aliasErr == nil && os.SameFile(actual, other)
+	if !caseInsensitive && os.Mkdir(alias, 0o700) != nil {
+		t.Fatal("separate case-sensitive directory unavailable")
+	}
+	cfg := DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Credentials = CredentialConfig{
+		Enabled: true, OwnerID: "owner", Origin: "https://approval.example.org",
+		StateDirectory: filepath.Join(alias, "not-created", "private"),
+		Accounts: []credentialbroker.AccountRule{{
+			Alias: "ebay", VaultID: "vault", ItemID: "item", Origins: []string{"https://example.com"},
+			Principals: []credentialbroker.Principal{{
+				OwnerID: "owner", ActorID: "actor", AgentID: "agent", HostID: "host",
+			}},
+		}},
+	}
+	if (cfg.ValidateCredentials() != nil) != caseInsensitive {
+		t.Fatal("case alias containment differs from actual filesystem identity")
+	}
+	if caseInsensitive {
+		t.Log("case-insensitive-volume containment verified")
+	} else {
+		t.Log("distinct case-sensitive directories remain valid")
+	}
+}
