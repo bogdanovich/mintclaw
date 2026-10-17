@@ -4,17 +4,42 @@ import (
 	"slices"
 )
 
+type formIntakeStoredResolution struct {
+	InputID       string         `json:"input_id"`
+	ThroughPasses int            `json:"through_passes"`
+	Span          formIntakeSpan `json:"span"`
+}
+
+// An acknowledgement need not advance the field revision. A settlement still
+// changes source accounting, so earlier unapplied reservations cannot use their
+// stale interpretation snapshot. Completed exact replay is handled before this.
+func formIntakeReservationSuperseded(mode *formIntakeStoredMode, inputID string, passIndex int) bool {
+	for _, input := range mode.Inputs {
+		for _, pass := range input.Reservations {
+			if pass.Outcome == nil {
+				continue
+			}
+			for _, prior := range pass.Outcome.PriorResolutions {
+				if prior.InputID == inputID && passIndex < prior.ThroughPasses {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // This runs inside the current native apply's atomic update, after positive
 // validation and before either accepted events or source accounting is published.
 func (store *FormJobStore) resolvePriorFormIntakeLiterals(
 	source *formJobSourceSecret, currentIndex int, record formJobStoredRecord, key []byte,
-	request FormIntakeApplyRequest, selection formIntakeSelection, digest string,
+	request FormIntakeApplyRequest, selection formIntakeSelection, outcome *formIntakeStoredOutcome,
 ) error {
 	type resolution struct {
 		spans []formIntakeSpan
-		ids   []string
 	}
 	resolved := make(map[int]*resolution)
+	var settlements []formIntakeStoredResolution
 	for _, proposal := range request.Proposals {
 		if len(proposal.Resolves) == 0 {
 			continue
@@ -41,7 +66,7 @@ func (store *FormJobStore) resolvePriorFormIntakeLiterals(
 			if input.State != formIntakeInputCommitted || len(input.Reservations) != prior.ExpectedPasses {
 				return ErrFormJobConflict
 			}
-			findings := formIntakeCurrentFindings(input)
+			findings := formIntakeCurrentModeFindings(source.Intake, input)
 			findingIndex := slices.IndexFunc(findings, func(finding FormFieldMappingBlocker) bool {
 				return finding.FieldID == proposal.FieldID &&
 					(finding.Code == "field_invalid" || finding.Code == "field_conflicting")
@@ -70,37 +95,27 @@ func (store *FormJobStore) resolvePriorFormIntakeLiterals(
 				return ErrFormJobAnswerConflict
 			}
 			item.spans = append(item.spans, span)
-			if !slices.Contains(item.ids, proposal.FieldID) {
-				item.ids = append(item.ids, proposal.FieldID)
-			}
+			settlements = append(settlements, formIntakeStoredResolution{
+				InputID: input.ID, ThroughPasses: prior.ExpectedPasses, Span: span,
+			})
 		}
 	}
-	// Use stable input order for deterministic native reservation identities.
+	outcome.PriorResolutions = settlements
+	// Bookkeeping never reserves another extraction or mutates an older outcome.
 	for index := 0; index < currentIndex; index++ {
 		item := resolved[index]
 		if item == nil {
 			continue
 		}
 		input := &source.Intake.Inputs[index]
-		if len(input.Reservations) >= MaxFormIntakeExtractionPasses ||
-			len(input.Accounted)+len(item.spans) > MaxFormIntakeAccountedSpans {
+		if len(input.Accounted)+len(item.spans) > MaxFormIntakeAccountedSpans {
 			return ErrFormJobCapacityExceeded
 		}
-		slices.Sort(item.ids)
-		id := keyedDigest(store.profileKey, "intake_prior_resolution", request.PassID, input.ID, digest)
-		outcome := &formIntakeStoredOutcome{
-			Digest: digest, AppliedRevision: record.Public.Revision, AcknowledgedIDs: item.ids,
-			Intent: formIntakeInput(record.Public, source.Intake, *input).DialogIntent,
-		}
-		input.Reservations = append(input.Reservations, formIntakeStoredPass{
-			ID: "form_pass_" + id[:32], KeyDigest: id, ReceiptCount: len(source.Intake.Inputs),
-			Revision: record.Public.Revision, CandidateIDs: item.ids, Outcome: outcome,
-		})
 		input.Accounted = appendFormIntakeSpans(input.Accounted, item.spans)
-		outcome.Consumed = len(formIntakeCurrentFindings(*input)) == 0 &&
+		consumed := len(formIntakeCurrentModeFindings(source.Intake, *input)) == 0 &&
 			formIntakeTextAccounted(input.Text, input.Accounted) &&
 			(!formIntakeHasScopedInstruction(*input) || formIntakeScopeCoverageComplete(*input, request.Schema))
-		if outcome.Consumed {
+		if consumed {
 			input.State, input.Text = formIntakeInputConsumed, ""
 		}
 	}

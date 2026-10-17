@@ -344,7 +344,7 @@ func decodeDocumentIntakeInterpretation(
 			resolutionCount++
 			prior := slices.IndexFunc(related, func(input document.FormIntakeInput) bool {
 				return input.Reference == resolution.Reference && !input.Consumed && input.Passes > 0 &&
-					input.Passes < document.MaxFormIntakeExtractionPasses &&
+					input.Passes <= document.MaxFormIntakeExtractionPasses &&
 					slices.ContainsFunc(input.Findings, func(finding document.FormFieldMappingBlocker) bool {
 						return finding.FieldID == proposal.FieldID &&
 							(finding.Code == "field_invalid" || finding.Code == "field_conflicting")

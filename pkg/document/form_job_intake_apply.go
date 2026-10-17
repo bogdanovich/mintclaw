@@ -77,7 +77,8 @@ type formIntakeStoredOutcome struct {
 	ScopedInstruction bool                      `json:"scoped_instruction,omitempty"`
 	ScopedIDs         []string                  `json:"scoped_ids,omitempty"`
 	// Native-derived settlement of advisory uncertainty, never a value or approval.
-	ResolvedGuidanceIDs []string `json:"resolved_guidance_ids,omitempty"`
+	ResolvedGuidanceIDs []string                     `json:"resolved_guidance_ids,omitempty"`
+	PriorResolutions    []formIntakeStoredResolution `json:"prior_resolutions,omitempty"`
 }
 
 // ApplyFormIntakePass publishes accepted ledger events, raw-input accounting
@@ -128,6 +129,7 @@ func (store *FormJobStore) ApplyFormIntakePass(
 			return false, nil
 		}
 		if source.Intake.State != FormIntakeActive || input.State != formIntakeInputCommitted ||
+			formIntakeReservationSuperseded(source.Intake, input.ID, passIndex) ||
 			!formIntakeMutable(record.Public) || record.Public.Revision != request.ExpectedRevision ||
 			len(record.PendingEvents) != 0 || pass.ReceiptCount != len(source.Intake.Inputs) {
 			return false, ErrFormJobConflict
@@ -168,12 +170,13 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		}
 		pass.Outcome.ResolvedGuidanceIDs = formIntakeResolvedGuidanceIDs(*input, *pass)
 		if resolveErr := store.resolvePriorFormIntakeLiterals(
-			&source, index, record, key, request, selection, digest,
+			&source, index, record, key, request, selection, pass.Outcome,
 		); resolveErr != nil {
 			return false, resolveErr
 		}
-		consumed := len(formIntakeCurrentFindings(*input)) == 0 && (input.Intent != interactions.ProtectedAnswerValue ||
-			formIntakeTextAccounted(input.Text, input.Accounted))
+		consumed := len(formIntakeCurrentModeFindings(source.Intake, *input)) == 0 &&
+			(input.Intent != interactions.ProtectedAnswerValue ||
+				formIntakeTextAccounted(input.Text, input.Accounted))
 		if consumed && formIntakeHasScopedInstruction(*input) {
 			consumed = formIntakeScopeCoverageComplete(*input, request.Schema)
 		}
@@ -258,7 +261,7 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		for _, prior := range item.Resolves {
 			resolutionCount++
 			if resolutionCount > MaxFormIntakeCandidates || prior.ExpectedPasses < 1 ||
-				prior.ExpectedPasses >= MaxFormIntakeExtractionPasses {
+				prior.ExpectedPasses > MaxFormIntakeExtractionPasses {
 				return "", ErrFormJobCapacityExceeded
 			}
 			if _, _, err := parseFormIntakeReceipt(prior.Reference); err != nil {

@@ -49,7 +49,7 @@ func TestDocumentIntakePriorResolutionBindsOnlyOfferedPrivateInputs(t *testing.T
 			case "consumed":
 				prior.Consumed = true
 			case "exhausted":
-				prior.Passes = document.MaxFormIntakeExtractionPasses
+				prior.Passes = document.MaxFormIntakeExtractionPasses + 1
 			case "zero passes":
 				prior.Passes = 0
 			case "wrong field":

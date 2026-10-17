@@ -7,11 +7,34 @@ import (
 )
 
 func formIntakeCurrentFindings(input formIntakeStoredInput) []FormFieldMappingBlocker {
+	return formIntakeFindingsThrough(input, nil)
+}
+
+func formIntakeCurrentModeFindings(mode *formIntakeStoredMode, input formIntakeStoredInput) []FormFieldMappingBlocker {
+	through := make(map[string]int)
+	if mode != nil {
+		for _, other := range mode.Inputs {
+			for _, pass := range other.Reservations {
+				if pass.Outcome == nil {
+					continue
+				}
+				for _, prior := range pass.Outcome.PriorResolutions {
+					if prior.InputID == input.ID && prior.ThroughPasses > through[prior.Span.FieldID] {
+						through[prior.Span.FieldID] = prior.ThroughPasses
+					}
+				}
+			}
+		}
+	}
+	return formIntakeFindingsThrough(input, through)
+}
+
+func formIntakeFindingsThrough(input formIntakeStoredInput, through map[string]int) []FormFieldMappingBlocker {
 	if input.State == formIntakeInputConsumed {
 		return nil
 	}
 	current := make(map[string]string, MaxFormIntakeCandidates)
-	for _, pass := range input.Reservations {
+	for passIndex, pass := range input.Reservations {
 		if pass.Outcome == nil {
 			continue
 		}
@@ -21,6 +44,9 @@ func formIntakeCurrentFindings(input formIntakeStoredInput) []FormFieldMappingBl
 			}
 		}
 		for _, finding := range pass.Outcome.Findings {
+			if passIndex < through[finding.FieldID] {
+				continue
+			}
 			prior := current[finding.FieldID]
 			if prior != "" && prior != "field_ambiguous" && prior != "field_confirmation_required" &&
 				(finding.Code == "field_ambiguous" || finding.Code == "field_confirmation_required") {

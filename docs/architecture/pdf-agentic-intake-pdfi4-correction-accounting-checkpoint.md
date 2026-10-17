@@ -18,19 +18,24 @@ Add bounded exact earlier-literal references to private positive proposals. Reso
 committed pending input with a native invalid/conflicting finding for that same field, at its exact
 observed reservation count. The current proposal must be natively accepted or acknowledged as a valid
 positive value. Old spans cannot overlap accepted or scoped evidence. Malformed, stale, duplicate,
-wrong-job, unoffered and exhausted references fail atomically with the current apply.
+wrong-job and unoffered references fail atomically with the current apply.
 
-Charge one additional existing native accounting reservation per affected old input against its existing
-32-pass budget and eight-field window. Its acknowledged-field outcome settles the finding at that exact
-chronological point; exact spans account only for explicitly superseded fragments. Other facts, scope
-coverage and later findings stay pending. This is accounting, not an extra model call or a fresh budget.
-Publish current field events and both inputs' bookkeeping in the same existing encrypted snapshot. Erase
-raw text only after the unchanged whole-utterance, finding and scope gates pass.
+Record immutable prior-input settlements on the current pass outcome. A separately admitted clarification
+uses its own extraction reservation: bookkeeping must not require a new extraction reservation on the old
+input. The reproduced 32-pass boundary otherwise permanently rejects a valid new clarification, even
+though no further model call on the old input is needed. The old counter stays unchanged and direct old
+extraction still stops at 32. Each settlement binds the old input, its observed pass count, field and exact
+span. Only findings through that count settle; later findings remain independent.
+Unapplied old reservations covered by that snapshot become stale even for an acknowledgement that
+does not advance a field revision. Completed exact replay remains readable; newly reserved later
+passes retain ordinary validation and their independent findings.
 
-Keep the existing persisted reservation/outcome/accounted-span shapes: no new store, state machine,
-global field-resolution map, persisted flag or new provider call. Preserve original admission and keyed
-replay identity. Existing readers understand the native acknowledgements and transaction fences. Keep a
-coherent backup at deployment; never reset a job or restore live user data to make qualification pass.
+Publish current field events and both inputs' bookkeeping in the existing encrypted snapshot. Do not
+mutate earlier outcomes, add a second store, reset a counter, increase limits or add provider calls. Erase
+raw text only after the unchanged whole-utterance, finding and scope gates pass. The optional encrypted
+outcome property requires the new reader; older strict readers fail closed. Keep a coherent backup and
+do not binary-only roll back after such an outcome is written. Preserve new user data and use a forward
+repair or an explicitly authorized state migration; never restore a whole profile over newer facts.
 
 ## Alternatives And Validation
 
@@ -45,6 +50,24 @@ identity isolation, 31/32-pass bounds, atomic failure, restart and exact/changed
 encoder/decoder bounds and public JSON exclusion. Run targeted/full/race tests, formatter/lint and current
 head CI/review/rocket before merged deployment. Real agent, large-form and Telegram qualification remain
 mandatory. This implements the admitted correction criterion; it does not broaden the goal.
+
+## Budget Ownership Checkpoint
+
+The entire initial diff, tests, body and commit sequence were reviewed before this refinement. There
+have been zero substantive review/fix cycles. Initial production scope was 240 additions in four files;
+the scalar refinement grew it to 295 additions in six files. Extending native accounting/read validation
+crosses the file-count checkpoint, so freeze the invariant here before implementation.
+
+Continuing fake old-input reservations conflates extraction budget and cross-receipt bookkeeping.
+Exempting or increasing the old counter violates the stop gate. Encoding links in unrelated digest
+fields hides state. A separate journal duplicates ownership. Choose one bounded optional property on
+the current immutable encrypted outcome, with explicit identity/chronology/overlap validation and exact
+replay. This is a bounded refactor inside the PR's declared store/interpreter/progress boundary.
+
+Required regressions: old 31/32 extraction counts remain unchanged, a new independently reserved
+clarification can settle old evidence, direct old extraction remains capped, unrelated raw facts survive,
+new later findings survive, current replacement validation and all identity fences remain, malformed
+persisted links fail closed, restart/replay preserves the result, and old payloads remain readable.
 
 ## Live Copy Diagnostic: Scalar Interpretation Contract
 

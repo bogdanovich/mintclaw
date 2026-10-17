@@ -88,8 +88,8 @@ func TestFormIntakePriorResolutionHandlesSeveralEarlierInputsAtomically(t *testi
 	}
 	for _, reference := range []string{first, second.Reference} {
 		input, err = store.ReadFormIntakeInput(t.Context(), reference, start.Owner)
-		if err != nil || !input.Consumed || input.Passes != 2 || input.Text != "" {
-			t.Fatal("settlement did not charge and clean each earlier input exactly once")
+		if err != nil || !input.Consumed || input.Passes != 1 || input.Text != "" {
+			t.Fatal("settlement changed an earlier extraction count or lost cleanup")
 		}
 	}
 }
@@ -138,7 +138,7 @@ func TestFormIntakePriorResolutionPreservesOtherFactsAndLaterFindings(t *testing
 	result, err := store.ApplyFormIntakePass(t.Context(), request)
 	input, readErr := store.ReadFormIntakeInput(t.Context(), old, start.Owner)
 	if err != nil || readErr != nil || result.Progress.PendingInputs != 1 || input.Consumed ||
-		!strings.Contains(input.Text, "Robin Mint") || len(input.Findings) != 0 || input.Passes != 2 {
+		!strings.Contains(input.Text, "Robin Mint") || len(input.Findings) != 0 || input.Passes != 1 {
 		t.Fatal("resolution dropped other facts or did not settle only its field")
 	}
 	newFinding := reserveIntakeApply(t, store, start, old, result.Job.Revision, []int{0}, "later-invalid")
@@ -151,7 +151,7 @@ func TestFormIntakePriorResolutionPreservesOtherFactsAndLaterFindings(t *testing
 	}
 }
 
-func TestFormIntakePriorResolutionChargesTheExistingReservationBudget(t *testing.T) {
+func TestFormIntakePriorResolutionPreservesBothExtractionBudgets(t *testing.T) {
 	for _, count := range []int{MaxFormIntakeExtractionPasses - 1, MaxFormIntakeExtractionPasses} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			store, _, start, old, request := priorResolutionFixture(t)
@@ -168,20 +168,10 @@ func TestFormIntakePriorResolutionChargesTheExistingReservationBudget(t *testing
 			}
 			request.Proposals[0].Resolves[0].ExpectedPasses = count
 			result, err := store.ApplyFormIntakePass(t.Context(), request)
-			if count == MaxFormIntakeExtractionPasses {
-				if !errors.Is(err, ErrFormJobCapacityExceeded) {
-					t.Fatal("exhausted original input received a new budget")
-				}
-				record, getErr := store.Get(t.Context(), start.JobID, start.Owner)
-				if getErr != nil || record.LedgerRevision != 0 {
-					t.Fatal("capacity failure committed replacement events")
-				}
-				return
-			}
 			input, readErr := store.ReadFormIntakeInput(t.Context(), old, start.Owner)
-			if err != nil || readErr != nil || !input.Consumed || input.Passes != MaxFormIntakeExtractionPasses ||
+			if err != nil || readErr != nil || !input.Consumed || input.Passes != count ||
 				result.Progress.PendingInputs != 0 {
-				t.Fatal("native resolution did not consume exactly the final reservation")
+				t.Fatal("native settlement changed the original extraction budget")
 			}
 		})
 	}
@@ -202,8 +192,8 @@ func TestFormIntakePriorResolutionSettlesInvalidLiteralAndReplaysAfterRestart(t 
 	}
 	t.Cleanup(store.Close)
 	input, err := store.ReadFormIntakeInput(t.Context(), old, start.Owner)
-	if err != nil || !input.Consumed || input.Text != "" || input.Passes != 2 || len(input.Findings) != 0 {
-		t.Fatal("restart lost the charged native settlement or restored raw input")
+	if err != nil || !input.Consumed || input.Text != "" || input.Passes != 1 || len(input.Findings) != 0 {
+		t.Fatal("restart lost the settlement, changed extraction count, or restored raw input")
 	}
 	replay, err := store.ApplyFormIntakePass(t.Context(), request)
 	if err != nil || !replay.Reused || replay.Job.LedgerRevision != 1 || replay.Progress.PendingInputs != 0 {
