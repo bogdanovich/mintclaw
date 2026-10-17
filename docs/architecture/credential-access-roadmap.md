@@ -145,6 +145,9 @@ behavior. Retain normal policy for subsequent authenticated actions.
   history, Seahorse state, browser state, logs, traces and both support-bundle
   modes. The fixture uses a local scripted provider and virtual passkey, with
   no personal credentials or website traffic.
+- TR6 pilot selection: the operator selected Craigslist. The
+  [pilot sequence](credential-craigslist-pilot.md) records public form evidence,
+  private setup and the remaining Android/account acceptance checks.
 - TR5/TR6: the scoped connector, full serialized-output qualification and
   personal-account pilot are incomplete. No real token, login, or physical
   phone approval is claimed. Passing component tests do not prove the complete

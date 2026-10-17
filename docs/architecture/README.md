@@ -145,6 +145,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   authenticated snapshot/catalog projections, and artifact output admission.
 - [Integrated Alias Browser Login](credential-alias-browser-login.md): runtime-owned alias tool,
   existing-channel phone notifications, signed-grant reuse and disabled-by-default rollout.
+- [Craigslist Credential Pilot](credential-craigslist-pilot.md): selected account, public form evidence,
+  private token/Android setup and remaining personal-account acceptance steps.
 - [Retired Credential Appliance](credential-appliance-retirement.md): removal of the unused daemon,
   privileged launch/transport/browser stack and obsolete qualification; retained current boundaries.
 - [Integrated Credential Output Qualification](credential-output-qualification.md): actual provider-wire,
