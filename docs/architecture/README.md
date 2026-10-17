@@ -135,6 +135,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   in the existing application and private operator enrollment.
 - [Private Vault Setup and Runtime Consumer](credential-private-vault-setup.md): hidden operator
   token entry, owner-only storage, SDK startup and lazy scoped login consumption.
+- [Find Credential Items](credential-item-discovery.md): private website/name metadata search
+  and explicit selection of an immutable item reference for a configured alias.
 - [Runtime Credential Output Privacy](credential-runtime-output-privacy.md): dynamically registered
   credential values guarded in model-facing config filtering, diagnostic previews, and logger output.
 - [Runtime-Internal 1Password Adapter](credential-runtime-vault-adapter.md): relocated private

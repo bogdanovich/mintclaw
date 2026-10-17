@@ -29,6 +29,8 @@ type commandDeps struct {
 	readGateway  func() *pid.PidFileData
 	openTerminal func() (io.WriteCloser, error)
 	readToken    func() ([]byte, error)
+	findLogins   func(context.Context, string, string, vault.DiscoveryQuery) ([]vault.Candidate, error)
+	updateConfig func(func(*config.Config) error) error
 }
 
 func NewCredentialsCommand() *cobra.Command {
@@ -37,11 +39,17 @@ func NewCredentialsCommand() *cobra.Command {
 		readGateway:  func() *pid.PidFileData { return pid.ReadPidFileWithCheck(internal.GetMintClawHome()) },
 		openTerminal: openPrivateTerminal,
 		readToken:    readPrivateToken,
+		findLogins:   findPrivateLogins,
+		updateConfig: func(mutate func(*config.Config) error) error {
+			_, err := internal.UpdateConfig(mutate)
+			return err
+		},
 	})
 }
 
 func newCredentialsCommand(deps commandDeps) *cobra.Command {
 	command := &cobra.Command{Use: "credentials", Short: "Set up private account access", Args: cobra.NoArgs}
+	command.AddCommand(newFindCommand(deps))
 	command.AddCommand(&cobra.Command{
 		Use: "init", Short: "Prepare the private approval state directory", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

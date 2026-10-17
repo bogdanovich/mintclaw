@@ -126,6 +126,11 @@ behavior. Retain normal policy for subsequent authenticated actions.
   [integrated alias operation](credential-alias-browser-login.md), disabled by
   default until qualification. Complete end-to-end output qualification remains
   incomplete.
+- TR2 setup: [private item discovery](credential-item-discovery.md) searches
+  the dedicated vault's Login overviews by website or item name. The operator
+  chooses a candidate and saves its exact reference for an existing alias,
+  without copying UUIDs or retrieving password fields. Website matching never
+  expands runtime origins; site flow and actor scope stay in local configuration.
 - TR3: gateway-owned enrollment/approval/revocation is merged in
   [#1631](https://github.com/bogdanovich/mintclaw/pull/1631). Synthetic signed and
   virtual-authenticator tests cover the component. The alias operation queues
