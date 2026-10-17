@@ -33,6 +33,32 @@ import (
 // Opt-in real Chromium + virtual WebAuthn + production gateway/browser tools.
 // This qualifies synthetic flow integration, never a physical phone or account.
 func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
+	testCredentialAliasBrowserAndPhoneFixture(t, "", "logged_in")
+}
+
+func TestCredentialProviderOutputFixture(t *testing.T) {
+	testCredentialAliasBrowserAndPhoneFixture(t, "openai_compat", "logged_in")
+}
+
+func TestCredentialProviderOutcomeFixture(t *testing.T) {
+	for _, outcome := range []string{"handoff_required", "outcome_unknown"} {
+		t.Run(outcome, func(t *testing.T) {
+			testCredentialAliasBrowserAndPhoneFixture(t, "openai_compat", outcome)
+		})
+	}
+}
+
+func TestCredentialCodexOutputFixture(t *testing.T) {
+	for _, outcome := range []string{"logged_in", "handoff_required", "outcome_unknown"} {
+		t.Run(outcome, func(t *testing.T) {
+			testCredentialAliasBrowserAndPhoneFixture(t, "codex", outcome)
+		})
+	}
+}
+
+func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expectedOutcome string) {
+	t.Helper()
+	providerMode := providerKind != ""
 	if os.Getenv("MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE") != "1" {
 		t.Skip("synthetic Chromium qualification only")
 	}
@@ -43,6 +69,10 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 		t.Fatal("gateway browser fixture path unavailable")
 	}
 	cfg := gatewayBrowserConfig(t.TempDir())
+	actor := "owner"
+	if providerMode {
+		actor = "cron"
+	}
 	runtimeRoot, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil || os.Chmod(runtimeRoot, 0o700) != nil {
 		t.Fatal("gateway browser fixture runtime unavailable")
@@ -52,12 +82,12 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 	}
 	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	target.Driver, target.DriverServer, target.DriverExecutable = config.BrowserDriverPlaywrightLibrary, "", "node"
-	target.DriverArguments = []string{script, "driver"}
+	target.DriverArguments = []string{script, "driver", expectedOutcome}
 	target.DefaultProfile = "ephemeral"
 	target.Profiles = map[string]config.BrowserProfileConfig{
 		"ephemeral": {
 			Enabled: true, Revision: "fixture-v1", Mode: config.BrowserProfileEphemeral,
-			AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+			AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:" + actor},
 			NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
 			ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
 			Runtime: config.BrowserProfileRuntimeConfig{
@@ -79,7 +109,7 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 			Principals: []credentialbroker.Principal{
 				{
 					OwnerID: "owner",
-					ActorID: browser.OpaqueActorID("telegram:owner"),
+					ActorID: browser.OpaqueActorID("telegram:" + actor),
 					AgentID: "browser",
 					HostID:  "gateway",
 				},
@@ -88,6 +118,7 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 				NavigationURL: origin + "/login", EntryOrigin: origin, FormID: "login", UsernameID: "username",
 				PasswordID: "password", UsernameType: "email", SubmitURL: origin + "/session",
 				SuccessURL: origin + "/home", SuccessMarkerID: "authenticated",
+				HandoffURL: origin + "/challenge", HandoffMarkerID: "challenge",
 			},
 		}},
 	}
@@ -128,7 +159,7 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 	observe := tools.NewBrowserObserveTool(options, source)
 	login := tools.NewBrowserLoginTool(options, source)
 	ctx = toolshared.WithToolInboundMetadata(ctx, bus.InboundContext{
-		Channel: "telegram", SenderID: "owner", ChatID: "fixture-owner-chat",
+		Channel: "telegram", SenderID: actor, ChatID: "fixture-owner-chat",
 	})
 	ctx = toolshared.WithToolSessionContext(ctx, "browser", "fixture-history", nil)
 	ctx = toolshared.WithToolRouteSessionKey(ctx, "fixture-route")
@@ -193,19 +224,9 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 		); err != nil {
 			return browser.CredentialLoginResult{}, err
 		}
-		args := map[string]any{
-			"account_alias": "fixture-account", "browser_session_id": session.ID, "tab_id": observation.TabID,
-			"snapshot_id": observation.SnapshotID, "snapshot_generation": int(observation.SnapshotGeneration),
-		}
-		for key, label := range map[string]string{
-			"username_ref": "Account", "password_ref": "Password", "submit_ref": "Sign in",
-		} {
-			pattern := regexp.MustCompile(`(?m)- (?:textbox|button) "` + label + `"[^\n]*\[ref=([^\]]+)\]`)
-			match := pattern.FindStringSubmatch(observation.Snapshot)
-			if len(match) != 2 {
-				return browser.CredentialLoginResult{}, errors.New("fixture current refs unavailable")
-			}
-			args[key] = match[1]
+		args, argsErr := credentialFixtureLoginArguments(observation)
+		if argsErr != nil {
+			return browser.CredentialLoginResult{}, argsErr
 		}
 		var result browser.CredentialLoginResult
 		if err := record(login.Execute(ctx, args), &result); err != nil {
@@ -217,6 +238,24 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 		}
 		return result, nil
 	}
+	finalize := func() {}
+	if providerMode {
+		perform, finalize = credentialProviderFixture(
+			t,
+			ctx,
+			cfg,
+			running,
+			messageBus,
+			providerKind,
+			expectedOutcome,
+			func(data []byte) {
+				mu.Lock()
+				outputs = append(outputs, append([]byte(nil), data...))
+				mu.Unlock()
+			},
+		)
+	}
+	defer finalize()
 	results := make(chan browser.CredentialLoginResult, 1)
 	var failure atomic.Value
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -254,14 +293,16 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 		case "/_fixture/reuse":
 			// The existing browser limit admits one live session. Close the
 			// first, then prove the same signed grant authorizes a new session.
-			mu.Lock()
-			previous := sessionIDs[len(sessionIDs)-1]
-			mu.Unlock()
-			if record(sessions.Execute(ctx, map[string]any{
-				"operation": "close", "browser_session_id": previous,
-			}), nil) != nil {
-				http.Error(writer, "fixture unavailable", http.StatusServiceUnavailable)
-				return
+			if !providerMode {
+				mu.Lock()
+				previous := sessionIDs[len(sessionIDs)-1]
+				mu.Unlock()
+				if record(sessions.Execute(ctx, map[string]any{
+					"operation": "close", "browser_session_id": previous,
+				}), nil) != nil {
+					http.Error(writer, "fixture unavailable", http.StatusServiceUnavailable)
+					return
+				}
 			}
 			result, performErr := perform()
 			if performErr != nil {
@@ -271,23 +312,18 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 			}
 			respond(result)
 		case "/_fixture/revoked":
-			mu.Lock()
-			ids := append([]string(nil), sessionIDs...)
-			mu.Unlock()
 			retired := false
 			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
-				retired = true
-				for _, id := range ids {
-					var view struct {
-						State browser.SessionState `json:"state"`
-					}
-					if record(sessions.Execute(ctx, map[string]any{
-						"operation": "status", "browser_session_id": id,
-					}), &view) != nil || !view.State.Terminal() {
-						retired = false
-					}
+				all, listErr := running.Browser.store.ListSessions(ctx)
+				retired = listErr == nil && len(all) == 2
+				for _, session := range all {
+					retired = retired && session.State.Terminal()
 				}
+				scope, _, scopeErr := credentials.controller.LoginRequest(ctx,
+					cfg.Credentials.Accounts[0].Principals[0], "fixture-account", origin)
+				_, grantErr := credentials.controller.ActiveLogin(ctx, scope)
+				retired = retired && scopeErr == nil && grantErr != nil
 				if retired {
 					break
 				}
@@ -304,7 +340,9 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 		t.Fatal("private synthetic enrollment unavailable")
 	}
 	defer clear(invite)
-	input, err := json.Marshal(map[string]string{"backend": server.URL, "invite": string(invite)})
+	input, err := json.Marshal(map[string]string{
+		"backend": server.URL, "invite": string(invite), "outcome": expectedOutcome,
+	})
 	if err != nil {
 		t.Fatal("synthetic phone configuration unavailable")
 	}
@@ -330,6 +368,7 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 	if retrieved.Load() != 2 || len(messageBus.OutboundChan()) != 0 {
 		t.Fatal("signed grant reuse retrieved unexpectedly or sent another approval notification")
 	}
+	finalize()
 	logger.DisableFileLogging()
 	logs, err := os.ReadFile(logPath)
 	if err != nil {
@@ -354,10 +393,29 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 	for _, output := range outputs {
 		for _, value := range []string{
 			"gateway-private-account@example.org", "gateway-private-password-Q68", "gateway-private-cookie-K82",
+			"gateway-private-otp-R49",
 		} {
 			if bytes.Contains(output, []byte(value)) {
 				t.Fatal("synthetic credential escaped into a serialized tool, browser state or logger sink")
 			}
 		}
 	}
+}
+
+func credentialFixtureLoginArguments(observation browser.Observation) (map[string]any, error) {
+	args := map[string]any{
+		"account_alias": "fixture-account", "browser_session_id": observation.SessionID, "tab_id": observation.TabID,
+		"snapshot_id": observation.SnapshotID, "snapshot_generation": int(observation.SnapshotGeneration),
+	}
+	for key, label := range map[string]string{
+		"username_ref": "Account", "password_ref": "Password", "submit_ref": "Sign in",
+	} {
+		pattern := regexp.MustCompile(`(?m)- (?:textbox|button) "` + label + `"[^\n]*\[ref=([^\]]+)\]`)
+		match := pattern.FindStringSubmatch(observation.Snapshot)
+		if len(match) != 2 {
+			return nil, errors.New("fixture current refs unavailable")
+		}
+		args[key] = match[1]
+	}
+	return args, nil
 }

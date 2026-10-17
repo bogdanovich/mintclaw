@@ -453,8 +453,8 @@ jobs:
         run: >-
           env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
           MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE=1
-          go test -count=1 -race -timeout 2m -tags goolm,stdjson
-          -run '^TestCredentialAliasBrowserAndPhoneFixture$' ./pkg/gateway
+          go test -count=1 -race -timeout 3m -tags goolm,stdjson
+          -run '^TestCredential(AliasBrowserAndPhone|ProviderOutput|ProviderOutcome|CodexOutput)Fixture$' ./pkg/gateway
 
       - name: Install pinned document runtime
         run: |

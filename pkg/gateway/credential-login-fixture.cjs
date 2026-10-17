@@ -10,23 +10,32 @@ const origin = 'https://93.184.216.34';
 const username = 'gateway-private-account@example.org';
 const password = 'gateway-private-password-Q68';
 const cookie = 'gateway-private-cookie-K82';
+const oneTimeCode = 'gateway-private-otp-R49';
 let stage = 'start';
 
 async function driver() {
+  const outcome = process.argv[3] || 'logged_in';
+  assert.equal(['logged_in', 'handoff_required', 'outcome_unknown'].includes(outcome), true);
   const instance = new Driver({ browser: 'chromium', headless: true });
   await instance.start();
+  let submissions = 0;
   await instance.context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url());
     if (url.origin !== origin) { await route.abort(); return; }
     if (url.pathname === '/session') {
+      assert.equal(++submissions, 1);
       const fields = new URLSearchParams(request.postData());
       assert.equal(fields.get('username') === username && fields.get('password') === password, true);
+      const destination = outcome === 'logged_in' ? '/home' : outcome === 'handoff_required' ? '/challenge' : '/unconfirmed';
       await route.fulfill({ contentType: 'text/html',
         headers: { 'set-cookie': `session=${cookie}; Secure; HttpOnly; Path=/` },
-        body: '<script>location.replace("/home")</script>' });
-    } else if (url.pathname === '/home') {
+        body: `<script>location.replace("${destination}")</script>` });
+    } else if (['/home', '/challenge', '/unconfirmed'].includes(url.pathname)) {
+      const marker = url.pathname === '/home' ? 'authenticated' : url.pathname === '/challenge' ? 'challenge' : 'unconfirmed';
+      const challenge = url.pathname === '/challenge' ?
+        `<input aria-label="Verification code" autocomplete="one-time-code" value="${oneTimeCode}">` : '';
       await route.fulfill({ contentType: 'text/html',
-        body: `<title>${cookie}</title><div id="authenticated">Ready</div><p>${username} ${password} ${cookie}</p>` });
+        body: `<title>${cookie}</title><div id="${marker}">Ready</div><p>${username} ${password} ${cookie}</p>${challenge}` });
     } else {
       await route.fulfill({ contentType: 'text/html', body: '<form method="post" action="/session">' +
         '<input name="username" type="email" aria-label="Account">' +
@@ -91,9 +100,9 @@ async function phone() {
     await page.getByRole('button', { name: 'Approve with passkey' }).click();
     await page.getByRole('status').filter({ hasText: 'Approved until' }).waitFor();
     stage = 'login-result';
-    assert.equal((await fixture('/_fixture/result')).outcome, 'logged_in');
+    assert.equal((await fixture('/_fixture/result')).outcome, config.outcome || 'logged_in');
     stage = 'reuse';
-    assert.equal((await fixture('/_fixture/reuse')).outcome, 'logged_in');
+    assert.equal((await fixture('/_fixture/reuse')).outcome, config.outcome || 'logged_in');
     stage = 'revoke';
     await page.getByRole('button', { name: 'Revoke access' }).click();
     await page.getByRole('button', { name: 'Revoke with passkey' }).click();
