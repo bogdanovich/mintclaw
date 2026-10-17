@@ -11,6 +11,7 @@ const origin = 'https://credential-protocol.example.org';
 const username = 'protocol-private-account@example.org';
 const password = 'protocol-private-password-M83&secret';
 const cookie = 'protocol-private-cookie-F47';
+const rotatedCookie = 'protocol-rotated-cookie-K49';
 
 // The production Driver and JSON-lines loop run in a separate process. Only
 // navigation is replaced with deterministic HTTPS routes; no real vault/site
@@ -37,6 +38,13 @@ const bootstrap = `
         await route.fulfill({ contentType: 'text/html',
           headers: { 'set-cookie': 'session=${cookie}; Secure; HttpOnly; Path=/' },
           body: '<script>location.replace("/home")</script>' });
+      } else if (url.pathname === '/rotate') {
+        await route.fulfill({ contentType: 'text/html',
+          headers: { 'set-cookie': 'session=${rotatedCookie}; Secure; HttpOnly; Path=/' },
+          body: '<div>Ready</div><input aria-label="Verification code" autocomplete="one-time-code" value="741852">' +
+            '<label>Recovery value<textarea>private-textarea-N58</textarea></label>' +
+            '<select aria-label="Recovery option"><option selected>private-option-R26</option></select>' +
+            '<div role="textbox" contenteditable="true" aria-label="Recovery input">private-editable-J62</div>' });
       } else {
         await route.fulfill({ contentType: 'text/html', body: '<div id="signed-in">Ready</div>' });
       }
@@ -119,9 +127,21 @@ test('private JSON-lines transaction suppresses dialogs and returns only fixed o
     assert.equal(response.cookies[0] === cookie, true, 'private cookie handoff mismatch');
     assert.equal(JSON.stringify(result).includes(username) || JSON.stringify(result).includes(password), false,
       'credential value escaped private submission');
-    const observation = await wire.call('browser_snapshot', {});
-    assert.equal(observation.is_error, false);
-    assert.equal(JSON.stringify(observation).includes(password), false, 'private dialog was retained');
+    const bypass = await wire.call('browser_snapshot', {});
+    assert.equal(bypass.is_error, true, 'authenticated observation bypassed private cookie harvesting');
+    const observation = envelope(await wire.call('mintclaw_credential_call', { tool: 'browser_snapshot', args: {} }));
+    assert.equal(observation.result.is_error, false);
+    assert.equal(JSON.stringify(observation.result).includes(password), false, 'private dialog was retained');
+    const rotated = envelope(await wire.call('mintclaw_credential_call', {
+      tool: 'browser_navigate', args: { url: `${origin}/rotate` },
+    }));
+    assert.equal(rotated.cookies.includes(cookie), true, 'old cookie protection was evicted');
+    assert.equal(rotated.cookies.includes(rotatedCookie), true, 'rotated cookie was not privately harvested');
+    const observed = JSON.stringify(rotated.result);
+    assert.equal(['741852', 'private-textarea-N58', 'private-option-R26', 'private-editable-J62']
+      .some(value => observed.includes(value)), false, 'authentication input was observed');
+    assert.equal(observed.includes('Verification code') && observed.includes('Recovery input'), true,
+      'authenticated controls lost their labels');
     await wire.shutdown();
   });
 

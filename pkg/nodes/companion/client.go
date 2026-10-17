@@ -1043,6 +1043,8 @@ func invocationCommandFailure(err error) (string, string) {
 			return nodes.InvocationDispatchBrowserNavigationFailed, "browser navigation failed"
 		case nodes.InvocationDispatchBrowserClickNotDispatched:
 			return nodes.InvocationDispatchBrowserClickNotDispatched, "browser click was not dispatched"
+		case nodes.InvocationDispatchBrowserDownloadNotDispatched:
+			return nodes.InvocationDispatchBrowserDownloadNotDispatched, "browser download was not dispatched"
 		case nodes.InvocationDispatchBrowserCleanupRequired:
 			return nodes.InvocationDispatchBrowserCleanupRequired,
 				"browser cleanup requires operator attention"

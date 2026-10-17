@@ -393,6 +393,13 @@ func TestDocumentFormIntakeFailureStagesAreClosedAndValueFree(t *testing.T) {
 				projection.Intake.Progress.PendingInputs != 1 {
 				t.Fatal("processing failure lost its phase or retained input")
 			}
+			wantReason := map[string]string{
+				"evidence": "unavailable", "reservation": "capacity_exceeded",
+				"interpretation": "interpretation_unavailable", "apply": "answer_rejected",
+			}[stage]
+			if projection.Intake.Failure.Reason != wantReason {
+				t.Fatalf("processing failure reason = %q, want %q", projection.Intake.Failure.Reason, wantReason)
+			}
 			if strings.Contains(result.ForLLM, "PRIVATE_") ||
 				strings.Contains(result.ForLLM, "unregistered-private-field") {
 				t.Fatal("public failure exposed private input or error details")

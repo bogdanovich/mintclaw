@@ -1231,6 +1231,19 @@ func TestGatewayBrowserWorkerRefreshesProtectedDiagnosticsWithFreshInvocation(t 
 }
 
 func TestGatewayBrowserWorkerAdvancesAfterDownloadWithoutOutput(t *testing.T) {
+	testGatewayBrowserWorkerDownloadFailure(t, "", nil)
+}
+
+func TestGatewayBrowserWorkerPreservesDownloadNotDispatched(t *testing.T) {
+	testGatewayBrowserWorkerDownloadFailure(
+		t,
+		nodes.InvocationDispatchBrowserDownloadNotDispatched,
+		browser.ErrDownloadNotDispatched,
+	)
+}
+
+func testGatewayBrowserWorkerDownloadFailure(t *testing.T, failureCode string, want error) {
+	t.Helper()
 	cfg, runtime, handler := browserNodeTestRuntime(t)
 	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
 	if err != nil {
@@ -1253,6 +1266,7 @@ func TestGatewayBrowserWorkerAdvancesAfterDownloadWithoutOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler.redactNextActObservation = true
+	handler.actFailureCode = failureCode
 	request := browser.WorkerPreparedAction{
 		InvocationID: "invocation_download",
 		Prepared: browser.PreparedAction{
@@ -1269,16 +1283,37 @@ func TestGatewayBrowserWorkerAdvancesAfterDownloadWithoutOutput(t *testing.T) {
 	}
 	ctx := gatewayBrowserArtifactContext(cfg.WorkspacePath())
 	var artifactErr *browser.DownloadArtifactError
-	if _, downloadErr := worker.DownloadPrepared(
+	_, downloadErr := worker.DownloadPrepared(
 		ctx, request, int64(cfg.Tools.Browser.Limits.Effective().DownloadBytes),
-	); !errors.As(downloadErr, &artifactErr) {
+	)
+	if want != nil && !errors.Is(downloadErr, want) || want == nil && !errors.As(downloadErr, &artifactErr) {
 		t.Fatalf("DownloadPrepared() error = %v, want artifact unavailable", downloadErr)
 	}
 	worker.mu.Lock()
 	generation := worker.snapshotGeneration
 	worker.mu.Unlock()
-	if generation != 2 {
-		t.Fatalf("post-download generation = %d, want 2", generation)
+	wantGeneration := uint64(2)
+	if want != nil {
+		wantGeneration = 1
+		if _, replayErr := worker.DownloadPrepared(
+			ctx,
+			request,
+			int64(cfg.Tools.Browser.Limits.Effective().DownloadBytes),
+		); !errors.Is(
+			replayErr,
+			want,
+		) {
+			t.Fatalf("replayed download = %v", replayErr)
+		}
+		handler.mu.Lock()
+		calls := len(handler.actInputs)
+		handler.mu.Unlock()
+		if calls != 1 {
+			t.Fatalf("download replayed %d times", calls)
+		}
+	}
+	if generation != wantGeneration {
+		t.Fatalf("post-download generation = %d, want %d", generation, wantGeneration)
 	}
 	if _, err = worker.Observe(t.Context()); err != nil {
 		t.Fatalf("Observe() after unavailable download error = %v", err)

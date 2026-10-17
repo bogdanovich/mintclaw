@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -125,6 +127,59 @@ func TestSemanticViewportMapsCoreRolesAcrossTerminalCapabilities(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDarkTrueColorBluePaletteRemainsReadableOnLightAndDarkBackgrounds(t *testing.T) {
+	context := cellRenderContext{Width: 80, Theme: cellThemeDark, ColorLevel: cellColorTrueColor}
+	for _, test := range []struct {
+		name  string
+		codes []string
+	}{
+		{name: "accent", codes: cellSemanticForegroundCodes(cellStyleAccent, context)},
+		{name: "path", codes: cellSemanticForegroundCodes(cellStylePath, context)},
+		{name: "Markdown code", codes: markdownForegroundCodes(context, "code")},
+		{name: "Markdown link", codes: markdownForegroundCodes(context, "link")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			red, green, blue := trueColorComponents(t, test.codes)
+			luminance := relativeLuminance(red, green, blue)
+			if lightContrast := 1.05 / (luminance + 0.05); lightContrast < 4.5 {
+				t.Fatalf("light-background contrast = %.2f, want at least 4.5 for RGB(%d,%d,%d)",
+					lightContrast, red, green, blue)
+			}
+			if darkContrast := (luminance + 0.05) / 0.05; darkContrast < 4.5 {
+				t.Fatalf("dark-background contrast = %.2f, want at least 4.5 for RGB(%d,%d,%d)",
+					darkContrast, red, green, blue)
+			}
+		})
+	}
+}
+
+func trueColorComponents(t *testing.T, codes []string) (int, int, int) {
+	t.Helper()
+	if len(codes) != 5 || codes[0] != "38" || codes[1] != "2" {
+		t.Fatalf("true-color foreground codes = %v", codes)
+	}
+	components := [3]int{}
+	for index, value := range codes[2:] {
+		component, err := strconv.Atoi(value)
+		if err != nil || component < 0 || component > 255 {
+			t.Fatalf("true-color component %q = %d, %v", value, component, err)
+		}
+		components[index] = component
+	}
+	return components[0], components[1], components[2]
+}
+
+func relativeLuminance(red, green, blue int) float64 {
+	linear := func(component int) float64 {
+		value := float64(component) / 255
+		if value <= 0.04045 {
+			return value / 12.92
+		}
+		return math.Pow((value+0.055)/1.055, 2.4)
+	}
+	return 0.2126*linear(red) + 0.7152*linear(green) + 0.0722*linear(blue)
 }
 
 func TestNativePlanReflowsWithinTinyUnicodeWidths(t *testing.T) {

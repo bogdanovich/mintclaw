@@ -352,6 +352,9 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 	if err != nil {
 		return Preparation{}, err
 	}
+	if slot.credentials != nil && request.Action.Kind == ActionDownload {
+		return Preparation{}, ErrDenied
+	}
 	if session.SnapshotID != request.SnapshotID ||
 		session.SnapshotGeneration != request.SnapshotGeneration {
 		return Preparation{}, ErrStale
@@ -525,6 +528,9 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 	)
 	if err != nil {
 		return Invocation{}, err
+	}
+	if slot.credentials != nil && prepared.Action.Kind == ActionDownload {
+		return Invocation{}, ErrDenied
 	}
 	if err = broker.validateActionInput(slot, prepared); err != nil {
 		return Invocation{}, err

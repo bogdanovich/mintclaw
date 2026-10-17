@@ -206,6 +206,18 @@ func (broker *Broker) Diagnostics(
 	if err = ValidateDiagnosticSummary(summary, categories); err != nil {
 		return DiagnosticSummary{}, errors.Join(ErrDriverIncompatible, err)
 	}
+	if slot.credentials != nil {
+		// Only counts are useful diagnostic output for credential-bearing
+		// sessions. URLs and message hashes can encode authentication values.
+		summary.Truncated = false
+		for index := range summary.Categories {
+			category := &summary.Categories[index]
+			category.Entries = nil
+			category.OmittedCount = category.Count
+			category.Truncated = category.Count > 0
+			summary.Truncated = summary.Truncated || category.Truncated
+		}
+	}
 	return summary, nil
 }
 

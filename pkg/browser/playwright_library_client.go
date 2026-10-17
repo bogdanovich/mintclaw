@@ -74,11 +74,12 @@ type playwrightLibraryClient struct {
 	done    chan struct{}
 	readErr error
 
-	connection localmcp.IsolatedCommandConnection
-	lease      *localmcp.ExclusiveServerLease
-	borrowed   bool
-	closeMu    sync.Mutex
-	closed     bool
+	connection        localmcp.IsolatedCommandConnection
+	lease             *localmcp.ExclusiveServerLease
+	borrowed          bool
+	closeMu           sync.Mutex
+	closed            bool
+	credentialOutputs func([]string) error
 }
 
 func newLibraryPlaywrightClient() playwrightDriverClient {
@@ -142,7 +143,7 @@ func (client *playwrightLibraryClient) connect(
 		}
 		return nil, err
 	}
-	connection, err := localmcp.StartIsolatedCommand(
+	connection, err := localmcp.StartPrivateIsolatedCommand(
 		ctx,
 		"browser_playwright_library",
 		command,
@@ -245,7 +246,14 @@ func (client *playwrightLibraryClient) CallTool(
 	tool string,
 	arguments map[string]any,
 ) (*sdkmcp.CallToolResult, error) {
-	return client.call(ctx, tool, arguments)
+	client.mu.Lock()
+	protect := client.credentialOutputs
+	client.mu.Unlock()
+	if protect == nil {
+		return client.call(ctx, tool, arguments)
+	}
+	result, err := client.call(ctx, "mintclaw_credential_call", map[string]any{"tool": tool, "args": arguments})
+	return decodeCredentialCall(result, err, protect)
 }
 
 func (client *playwrightLibraryClient) ExecutePrivileged(
