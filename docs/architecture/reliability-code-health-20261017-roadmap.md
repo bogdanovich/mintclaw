@@ -187,6 +187,14 @@ Preserve real durability tests. A measured budget failure may admit a separate,
 focused redesign; attractive throughput numbers alone do not justify replacing
 bounded, reliable storage.
 
+The [October storage measurements](../operations/storage-costs-20261017.md)
+record realistic snapshot/history sizes, concurrent callers, actual durability,
+profiles, outbox recovery cost, and platform limits. Byte-budget event trimming
+missed the pre-recorded latency budgets and allocated about 130 MiB per update.
+That evidence admits exact event-byte accounting in the existing pruner. The
+same workloads improve substantially, while remaining budget misses stay
+explicit. A storage backend replacement is not admitted at the measured scale.
+
 ## R11: Documentation Navigation
 
 Provide a compact current-system map and active-work index using the existing
