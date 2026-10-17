@@ -351,12 +351,14 @@ func (tool *DocumentTool) continueFormIntake(
 				Code:    "intake_pending",
 				Message: "Some protected input remains pending. Accepted fields are preserved; retry or clarify without repeating them.",
 				Stage:   result.failureStage,
+				Reason:  documentFormIntakeFailureReason(processErr),
 			}
 			if errors.Is(processErr, document.ErrFormEditableOutputUnavailable) {
 				intake.Failure = &safeDocumentFormFailure{
 					Code:    "editable_output_unavailable",
 					Message: "Verified editable output is unavailable for this job. Protected input and accepted fields are preserved; continue complete filling or cancel. No draft was produced.",
 					Stage:   result.failureStage,
+					Reason:  "editable_output_unavailable",
 				}
 			}
 			// A retained older error must not suppress a later admitted control or
@@ -377,6 +379,26 @@ func (tool *DocumentTool) continueFormIntake(
 		return documentFormToolError(err)
 	}
 	return tool.formIntakeResult(ctx, owner, schema, record, "continue", intake)
+}
+
+// Never project err.Error(): private provider/native wrappers can contain input.
+// These closed categories explain a processing failure, not missing field data
+// or permission to retry, discard protected input, change scope or commit.
+func documentFormIntakeFailureReason(err error) string {
+	switch {
+	case errors.Is(err, document.ErrFormJobCapacityExceeded):
+		return "capacity_exceeded"
+	case errors.Is(err, document.ErrFormJobAnswerConflict):
+		return "answer_rejected"
+	case errors.Is(err, document.ErrFormJobConflict):
+		return "state_changed"
+	case errors.Is(err, document.ErrFormAuditUnavailable):
+		return "interpretation_unavailable"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "interrupted"
+	default:
+		return "unavailable"
+	}
 }
 
 type formIntakeProcessedInput struct {
