@@ -80,16 +80,131 @@ advertisement. The adapter now explicitly disables that vendor behavior. After
 the screen reader was stopped, live before/after checks confirmed unchanged
 `ScreenReaderEnabled`, `IsEnabled`, and the GNOME screen-reader setting.
 
-The current Mac qualification launch was attributed by TCC to
+The October 10 Mac qualification launch was attributed by TCC to
 `sshd-keygen-wrapper`, despite a Herdr process ancestor. The worker reported
 Accessibility and Screen Recording as denied. Adding Herdr alone did not grant
 this launch chain permission; a stable companion-owned, user-approved process
 identity is a prerequisite for meaningful Mac qualification.
 
+## Mac companion app launch
+
+Package the actual companion executable in a new app bundle to give its native
+permission checks a companion-owned process identity. Existing CLI and service
+invocations are unchanged. The packager neither installs nor launches the app,
+replaces an existing app, changes a service, or changes permissions.
+
+```sh
+go build -o build/mintclaw-node ./cmd/mintclaw-node
+bash scripts/build-macos-companion.sh \
+  --binary "$PWD/build/mintclaw-node" \
+  --config /absolute/operator-config.json \
+  --output '/absolute/new/MintClaw Companion.app' \
+  --sign-identity 'Your configured code signing identity'
+```
+
+For private development without a certificate, use `--development-ad-hoc`
+instead of `--sign-identity`. Ad-hoc grants must be rechecked after rebuilding;
+they are not a stable signing identity across updates. The bundle contains only
+an absolute reference to the external node configuration, not a credential copy.
+
+Launch the app through Finder or `open`. A launch without arguments runs the
+existing companion using the referenced configuration. Do not run a second
+companion against an already-owned configuration or state directory. For a
+permission-only check without starting a gateway connection:
+
+```sh
+readiness_dir=$(mktemp -d)
+open -n -W --stdout "$readiness_dir/report.json" \
+  '/absolute/new/MintClaw Companion.app' --args desktop-readiness
+```
+
+`desktop-readiness` checks the process's main bundle, current GUI session,
+Accessibility and Screen Recording without prompting, capturing, enumerating
+windows, or changing OS settings. A missing grant produces `ready: false` with
+specific blocker codes. Grant permissions to the actual MintClaw Companion app
+in System Settings, then relaunch and check again. Executing its embedded binary
+over SSH is not the supported GUI launch path. Readiness grants no MintClaw
+authority and does not prove that a desktop is unlocked or a window is admitted.
+
+On October 17, a native app launch on macOS 26.6.2 reported the companion bundle
+identity and an active GUI session. TCC attributed its permission checks to
+`io.github.bogdanovich.mintclaw.companion`, rather than the SSH wrapper. Both
+permissions remained denied; capture and input qualification still require the
+corresponding grants.
+
+## Linux window incarnation admission
+
+The opt-in native window guard requires an explicitly selected local X11 socket
+and a private, current-user Xauthority file. It never tries ambient display
+settings, unauthenticated access, a forwarded TCP desktop, or another display.
+X-Resource 1.2 reports the native window's actual client PID; an application-set
+`_NET_WM_PID` property is not ownership evidence. A retained Linux pidfd identifies
+the original process even after a numeric PID could be reused.
+
+The guard subscribes to native destruction before admission and checks the
+selected X screen. Destruction, process exit or observer transport loss makes it
+permanently invalid. A newly admitted window receives a fresh generation. Closing
+the observer releases only its connection and process handle, not the application
+window. These checks remain mechanisms behind trusted host policy, not agent
+commands or a replacement for companion authority and capture-scope validation.
+
+On October 17, selected GNOME X11 native fixtures passed three detailed and
+twenty additional runs covering exact XID reuse by the same process, explicit
+replacement admission, wrong native owner rejection, owner-process exit and
+observer transport loss. Both observer close and transport loss preserved the
+fixture application window. Three further runs included 12,000 native window
+events while the observer was idle; observation and teardown remained bounded,
+and fresh admission still detected subsequent destruction. The screen reader
+remained disabled. macOS window
+incarnation admission is a separate prerequisite; this guard refuses unsupported
+platforms rather than accepting a PID-only substitute.
+
+For an explicitly selected X11 session, run the opt-in native tests with the
+desktop package's Linux test binary (or `go test` on the Linux host):
+
+```sh
+MINTCLAW_NATIVE_X11_GUARD_TEST=1 \
+  DISPLAY=:1 XAUTHORITY=/absolute/private/Xauthority \
+  go test ./pkg/computer/desktop -run '^TestNativeX11' -count=20
+```
+
+The test creates only disposable native windows and verifies lifetime effects
+through native X11 resources and kernel handles. It does not capture existing
+window contents, use the clipboard or change accessibility settings.
+
+## macOS window incarnation admission
+
+The macOS guard requires the companion's actual GUI launch identity and both
+native permission grants before admitting a window. It retains the exact selected
+`AXUIElementRef`, registers `AXUIElementDestroyed` before admission, and processes
+that observer on a dedicated native thread and run loop. It never rediscovers a
+replacement by title, position or list order. Native destruction or a failed
+identity check permanently invalidates the admission.
+
+The exact accessibility-element/CG-window mapping uses the non-public
+`_AXUIElementGetWindow` symbol. Missing mapping or destruction-notification support
+is explicitly unsupported; there is no approximate fallback. This compatibility
+dependency must be requalified on new macOS versions. A retained kernel `kqueue`
+process watch separately invalidates process exit and `exec`, with start-time and
+current-user checks around registration. Numeric PID liveness is not sufficient.
+
+Observer teardown releases only its own native references and handles. Callback
+registration uses one process-lifetime trampoline and reclaimable numeric tokens,
+not retained Go pointers or a new permanent trampoline for each session. Event
+drains are bounded; a stopped loop or notification flood invalidates admission.
+
+On October 17, macOS 26.6.2 native tests passed exact-symbol and AX-handle/timeout
+ABI checks, kernel process exit and same-PID `exec` detection, callback cleanup,
+and bounded run-loop tests. These tests neither capture nor enumerate personal
+windows. Native GUI-window destruction, capture and handoff/resume qualification
+remain separate integration gates requiring the actual app's grants; the
+permission-denied readiness result is not a capture pass.
+
 ## Integration gates
 
 - Qualify the Mac companion's real launch identity and permission lifecycle.
-- Implement OS-backed window-incarnation admission and loss detection.
+- Qualify macOS GUI window-incarnation admission and integrate native guards into
+  companion capture/session ownership.
 - Requalify Unicode insertion on a corrected pinned driver or another backend.
 - Add input contracts with fresh evidence, bounded actions, and independent
   effect verification before registering public tools or companion commands.
