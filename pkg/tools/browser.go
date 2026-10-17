@@ -411,7 +411,10 @@ func (*BrowserTargetsTool) Name() string { return "browser_targets" }
 func (*BrowserTargetsTool) Description() string {
 	return "List browser targets and identity profiles granted to this agent and actor without starting a browser. " +
 		"When the current user request does not explicitly name a target or identity profile, use default_target and " +
-		"that target's default_profile when present; never infer preference from array order or historical messages."
+		"that target's default_profile when present; never infer preference from array order or historical messages. " +
+		"For provider=steel, steel.use_proxy reports whether a new session starts with Steel's paid proxy; " +
+		"steel.proxy_on_block permits a new proxied session only after confirmed blocking. " +
+		"network_boundary and readiness.proxy describe network-policy enforcement, not Steel's paid proxy."
 }
 
 func (*BrowserTargetsTool) Parameters() map[string]any {
@@ -431,6 +434,8 @@ type browserTargetResult struct {
 
 type browserTargetView struct {
 	Target         string               `json:"target"`
+	Provider       string               `json:"provider"`
+	Steel          *browserSteelView    `json:"steel,omitempty"`
 	DefaultProfile string               `json:"default_profile,omitempty"`
 	Status         string               `json:"status"`
 	Reason         string               `json:"reason,omitempty"`
@@ -438,6 +443,11 @@ type browserTargetView struct {
 	Actions        []browser.ActionKind `json:"actions"`
 	Features       browserFeatureView   `json:"features"`
 	Limits         browserLimitsView    `json:"limits"`
+}
+
+type browserSteelView struct {
+	UseProxy     bool `json:"use_proxy"`
+	ProxyOnBlock bool `json:"proxy_on_block"`
 }
 
 type browserFeatureView struct {
@@ -535,6 +545,11 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 	views := make([]browserTargetView, 0, len(targetNames))
 	for _, name := range targetNames {
 		target := tool.runtime.config.Targets[name]
+		provider := target.EffectiveProvider()
+		var steel *browserSteelView
+		if provider == config.BrowserProviderSteel {
+			steel = &browserSteelView{UseProxy: target.Steel.UseProxy, ProxyOnBlock: target.Steel.ProxyOnBlock}
+		}
 		profileNames := make([]string, 0, len(target.Profiles))
 		for profileName, profile := range target.Profiles {
 			if profile.Enabled && browserProfileGranted(profile, agentID, actorID) {
@@ -569,6 +584,8 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			networkBoundary := "managed_request_proxy"
 			if attached {
 				networkBoundary = "selected_top_level_action_only"
+			} else if provider == config.BrowserProviderSteel {
+				networkBoundary = "remote_request_routes"
 			}
 			status, reason := "unavailable", "driver_unavailable"
 			readiness := browser.PassiveReadiness{
@@ -661,7 +678,7 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			func(profile browserProfileView) bool { return profile.HeadedView },
 		))
 		views = append(views, browserTargetView{
-			Target: name, DefaultProfile: defaultProfile,
+			Target: name, Provider: provider, Steel: steel, DefaultProfile: defaultProfile,
 			Status: targetStatus, Reason: targetReason, Profiles: profiles,
 			Actions: actions,
 			Features: browserFeatureView{
