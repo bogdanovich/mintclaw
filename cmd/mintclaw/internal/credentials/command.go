@@ -71,8 +71,15 @@ func newCredentialsCommand(deps commandDeps) *cobra.Command {
 		Use: "token", Short: "Enter your 1Password service token privately", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := deps.loadConfig()
-			if err != nil || cfg == nil || !cfg.Credentials.Enabled || cfg.ValidateCredentials() != nil ||
-				deps.readToken == nil {
+			if err != nil || cfg == nil {
+				return errSetupUnavailable
+			}
+			if !cfg.Credentials.Enabled {
+				return errors.New(
+					"credential access is disabled in the selected profile; finish configuration and run credentials init first",
+				)
+			}
+			if cfg.ValidateCredentials() != nil || deps.readToken == nil {
 				return errSetupUnavailable
 			}
 			token, err := deps.readToken()
