@@ -352,6 +352,7 @@ export function sendChatMessage({
   }
 
   const socket = wsRef
+  const previousTyping = getChatState().isTyping
   const id = `msg-${++msgIdCounter}-${Date.now()}`
 
   updateChatStore((prev) => ({
@@ -387,7 +388,7 @@ export function sendChatMessage({
     console.error("Failed to send mintclaw message:", error)
     updateChatStore((prev) => ({
       messages: prev.messages.filter((message) => message.id !== id),
-      isTyping: false,
+      isTyping: previousTyping,
     }))
     return false
   }

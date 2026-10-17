@@ -312,18 +312,22 @@ describe("chat connection lifecycle", () => {
     expect(old.close).toHaveBeenCalledOnce()
   })
 
-  it("rolls back a failed send without removing existing messages or retrying the send", async () => {
-    const socket = startGateway()
-    socket.open()
-    socket.send.mockImplementationOnce(() => {
-      throw new Error("closed during send")
-    })
-    expect(sendChatMessage({ content: "hello" })).toBe(false)
-    await vi.advanceTimersByTimeAsync(10000)
-    expect(getChatState().messages).toEqual(messages("initial"))
-    expect(getChatState().isTyping).toBe(false)
-    expect(socket.send).toHaveBeenCalledOnce()
-  })
+  it.each([false, true])(
+    "preserves existing messages and typing state after a failed send (was typing: %s)",
+    async (wasTyping) => {
+      updateChatStore({ isTyping: wasTyping })
+      const socket = startGateway()
+      socket.open()
+      socket.send.mockImplementationOnce(() => {
+        throw new Error("closed during send")
+      })
+      expect(sendChatMessage({ content: "hello" })).toBe(false)
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(getChatState().messages).toEqual(messages("initial"))
+      expect(getChatState().isTyping).toBe(wasTyping)
+      expect(socket.send).toHaveBeenCalledOnce()
+    },
+  )
 
   it("rejects disconnected sends without adding optimistic messages", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {})

@@ -295,7 +295,11 @@ identifiers, cookie credentials, expired-session redirects without mutation
 replay, and omitted versus explicit replacement model secrets. These are request
 and store contract tests, not browser/OAuth popup qualification.
 
-Local validation: 37 tests across six files, ESLint, Prettier, TypeScript and
+Failed sends also restore the preceding typing state, preserving an in-flight
+assistant response when a newer send fails synchronously. The added active-typing
+regression first failed against the original rollback.
+
+Local validation: 38 tests across six files, ESLint, Prettier, TypeScript and
 production build passed with supported Node 22.23.1 and the frozen lockfile.
 No new frontend dependency or state framework was introduced. CI and review
 remain required before this packet is complete.
