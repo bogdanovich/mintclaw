@@ -29,6 +29,7 @@ import (
 type ownedGatewayControl struct {
 	Mode      string `json:"mode"`
 	ParentPID int    `json:"parent_pid"`
+	LateValue string `json:"late_value,omitempty"`
 }
 
 // The test binary accepts the same literal gateway command as the product.
@@ -150,6 +151,16 @@ func runOwnedGatewayTestChild() int {
 	defer cancel()
 	if server.Shutdown(ctx) != nil {
 		return 8
+	}
+	if control.LateValue != "" {
+		data, err := json.Marshal(map[string]string{"value": control.LateValue})
+		if err != nil {
+			return 8
+		}
+		if os.WriteFile(filepath.Join(home, "late-runtime.json"),
+			data, 0o600) != nil {
+			return 8
+		}
 	}
 	if control.Mode == "bad_exit" {
 		return 9

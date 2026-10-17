@@ -29,6 +29,8 @@ type Comparison struct {
 	Outcome             string           `json:"outcome"`
 	BaselineRun         string           `json:"baseline_run"`
 	CurrentRun          string           `json:"current_run"`
+	BaselineVerdict     Verdict          `json:"baseline_verdict"`
+	CurrentVerdict      Verdict          `json:"current_verdict"`
 	CompatibleCases     bool             `json:"compatible_cases"`
 	EnvironmentChanges  []string         `json:"environment_changes"`
 	EnvironmentUnknowns []string         `json:"environment_unknowns"`
@@ -57,11 +59,21 @@ func Compare(baselineDirectory, currentDirectory string) (Comparison, error) {
 	}
 	result := Comparison{
 		Version: Version, Outcome: "compared", BaselineRun: baseline.report.ID, CurrentRun: current.report.ID,
+		BaselineVerdict: baseline.report.Verdict, CurrentVerdict: current.report.Verdict,
 		CompatibleCases: true, EnvironmentChanges: []string{}, EnvironmentCoverage: "recorded_runtime_and_roles_only",
 		EnvironmentUnknowns: []string{"instructions_and_skills", "target_all_call_models"},
 		Attribution:         "not_established", Cases: []CaseComparison{},
 	}
 	compareWorkspaceInputs(&result, baseline.report.WorkspaceInputs, current.report.WorkspaceInputs)
+	for _, source := range []struct {
+		name        string
+		observation *PrivateSurfaceObservation
+	}{{"baseline", baseline.report.PrivateSurfaces}, {"current", current.report.PrivateSurfaces}} {
+		if (baseline.report.PrivateSurfaces != nil || current.report.PrivateSurfaces != nil) &&
+			(source.observation == nil || source.observation.verdict() != Pass) {
+			result.EnvironmentUnknowns = append(result.EnvironmentUnknowns, source.name+"_private_file_coverage")
+		}
+	}
 	if baseline.report.TargetLifecycle.verdict() != Pass {
 		result.EnvironmentUnknowns = append(result.EnvironmentUnknowns, "baseline_target_cleanup")
 	}
@@ -161,7 +173,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		report.Repeat < 0 || report.Repeat > MaxRepeat || len(report.Trials) == 0 ||
 		len(report.Trials) > MaxCorpusCases || report.DurationMS < 0 || report.StartedAt.IsZero() ||
 		report.Runtime.Version != 1 || !validDigest(report.Runtime.ConfigSHA256) || !report.TargetLifecycle.valid() ||
-		!report.WorkspaceInputs.valid() {
+		!report.WorkspaceInputs.valid() || !report.PrivateSurfaces.valid() {
 		return result, ErrCompare
 	}
 	seen, sessions, roles := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -229,7 +241,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 			return result, ErrCompare
 		}
 	}
-	verdicts = append(verdicts, report.TargetLifecycle.verdict())
+	verdicts = append(verdicts, report.TargetLifecycle.verdict(), report.PrivateSurfaces.verdict())
 	if report.Verdict != combineVerdicts(verdicts...) {
 		return result, ErrCompare
 	}
