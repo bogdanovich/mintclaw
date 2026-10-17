@@ -61,6 +61,12 @@ func Compare(baselineDirectory, currentDirectory string) (Comparison, error) {
 		EnvironmentUnknowns: []string{"instructions_and_skills", "target_all_call_models"},
 		Attribution:         "not_established", Cases: []CaseComparison{},
 	}
+	if baseline.report.TargetLifecycle.verdict() != Pass {
+		result.EnvironmentUnknowns = append(result.EnvironmentUnknowns, "baseline_target_cleanup")
+	}
+	if current.report.TargetLifecycle.verdict() != Pass {
+		result.EnvironmentUnknowns = append(result.EnvironmentUnknowns, "current_target_cleanup")
+	}
 	if len(baseline.report.Runtime.GitCommit) != 40 || len(current.report.Runtime.GitCommit) != 40 ||
 		baseline.report.Runtime.GOOS == "" || current.report.Runtime.GOOS == "" ||
 		baseline.report.Runtime.GOARCH == "" || current.report.Runtime.GOARCH == "" {
@@ -80,6 +86,8 @@ func Compare(baselineDirectory, currentDirectory string) (Comparison, error) {
 		{"grading_mode", baseline.report.Mode != current.report.Mode},
 		{"model_roles_or_prompts", !slices.Equal(baseline.roles, current.roles)},
 		{"repetitions", effectiveRepeat(baseline.report) != effectiveRepeat(current.report)},
+		{"target_lifecycle_mode", targetLifecycleMode(baseline.report.TargetLifecycle) !=
+			targetLifecycleMode(current.report.TargetLifecycle)},
 	} {
 		if difference.changed {
 			result.EnvironmentChanges = append(result.EnvironmentChanges, difference.name)
@@ -151,7 +159,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		!validID(report.PresetID) || !slices.Contains([]string{"run", "grade"}, report.Mode) ||
 		report.Repeat < 0 || report.Repeat > MaxRepeat || len(report.Trials) == 0 ||
 		len(report.Trials) > MaxCorpusCases || report.DurationMS < 0 || report.StartedAt.IsZero() ||
-		report.Runtime.Version != 1 || !validDigest(report.Runtime.ConfigSHA256) {
+		report.Runtime.Version != 1 || !validDigest(report.Runtime.ConfigSHA256) || !report.TargetLifecycle.valid() {
 		return result, ErrCompare
 	}
 	seen, sessions, roles := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -219,6 +227,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 			return result, ErrCompare
 		}
 	}
+	verdicts = append(verdicts, report.TargetLifecycle.verdict())
 	if report.Verdict != combineVerdicts(verdicts...) {
 		return result, ErrCompare
 	}

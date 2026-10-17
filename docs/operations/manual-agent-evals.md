@@ -77,6 +77,38 @@ cases passing on Linux after that reviewed fix, without claiming PDF/browser or 
 
 ## Prepare The Target
 
+### Owned Gateway Mode
+
+`eval run --start-target` explicitly launches the current MintClaw executable's native `gateway` command and
+stops that child before publishing a complete run report. Attachment to an already prepared running gateway
+remains the default. The owned mode does not provision a profile or copy any production configuration or state.
+
+Use a fresh private home with only `config.json`, optional native `.security.yml` and `.security` credential-file
+directory, `workspace`, and `reports` at its root. The native repository's empty regular `0600`
+`.security.yml.lock` file is permitted; it is not gateway/process ownership.
+The workspace must be the physical `HOME/workspace` directory and may initially contain only reviewed
+`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, and `skills`. Existing native state, sessions, memory,
+PID files, ownership markers, logs, extra roots, and symlink entries are refused before launching. Existing
+prepared-target tool/channel/network/approval admission still applies. Provider credentials should use native
+file references in this private profile; the child does not inherit the parent's environment or secret stores.
+Only the explicit home/config, PATH, fixed language and admitted warn/error/fatal logging environment are supplied.
+
+Readiness must pass the authenticated native `/runtime` admission and identify the exact child PID. An existing
+service's healthy response is not adopted. Startup is bounded to 30 seconds; cleanup has a separate 35-second
+budget even when the scenario is interrupted. Only the owned process handle is signaled. A forced kill or
+nonzero/uncertain exit is non-passing and never means a remote interaction was canceled. The ownership marker
+is retained on abnormal exit. Never delete it to retry an uncertain operation; use a newly prepared profile.
+In owned mode, SIGINT and SIGTERM cancel the eval command's run context while keeping the parent alive for its
+independent cleanup budget. SIGKILL, a crash or host loss cannot execute that cleanup; retained process/domain
+state must be treated as uncertain, not resumed or reported as canceled.
+
+The private `target_lifecycle` receipt records admitted PID, stop/exit observations, exit code, forced exit and
+log truncation. Captured child output is private and bounded to 1 MiB; native runtime logs remain separate
+surfaces needing inspection. An exit-zero receipt does not grant PDF/browser idle, privacy, no-write, delivery,
+or domain cleanup checks, and does not rewrite per-trial remote state. Reports remain outside git. Judge-only
+regrading preserves source lifecycle uncertainty without starting a target; comparison distinguishes owned and
+attached modes. Profile provisioning and post-settlement domain witnesses remain later E5/qualification work.
+
 Use a new private profile, not the production profile or a copy of its sessions, memory, ledgers, or auth store.
 Both runner and gateway must use the same explicit `MINTCLAW_HOME`. Keep configuration and profile files immutable
 for the run. Admission is an operator-prepared profile check, not protection from a hostile concurrent filesystem
