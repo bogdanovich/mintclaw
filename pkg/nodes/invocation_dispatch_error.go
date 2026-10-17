@@ -4,6 +4,10 @@ import "errors"
 
 const (
 	InvocationDispatchCommandDenied             = "COMMAND_DENIED"
+	InvocationDispatchComputerStale             = "COMPUTER_STALE"
+	InvocationDispatchComputerBusy              = "COMPUTER_BUSY"
+	InvocationDispatchComputerExpired           = "COMPUTER_EXPIRED"
+	InvocationDispatchComputerUnavailable       = "COMPUTER_UNAVAILABLE"
 	InvocationDispatchCommandUnavailable        = "COMMAND_UNAVAILABLE"
 	InvocationDispatchExecutionFailed           = "EXECUTION_FAILED"
 	InvocationDispatchFileNotFound              = "FILE_NOT_FOUND"
@@ -63,6 +67,10 @@ func InvocationDispatchErrorCode(err error) (string, bool) {
 func normalizeInvocationDispatchErrorCode(code string) string {
 	switch code {
 	case InvocationDispatchCommandDenied,
+		InvocationDispatchComputerStale,
+		InvocationDispatchComputerBusy,
+		InvocationDispatchComputerExpired,
+		InvocationDispatchComputerUnavailable,
 		InvocationDispatchCommandUnavailable,
 		InvocationDispatchExecutionFailed,
 		InvocationDispatchFileNotFound,

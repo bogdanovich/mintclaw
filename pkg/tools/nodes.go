@@ -535,7 +535,8 @@ func projectDescriptorForTarget(
 	updateProfile string,
 	jobProfile string,
 ) (nodes.CommandDescriptor, bool) {
-	if nodes.IsBrowserCommand(descriptor.Name) || nodes.IsWorkspaceCommand(descriptor.Name) {
+	if nodes.IsBrowserCommand(descriptor.Name) || nodes.IsWorkspaceCommand(descriptor.Name) ||
+		nodes.IsComputerCommand(descriptor.Name) {
 		return nodes.CommandDescriptor{}, false
 	}
 	projected, available := projectFileDescriptorForTarget(descriptor, fileProfile)
