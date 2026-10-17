@@ -149,7 +149,8 @@ func (guard *x11Window) alive(ctx context.Context) bool {
 	}
 	stop := context.AfterFunc(ctx, func() { _ = guard.socket.SetDeadline(time.Now()) })
 	defer func() { stop(); _ = guard.socket.SetDeadline(time.Time{}) }()
-	if reply, err := xproto.GetInputFocus(guard.connection).Reply(); err != nil || reply == nil {
+	if reply, err := xproto.GetGeometry(guard.connection, xproto.Drawable(guard.window)).Reply(); err != nil ||
+		reply == nil || reply.Root != guard.root {
 		guard.lost.Store(true)
 		return false
 	}
@@ -174,12 +175,6 @@ func (guard *x11Window) alive(ctx context.Context) bool {
 		return false
 	}
 	if guard.lost.Load() {
-		return false
-	}
-	if reply, err := xproto.GetGeometry(guard.connection, xproto.Drawable(guard.window)).
-		Reply(); err != nil || reply == nil ||
-		reply.Root != guard.root {
-		guard.lost.Store(true)
 		return false
 	}
 	return ctx.Err() == nil && !guard.lost.Load()
