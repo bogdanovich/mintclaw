@@ -18,6 +18,8 @@ live browser origin and uses immutable configured outcome evidence.
 Only the selected alias and a fixed outcome reach the model. Unexpected source
 outcomes are replaced with a fixed denial. Retrieval remains lazy: an approved
 lease and the browser's live form/document preparation precede SDK access.
+The login tool owns the distinct `browser.login` runtime capability; ordinary
+browser actions retain `browser.act`, so both can compose in one enabled catalog.
 Revocation, expiry, policy changes and browser retirement retain their existing
 authority. A login grant approves no later purchase, post, message or account
 change.
