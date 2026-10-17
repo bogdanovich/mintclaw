@@ -85,3 +85,7 @@ reopen the profile successfully. No third-party listing is edited or published.
 The image-transfer probe declares its download/upload/submission work as an
 `external_action` objective with runtime receipts, separately from its one
 machine-readable result objective. It does not bypass completion accounting.
+The native protocol can return that one result alongside receipted effects only
+when the entire objective succeeds. Partial, unreceipted, ambiguous, invalid,
+and oversized results do not receive a standalone success projection. Human
+presentation remains separate from these machine-readable records.
