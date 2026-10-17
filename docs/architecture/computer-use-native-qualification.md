@@ -51,6 +51,37 @@ attached-window caller must supply a real window-incarnation guard, not merely a
 PID-alive test. Fixture liveness suffices only because the test owns both
 immutable window incarnations until process exit.
 
+## Strict attached-window capture
+
+The general read-only adapter requests pixels only and discards unsolicited
+accessibility text. The pinned Linux AT-SPI bridge correlates native windows
+with accessibility roots by geometry, which is not exact root identity. The
+earlier fixture accessibility pass below therefore does not qualify general
+attached-window accessibility capture. A future scoped accessibility provider
+needs independent native root attestation; title or geometry matching is not a
+substitute.
+
+The pinned Linux driver can also capture a screen-region composite when a popup
+or transient dialog overlaps the selected window. The adapter rejects the typed
+`screenshot_composited` result before exposing any pixels or text. A same-process
+popup or transient relationship does not implicitly admit another native window.
+This is capture-scope validation, not an application-name or page-content rule.
+
+Relevant pinned source: the
+[AT-SPI root correlation](https://github.com/trycua/cua/blob/0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs)
+and the
+[window capture implementation](https://github.com/trycua/cua/blob/0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs).
+Private input qualification below remains a fixture-only path, not an enabled
+agent capability.
+
+On October 17, three native Linux GNOME X11 runs each passed the pixels-only
+observation lifecycle (440 by 240 pixels, zero forwarded accessibility bytes)
+and the negative `ScopeProjection` case. The negative fixture first verifies
+that an owned overlapping transient dialog actually produces a valid composited
+vendor frame, then requires the public adapter to return no pixels or text.
+The fixture application remains alive after refusal. Run that case explicitly
+with `scripts/computer-native-qualification.sh --driver /absolute/pinned/cua-driver --case ScopeProjection`.
+
 ## Native results
 
 These are capability-specific observations from October 10, 2026, not a general

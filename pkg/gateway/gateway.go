@@ -1137,7 +1137,9 @@ func setupAndStartServicesWithHooks(
 		listenAddr,
 		runningServices.HealthServer,
 	)
-	runningServices.Credentials, err = setupCredentialRuntime(cfg, authToken, runningServices.ChannelManager)
+	runningServices.Credentials, err = setupCredentialRuntime(
+		cfg, authToken, runningServices.ChannelManager, credentialNotificationPublisher(msgBus),
+	)
 	if err != nil {
 		return nil, errCredentialsUnavailable
 	}

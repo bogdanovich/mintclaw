@@ -44,6 +44,9 @@ func TestNativeQualification(t *testing.T) {
 		command = exec.CommandContext(ctx, "/usr/bin/python3", fixturePath)
 	}
 	command.Env = []string{"PATH=/usr/bin:/bin", "GSETTINGS_BACKEND=memory", "NO_AT_BRIDGE=0"}
+	if runtime.GOOS == "linux" && os.Getenv("MINTCLAW_FIXTURE_TRANSIENT_OVERLAY") == "1" {
+		command.Env = append(command.Env, "MINTCLAW_FIXTURE_TRANSIENT_OVERLAY=1")
+	}
 	gui := make(map[string]string)
 	for _, key := range []string{"DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"} {
 		if value := os.Getenv(key); value != "" {
@@ -193,6 +196,46 @@ func TestNativeQualification(t *testing.T) {
 			t.Fatal("worker close altered application lifetime")
 		}
 		t.Log("handoff/resume/release and application lifetime verified")
+	})
+
+	t.Run("ScopeProjection", func(t *testing.T) {
+		if runtime.GOOS != "linux" || os.Getenv("MINTCLAW_FIXTURE_TRANSIENT_OVERLAY") != "1" {
+			t.Skip("explicit owned Linux transient-overlay fixture required")
+		}
+		driver, err := New(ctx, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = driver.Close() })
+		// Establish that this fixture actually exercises the pinned composite
+		// branch, rather than passing because an unrelated capture failed.
+		result, probeErr := driver.call(ctx, "get_window_state", map[string]any{
+			"pid": ready.PID, "window_id": ready.Windows[0],
+			"include_screenshot": true, "include_accessibility_tree": false, "max_image_dimension": 0,
+		})
+		if probeErr != nil {
+			t.Fatal("native composite fixture probe failed", probeErr)
+		}
+		var projection struct {
+			Valid      bool              `json:"screenshot_frame_valid"`
+			Composited bool              `json:"screenshot_composited"`
+			Dialogs    []json.RawMessage `json:"dialogs"`
+			Popups     []json.RawMessage `json:"popups"`
+		}
+		data, marshalErr := json.Marshal(result.StructuredContent)
+		if marshalErr != nil || json.Unmarshal(data, &projection) != nil || !projection.Valid ||
+			!projection.Composited {
+			t.Fatalf("native fixture did not produce composite: valid=%t composited=%t dialogs=%d popups=%d",
+				projection.Valid, projection.Composited, len(projection.Dialogs), len(projection.Popups))
+		}
+		capture, err := driver.Capture(ctx, target)
+		if !errors.Is(err, computer.ErrStale) || len(capture.Screenshot) != 0 || capture.AccessibilityText != "" {
+			t.Fatal("composited native popup pixels or text escaped exact-window admission", err)
+		}
+		if !alive(ctx, target.Scope) {
+			t.Fatal("scope refusal altered fixture application lifetime")
+		}
+		t.Log("native transient-overlap capture refused without exposing pixels or text")
 	})
 
 	// Qualification-only worker: input is not exposed by the public adapter.

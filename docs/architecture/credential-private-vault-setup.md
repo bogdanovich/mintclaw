@@ -6,10 +6,38 @@ VM, separate credential host or model-facing value-retrieval tool.
 
 ## Operator setup
 
+In the 1Password desktop app, create a separate vault such as `MintClaw` and
+move the existing Login items you want the agent to use into it. Service
+accounts cannot access the built-in Personal/Private vault. On 1Password.com,
+open **Developer**, select your service account and inspect its vault access.
+If it does not already have the intended scope, create a replacement account:
+select only the dedicated vault, open its settings and enable **Read Items**
+only. Do not grant write, sharing or vault-creation permissions. Existing
+service-account vault permissions cannot be changed after creation. Save the
+token privately in your Personal vault, outside the dedicated agent vault.
+See [1Password service account setup](https://www.1password.dev/service-accounts/get-started).
+
 Use a 1Password service account with read-only access to one dedicated vault.
 Configure exact vault/item identifiers and account aliases in the existing
 reference-only credential configuration. The adapter exposes only exact login
 item reads; it does not expose listing, writes, arbitrary fields or SDK calls.
+Identifiers must refer to the item's destination after moving it. No password
+or service-account token belongs in this reference configuration.
+
+Select the same profile as the gateway before setup. For the deployed main
+profile, run these yourself in a private terminal:
+
+```sh
+export MINTCLAW_HOME=/home/server/.mintclaw/main
+export MINTCLAW_CONFIG="$MINTCLAW_HOME/config.json"
+```
+
+The profile must already have valid credential configuration with
+`credentials.enabled` set to `true`, its exact account bindings and a private
+state directory outside agent workspaces. Keep browser login disabled until
+its rollout qualification is complete. If `credentials token` reports that
+credential access is disabled, finish this configuration before retrying;
+the command has not requested or read the token.
 
 Prepare ordinary workspace directories before enabling credentials. Run
 `mintclaw credentials init`, then run `mintclaw credentials token` manually in

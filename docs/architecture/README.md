@@ -7,6 +7,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Code Health Architecture State](code-health.md): current ownership,
   compatibility boundaries, and guardrails after the completed simplification
   and code-health programs.
+- [October 2026 Reliability And Code Health Roadmap](reliability-code-health-20261017-roadmap.md): active,
+  evidence-backed outbox, MCP, frontend, qualification, and conditional simplification work.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Manual Agent Evals Design](agent-evals-design.md): proposed on-demand multi-turn task evaluation, isolated targets,
   independent artifact/state checks, LLM user simulation, and separate rubric judging; approved for implementation.
@@ -143,6 +145,14 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   session-owned output guards, grant-driven retirement, and explicit rollout limits.
 - [Credential Browser Output Boundary](credential-browser-output-privacy.md): private cookie refresh,
   authenticated snapshot/catalog projections, and artifact output admission.
+- [Integrated Alias Browser Login](credential-alias-browser-login.md): runtime-owned alias tool,
+  existing-channel phone notifications, signed-grant reuse and disabled-by-default rollout.
+- [Craigslist Credential Pilot](credential-craigslist-pilot.md): selected account, public form evidence,
+  private token/Android setup and remaining personal-account acceptance steps.
+- [Retired Credential Appliance](credential-appliance-retirement.md): removal of the unused daemon,
+  privileged launch/transport/browser stack and obsolete qualification; retained current boundaries.
+- [Integrated Credential Output Qualification](credential-output-qualification.md): actual provider-wire,
+  tool/history/context/browser/log/trace evidence and remaining rollout gates.
 - [Historical Isolated Credential Roadmap](credential-isolated-runtime-history.md): superseded
   deployment design and preserved component PR/qualification evidence.
 - [Historical Mac Credential VM Package](credential-mac-vm-package.md): retired candidate launcher

@@ -24,6 +24,11 @@ The retained [PDF cancellation v2](../operations/manual-agent-evals-pdf-cancel-v
 [adaptive PDF fill v1](../operations/manual-agent-evals-pdf-fill-v1-pilot-20261012.md) remain inconclusive, not erased
 by passing general cases.
 
+The [prepared general v1 pilot](../operations/manual-agent-evals-prepared-general-v1-20261017.md) exercised merged
+#1665's allowlisted `eval prepare`, then passed four general trials (two repetitions per case) on its identified
+code head. A single regrade retained two passes and two provider-unavailable judge errors; comparison preserved all
+trials without attributing those errors to target quality. This is not complete E5 or domain qualification.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 
@@ -36,7 +41,7 @@ may run in normal CI without credentials, a live gateway, paid models, or instal
 | E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation/adaptive runner/grade merged (#1531, #1541); judge v2 live calibration passed 6/6; adaptive live qualification pending |
 | E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Fixtures/oracle, preparation, approval contracts, dialogue, write intent, native write observation, metadata settlement and artifact collection merged (#1544, #1546, #1547, #1550, #1552, #1553, #1557, #1558); uniqueness/privacy/cleanup and live qualification pending |
 | E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Fixture/native snapshots and independent fixture oracles merged (#1564, #1567, #1591); six typed cases; native execution/privacy/cleanup/live qualification pending |
-| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Repeats/all-trial regrade/comparison (#1588), prepared-profile owned gateway (#1639) and bounded local workspace file observations (#1648) merged; allowlisted provisioning, effective-input witnesses and domain live qualification pending |
+| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Repeats/all-trial regrade/comparison (#1588), owned gateway (#1639), file observations (#1648) and explicit allowlisted seed provisioning (#1665) merged; Linux general repeats/regrade/error comparison exercised; per-trial/effective-input witnesses and domain qualification pending |
 
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
 prerequisites when necessary. Do not reimplement protected intake, browser sessions, approval, or delivery in the harness.
@@ -52,15 +57,16 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
 
 ## Next Mandatory Work
 
-1. E5: implement allowlisted fresh profile provisioning using native configuration/credential boundaries, with
-   actual effective-input identity and explicit exclusions for production state. File samples and a prepared-home
-   launcher do not complete provisioning or per-trial isolation.
+1. E5: finish per-trial isolation and actual effective-input identity using the existing native boundaries and
+   explicit fresh-profile preparation. The merged one-time conversation/PDF seed provisioner and file samples do
+   not complete automatic per-trial/browser provisioning or effective loaded prompt/catalog proof.
 2. E3: finish native post-settlement delivery/no-write/privacy/cleanup witnesses and qualify all six PDF cases,
    including adaptive conversation and deterministic denial/cancel. Preserve earlier failures and unknowns.
 3. E4: integrate native browser admission, fixture execution, approval/artifact/context correlation and owned
    cleanup; qualify all six cases, including adaptive and denied-action evidence. Browser cases still skip today.
-4. Exit: exercise repeats/regrade/comparison on qualified retained evidence, available all-call usage and remaining
-   negative controls; record platform/transport/oracle limits and merge the exit record. Do not turn unavailable
+4. Exit: extend the exercised general repeats/regrade/comparison to qualified domain evidence, available all-call
+   usage and remaining negative controls; record platform/transport/oracle limits and merge the exit record. Do not
+   turn unavailable
    usage, incomplete native evidence or a two-case smoke into complete-suite success.
 
 These are unfinished parts of the frozen first goal, not new milestones or permission to expand its scope.
