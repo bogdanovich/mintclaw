@@ -105,6 +105,8 @@ elif printf '%s' "$message" | grep -Fq 'stage click-recovery'; then
 	stage=click-recovery
 elif printf '%s' "$message" | grep -Fq 'stage semantic-observation'; then
 	stage=semantic-observation
+elif printf '%s' "$message" | grep -Fq 'stage image-transfer'; then
+	stage=image-transfer
 elif printf '%s' "$message" | grep -Fq 'stage privileged-execute'; then
 	stage=privileged-execute
 elif printf '%s' "$message" | grep -Fq 'stage provider-open-one'; then
@@ -152,6 +154,8 @@ elif [ "$stage" = ephemeral-verify ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","cookie_removed":"true","local_storage_removed":"true","cache_removed":"true","service_worker_removed":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = click-recovery ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","click_not_dispatched":"true","same_session_preserved":"true","no_photo_click":"true","alternative_control_succeeded":"true","session_closed":"true","safe_error_absent":"true"}'
+elif [ "$stage" = image-transfer ]; then
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","image_observed":"true","download_not_dispatched":"true","same_session_preserved":"true","original_artifact_retained":"true","upload_selected":"true","upload_received":"true","source_page_preserved":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = semantic-observation ]; then
 	if ! printf '%s' "$message" | grep -Fq 'GALLERY_OPEN and MAP_INLINE together' ||
 		! printf '%s' "$message" | grep -Fq 'Input dispatch alone is not gallery success'; then
@@ -210,11 +214,24 @@ if printf '%s' "$message" | grep -Fq 'exact target cloud' &&
 fi
 python3 - "$record" "$is_cleanup" "$stage" "$evidence_target" "$evidence_profile" "$message" <<'PY'
 import json
+import http.cookiejar
 import os
 import re
 import sys
 import urllib.request
 
+if sys.argv[3] == "image-transfer":
+    origin = re.search(r"Navigate to (http://[^\s]+?)/browser-smoke/image-transfer", sys.argv[6]).group(1)
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    with opener.open(origin + "/browser-smoke/image-transfer") as response:
+        response.read()
+    for _ in range(2):
+        with opener.open(origin + "/browser-smoke/auth-photo-redirect") as response:
+            photo = response.read()
+    if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_IMAGE") == "1":
+        photo = b"X" * len(photo)
+    with opener.open(urllib.request.Request(origin + "/browser-smoke/image-upload", data=photo, method="POST")) as response:
+        response.read()
 if sys.argv[3] == "semantic-observation":
     origin = re.search(r"Navigate to (http://[^\s]+?)/browser-smoke/map-only", sys.argv[6]).group(1)
     for path in ("/browser-smoke/map-only", "/browser-smoke/gallery"):
@@ -254,6 +271,7 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
         calls = {
             "core": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
             "click-recovery": {"browser_targets": 1, "browser_session": 2, "browser_observe": 4, "browser_act": 3},
+            "image-transfer": {"browser_targets": 1, "browser_session": 2, "browser_observe": 5, "browser_act": 5},
             "semantic-observation": {"browser_targets": 1, "browser_session": 2, "browser_observe": 4, "browser_act": 3},
             "managed-seed": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
             "managed-verify": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
@@ -292,7 +310,7 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
     if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NONTERMINAL_STATUS") == "1":
         sessions[1]["state"] = "ready"
     failures = {"browser_execute": 1} if stage == "privileged-execute" and not cleanup else {}
-    if stage == "click-recovery" and not cleanup:
+    if stage in {"click-recovery", "image-transfer"} and not cleanup:
         failures = {"browser_act": 1}
     discovery_mode = os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_DISCOVERY")
     if discovery_mode:
@@ -349,7 +367,7 @@ PY
 EOF
 chmod +x "$fake"
 
-for suite in core click-recovery semantic-observation managed-reuse ephemeral-cleanup driver-conformance provider-lifecycle playwright-library privileged-execute; do
+for suite in core image-transfer click-recovery semantic-observation managed-reuse ephemeral-cleanup driver-conformance provider-lifecycle playwright-library privileged-execute; do
 	output="$test_root/$suite.json"
 	if ! MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
 		"$repo_root/scripts/browser-capability-smoke.sh" \
@@ -366,6 +384,7 @@ report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected_primary_calls = {
     "core": {"browser_act": 2, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
     "click-recovery": {"browser_act": 3, "browser_observe": 4, "browser_session": 2, "browser_targets": 1},
+    "image-transfer": {"browser_act": 5, "browser_observe": 5, "browser_session": 2, "browser_targets": 1},
     "semantic-observation": {"browser_act": 3, "browser_observe": 4, "browser_session": 2, "browser_targets": 1},
     "managed-reuse": {"browser_act": 4, "browser_observe": 6, "browser_session": 4, "browser_targets": 2},
     "ephemeral-cleanup": {"browser_act": 3, "browser_observe": 5, "browser_session": 4, "browser_targets": 2},
@@ -374,13 +393,16 @@ expected_primary_calls = {
     "privileged-execute": {"browser_act": 1, "browser_execute": 3, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
     "provider-lifecycle": {"browser_observe": 2, "browser_session": 4, "browser_targets": 2},
 }[sys.argv[2]]
-expected_delegations = 1 if sys.argv[2] in {"core", "click-recovery", "semantic-observation", "driver-conformance", "playwright-library", "privileged-execute"} else 2
+expected_delegations = 1 if sys.argv[2] in {"core", "image-transfer", "click-recovery", "semantic-observation", "driver-conformance", "playwright-library", "privileged-execute"} else 2
 assert report["schema_version"] == "mintclaw.browser_smoke.v1"
 assert report["suite"] == sys.argv[2]
 if sys.argv[2] == "semantic-observation":
     assert report["fixture_outcome_audit"] == {"state": "passed", "events": {
         "map-only": 1, "gallery": 1, "map-click": 0, "gallery-click": 1,
     }}
+if sys.argv[2] == "image-transfer":
+    assert report["fixture_outcome_audit"]["state"] == "passed"
+    assert report["fixture_outcome_audit"]["events"]["uploaded-bytes"] == 68
 assert report["cleanup"] == {"fixture": "stopped", "session_close": "closed", "state": "clean"}
 assert report["process_audit"] == {"immediate_reuse": True, "state": "passed"}
 assert report["execution_audit"] == {
@@ -640,6 +662,23 @@ done
 
 nonterminal_status_output="$test_root/nonterminal-status.json"
 wrong_widget_output="$test_root/wrong-widget.json"
+wrong_image_output="$test_root/wrong-image.json"
+if MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_IMAGE=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite image-transfer \
+	--json-output "$wrong_image_output"; then
+	echo "browser smoke self-test: wrong image bytes with claimed success unexpectedly passed" >&2
+	exit 1
+fi
+python3 - "$wrong_image_output" <<'PY'
+import json
+import pathlib
+import sys
+report = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert report["fixture_outcome_audit"]["state"] == "failed"
+assert report["safe_error"]["code"] == "suite_failed"
+PY
 if MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_WIDGET=1 \
 	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
 	"$repo_root/scripts/browser-capability-smoke.sh" \

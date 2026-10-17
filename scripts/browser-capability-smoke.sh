@@ -4,7 +4,7 @@ set -eu
 
 usage() {
 	cat >&2 <<'EOF'
-usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff> --json-output <path> [options]
+usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|image-transfer|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff> --json-output <path> [options]
 
 Options:
   --gateway-host <ssh-host>  Run the live client on the gateway over SSH.
@@ -106,7 +106,7 @@ if [ "${#profile}" -gt 64 ]; then
 	exit 2
 fi
 case "$suite" in
-core|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff) ;;
+core|image-transfer|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff) ;;
 *)
 	echo "unsupported browser smoke suite" >&2
 	exit 2
@@ -318,6 +318,12 @@ ephemeral-cleanup)
 	stage_two=ephemeral-verify
 	stage_two_checks='cookie_removed, local_storage_removed, cache_removed, service_worker_removed'
 	stage_two_workflow="Open the verification session with the same target and profile and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check, call browser_observe until it shows cookie=false, local_storage=false, cache=false, and service_worker=false, and close this session."
+	;;
+image-transfer)
+	stage_one=image-transfer
+	stage_one_checks='initial_blank, image_observed, download_not_dispatched, same_session_preserved, original_artifact_retained, upload_selected, upload_received, source_page_preserved'
+	stage_one_workflow="Open one session and observe about:blank. Navigate to ${fixture_origin}/browser-smoke/image-transfer and observe fresh state. Require Original transfer photo. Call browser_act kind=download on the button Not a download exactly once; require code=download_not_dispatched, download_dispatched=false and session_preserved=true. This one expected tool error is not safe_error. Do not click or replay this target. Observe fresh state in the exact same session. Download the image Original transfer photo once using its fresh ref; require a committed image/png artifact, not a screenshot. Observe fresh state and require the same source URL and title. Use upload with the returned artifact_ref on Upload original photo. Observe UPLOAD_SELECTED_1, then click Send test upload once with effect=external_commit. I authorize this POST to this local fixture only without another confirmation. Observe UPLOAD_RECEIVED_ORIGINAL; require original bytes, not a filename-only or dispatch-only claim. Use only browser_targets, browser_session, browser_observe, browser_act and read-only browser_contexts list when needed, not browser_execute or direct HTTP tools. Keep the same session throughout and close it exactly once."
+	stage_two=""
 	;;
 semantic-observation)
 	stage_one=semantic-observation
@@ -542,6 +548,10 @@ if [ "$suite" = semantic-observation ]; then
 	"$python_command" "$helper" semantic-probe --origin "$fixture_origin" \
 		--output "$smoke_root/semantic-oracle.json"
 fi
+if [ "$suite" = image-transfer ]; then
+	"$python_command" "$helper" image-probe --origin "$fixture_origin" \
+		--output "$smoke_root/image-oracle.json"
+fi
 
 stop_pid "$fixture_pid"
 fixture_pid=""
@@ -556,6 +566,9 @@ if [ -n "$prompt_two" ]; then
 fi
 if [ "$suite" = semantic-observation ]; then
 	set -- "$@" --semantic-oracle "$smoke_root/semantic-oracle.json"
+fi
+if [ "$suite" = image-transfer ]; then
+	set -- "$@" --image-oracle "$smoke_root/image-oracle.json"
 fi
 set -- "$@" \
 	--cleanup-json "$cleanup_json" \

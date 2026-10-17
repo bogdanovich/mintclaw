@@ -487,8 +487,8 @@ func TestPlaywrightDownloadKeepsPredispatchFailureOrdinary(t *testing.T) {
 				Kind: DriverDownloadAction, Target: "e1", Element: "Download",
 			}, 1024)
 			var artifactFailure *DownloadArtifactError
-			if !errors.Is(err, ErrDriverIncompatible) || errors.As(err, &artifactFailure) {
-				t.Fatalf("Download() error = %v, want ordinary pre-dispatch failure", err)
+			if !errors.Is(err, ErrDownloadNotDispatched) || errors.As(err, &artifactFailure) {
+				t.Fatalf("Download() error = %v, want proven pre-dispatch failure", err)
 			}
 		})
 	}
@@ -1355,8 +1355,8 @@ func TestPlaywrightWorkerUploadsOnlyAfterExactFileChooser(t *testing.T) {
 		!strings.HasPrefix(stagedPaths[0], outputDir+string(filepath.Separator)) {
 		t.Fatalf("Upload() error = %v; calls = %#v", err, client.calls)
 	}
-	if _, statErr := os.Stat(stagedPaths[0]); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("staged upload was not cleaned up: %v", statErr)
+	if content, readErr := os.ReadFile(stagedPaths[0]); readErr != nil || string(content) != "upload fixture" {
+		t.Fatalf("selected file must remain readable until browser close: %q, %v", content, readErr)
 	}
 	client.callResults["browser_click"] = playwrightTextResult("ordinary click")
 	if err = worker.Upload(context.Background(), DriverAction{
@@ -1370,6 +1370,12 @@ func TestPlaywrightWorkerUploadsOnlyAfterExactFileChooser(t *testing.T) {
 		ArtifactSHA256: strings.Repeat("b", 64), ArtifactBytes: int64(len("upload fixture")),
 	}); !errors.Is(err, ErrDenied) {
 		t.Fatalf("Upload() with wrong digest error = %v", err)
+	}
+	if err = worker.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(stagedPaths[0]); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("session close did not remove retained upload: %v", statErr)
 	}
 }
 
@@ -1476,10 +1482,10 @@ func TestPlaywrightWorkerCapturesExactlyOneBoundedDownload(t *testing.T) {
 		!strings.Contains(code, `event.initiator.type === "other"`) ||
 		!strings.Contains(code, `element.removeAttribute("download")`) ||
 		!strings.Contains(code, `state.attachmentCount++`) ||
-		!strings.Contains(code, `const encodeUTF8Base64 = value =>`) ||
+		!strings.Contains(code, `function encodeUTF8Base64(value)`) ||
 		!strings.Contains(code, `state.status = "claiming"`) ||
 		strings.Index(code, `state.status = "claiming"`) >
-			strings.Index(code, `Fetch.takeResponseBodyAsStream`) {
+			strings.Index(code, `const body = await cdp.send("Fetch.takeResponseBodyAsStream"`) {
 		t.Fatalf("private download calls = %#v", client.calls)
 	}
 }
@@ -4810,10 +4816,12 @@ func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	retained := false
 	for _, entry := range entries {
-		if entry.IsDir() && strings.HasPrefix(entry.Name(), "upload-") {
-			t.Fatalf("staged upload directory was not cleaned up: %q", entry.Name())
-		}
+		retained = retained || entry.IsDir() && strings.HasPrefix(entry.Name(), "upload-")
+	}
+	if !retained {
+		t.Fatal("selected file must survive until the browser finishes using it")
 	}
 
 	observation, err = worker.Observe(ctx)

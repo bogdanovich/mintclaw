@@ -19,16 +19,17 @@ import (
 )
 
 var (
-	ErrBrowserHostDenied              = errors.New("companion browser authority denied")
-	ErrBrowserHostBusy                = errors.New("companion browser profile is busy")
-	ErrBrowserHostNotFound            = errors.New("companion browser session not found")
-	ErrBrowserHostStale               = errors.New("companion browser state is stale")
-	ErrBrowserHostNavigationFailed    = errors.New("companion browser navigation failed")
-	ErrBrowserHostClickNotDispatched  = errors.New("companion browser click was not dispatched")
-	ErrBrowserHostLost                = errors.New("companion browser session is lost")
-	ErrBrowserHostExecutionTimeout    = errors.New("companion browser privileged execution timed out")
-	ErrBrowserHostCleanupRequired     = errors.New("companion browser cleanup requires operator attention")
-	ErrBrowserHostArtifactUnavailable = errors.New("companion browser artifact is unavailable")
+	ErrBrowserHostDenied                = errors.New("companion browser authority denied")
+	ErrBrowserHostBusy                  = errors.New("companion browser profile is busy")
+	ErrBrowserHostNotFound              = errors.New("companion browser session not found")
+	ErrBrowserHostStale                 = errors.New("companion browser state is stale")
+	ErrBrowserHostNavigationFailed      = errors.New("companion browser navigation failed")
+	ErrBrowserHostClickNotDispatched    = errors.New("companion browser click was not dispatched")
+	ErrBrowserHostDownloadNotDispatched = errors.New("companion browser download was not dispatched")
+	ErrBrowserHostLost                  = errors.New("companion browser session is lost")
+	ErrBrowserHostExecutionTimeout      = errors.New("companion browser privileged execution timed out")
+	ErrBrowserHostCleanupRequired       = errors.New("companion browser cleanup requires operator attention")
+	ErrBrowserHostArtifactUnavailable   = errors.New("companion browser artifact is unavailable")
 )
 
 const (
