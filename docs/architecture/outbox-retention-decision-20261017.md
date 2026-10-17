@@ -101,3 +101,21 @@ about provider or channel retention.
 Activation remains a separate operation with an explicit horizon, dry-run
 counts/bytes and excluded-owner evidence, recoverable backup, reader/rollback
 floor and qualified filesystem. No production policy is implied by this merge.
+
+
+## R4A Implementation Evidence
+
+The first prerequisite freezes identity version 3 independently of record
+formats and adds cooperating-process exclusion to `OpenCoordinator`, using
+`state/outbox/.writer.lock`. The in-process map remains an early duplicate guard.
+The lock lives inside the actual store, so an outbox-directory symlink cannot
+create a second lock for shared records. OS ownership ends at coordinator close
+or process death; leave the lock pathname
+in place while any owner runs. Subprocess tests cover competition, close and
+process death, and failure cleanup permits retry. Golden keys pin persisted IDs.
+
+The production writer opens through `OpenCoordinator`; low-level `Store` APIs
+remain caller-owned primitives and do not acquire that lifecycle lock. Older
+binaries do not honor the new lock. This prerequisite does not establish a safe
+mixed-version rollout, invent an old-reader fence, enable retirement, or finish
+R4. Those activation gates above remain mandatory.
