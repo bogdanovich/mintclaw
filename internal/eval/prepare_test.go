@@ -36,6 +36,7 @@ func TestPrepareProfileCopiesOnlyPinnedInputsAndNativeCredentials(t *testing.T) 
 		ModelName: "disabled", Provider: "openai", Model: "unused-model",
 		APIKeys: config.SimpleSecureStrings("unused-private-model-key"),
 	})
+	fixture.cfg.ModelList[0].UserAgent = `reviewed-escaped\literal`
 	if _, err := config.NewRepository(fixture.preset.ConfigPath).Save(fixture.cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +203,7 @@ func TestPrepareProfileRejectsAmbiguousAuthAndDestination(t *testing.T) {
 	for _, variant := range []string{
 		"no key", "auth method", "header", "proxy", "fallback", "url credential", "unknown role", "nested parent", "canceled",
 		"credential in preset", "credential in public config", "credential in destination", "verbose logging",
+		"long parent",
 	} {
 		t.Run(variant, func(t *testing.T) {
 			fixture, parent := preparationFixture(t)
@@ -237,6 +239,15 @@ func TestPrepareProfileRejectsAmbiguousAuthAndDestination(t *testing.T) {
 				}
 			case "verbose logging":
 				fixture.cfg.Gateway.LogLevel = "debug"
+			case "long parent":
+				// Keep the existing parent below macOS PATH_MAX; the generated
+				// profile/preset paths, not fixture creation, must exceed the bound.
+				for len(parent) < 980 {
+					parent = filepath.Join(parent, strings.Repeat("d", min(64, 1000-len(parent)-1)))
+					if err := os.Mkdir(parent, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
 			case "nested parent":
 				parent = fixture.output
 			case "canceled":
@@ -303,5 +314,58 @@ func TestPrepareProfileRefusesAggregateInputBudgetBeforeAllocation(t *testing.T)
 	entries, readErr := os.ReadDir(parent)
 	if !errors.Is(err, ErrPreparation) || result.Home != "" || readErr != nil || len(entries) != 0 {
 		t.Fatal("aggregate input bound allocated a profile", err, readErr)
+	}
+}
+
+func TestPrepareProfileRefusesEscapedMetadataCredentialBeforeAllocation(t *testing.T) {
+	fixture, parent := preparationFixture(t)
+	key := `synthetic-quoted"credential<&>\key`
+	fixture.cfg.ModelList[0].APIKeys = config.SimpleSecureStrings(key)
+	fixture.cfg.ModelList[0].UserAgent = key
+	if _, err := config.NewRepository(fixture.preset.ConfigPath).Save(fixture.cfg); err != nil {
+		t.Fatal(err)
+	}
+	result, err := PrepareProfile(t.Context(), fixture.preset, fixture.home, parent)
+	entries, readErr := os.ReadDir(parent)
+	if !errors.Is(err, ErrPreparation) || result.Home != "" || readErr != nil || len(entries) != 0 ||
+		fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+		t.Fatal("serialized credential escaped the preparation metadata guard", err, readErr)
+	}
+}
+
+func TestPrepareProfileRetainsAndReportsOutputOutsideAdmissionBounds(t *testing.T) {
+	fixture, parent := preparationFixture(t)
+	before, err := os.ReadFile(fixture.preset.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	padding := strings.Repeat("x", MaxManifestBytes-len(before)-512)
+	fixture.cfg.Hooks.Builtins = map[string]config.BuiltinHookConfig{
+		"unused": {Config: json.RawMessage(`"` + padding + `"`)},
+	}
+	if _, err = config.NewRepository(fixture.preset.ConfigPath).Save(fixture.cfg); err != nil {
+		t.Fatal(err)
+	}
+	for len(parent) < 700 {
+		parent = filepath.Join(parent, strings.Repeat("d", 64))
+		if err = os.Mkdir(parent, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := PrepareProfile(t.Context(), fixture.preset, fixture.home, parent)
+	if !errors.Is(err, ErrPreparation) || result.Outcome != "incomplete" || !pathWithin(parent, result.Home) ||
+		fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+		t.Fatal("unreadable output was reported prepared or hid its allocated home", err)
+	}
+	info, statErr := os.Stat(result.ConfigPath)
+	if statErr != nil || info.Size() <= MaxManifestBytes {
+		t.Fatal("fixture did not reach the post-save admission bound", statErr)
+	}
+	if _, statErr = os.Stat(filepath.Join(result.Home, ".security", "model-0-key-0")); statErr != nil {
+		t.Fatal("partial credential-bearing home was silently removed", statErr)
+	}
+	entries, readErr := os.ReadDir(parent)
+	if readErr != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(result.Home) {
+		t.Fatal("partial profile inventory was not explicit", readErr)
 	}
 }

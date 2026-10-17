@@ -16,7 +16,10 @@ type preparedProfile struct {
 // File admission is shared by run and judge-only work. Only run adds process
 // identity and target capability admission; this reader performs no network I/O.
 func readPreparedProfile(preset Preset, home string) (preparedProfile, error) {
-	profile, before, err := inspectPreparedProfile(preset, home)
+	if !samePhysicalPath(config.GetHome(), home) {
+		return preparedProfile{}, ErrUnsafeTarget
+	}
+	profile, before, err := inspectProfileFiles(preset, home)
 	if err != nil {
 		return preparedProfile{}, err
 	}
@@ -28,11 +31,12 @@ func readPreparedProfile(preset Preset, home string) (preparedProfile, error) {
 	return profile, nil
 }
 
-func inspectPreparedProfile(preset Preset, home string) (preparedProfile, string, error) {
+// Filesystem admission is independent of process environment. Runtime reads and
+// seed preparation bind HOME explicitly; preparation can also inspect its output.
+func inspectProfileFiles(preset Preset, home string) (preparedProfile, string, error) {
 	var result preparedProfile
 	physical, err := privateHome(preset.IsolationRoot)
 	if preset.Validate() != nil || err != nil || !samePhysicalPath(home, physical) ||
-		!samePhysicalPath(config.GetHome(), physical) ||
 		!samePhysicalPath(preset.ConfigPath, filepath.Join(physical, "config.json")) {
 		return result, "", ErrUnsafeTarget
 	}

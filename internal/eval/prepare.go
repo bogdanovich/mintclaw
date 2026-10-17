@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -42,10 +43,11 @@ type Preparation struct {
 // than hiding credential-bearing leftovers behind a best-effort rollback.
 func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Preparation, error) {
 	var result Preparation
-	if ctx == nil || ctx.Err() != nil || runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+	if ctx == nil || ctx.Err() != nil || runtime.GOOS != "linux" && runtime.GOOS != "darwin" ||
+		!samePhysicalPath(config.GetHome(), home) {
 		return result, ErrPreparation
 	}
-	seed, before, err := inspectPreparedProfile(preset, home)
+	seed, before, err := inspectProfileFiles(preset, home)
 	if err != nil || validateConversationPolicy(seed.config, preset, seed.workspace) != nil {
 		return result, ErrPreparation
 	}
@@ -80,7 +82,7 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 		Preset Preset
 		Parent string
 	}{public, preset, physicalParent})
-	if err != nil || seed.config.SensitiveDataReplacer().Replace(string(metadata)) != string(metadata) {
+	if err != nil || preparationMetadataHasCredential(metadata, seed.config.SensitiveDataReplacer()) {
 		return result, ErrPreparation
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -97,13 +99,26 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 	}
 	defer func() { _ = parentRoot.Close() }()
 	name := "eval-" + uuid.NewString()
+	newHome := filepath.Join(physicalParent, name)
+	prepared := preset
+	prepared.IsolationRoot = newHome
+	prepared.ConfigPath, prepared.ExpectedWorkspace = filepath.Join(
+		newHome,
+		"config.json",
+	), filepath.Join(
+		newHome,
+		"workspace",
+	)
+	presetData, err := json.Marshal(prepared)
+	if prepared.Validate() != nil || err != nil || len(presetData)+1 > MaxManifestBytes || ctx.Err() != nil {
+		return result, ErrPreparation
+	}
 	if parentRoot.Mkdir(name, 0o700) != nil {
 		return result, ErrPreparation
 	}
-	newHome := filepath.Join(physicalParent, name)
 	result = Preparation{
 		Version: Version, Outcome: "incomplete", Home: newHome,
-		ConfigPath: filepath.Join(newHome, "config.json"), Workspace: filepath.Join(newHome, "workspace"),
+		ConfigPath: prepared.ConfigPath, Workspace: prepared.ExpectedWorkspace,
 		PresetPath: filepath.Join(newHome, "reports", "preset.json"),
 	}
 	root, err := parentRoot.OpenRoot(name)
@@ -153,8 +168,6 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 		}
 		result.WorkspaceFileCount++
 	}
-	prepared := preset
-	prepared.IsolationRoot, prepared.ConfigPath, prepared.ExpectedWorkspace = newHome, result.ConfigPath, result.Workspace
 	if ctx.Err() != nil {
 		return result, ErrPreparation
 	}
@@ -165,16 +178,37 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 		) != nil {
 		return result, ErrPreparation
 	}
+	if _, _, err = inspectProfileFiles(prepared, newHome); err != nil {
+		return result, ErrPreparation
+	}
 	fingerprint, err := config.PublicFingerprint(saved.Config)
 	if err != nil {
 		return result, ErrPreparation
 	}
-	data, err := json.Marshal(prepared)
-	if err != nil || writePreparedFile(root, "reports/preset.json", append(data, '\n')) != nil || ctx.Err() != nil {
+	if writePreparedFile(root, "reports/preset.json", append(presetData, '\n')) != nil || ctx.Err() != nil {
 		return result, ErrPreparation
 	}
 	result.Outcome, result.PublicConfigSHA256 = "prepared", fingerprint
 	return result, nil
+}
+
+// Inspect this one serializer-owned JSON document as decoded tokens. Substring
+// checks on encoded bytes miss quotes and HTML characters escaped by Marshal.
+// This is a known-literal guard, not the runtime evidence privacy oracle.
+func preparationMetadataHasCredential(data []byte, filter *strings.Replacer) bool {
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return false
+		}
+		if err != nil {
+			return true
+		}
+		if value, ok := token.(string); ok && filter.Replace(value) != value {
+			return true
+		}
+	}
 }
 
 func clonePreparationConfig(source *config.Config, preset Preset) (*config.Config, error) {
