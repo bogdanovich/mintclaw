@@ -1,5 +1,6 @@
-// Package desktop implements local OS readiness and identity checks. A report
-// describes this process, not its parent terminal, and grants no authority.
+// Package desktop implements local OS readiness and native window-lifetime
+// checks. A report describes this process, not its parent terminal, and grants
+// no authority.
 package desktop
 
 import (
@@ -9,7 +10,7 @@ import (
 
 const CompanionBundleID = "io.github.bogdanovich.mintclaw.companion"
 
-var ErrUnsupported = errors.New("native desktop readiness is unavailable")
+var ErrUnsupported = errors.New("native desktop capability is unavailable")
 
 // Application is the actual process's main bundle, not a caller-supplied path
 // or an inference from process ancestry. ConfigPath is local operator metadata.
