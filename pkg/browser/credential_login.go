@@ -47,6 +47,8 @@ type credentialSession struct {
 	lease   CredentialGrant
 	request credentialbroker.Request
 	release []func()
+	cookies map[string]struct{}
+	closed  bool
 	done    chan struct{}
 }
 
@@ -57,14 +59,43 @@ func (bound *credentialSession) check(ctx context.Context, origin string) error 
 }
 
 func (bound *credentialSession) close() {
+	bound.closed = true
 	for _, release := range bound.release {
 		release()
 	}
 	bound.release = nil
+	clear(bound.cookies)
 	if bound.done != nil {
 		close(bound.done)
 		bound.done = nil
 	}
+}
+
+func (bound *credentialSession) protectCookies(values []string) error {
+	if bound.closed || len(values) > 128 {
+		return errCredentialDriver
+	}
+	if bound.cookies == nil {
+		bound.cookies = make(map[string]struct{})
+	}
+	for _, value := range values {
+		if value == "" || len(value) > 4096 {
+			return errCredentialDriver
+		}
+		if _, exists := bound.cookies[value]; exists {
+			continue
+		}
+		if len(bound.cookies) >= 128 {
+			return errCredentialDriver
+		}
+		release, err := secretvalues.Register([]byte(value))
+		if err != nil {
+			return errCredentialDriver
+		}
+		bound.cookies[value] = struct{}{}
+		bound.release = append(bound.release, release)
+	}
+	return nil
 }
 
 // LoginCredential serializes observation, retrieval, private fill and submit
@@ -204,15 +235,13 @@ func (broker *Broker) LoginCredential(
 		}
 		return result
 	}
-	releaseCookies, err := outcome.protectCookies()
-	if err != nil {
+	if bound.protectCookies(outcome.cookies) != nil || driver.bindCredentialOutputs(bound.protectCookies) != nil {
 		private.lost = true
 		_ = private.client.Close()
 		broker.retireCredentialSession(request.Owner, request.SessionID)
 		result.Outcome = "outcome_unknown"
 		return result
 	}
-	bound.release = append(bound.release, releaseCookies)
 	slot.refs, slot.refPositions, slot.inputs = nil, nil, nil
 	slot.navigationID = ""
 	result.Alias, result.Outcome = request.Account, outcome.code
