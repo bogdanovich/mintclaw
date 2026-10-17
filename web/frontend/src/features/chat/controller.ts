@@ -268,8 +268,11 @@ export async function hydrateActiveSession() {
     return
   }
 
-  hydratePromise = loadSessionMessages(storedSessionId)
+  const hydration: Promise<void> = loadSessionMessages(storedSessionId)
     .then((historyMessages) => {
+      if (hydratePromise !== hydration) {
+        return
+      }
       const currentState = getChatState()
       if (currentState.activeSessionId !== storedSessionId) {
         return
@@ -293,6 +296,9 @@ export async function hydrateActiveSession() {
       })
     })
     .catch((error) => {
+      if (hydratePromise !== hydration) {
+        return
+      }
       console.error("Failed to restore last session history:", error)
 
       const currentState = getChatState()
@@ -313,10 +319,13 @@ export async function hydrateActiveSession() {
       })
     })
     .finally(() => {
-      hydratePromise = null
+      if (hydratePromise === hydration) {
+        hydratePromise = null
+      }
     })
 
-  return hydratePromise
+  hydratePromise = hydration
+  return hydration
 }
 
 interface SendChatMessageInput {
@@ -487,6 +496,7 @@ export function initializeChatStore() {
 
 export function teardownChatStore() {
   sessionSelectionGeneration += 1
+  hydratePromise = null
   unsubscribeGateway?.()
   unsubscribeGateway = null
   initialized = false
