@@ -35,12 +35,18 @@ type credentialRuntime struct {
 	once         sync.Once
 	closeErr     error
 	consumeLogin func(context.Context, vault.Binding, func([]byte, []byte) error) error
+	loginEnabled bool
+	ownerID      string
+	hostID       string
+	origin       string
+	notify       credentialNotifier
 }
 
 func setupCredentialRuntime(
 	cfg *config.Config,
 	token string,
 	routes credentialRoutes,
+	notifiers ...credentialNotifier,
 ) (*credentialRuntime, error) {
 	if cfg == nil || !cfg.Credentials.Enabled {
 		return nil, nil
@@ -57,6 +63,11 @@ func setupCredentialRuntime(
 		return nil, errCredentialsUnavailable
 	}
 	runtime := &credentialRuntime{controller: controller, routes: routes}
+	runtime.loginEnabled = cfg.Credentials.BrowserLoginEnabled
+	runtime.ownerID, runtime.hostID, runtime.origin = cfg.Credentials.OwnerID, cfg.Credentials.HostID, cfg.Credentials.Origin
+	if len(notifiers) == 1 {
+		runtime.notify = notifiers[0]
+	}
 	// Approval setup remains available before the operator provisions a token.
 	// An unavailable SDK never provides a login consumer or value access.
 	if provider, vaultErr := newCredentialVault(cfg.Credentials.StateDirectory, vault.New); vaultErr == nil {

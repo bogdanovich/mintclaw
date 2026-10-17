@@ -23,6 +23,7 @@ const (
 	CapabilityDocumentForm    CapabilityID = "document.form"
 	CapabilityBrowserObserve  CapabilityID = "browser.observe"
 	CapabilityBrowserAct      CapabilityID = "browser.act"
+	CapabilityBrowserLogin    CapabilityID = "browser.login"
 	CapabilityBrowserWorkflow CapabilityID = "browser.workflow"
 	CapabilityBrowserCapture  CapabilityID = "browser.capture"
 	CapabilityBrowserDownload CapabilityID = "browser.download"
@@ -44,6 +45,7 @@ func (capability CapabilityID) Valid() bool {
 		CapabilityDocumentForm,
 		CapabilityBrowserObserve,
 		CapabilityBrowserAct,
+		CapabilityBrowserLogin,
 		CapabilityBrowserWorkflow,
 		CapabilityBrowserCapture,
 		CapabilityBrowserDownload:
