@@ -81,4 +81,11 @@ func TestFormIntakePriorSettlementFencesAnUnappliedOldReservationWithoutANewFiel
 	if _, err = store.ApplyFormIntakePass(t.Context(), stale); !errors.Is(err, ErrFormJobConflict) {
 		t.Fatal("a pre-settlement reservation applied against its changed source-accounting snapshot")
 	}
+	_, err = store.ReserveFormIntakePass(t.Context(), FormIntakePassRequest{
+		Reference: old, ExpectedRevision: settled.Job.Revision, Owner: start.Owner, Schema: start.Schema,
+		CandidateIDs: []string{start.Schema.Fields[0].ID}, IdempotencyKey: "reserved-before-settlement",
+	})
+	if !errors.Is(err, ErrFormJobConflict) {
+		t.Fatal("reservation reuse exposed stale authority for another private interpretation")
+	}
 }

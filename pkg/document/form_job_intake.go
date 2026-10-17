@@ -389,7 +389,8 @@ func (store *FormJobStore) ReserveFormIntakePass(
 				!slices.Equal(reservation.CandidateIDs, request.CandidateIDs) {
 				return false, ErrFormJobAnswerConflict
 			}
-			if reservation.Outcome == nil && reservation.ReceiptCount != len(source.Intake.Inputs) {
+			if reservation.Outcome == nil && (reservation.ReceiptCount != len(source.Intake.Inputs) ||
+				formIntakeReservationSuperseded(source.Intake, input.ID, reservationIndex)) {
 				return false, ErrFormJobConflict
 			}
 		} else {
