@@ -176,7 +176,11 @@ func TestPlaywrightImageDownloadRealBrowser(t *testing.T) {
 	root := runtimeAdmittedBrowserConfig(t, false)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
-	profile.NetworkMode, profile.AllowedOrigins = config.BrowserNetworkExactOrigins, []string{fixtureOrigin}
+	// Full Chrome makes browser-level background requests, unlike the bundled
+	// headless shell. Match the other real-driver fixtures: public_web still
+	// denies the private redirect, and every permitted dial is forced into our
+	// owned listener below, so no request can reach an external service.
+	profile.NetworkMode, profile.AllowedOrigins = config.BrowserNetworkPublicWeb, nil
 	profile.CapabilityMode, profile.ApprovalMode = config.BrowserCapabilityFullAccess, "model_requested"
 	profile.DryRun, profile.AllowApprovedActions = false, true
 	target.Profiles[config.BrowserDefaultProfile] = profile
@@ -204,7 +208,14 @@ func TestPlaywrightImageDownloadRealBrowser(t *testing.T) {
 	worker := opened.Owner.(*playwrightWorker)
 	t.Cleanup(func() { _ = worker.Close(context.Background()) })
 	if err = worker.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixtureOrigin}); err != nil {
-		t.Fatal(err)
+		diagnostics, diagnosticErr := worker.Diagnostics(ctx, []DiagnosticCategory{DiagnosticFailedRequests})
+		t.Fatalf(
+			"fixture navigation: %v; proxy denials=%d; diagnostics=%+v, %v",
+			err,
+			worker.networkProxy.Denials(),
+			diagnostics,
+			diagnosticErr,
+		)
 	}
 	observe := func() DriverObservation {
 		t.Helper()
