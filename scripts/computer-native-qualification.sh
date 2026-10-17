@@ -4,7 +4,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: computer-native-qualification.sh --driver /absolute/pinned/cua-driver [--case all|ObservationLifecycle|UnicodeInsertion|UnicodeReplacement|ButtonClick|ScopeDenial]'
+  echo 'Usage: computer-native-qualification.sh --driver /absolute/pinned/cua-driver [--case all|ObservationLifecycle|ScopeProjection|UnicodeInsertion|UnicodeReplacement|ButtonClick|ScopeDenial]'
   echo 'Optional: MINTCLAW_COMPUTER_NATIVE_TEST_BINARY=/absolute/prebuilt/cua.test'
 }
 
@@ -21,7 +21,7 @@ done
 
 case "$qualification_case" in
   all) test_pattern='^TestNativeQualification$' ;;
-  ObservationLifecycle)
+  ObservationLifecycle|ScopeProjection)
     test_pattern="^TestNativeQualification$/^${qualification_case}$" ;;
   UnicodeInsertion|UnicodeReplacement|ButtonClick|ScopeDenial)
     test_pattern="^TestNativeQualification$/^Input$/^${qualification_case}$" ;;
@@ -81,6 +81,9 @@ fi
 printf 'Pinned Cua Driver 0.34.1; native qualification case: %s\n' "$qualification_case"
 if [[ "$qualification_case" != all ]]; then
   echo 'This selected-case run does not qualify omitted capabilities.'
+fi
+if [[ "$qualification_case" == ScopeProjection ]]; then
+  export MINTCLAW_FIXTURE_TRANSIENT_OVERLAY=1
 fi
 env MINTCLAW_COMPUTER_NATIVE_DRIVER="$driver_path" \
   MINTCLAW_COMPUTER_NATIVE_SHA256="$driver_sha256" \
