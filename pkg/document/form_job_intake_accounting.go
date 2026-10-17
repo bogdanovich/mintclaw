@@ -85,12 +85,14 @@ func formIntakeAccountedLiterals(input formIntakeStoredInput) []FormIntakeAccoun
 		return nil
 	}
 	result := make([]FormIntakeAccountedLiteral, 0, len(input.Accounted))
+	outputOnly := formIntakeOutputOnlyHistory(input)
 	for _, span := range input.Accounted {
 		text := input.Text[span.Start:span.End]
 		occurrence := formIntakeLiteralOccurrence(input.Text, span)
 		result = append(result, FormIntakeAccountedLiteral{
 			Literal: FormIntakeLiteral{Text: text, Occurrence: occurrence}, FieldID: span.FieldID,
-			ScopedInstruction: span.ScopedInstruction,
+			ScopedInstruction:    span.ScopedInstruction,
+			ReclassifiableOutput: outputOnly && span.ScopedInstruction,
 		})
 	}
 	return result
