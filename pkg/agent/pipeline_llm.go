@@ -621,6 +621,13 @@ func (p *Pipeline) invokeLLMWithRetry(
 		if failure := providers.ClassifyError(err, "", ""); failure != nil {
 			errorCode = string(failure.Reason)
 		}
+		provider, authMethod := "", ""
+		var exhausted *providers.FallbackExhaustedError
+		if route := exec.model.activeModelConfig; route != nil && len(exec.model.activeCandidates) <= 1 &&
+			!errors.As(err, &exhausted) {
+			provider, _ = providers.ExtractProtocol(route)
+			authMethod = route.AuthMethod
+		}
 		p.emitEvent(
 			runtimeevents.KindAgentError,
 			ts.eventMeta("runTurn", "turn.error").withModelAttemptID(llm.modelAttemptID),
@@ -632,6 +639,8 @@ func (p *Pipeline) invokeLLMWithRetry(
 				ProviderErrorKind:    diagnostic.ProviderErrorKind,
 				HTTPStatus:           diagnostic.HTTPStatus,
 				RequestID:            diagnostic.RequestID,
+				Provider:             provider,
+				AuthMethod:           authMethod,
 			},
 		)
 		logger.ErrorCF("agent", "LLM call failed",

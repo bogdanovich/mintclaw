@@ -292,7 +292,7 @@ func (a *Adapter) project(event runtimeevents.Event) {
 		payload, ok := event.Payload.(agent.ErrorPayload)
 		if ok && strings.TrimSpace(payload.Stage) != "" {
 			stage := safeToken(payload.Stage)
-			status := "agent error during " + stage
+			status := agentErrorMessage(payload, stage)
 			a.projector.Error(turnID, fmt.Sprintf("%s:error:%s", normalizeID(turnID), stage), status)
 			a.projector.TurnFailed(turnID, status)
 		} else {
