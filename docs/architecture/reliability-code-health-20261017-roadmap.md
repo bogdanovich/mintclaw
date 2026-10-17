@@ -26,16 +26,16 @@ repository; these counts are context, not coverage or quality scores.
 | ID | Priority | Packet | Admission/status |
 | --- | --- | --- | --- |
 | R1 | High | Isolate damaged outbox records during recovery | Admitted correctness work |
-| R2 | High | Propagate MCP tool-discovery failures | Implementation in progress; merge evidence pending |
-| R3 | High | Prevent stale Web UI session switches | Admitted correctness work |
+| R2 | High | Propagate MCP tool-discovery failures | Merged in #1681 |
+| R3 | High | Prevent stale Web UI session switches | Merged in #1682 |
 | R4 | High | Bound outbox payload storage and recovery cost | Admitted; retention design precedes implementation |
 | R5 | Medium | Carry typed MCP failure classifications | Admitted correctness work |
 | R6 | High | Finish behavioral evaluation qualification | Existing agent-evals program; reuse its owners and evidence |
-| R7 | Medium | Simplify tool execution around existing stages | Conditional on a concrete mixed-responsibility change |
+| R7 | Medium | Simplify tool execution around existing stages | Intentionally deferred; trigger not observed |
 | R8 | Medium | Expand frontend lifecycle regression coverage | Admitted, bounded to exercised lifecycle contracts |
-| R9 | Conditional | Decompose browser and coding integration files | Only when related work demonstrates a review or ownership benefit |
+| R9 | Conditional | Decompose browser and coding integration files | Intentionally deferred; trigger not observed |
 | R10 | Conditional | Measure storage contention before redesign | Measurement admitted; replacement requires measured need |
-| R11 | Low | Improve current architecture navigation | Bounded documentation work; preserve historical evidence |
+| R11 | Low | Improve current architecture navigation | Current-owner map added to code-health.md |
 | R12 | High | Triage and remediate frontend dependency advisories | Admitted follow-up from publication-time GitHub evidence |
 
 R1, R2, R3, and R5 are independent first-batch fixes and may be delivered in the
@@ -230,3 +230,49 @@ conditional admission decisions. Completion requires the admitted correctness
 and retention work, bounded frontend coverage, the linked disposition of R6,
 measured storage results, and explicit implemented/deferred decisions for the
 conditional packets. Never mark unfinished work complete to close the goal.
+
+
+## Architecture Decisions And Linked Dispositions
+
+R4's [retention decision](outbox-retention-decision-20261017.md) records the actual
+canonical replay readers, callback hazard, domain exclusions, identity version,
+crash ordering, cross-process exclusion and activation gates. Keep the file
+store at measured scale. Retirement implementation remains admitted and
+unfinished; this design merge does not authorize or claim production cleanup.
+
+R6 is assigned to the existing [agent-evals first-release goal](agent-evals-goal.md)
+and its [Next Mandatory Work](agent-evals-roadmap.md#next-mandatory-work).
+That program remains active: per-trial/effective-input proof, six PDF and six
+browser cases, native cleanup/privacy and platform-specific qualification are
+unfinished. General pilots and judge calibration provide narrower evidence;
+retained PDF failures and judge errors remain part of the record. Merged
+[#1680](https://github.com/bogdanovich/mintclaw/pull/1680) improves owned post-stop
+privacy observation but does not finish whole-runtime privacy or domain
+qualification. This is the reliability goal's linked disposition, not a claim
+that the separately owned evaluation goal is complete. Do not create another
+harness or pay for duplicate live runs as a code-health task.
+
+R7: intentional defer. R5 replaces downstream summary-text classification with a
+typed MCP boundary and the existing tool execution journal. It does not require
+new orchestration stages, approval owners or settlement paths. No demonstrated
+cross-stage ownership benefit admits a broad pipeline extraction in this batch.
+Reconsider when a concrete change crosses the existing boundaries or a repeated
+lifecycle defect exposes unclear ownership.
+
+R9: intentional defer. No admitted fix requires changing browser/coding adapter
+layout. Moving large files during transport, frontend or storage work adds review
+surface without an evidenced ownership benefit. Preserve independent authority
+checks at gateway, node and driver boundaries. Reconsider during related work
+when an extraction makes a specific behavioral change or owner easier to review.
+
+R11: the current ownership map and existing architecture/operations entry points
+now lead directly to runtime, persistence, delivery, frontend and evaluation
+contracts. Historical exit records remain intact; there is no new parallel work
+catalogue.
+
+Merged correctness evidence: R2 [#1681](https://github.com/bogdanovich/mintclaw/pull/1681)
+(`b4aa5d1df41c6b31c3ec3fa08f171d11d902dbe0`) and R3
+[#1682](https://github.com/bogdanovich/mintclaw/pull/1682)
+(`5fef84bbebb2047d1ab3eb766ef06dcf5e1a3bc4`) passed exact-head CI, substantive
+review and owner merge approval. R1 #1685, R5 #1687, R8 #1691, R10 #1690 and
+R12 #1688 are published separately and remain subject to their own gates.
