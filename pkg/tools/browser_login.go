@@ -27,7 +27,7 @@ func NewBrowserLoginTool(options BrowserToolOptions, source BrowserToolSource) *
 func (*BrowserLoginTool) Name() string { return "browser_login" }
 
 func (*BrowserLoginTool) RuntimeCapabilities() []runtimecap.CapabilityID {
-	return []runtimecap.CapabilityID{runtimecap.CapabilityBrowserAct}
+	return []runtimecap.CapabilityID{runtimecap.CapabilityBrowserLogin}
 }
 
 func (*BrowserLoginTool) Description() string {
