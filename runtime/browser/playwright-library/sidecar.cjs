@@ -561,11 +561,18 @@ class Driver {
               if (!element.isConnected) return null;
               const control = bound && (element.matches('input,textarea,select') || element.isContentEditable);
               if (control) {
+                const labelText = label => {
+                  const controls = 'input,textarea,select,[contenteditable],script,style';
+                  if (label.matches(controls)) return '';
+                  const copy = label.cloneNode(true);
+                  for (const child of copy.querySelectorAll(controls)) child.remove();
+                  return copy.textContent || '';
+                };
                 const labelledBy = (element.getAttribute('aria-labelledby') || '').trim();
                 const labels = labelledBy ? labelledBy.split(/\s+/).map(id => document.getElementById(id))
-                  .filter(Boolean).map(label => label.textContent || '').join(' ').trim() : '';
+                  .filter(Boolean).map(labelText).join(' ').trim() : '';
                 const name = labels || element.getAttribute('aria-label') ||
-                  (element.labels && Array.from(element.labels).map(label => label.textContent || '').join(' ').trim()) ||
+                  (element.labels && Array.from(element.labels).map(labelText).join(' ').trim()) ||
                   element.getAttribute('placeholder') || element.getAttribute('title') || '';
                 return { control: true, name };
               }

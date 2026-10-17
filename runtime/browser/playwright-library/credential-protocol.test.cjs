@@ -42,7 +42,7 @@ const bootstrap = `
         await route.fulfill({ contentType: 'text/html',
           headers: { 'set-cookie': 'session=${rotatedCookie}; Secure; HttpOnly; Path=/' },
           body: '<div>Ready</div><input aria-label="Verification code" autocomplete="one-time-code" value="741852">' +
-            '<textarea aria-label="Recovery value">private-textarea-N58</textarea>' +
+            '<label>Recovery value<textarea>private-textarea-N58</textarea></label>' +
             '<select aria-label="Recovery option"><option selected>private-option-R26</option></select>' +
             '<div role="textbox" contenteditable="true" aria-label="Recovery input">private-editable-J62</div>' });
       } else {

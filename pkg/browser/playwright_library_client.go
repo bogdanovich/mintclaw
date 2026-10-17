@@ -143,7 +143,7 @@ func (client *playwrightLibraryClient) connect(
 		}
 		return nil, err
 	}
-	connection, err := localmcp.StartIsolatedCommand(
+	connection, err := localmcp.StartPrivateIsolatedCommand(
 		ctx,
 		"browser_playwright_library",
 		command,

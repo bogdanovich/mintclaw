@@ -22,6 +22,10 @@ makes the worker unavailable rather than releasing an unguarded response.
 Closed sessions reject late registration. Ordinary close/shutdown retains the
 existing process-cleanup authority before releasing output guards.
 
+The direct browser driver uses the existing private subprocess transport.
+Its stderr is drained to discard before logger/trace fanout, including startup
+and shutdown; diagnostic or dependency output cannot become a local log stream.
+
 This is a bounded accidental-echo guard under the approved trusted-site/runtime
 model, not a promise about arbitrary adversarial transformations. JavaScript
 cookie values that remain in the jar are collected; full companion and site
