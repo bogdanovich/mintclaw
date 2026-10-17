@@ -107,13 +107,31 @@ behavior. Retain normal policy for subsequent authenticated actions.
 
 ## Current progress
 
-- TR0: this revision replaces the design and roadmap. The operator resumed the
-  same goal; its original requested outcomes remain in scope.
-- Policy, vault adapter, WebAuthn, mobile UI, and first-party browser primitives
-  exist in merged code. Their earlier tests prove component behavior, not the
-  integrated feature or absence of secrets from all outputs.
-- Gateway credential configuration and ownership, integrated browser login,
-  scoped connector access, actual Android qualification, and the personal pilot
-  are incomplete. No real token, login, or phone approval is claimed.
+- TR0: the revised design/roadmap is merged in
+  [#1619](https://github.com/bogdanovich/mintclaw/pull/1619). The same active
+  goal retains all original requested outcomes.
+- TR1: unused Mac VM packaging is removed in
+  [#1620](https://github.com/bogdanovich/mintclaw/pull/1620), and the private
+  vault adapter is shared with the runtime in
+  [#1625](https://github.com/bogdanovich/mintclaw/pull/1625). Other unused
+  appliance commands/helpers and their obsolete qualification remain to retire.
+- TR2: the dynamic model/log/trace output guard is merged in
+  [#1623](https://github.com/bogdanovich/mintclaw/pull/1623). Private token entry,
+  storage, SDK startup and lazy scoped consumption are under review in
+  [#1643](https://github.com/bogdanovich/mintclaw/pull/1643). Alias-only tool
+  wiring and complete end-to-end output qualification remain incomplete.
+- TR3: gateway-owned enrollment/approval/revocation is merged in
+  [#1631](https://github.com/bogdanovich/mintclaw/pull/1631). Synthetic signed and
+  virtual-authenticator tests cover the component; actual Android enrollment
+  and generic notifications remain required.
+- TR4: the existing browser's private credential transaction is merged in
+  [#1637](https://github.com/bogdanovich/mintclaw/pull/1637), including grant
+  checks around preparation/retrieval and authenticated session retirement.
+  User-facing tool wiring, site/placement admission, current-cookie refresh,
+  and all companion/artifact/persistence sinks remain rollout requirements.
+- TR5/TR6: the scoped connector, full serialized-output qualification and
+  personal-account pilot are incomplete. No real token, login, or physical
+  phone approval is claimed. Passing component tests do not prove the complete
+  feature or absence of secrets from every enabled output.
 - Earlier PR and qualification records are preserved in the
   [historical roadmap](credential-isolated-runtime-history.md).
