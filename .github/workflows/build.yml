@@ -5,18 +5,12 @@ on:
     branches: [ "main" ]
 
 jobs:
-  integration:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Run Docker-backed integration suites
-        run: bash ./scripts/run-integration-tests.sh
+  checks:
+    name: Full CI
+    uses: ./.github/workflows/pr.yml
 
   build:
-    needs: integration
+    needs: checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

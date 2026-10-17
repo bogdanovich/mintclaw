@@ -28,13 +28,29 @@ Some integration-tagged tests are intentionally opt-in and not part of the Docke
 
 ## What CI Runs
 
-The integration jobs in [`.github/workflows/pr.yml`](../.github/workflows/pr.yml) and [`.github/workflows/build.yml`](../.github/workflows/build.yml) both execute:
+PR integration checks select credential/browser, document, companion, and
+Docker suites from changed paths. Shared Go and build inputs run every suite.
+Main builds, scheduled CI, and manual CI runs use the complete suite through
+[`.github/workflows/pr.yml`](../.github/workflows/pr.yml).
+
+Docker-backed suites run with:
 
 ```bash
 bash ./scripts/run-integration-tests.sh
 ```
 
 The runner auto-discovers every suite under `integration/suites/`, so adding a suite does not require editing the GitHub Actions workflow.
+
+The real-process Go runner accepts `companion`, `documents`, or `all`:
+
+```bash
+bash ./scripts/run-go-integration-tests.sh companion
+bash ./scripts/run-go-integration-tests.sh documents
+```
+
+Calling it without an argument runs both groups. Document tests require the
+Linux document runtime installed by the CI job. Credential/browser qualification
+has separate fixture setup and scripts in that job.
 
 ## How the Runner Works
 
