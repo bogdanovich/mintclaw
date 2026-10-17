@@ -31,6 +31,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/h2non/filetype v1.1.3
+	github.com/jezek/xgb v1.3.1
 	github.com/kagisearch/kagi-openapi-golang v0.0.0-20260526215348-96575e864d62
 	github.com/klippa-app/go-pdfium v1.20.0
 	github.com/larksuite/oapi-sdk-go/v3 v3.9.10
