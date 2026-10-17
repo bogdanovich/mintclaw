@@ -49,22 +49,6 @@ func (store *FormJobStore) resolvePriorFormIntakeLiterals(
 			if findingIndex < 0 {
 				return ErrFormJobAnswerConflict
 			}
-			fieldIndex := slices.IndexFunc(request.Schema.Fields, func(field FormField) bool {
-				return field.ID == proposal.FieldID
-			})
-			if fieldIndex < 0 {
-				return ErrFormJobAnswerConflict
-			}
-			old := formIntakeAssignment(formIntakeResolvedProposal{
-				Proposal: FormIntakeProposal{FieldID: proposal.FieldID, Literals: []FormIntakeLiteral{prior.Literal}},
-				Field:    request.Schema.Fields[fieldIndex],
-			})
-			_, validation, code := deterministicFormValue(request.Schema.Fields[fieldIndex], old.Value)
-			finding := findings[findingIndex]
-			if finding.Code == "field_invalid" && code != "field_invalid" ||
-				finding.Code == "field_conflicting" && validation != FormValueValidationValid {
-				return ErrFormJobAnswerConflict
-			}
 			span, err := resolveFormIntakeLiteral(input.Text, prior.Literal)
 			if err != nil {
 				return err

@@ -112,6 +112,10 @@ func selectFormIntakeProposals(
 			result.Findings = append(result.Findings, FormFieldMappingBlocker{FieldID: item.Field.ID, Code: code})
 			continue
 		}
+		if code := formIntakeScalarEvidenceCode(item, value); code != "" {
+			result.Findings = append(result.Findings, FormFieldMappingBlocker{FieldID: item.Field.ID, Code: code})
+			continue
+		}
 		current, found, readErr := currentFormIntakeValue(record, key, item.Field.ID)
 		if readErr != nil {
 			return result, readErr
@@ -182,7 +186,7 @@ func resolveFormIntakeProposals(
 		seen[item.FieldID] = true
 		field := request.Schema.Fields[index]
 		if !item.Disposition.valid() ||
-			(len(item.Literals) != 1 && (item.Disposition != "" || field.Kind != FormFieldList || !field.MultiSelect)) {
+			(len(item.Literals) != 1 && item.Disposition != "") {
 			return nil, ErrFormJobAnswerConflict
 		}
 		spans, err := resolveFormIntakeRefs(text, item.Literals, item.FieldID)
@@ -212,6 +216,26 @@ func resolveFormIntakeProposals(
 		result = append(result, formIntakeResolvedProposal{item, field, spans, correction})
 	}
 	return result, nil
+}
+
+// Multiple fragments may prove one scalar, never manufacture it by joining or
+// choosing a preferred fragment. Distinct list choices retain their old path.
+func formIntakeScalarEvidenceCode(item formIntakeResolvedProposal, canonical FormProtectedValue) string {
+	if item.Field.Kind == FormFieldList && item.Field.MultiSelect {
+		return ""
+	}
+	for _, literal := range item.Proposal.Literals[1:] {
+		value, validation, code := deterministicFormValue(item.Field, FormProtectedValue{
+			Kind: ProtectedValueText, Text: literal.Text,
+		})
+		if validation != FormValueValidationValid {
+			return code
+		}
+		if !reflect.DeepEqual(value, canonical) {
+			return "field_conflicting"
+		}
+	}
+	return ""
 }
 
 func resolveFormIntakeRefs(text string, refs []FormIntakeLiteral, fieldID string) ([]formIntakeSpan, error) {

@@ -60,6 +60,13 @@ const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance
 	`Omit output unless this utterance explicitly changes complete-versus-draft scope; finish alone is not a scope change. ` +
 	`Arrays may be empty. Occurrences count exact token-aligned non-overlapping matches, starting at 1. ` +
 	`Use only literal text from the utterance, never generate, rephrase, infer or case-fold a value. ` +
+	`A scalar field has one value. Multiple exact evidence literals are permitted only if each independently ` +
+	`normalizes to that same native value; never join them into a new value. Multi-select lists permit distinct choices. ` +
+	`Redundant evidence must refer to the same field/person; never merge same-valued facts from different roles. ` +
+	`For a checkbox, extract exact supplied tokens from boolean_literals (native comparison ignores case). ` +
+	`Never concatenate synonyms or a whole clause into that scalar. Keep the remaining connective prose in non_data. ` +
+	`Do not generate a boolean token or copy one from related input when the current utterance lacks one. ` +
+	`Conflicting or unclear supplied values require a finding, not several scalar literals or a guessed value. ` +
 	`For explicit operator instructions to leave a field blank or mark a section inapplicable, use disposition with ` +
 	`one exact instruction literal, not a generated blank or N/A string. Do not mark missing fields inapplicable by default. ` +
 	`A section instruction can target several supplied fields using the same exact literal. Scoped instruction evidence ` +
@@ -126,7 +133,9 @@ type documentIntakeOutputWire struct {
 
 type documentIntakeFieldWire struct {
 	documentFormAuditFieldPayload
-	EventID string `json:"current_event_id,omitempty"`
+	EventID         string   `json:"current_event_id,omitempty"`
+	MaxLength       int      `json:"max_length,omitempty"`
+	BooleanLiterals []string `json:"boolean_literals,omitempty"`
 }
 
 func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byte, error) {
@@ -209,7 +218,10 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 			DateFormat: field.DateFormat, Options: field.Options, Existing: field.HasValue,
 			State: state.State, Source: state.Source, Confidence: state.Confidence, Validation: state.Validation,
 			Deferred: seenDeferred[field.ID] && state.EventID == "" && !field.HasValue,
-		}, EventID: state.EventID}
+		}, EventID: state.EventID, MaxLength: field.MaxLength}
+		if field.Kind == document.FormFieldCheckbox {
+			fields[index].BooleanLiterals = document.FormIntakeBooleanLiterals()
+		}
 	}
 	type evidenceWire struct {
 		Page int    `json:"page"`
