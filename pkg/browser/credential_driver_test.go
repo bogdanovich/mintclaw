@@ -78,6 +78,37 @@ func TestCredentialCookieEnvelopeRejectsOpaqueAndUnprotectedOutput(t *testing.T)
 	}
 }
 
+func TestCredentialCookieEnvelopeRequiresPresentNonNullInventory(t *testing.T) {
+	for _, inventory := range []struct {
+		name  string
+		field string
+		valid bool
+	}{
+		{name: "missing"},
+		{name: "null", field: `,"cookies":null`},
+		{name: "empty", field: `,"cookies":[]`, valid: true},
+	} {
+		t.Run(inventory.name, func(t *testing.T) {
+			called := false
+			envelope := `{"result":{"content":[{"type":"text","text":"fixture result"}]}` + inventory.field + `}`
+			result, err := decodeCredentialCall(playwrightTextResult(envelope), nil, func(cookies []string) error {
+				called = true
+				if cookies == nil {
+					t.Error("cookie guard received no valid inventory")
+				}
+				return nil
+			})
+			if inventory.valid {
+				if err != nil || result == nil || !called {
+					t.Fatal("explicit empty cookie inventory was rejected")
+				}
+			} else if result != nil || !errors.Is(err, ErrWorkerLost) || called {
+				t.Fatal("missing or null cookie inventory released ordinary output")
+			}
+		})
+	}
+}
+
 func TestCredentialContextCatalogGuardsPersistedURLsAndLabels(t *testing.T) {
 	broker, request, _, _, _, _ := credentialBrokerFixture(t)
 	const value = "catalog-credential-fixture-S47"
