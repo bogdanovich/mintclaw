@@ -121,7 +121,7 @@ func TestFormIntakeNewerGuidanceRequiresEveryNativeGate(t *testing.T) {
 	for _, name := range []string{
 		"acknowledged", "accepted", "confirmation advice", "native invalid", "native conflict", "unsupported",
 		"unaccounted", "other uncertainty", "deferred", "no canonical field", "invalid canonical field",
-		"low confidence", "not a user decision", "unconfirmed", "missing scope coverage", "not newer",
+		"low confidence", "not a user decision", "unconfirmed", "missing scope coverage", "not newer", "historical acknowledgement",
 	} {
 		t.Run(name, func(t *testing.T) {
 			schema := intakeTextSchema()
@@ -134,7 +134,7 @@ func TestFormIntakeNewerGuidanceRequiresEveryNativeGate(t *testing.T) {
 					Findings: []FormFieldMappingBlocker{{FieldID: b, Code: "field_ambiguous"}},
 				}}},
 			}
-			outcome := formIntakeStoredOutcome{AcknowledgedIDs: []string{b}}
+			currentValueIDs := []string{b}
 			record := FormJobRecord{Fields: []FormJobFieldState{{
 				FieldID: b, Source: FormValueSourceUser, State: FormValueConfirmed,
 				Confidence: FormValueConfidenceExact, Validation: FormValueValidationValid,
@@ -142,8 +142,7 @@ func TestFormIntakeNewerGuidanceRequiresEveryNativeGate(t *testing.T) {
 			index := 1
 			switch name {
 			case "accepted":
-				outcome.AcknowledgedIDs = nil
-				outcome.AcceptedIDs = []string{b}
+				currentValueIDs = []string{b}
 			case "confirmation advice":
 				old.Reservations[0].Outcome.Findings[0].Code = "field_confirmation_required"
 			case "native invalid":
@@ -158,8 +157,9 @@ func TestFormIntakeNewerGuidanceRequiresEveryNativeGate(t *testing.T) {
 				old.Reservations[0].Outcome.Findings = append(old.Reservations[0].Outcome.Findings,
 					FormFieldMappingBlocker{FieldID: a, Code: "field_ambiguous"})
 			case "deferred":
-				outcome.AcknowledgedIDs = nil
-				outcome.ScopedIDs = []string{b}
+				currentValueIDs = nil
+			case "historical acknowledgement":
+				currentValueIDs = nil
 			case "no canonical field":
 				record.Fields = nil
 			case "invalid canonical field":
@@ -178,12 +178,15 @@ func TestFormIntakeNewerGuidanceRequiresEveryNativeGate(t *testing.T) {
 			case "not newer":
 				index = 0
 			}
-			mode := &formIntakeStoredMode{Inputs: []formIntakeStoredInput{old, {ID: "current", Text: "later"}}}
+			outcome := &formIntakeStoredOutcome{AcceptedIDs: currentValueIDs}
+			mode := &formIntakeStoredMode{Inputs: []formIntakeStoredInput{old, {
+				ID: "current", Text: "later", Reservations: []formIntakeStoredPass{{Outcome: outcome}},
+			}}}
 			before, err := json.Marshal(old.Reservations)
 			if err != nil {
 				t.Fatal(err)
 			}
-			consumeOlderFormIntakeGuidance(mode, index, schema, record, outcome)
+			consumeOlderFormIntakeGuidance(mode, index, schema, record, currentValueIDs, outcome)
 			want := name == "acknowledged" || name == "accepted" || name == "confirmation advice"
 			got := mode.Inputs[0]
 			after, err := json.Marshal(got.Reservations)

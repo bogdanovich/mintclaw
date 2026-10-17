@@ -7,11 +7,12 @@ import (
 )
 
 func formIntakeCurrentFindings(input formIntakeStoredInput) []FormFieldMappingBlocker {
-	return formIntakeFindingsThrough(input, nil)
+	return formIntakeFindingsThrough(input, nil, nil)
 }
 
 func formIntakeCurrentModeFindings(mode *formIntakeStoredMode, input formIntakeStoredInput) []FormFieldMappingBlocker {
 	through := make(map[string]int)
+	guidanceThrough := make(map[string]int)
 	if mode != nil {
 		for _, other := range mode.Inputs {
 			for _, pass := range other.Reservations {
@@ -19,17 +20,26 @@ func formIntakeCurrentModeFindings(mode *formIntakeStoredMode, input formIntakeS
 					continue
 				}
 				for _, prior := range pass.Outcome.PriorResolutions {
-					if prior.InputID == input.ID && prior.ThroughPasses > through[prior.Span.FieldID] {
-						through[prior.Span.FieldID] = prior.ThroughPasses
+					if prior.InputID != input.ID {
+						continue
+					}
+					target, fieldID := through, prior.Span.FieldID
+					if prior.GuidanceFieldID != "" {
+						target, fieldID = guidanceThrough, prior.GuidanceFieldID
+					}
+					if prior.ThroughPasses > target[fieldID] {
+						target[fieldID] = prior.ThroughPasses
 					}
 				}
 			}
 		}
 	}
-	return formIntakeFindingsThrough(input, through)
+	return formIntakeFindingsThrough(input, through, guidanceThrough)
 }
 
-func formIntakeFindingsThrough(input formIntakeStoredInput, through map[string]int) []FormFieldMappingBlocker {
+func formIntakeFindingsThrough(
+	input formIntakeStoredInput, through, guidanceThrough map[string]int,
+) []FormFieldMappingBlocker {
 	if input.State == formIntakeInputConsumed {
 		return nil
 	}
@@ -44,7 +54,8 @@ func formIntakeFindingsThrough(input formIntakeStoredInput, through map[string]i
 			}
 		}
 		for _, finding := range pass.Outcome.Findings {
-			if passIndex < through[finding.FieldID] {
+			if passIndex < through[finding.FieldID] || passIndex < guidanceThrough[finding.FieldID] &&
+				(finding.Code == "field_ambiguous" || finding.Code == "field_confirmation_required") {
 				continue
 			}
 			prior := current[finding.FieldID]

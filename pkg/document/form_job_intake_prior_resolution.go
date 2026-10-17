@@ -7,7 +7,9 @@ import (
 type formIntakeStoredResolution struct {
 	InputID       string         `json:"input_id"`
 	ThroughPasses int            `json:"through_passes"`
-	Span          formIntakeSpan `json:"span"`
+	Span          formIntakeSpan `json:"span,omitzero"`
+	// Advisory settlement has no literal to account. Exactly one variant is set.
+	GuidanceFieldID string `json:"guidance_field_id,omitempty"`
 }
 
 // An acknowledgement need not advance the field revision. A settlement still

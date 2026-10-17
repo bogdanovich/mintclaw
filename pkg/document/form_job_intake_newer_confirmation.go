@@ -7,7 +7,7 @@ import "slices"
 // accounted older text; it never derives, copies or changes a field value.
 func consumeOlderFormIntakeGuidance(
 	mode *formIntakeStoredMode, currentIndex int, schema FormFieldsFacts,
-	record FormJobRecord, outcome formIntakeStoredOutcome,
+	record FormJobRecord, currentValueIDs []string, outcome *formIntakeStoredOutcome,
 ) {
 	for index := 0; index < currentIndex; index++ {
 		input := &mode.Inputs[index]
@@ -19,7 +19,6 @@ func consumeOlderFormIntakeGuidance(
 		if len(findings) == 0 {
 			continue
 		}
-		settled := true
 		for _, finding := range findings {
 			field := slices.IndexFunc(record.Fields, func(field FormJobFieldState) bool {
 				return field.FieldID == finding.FieldID && field.Source == FormValueSourceUser &&
@@ -28,13 +27,14 @@ func consumeOlderFormIntakeGuidance(
 						field.State == FormValueNotApplicable)
 			})
 			if (finding.Code != "field_ambiguous" && finding.Code != "field_confirmation_required") || field < 0 ||
-				!slices.Contains(outcome.AcceptedIDs, finding.FieldID) &&
-					!slices.Contains(outcome.AcknowledgedIDs, finding.FieldID) {
-				settled = false
-				break
+				!slices.Contains(currentValueIDs, finding.FieldID) {
+				continue
 			}
+			outcome.PriorResolutions = append(outcome.PriorResolutions, formIntakeStoredResolution{
+				InputID: input.ID, ThroughPasses: len(input.Reservations), GuidanceFieldID: finding.FieldID,
+			})
 		}
-		if settled {
+		if len(formIntakeCurrentModeFindings(mode, *input)) == 0 {
 			input.State, input.Text = formIntakeInputConsumed, ""
 		}
 	}
