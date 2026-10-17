@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap/identity"
 )
 
 var (
@@ -66,7 +66,7 @@ type ReadOnlyPolicy struct {
 	Targets        []Target
 	LeaseTTL       time.Duration
 	ObservationTTL time.Duration
-	Admit          func(runtimecap.Principal, Target) bool
+	Admit          func(identity.Principal, Target) bool
 }
 
 // ReadOnlyHost enforces the stored owner, exact target/worker/policy binding,
@@ -104,7 +104,7 @@ func NewReadOnlyHost(policy ReadOnlyPolicy, driver CaptureDriver, arbiter *Arbit
 	}, nil
 }
 
-func (host *ReadOnlyHost) Targets(ctx context.Context, principal runtimecap.Principal) ([]Target, error) {
+func (host *ReadOnlyHost) Targets(ctx context.Context, principal identity.Principal) ([]Target, error) {
 	if principal.Validate() != nil {
 		return nil, ErrInvalid
 	}
@@ -174,7 +174,7 @@ func (host *ReadOnlyHost) Open(ctx context.Context, request OpenRequest) (Sessio
 }
 
 func (host *ReadOnlyHost) Status(
-	ctx context.Context, principal runtimecap.Principal, sessionID string,
+	ctx context.Context, principal identity.Principal, sessionID string,
 ) (Session, error) {
 	host.arbiter.mu.Lock()
 	defer host.arbiter.mu.Unlock()
@@ -289,7 +289,7 @@ func (host *ReadOnlyHost) transition(ctx context.Context, binding Binding, event
 	return next, nil
 }
 
-func (host *ReadOnlyHost) admitted(principal runtimecap.Principal, target Target) bool {
+func (host *ReadOnlyHost) admitted(principal identity.Principal, target Target) bool {
 	for _, allowed := range host.policy.Targets {
 		if allowed == target {
 			return host.policy.Admit(principal, target)
@@ -300,7 +300,7 @@ func (host *ReadOnlyHost) admitted(principal runtimecap.Principal, target Target
 
 // owned allows status/release of expired leases, but revokes capture authority.
 func (host *ReadOnlyHost) owned(
-	ctx context.Context, principal runtimecap.Principal, id string,
+	ctx context.Context, principal identity.Principal, id string,
 ) (*lease, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
