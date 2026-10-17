@@ -107,7 +107,7 @@ func TestRejectedEnrollmentStaysInactiveAndRecoversPrivately(t *testing.T) {
 				t.Fatal("rejected owner proof activated a grant")
 			}
 			assertEnrollmentInactive(t, restarted)
-			// A new protected console action can deliberately replace a pending
+			// A new protected operator action can deliberately replace a pending
 			// candidate. Ordinary phone links never obtain this capability.
 			fresh, err := NewEnrollment(setup)
 			if err != nil {
