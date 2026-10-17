@@ -119,7 +119,8 @@ func credentialProviderFixture(
 					Repository   string                   `json:"repository"`
 					PullRequests []githubread.PullRequest `json:"pull_requests"`
 				}
-				if !decode(&result) || result.Repository != "fixture-owner/fixture-repo" || len(result.PullRequests) != 1 ||
+				if !decode(&result) || result.Repository != "fixture-owner/fixture-repo" ||
+					len(result.PullRequests) != 1 ||
 					result.PullRequests[0].Number != 7 ||
 					!strings.Contains(result.PullRequests[0].Title, "Pull request") ||
 					result.PullRequests[0].URL != "https://github.com/fixture-owner/fixture-repo/pull/7" {
