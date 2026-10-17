@@ -64,7 +64,7 @@ func decodeCredentialCall(result *sdkmcp.CallToolResult, err error, protect func
 		Result  playwrightLibraryWireResult `json:"result"`
 		Cookies []string                    `json:"cookies"`
 	}
-	if decodeCredentialEnvelope(text, &response) != nil || protect(response.Cookies) != nil {
+	if decodeCredentialEnvelope(text, &response) != nil || response.Cookies == nil || protect(response.Cookies) != nil {
 		return nil, ErrWorkerLost
 	}
 	for _, content := range response.Result.Content {
