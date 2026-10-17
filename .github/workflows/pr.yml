@@ -459,6 +459,13 @@ jobs:
           runtime/browser/playwright-library/credential-protocol.test.cjs
           runtime/browser/playwright-library/navigation-evidence.test.cjs
 
+      - name: Qualify integrated alias login and phone approval
+        run: >-
+          env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
+          MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE=1
+          go test -count=1 -race -timeout 2m -tags goolm,stdjson
+          -run '^TestCredentialAliasBrowserAndPhoneFixture$' ./pkg/gateway
+
       - name: Install pinned document runtime
         run: |
           snapshot=20261011T000000Z
