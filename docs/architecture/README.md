@@ -143,6 +143,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   session-owned output guards, grant-driven retirement, and explicit rollout limits.
 - [Credential Browser Output Boundary](credential-browser-output-privacy.md): private cookie refresh,
   authenticated snapshot/catalog projections, and artifact output admission.
+- [Integrated Alias Browser Login](credential-alias-browser-login.md): runtime-owned alias tool,
+  existing-channel phone notifications, signed-grant reuse and disabled-by-default rollout.
 - [Historical Isolated Credential Roadmap](credential-isolated-runtime-history.md): superseded
   deployment design and preserved component PR/qualification evidence.
 - [Historical Mac Credential VM Package](credential-mac-vm-package.md): retired candidate launcher

@@ -119,19 +119,24 @@ behavior. Retain normal policy for subsequent authenticated actions.
   [#1623](https://github.com/bogdanovich/mintclaw/pull/1623). Private token entry,
   storage, SDK startup and lazy scoped consumption are merged in
   [#1643](https://github.com/bogdanovich/mintclaw/pull/1643). Alias-only tool
-  wiring and complete end-to-end output qualification remain incomplete.
+  wiring and generic notifications are implemented by the
+  [integrated alias operation](credential-alias-browser-login.md), disabled by
+  default until qualification. Complete end-to-end output qualification remains
+  incomplete.
 - TR3: gateway-owned enrollment/approval/revocation is merged in
   [#1631](https://github.com/bogdanovich/mintclaw/pull/1631). Synthetic signed and
-  virtual-authenticator tests cover the component; actual Android enrollment
-  and generic notifications remain required.
+  virtual-authenticator tests cover the component. The alias operation queues
+  generic approval links through the existing outbound chat channel; actual
+  Android enrollment and notification delivery remain required.
 - TR4: the existing browser's private credential transaction is merged in
   [#1637](https://github.com/bogdanovich/mintclaw/pull/1637), including grant
   checks around preparation/retrieval and authenticated session retirement.
   Authenticated cookie rotation, native control-value suppression and browser
   catalog/diagnostic/artifact projections are described in the
-  [browser output boundary](credential-browser-output-privacy.md). User-facing
-  tool wiring, site/placement admission and complete companion/output
-  qualification remain rollout requirements.
+  [browser output boundary](credential-browser-output-privacy.md). The
+  [alias login operation](credential-alias-browser-login.md) joins these
+  components for synthetic qualification. Site/placement admission and complete
+  companion/output qualification remain rollout requirements.
 - TR5/TR6: the scoped connector, full serialized-output qualification and
   personal-account pilot are incomplete. No real token, login, or physical
   phone approval is claimed. Passing component tests do not prove the complete
