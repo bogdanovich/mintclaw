@@ -87,6 +87,8 @@ because no trigger appeared. Final packet evidence and stop criteria are
 recorded in the archived
 [Code Health Maintenance V2 Roadmap](archive/code-health-maintenance-v2-roadmap.md).
 
-No code-health maintenance roadmap is currently active. New work requires a
-fresh evidence-backed admission decision rather than extending a completed
-program.
+The owner admitted the [October 2026 Reliability And Code Health Roadmap](reliability-code-health-20261017-roadmap.md)
+on 2026-10-17 after a fresh repository assessment. It tracks current outbox,
+MCP, frontend, and qualification findings without reopening completed programs.
+Conditional refactors still require their stated evidence rather than a file-size
+or abstraction target.
