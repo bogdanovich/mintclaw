@@ -176,6 +176,7 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		); resolveErr != nil {
 			return false, resolveErr
 		}
+		consumeOlderFormIntakeGuidance(source.Intake, index, request.Schema, record.Public, *pass.Outcome)
 		consumed := len(formIntakeCurrentModeFindings(source.Intake, *input)) == 0 &&
 			(input.Intent != interactions.ProtectedAnswerValue ||
 				formIntakeTextAccounted(input.Text, input.Accounted))
