@@ -1684,12 +1684,14 @@ func (t *scriptedTransport) Write(ctx context.Context, msg jsonrpc.Message) erro
 			return t.toolCallErr
 		}
 		if t.toolCallRawResult != nil || t.toolCallResponseError != nil {
+			response := &jsonrpc.Response{ID: req.ID, Result: t.toolCallRawResult}
+			if t.toolCallResponseError != nil {
+				response.Error = t.toolCallResponseError
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case t.incoming <- &jsonrpc.Response{
-				ID: req.ID, Result: t.toolCallRawResult, Error: t.toolCallResponseError,
-			}:
+			case t.incoming <- response:
 				return nil
 			}
 		}
