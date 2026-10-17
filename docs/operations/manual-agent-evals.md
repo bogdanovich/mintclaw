@@ -84,6 +84,7 @@ configuration importer: the seed must pass the existing restrictive conversation
 channels, hooks, routing and production capabilities are refused before native repository lock/recovery or credential
 resolution. Set `MINTCLAW_HOME` to the seed's physical home; the output parent must already exist with mode `0700`
 and must be outside, and not contain, that home.
+Gateway logging must be explicitly `warn`, `error` or `fatal`, matching owned-launch privacy admission.
 
 ```sh
 MINTCLAW_HOME=/private/eval-seed MINTCLAW_CONFIG=/private/eval-seed/config.json \
@@ -117,7 +118,8 @@ Only the five bootstrap filenames listed below and explicit files below `skills/
 recursive directory copy. Empty/absent lists copy no workspace inputs. Limits are 64 files, 64 KiB per file and
 1 MiB total; every path component must be non-symlink, and final entries must be regular files. Digests are checked
 before profile allocation. All copied files become `0600`, directories `0700`; executable bits are not retained.
-Known configured credential literals in workspace inputs are refused. This narrow literal guard and an operator's
+Known configured credential literals in workspace inputs, copied public configuration, preset metadata and the
+destination parent are refused before allocation. This narrow literal guard and an operator's
 allowlist are not comprehensive secret detection, runtime privacy evidence or proof of effective loaded prompts.
 The seed remains operator-owned and immutable; hostile concurrent filesystem mutation is not certified.
 

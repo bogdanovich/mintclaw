@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -57,7 +58,8 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 	// public policy gate above precedes native lock/recovery and credential work.
 	snapshot, err := config.NewRepository(preset.ConfigPath).ReadDurable()
 	if err != nil || !profileConfigUnchanged(seed.home, before) ||
-		validateConversationProfile(snapshot.Config, preset, seed.workspace) != nil {
+		validateConversationProfile(snapshot.Config, preset, seed.workspace) != nil ||
+		!slices.Contains([]string{"warn", "error", "fatal"}, config.EffectiveGatewayLogLevel(snapshot.Config)) {
 		return result, ErrPreparation
 	}
 	seed.config = snapshot.Config
@@ -67,6 +69,18 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 	}
 	clone, err := clonePreparationConfig(seed.config, preset)
 	if err != nil {
+		return result, ErrPreparation
+	}
+	public, err := config.ProjectPublicConfig(clone)
+	if err != nil {
+		return result, ErrPreparation
+	}
+	metadata, err := json.Marshal(struct {
+		Config *config.Config
+		Preset Preset
+		Parent string
+	}{public, preset, physicalParent})
+	if err != nil || seed.config.SensitiveDataReplacer().Replace(string(metadata)) != string(metadata) {
 		return result, ErrPreparation
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")

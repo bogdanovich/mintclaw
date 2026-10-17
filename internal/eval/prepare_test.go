@@ -199,7 +199,10 @@ func TestPrepareProfileRejectsBroadSeedBeforeNativeRepository(t *testing.T) {
 }
 
 func TestPrepareProfileRejectsAmbiguousAuthAndDestination(t *testing.T) {
-	for _, variant := range []string{"no key", "auth method", "header", "proxy", "fallback", "url credential", "unknown role", "nested parent", "canceled"} {
+	for _, variant := range []string{
+		"no key", "auth method", "header", "proxy", "fallback", "url credential", "unknown role", "nested parent", "canceled",
+		"credential in preset", "credential in public config", "credential in destination", "verbose logging",
+	} {
 		t.Run(variant, func(t *testing.T) {
 			fixture, parent := preparationFixture(t)
 			ctx := t.Context()
@@ -223,6 +226,17 @@ func TestPrepareProfileRejectsAmbiguousAuthAndDestination(t *testing.T) {
 				model.APIBase = "https://user:password@example.invalid"
 			case "unknown role":
 				fixture.preset.JudgeModel = "missing"
+			case "credential in preset":
+				fixture.preset.ID = preparationTestKey
+			case "credential in public config":
+				model.UserAgent = preparationTestKey
+			case "credential in destination":
+				parent = filepath.Join(parent, preparationTestKey)
+				if err := os.Mkdir(parent, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			case "verbose logging":
+				fixture.cfg.Gateway.LogLevel = "debug"
 			case "nested parent":
 				parent = fixture.output
 			case "canceled":
