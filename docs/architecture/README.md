@@ -147,6 +147,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   existing-channel phone notifications, signed-grant reuse and disabled-by-default rollout.
 - [Retired Credential Appliance](credential-appliance-retirement.md): removal of the unused daemon,
   privileged launch/transport/browser stack and obsolete qualification; retained current boundaries.
+- [Integrated Credential Output Qualification](credential-output-qualification.md): actual provider-wire,
+  tool/history/context/browser/log/trace evidence and remaining rollout gates.
 - [Historical Isolated Credential Roadmap](credential-isolated-runtime-history.md): superseded
   deployment design and preserved component PR/qualification evidence.
 - [Historical Mac Credential VM Package](credential-mac-vm-package.md): retired candidate launcher
