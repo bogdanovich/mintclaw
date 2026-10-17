@@ -211,6 +211,12 @@ alerts, reproducible frozen installation, frontend formatting/lint/tests/build,
 and a bounded repeatable advisory check that distinguishes actionable findings
 from accepted, documented exceptions. Keep this separate from runtime fixes.
 
+The first compatible dependency refresh reduces a fresh pnpm audit from 69 to
+three findings. The [frontend audit record](../operations/frontend-dependency-audit-20261017.md)
+records the remaining tooling paths, built-output witness, expiring dispositions,
+and the repeatable CI check. Merge evidence is pending; this is not a deployed
+security or live-browser qualification claim.
+
 ## Validation And Delivery
 
 The assessment's focused outbox, task, interaction, and provider-error suites
