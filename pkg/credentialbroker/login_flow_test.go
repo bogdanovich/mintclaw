@@ -1,6 +1,7 @@
 package credentialbroker
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -9,7 +10,6 @@ import (
 func testLoginFlow() LoginFlow {
 	return LoginFlow{
 		NavigationURL: "https://signin.ebay.com/login", EntryOrigin: "https://signin.ebay.com",
-		FormID: "login", UsernameID: "username", PasswordID: "password", UsernameType: "email",
 		SubmitURL: "https://signin.ebay.com/session", SuccessURL: "https://www.ebay.com/home",
 		SuccessMarkerID: "authenticated", HandoffURL: "https://signin.ebay.com/mfa", HandoffMarkerID: "mfa-required",
 	}
@@ -22,6 +22,30 @@ func flowRules() []AccountRule {
 	return rules
 }
 
+func TestLoginFlowAcceptsNativeReferenceFormWithoutHTMLIdentifiers(t *testing.T) {
+	// The public Craigslist login form has no HTML id. Operator metadata
+	// describes the flow; live native refs establish input/form authority.
+	var flow LoginFlow
+	if json.Unmarshal([]byte(`{
+		"navigation_url":"https://signin.ebay.com/login",
+		"entry_origin":"https://signin.ebay.com",
+		"submit_url":"https://signin.ebay.com/session",
+		"success_url":"https://www.ebay.com/home",
+		"success_marker_id":"authenticated"
+	}`), &flow) != nil {
+		t.Fatal("reference-based flow fixture is invalid")
+	}
+	rules := testRules()
+	rules[0].Login = &flow
+	policy, err := NewPolicy(rules)
+	if err != nil {
+		t.Fatal("flow required unused static form/input identifiers")
+	}
+	if actual, lookupErr := policy.LoginFlow(testRequest(policy)); lookupErr != nil || actual != flow {
+		t.Fatal("native-reference flow did not retain its configured authority")
+	}
+}
+
 func TestLoginFlowIsImmutableAndDefaultDenied(t *testing.T) {
 	rules := flowRules()
 	policy := mustPolicy(t, rules)
@@ -30,8 +54,8 @@ func TestLoginFlowIsImmutableAndDefaultDenied(t *testing.T) {
 	if err != nil || flow != testLoginFlow() {
 		t.Fatal("configured flow unavailable")
 	}
-	rules[0].Login.PasswordID = "changed"
-	flow.PasswordID = "changed-again"
+	rules[0].Login.SuccessMarkerID = "changed"
+	flow.SuccessMarkerID = "changed-again"
 	if copied, copyErr := policy.LoginFlow(request); copyErr != nil || copied != testLoginFlow() {
 		t.Fatal("caller mutation changed policy flow")
 	}
@@ -70,10 +94,6 @@ func TestLoginFlowCanonicalRevisionAndGrantInvalidation(t *testing.T) {
 		change func(*LoginFlow)
 	}{
 		{"navigation", func(flow *LoginFlow) { flow.NavigationURL += "-other" }},
-		{"form", func(flow *LoginFlow) { flow.FormID += "-other" }},
-		{"username", func(flow *LoginFlow) { flow.UsernameID += "-other" }},
-		{"password", func(flow *LoginFlow) { flow.PasswordID += "-other" }},
-		{"username type", func(flow *LoginFlow) { flow.UsernameType = "text" }},
 		{"submission", func(flow *LoginFlow) { flow.SubmitURL += "-other" }},
 		{"success", func(flow *LoginFlow) { flow.SuccessURL += "-other" }},
 		{"success marker", func(flow *LoginFlow) { flow.SuccessMarkerID += "-other" }},
@@ -123,17 +143,11 @@ func TestLoginFlowRejectsIncompleteAmbiguousAndOutOfScopeConfiguration(t *testin
 		name   string
 		change func(*LoginFlow)
 	}{
-		{"missing form", func(flow *LoginFlow) { flow.FormID = "" }},
-		{"missing username", func(flow *LoginFlow) { flow.UsernameID = "" }},
-		{"missing password", func(flow *LoginFlow) { flow.PasswordID = "" }},
 		{"missing success marker", func(flow *LoginFlow) { flow.SuccessMarkerID = "" }},
 		{"missing handoff marker", func(flow *LoginFlow) { flow.HandoffMarkerID = "" }},
 		{"orphan handoff marker", func(flow *LoginFlow) { flow.HandoffURL = "" }},
-		{"selector", func(flow *LoginFlow) { flow.PasswordID = "input[type=password]" }},
-		{"large ID", func(flow *LoginFlow) { flow.FormID = strings.Repeat("a", 129) }},
-		{"same inputs", func(flow *LoginFlow) { flow.UsernameID = flow.PasswordID }},
-		{"same form and input", func(flow *LoginFlow) { flow.FormID = flow.UsernameID }},
-		{"password username type", func(flow *LoginFlow) { flow.UsernameType = "password" }},
+		{"selector", func(flow *LoginFlow) { flow.SuccessMarkerID = "input[type=password]" }},
+		{"large ID", func(flow *LoginFlow) { flow.SuccessMarkerID = strings.Repeat("a", 129) }},
 		{"outside entry", func(flow *LoginFlow) { flow.EntryOrigin = "https://attacker.example" }},
 		{"trailing-dot entry", func(flow *LoginFlow) { flow.EntryOrigin += "." }},
 		{"cross-origin navigation", func(flow *LoginFlow) { flow.NavigationURL = "https://www.ebay.com/login" }},
