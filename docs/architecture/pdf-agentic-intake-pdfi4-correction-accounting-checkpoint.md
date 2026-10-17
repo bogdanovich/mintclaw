@@ -96,3 +96,13 @@ valid members of a rejected set. The existing native field-level finding, exact 
 same-field current positive acceptance, protected semantic link, non-overlap and atomic revision/budget
 gates remain the resolution proof. Interpretation of the link remains in the existing private call;
 no claim that native code can prove a fragment's natural-language meaning is introduced.
+
+## Review: Historical Accounting Is Not Current-Value Authority
+
+A chained native regression shows that a settled rejected literal may be acknowledged as historical
+accounting without matching the canonical value. That acknowledgement must never authorize another
+settlement. Native selection now projects an ephemeral current-value ID subset, derived only from new
+accepted events or the existing exact normalized-value/canonical-value comparison and correction gates.
+Keep historical acknowledgement/replay semantics unchanged. Cross-input authorities must use this
+native subset rather than treating every accounted fragment as a current positive decision. No model
+flag, extra parser, value copy, new reservation or persisted property is introduced by this refinement.
