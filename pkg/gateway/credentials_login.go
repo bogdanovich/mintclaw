@@ -2,10 +2,9 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"strings"
-	"time"
 
-	"github.com/bogdanovich/mintclaw/internal/credentials/approval"
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -101,25 +100,14 @@ func (source *gatewayBrowserToolSource) LoginCredential(ctx context.Context,
 	if err != nil {
 		return denied
 	}
+	if _, err = runtime.requestCredentialLease(ctx, scope); errors.Is(err, errCredentialApprovalRequired) {
+		return browser.CredentialLoginResult{Alias: scope.Account, Outcome: "approval_required"}
+	} else if err != nil {
+		return denied
+	}
 	lease, consume, err := runtime.prepareLogin(ctx, scope)
 	if err != nil {
-		if runtime.notify == nil {
-			return denied
-		}
-		reference, requestErr := runtime.controller.Request(ctx, principal, []string{scope.Account},
-			credentialbroker.MaxGrantLifetime)
-		if requestErr != nil || runtime.notify(ctx, runtime.origin+credentialPagePath+"#request="+reference) != nil {
-			return denied
-		}
-		// Most phone approvals finish within one tool call. On timeout the
-		// signed grant can still be reused by a later invocation, within its
-		// approved lifetime; no login is submitted before the grant exists.
-		waitCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
-		defer cancel()
-		lease, consume, err = runtime.waitLogin(waitCtx, scope)
-		if err != nil {
-			return browser.CredentialLoginResult{Alias: scope.Account, Outcome: "approval_required"}
-		}
+		return denied
 	}
 	selection.Principal, selection.PolicyRevision = principal, scope.PolicyRevision
 	selection.Fields = browser.CredentialFields{
@@ -136,21 +124,4 @@ func (source *gatewayBrowserToolSource) LoginCredential(ctx context.Context,
 		return denied
 	}
 	return result
-}
-
-func (runtime *credentialRuntime) waitLogin(ctx context.Context, scope credentialbroker.Request) (
-	approval.LoginLease, func(context.Context, func([]byte, []byte) error) error, error,
-) {
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if lease, consume, err := runtime.prepareLogin(ctx, scope); err == nil {
-			return lease, consume, nil
-		}
-		select {
-		case <-ctx.Done():
-			return approval.LoginLease{}, nil, errCredentialsUnavailable
-		case <-ticker.C:
-		}
-	}
 }

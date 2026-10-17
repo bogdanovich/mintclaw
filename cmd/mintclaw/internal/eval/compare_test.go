@@ -57,10 +57,12 @@ func TestCompareCLIIsOfflineAndDoesNotClaimPassForSkippedEvidence(t *testing.T) 
 		if jsonOutput {
 			var result manualeval.Comparison
 			if json.Unmarshal(output.Bytes(), &result) != nil || result.Outcome != "compared" ||
+				result.BaselineVerdict != manualeval.Skipped || result.CurrentVerdict != manualeval.Skipped ||
 				result.Cases[0].Current.Coverage[manualeval.Skipped] != 1 || result.Cases[0].Current.Trials != 1 {
 				t.Fatal("JSON comparison lost skipped coverage")
 			}
 		} else if !strings.Contains(output.String(), "0/1") || !strings.Contains(output.String(), "skipped=1") ||
+			!strings.Contains(output.String(), "Run verdicts: baseline=skipped current=skipped") ||
 			!strings.Contains(output.String(), "not established") {
 			t.Fatal("text comparison hid uncertainty", output.String())
 		}

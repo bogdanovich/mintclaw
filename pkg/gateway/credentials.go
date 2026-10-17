@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/bogdanovich/mintclaw/internal/credentials/approval"
+	"github.com/bogdanovich/mintclaw/internal/credentials/githubread"
 	"github.com/bogdanovich/mintclaw/internal/credentials/vault"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
@@ -30,16 +31,19 @@ type credentialRoutes interface {
 // credentialRuntime is the gateway's sole approval owner. It creates neither
 // a separate listener nor a model-facing secret retrieval API.
 type credentialRuntime struct {
-	controller   *approval.Controller
-	routes       credentialRoutes
-	once         sync.Once
-	closeErr     error
-	consumeLogin func(context.Context, vault.Binding, func([]byte, []byte) error) error
-	loginEnabled bool
-	ownerID      string
-	hostID       string
-	origin       string
-	notify       credentialNotifier
+	controller        *approval.Controller
+	routes            credentialRoutes
+	once              sync.Once
+	closeErr          error
+	consumeLogin      func(context.Context, vault.Binding, func([]byte, []byte) error) error
+	consumeAPIKey     func(context.Context, vault.Binding, func([]byte) error) error
+	loginEnabled      bool
+	githubReadEnabled bool
+	githubReader      credentialGitHubReader
+	ownerID           string
+	hostID            string
+	origin            string
+	notify            credentialNotifier
 }
 
 func setupCredentialRuntime(
@@ -64,6 +68,10 @@ func setupCredentialRuntime(
 	}
 	runtime := &credentialRuntime{controller: controller, routes: routes}
 	runtime.loginEnabled = cfg.Credentials.BrowserLoginEnabled
+	runtime.githubReadEnabled = cfg.Credentials.GitHubReadEnabled
+	if runtime.githubReadEnabled {
+		runtime.githubReader = githubread.New(nil)
+	}
 	runtime.ownerID, runtime.hostID, runtime.origin = cfg.Credentials.OwnerID, cfg.Credentials.HostID, cfg.Credentials.Origin
 	if len(notifiers) == 1 {
 		runtime.notify = notifiers[0]
@@ -72,6 +80,7 @@ func setupCredentialRuntime(
 	// An unavailable SDK never provides a login consumer or value access.
 	if provider, vaultErr := newCredentialVault(cfg.Credentials.StateDirectory, vault.New); vaultErr == nil {
 		runtime.consumeLogin = provider.UseLogin
+		runtime.consumeAPIKey = provider.UseAPIKey
 	}
 	phone, err := approval.NewPhoneHandler(controller)
 	if err != nil {

@@ -27,6 +27,8 @@ func newCompareCommand() *cobra.Command {
 					return writeErr
 				}
 			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Run verdicts: baseline=%s current=%s\n",
+					result.BaselineVerdict, result.CurrentVerdict)
 				fmt.Fprintln(cmd.OutOrStdout(), "Case\tBaseline pass/trials\tCurrent pass/trials\tStatus")
 				for _, item := range result.Cases {
 					fmt.Fprintf(cmd.OutOrStdout(), "%s\t%d/%d\t%d/%d\t%s\n", item.CaseID,

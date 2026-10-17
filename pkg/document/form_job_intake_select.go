@@ -9,10 +9,13 @@ import (
 )
 
 type formIntakeSelection struct {
-	Payloads          []formJobValuePayload
-	Accounted         []formIntakeSpan
-	AcceptedIDs       []string
-	AcknowledgedIDs   []string
+	Payloads        []formJobValuePayload
+	Accounted       []formIntakeSpan
+	AcceptedIDs     []string
+	AcknowledgedIDs []string
+	// Native authority, unlike historical accounting acknowledgement: each
+	// proposal is newly accepted or normalizes to the current canonical value.
+	CurrentValueIDs   []string
 	Findings          []FormFieldMappingBlocker
 	ScopedInstruction bool
 	ScopedIDs         []string
@@ -103,6 +106,9 @@ func selectFormIntakeProposals(
 			if err := selectFormIntakeDisposition(&result, record, key, item); err != nil {
 				return result, err
 			}
+			if slices.Contains(result.AcknowledgedIDs, item.Field.ID) {
+				result.CurrentValueIDs = append(result.CurrentValueIDs, item.Field.ID)
+			}
 			continue
 		}
 		assignment := formIntakeAssignment(item)
@@ -114,6 +120,10 @@ func selectFormIntakeProposals(
 			result.Findings = append(result.Findings, FormFieldMappingBlocker{FieldID: item.Field.ID, Code: code})
 			continue
 		}
+		if code := formIntakeScalarEvidenceCode(item, value); code != "" {
+			result.Findings = append(result.Findings, FormFieldMappingBlocker{FieldID: item.Field.ID, Code: code})
+			continue
+		}
 		current, found, readErr := currentFormIntakeValue(record, key, item.Field.ID)
 		if readErr != nil {
 			return result, readErr
@@ -122,9 +132,13 @@ func selectFormIntakeProposals(
 		alreadyConfirmed := found && current.State == FormValueConfirmed &&
 			current.Confidence != FormValueConfidenceLow && current.Validation == FormValueValidationValid &&
 			reflect.DeepEqual(current.Value, value)
-		if oldEvidence || alreadyConfirmed && (assignment.SupersedesEventID == "" ||
-			assignment.SupersedesEventID == current.EventID) && !assignment.ReplaceExisting {
+		currentAcknowledgement := alreadyConfirmed && (assignment.SupersedesEventID == "" ||
+			assignment.SupersedesEventID == current.EventID) && !assignment.ReplaceExisting
+		if oldEvidence || currentAcknowledgement {
 			result.AcknowledgedIDs = append(result.AcknowledgedIDs, item.Field.ID)
+			if currentAcknowledgement {
+				result.CurrentValueIDs = append(result.CurrentValueIDs, item.Field.ID)
+			}
 			result.Accounted = appendFormIntakeSpans(result.Accounted, item.Spans)
 			result.Accounted = appendFormIntakeSpans(result.Accounted, item.Correction)
 			continue
@@ -167,6 +181,8 @@ func selectFormIntakeProposals(
 	slices.Sort(result.AcceptedIDs)
 	slices.Sort(result.AcknowledgedIDs)
 	slices.Sort(result.ScopedIDs)
+	result.CurrentValueIDs = append(result.CurrentValueIDs, result.AcceptedIDs...)
+	slices.Sort(result.CurrentValueIDs)
 	return result, nil
 }
 
@@ -184,7 +200,7 @@ func resolveFormIntakeProposals(
 		seen[item.FieldID] = true
 		field := request.Schema.Fields[index]
 		if !item.Disposition.valid() ||
-			(len(item.Literals) != 1 && (item.Disposition != "" || field.Kind != FormFieldList || !field.MultiSelect)) {
+			(len(item.Literals) != 1 && item.Disposition != "") {
 			return nil, ErrFormJobAnswerConflict
 		}
 		spans, err := resolveFormIntakeRefs(text, item.Literals, item.FieldID)
@@ -214,6 +230,26 @@ func resolveFormIntakeProposals(
 		result = append(result, formIntakeResolvedProposal{item, field, spans, correction})
 	}
 	return result, nil
+}
+
+// Multiple fragments may prove one scalar, never manufacture it by joining or
+// choosing a preferred fragment. Distinct list choices retain their old path.
+func formIntakeScalarEvidenceCode(item formIntakeResolvedProposal, canonical FormProtectedValue) string {
+	if item.Field.Kind == FormFieldList && item.Field.MultiSelect {
+		return ""
+	}
+	for _, literal := range item.Proposal.Literals[1:] {
+		value, validation, code := deterministicFormValue(item.Field, FormProtectedValue{
+			Kind: ProtectedValueText, Text: literal.Text,
+		})
+		if validation != FormValueValidationValid {
+			return code
+		}
+		if !reflect.DeepEqual(value, canonical) {
+			return "field_conflicting"
+		}
+	}
+	return ""
 }
 
 func resolveFormIntakeRefs(text string, refs []FormIntakeLiteral, fieldID string) ([]formIntakeSpan, error) {

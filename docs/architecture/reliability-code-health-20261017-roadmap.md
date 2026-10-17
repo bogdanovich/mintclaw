@@ -26,7 +26,7 @@ repository; these counts are context, not coverage or quality scores.
 | ID | Priority | Packet | Admission/status |
 | --- | --- | --- | --- |
 | R1 | High | Isolate damaged outbox records during recovery | Admitted correctness work |
-| R2 | High | Propagate MCP tool-discovery failures | Admitted correctness work |
+| R2 | High | Propagate MCP tool-discovery failures | Implementation in progress; merge evidence pending |
 | R3 | High | Prevent stale Web UI session switches | Admitted correctness work |
 | R4 | High | Bound outbox payload storage and recovery cost | Admitted; retention design precedes implementation |
 | R5 | Medium | Carry typed MCP failure classifications | Admitted correctness work |
