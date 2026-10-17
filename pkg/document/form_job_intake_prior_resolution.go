@@ -44,9 +44,7 @@ func (store *FormJobStore) resolvePriorFormIntakeLiterals(
 		if len(proposal.Resolves) == 0 {
 			continue
 		}
-		if proposal.Disposition != "" ||
-			!slices.Contains(selection.AcceptedIDs, proposal.FieldID) &&
-				!slices.Contains(selection.AcknowledgedIDs, proposal.FieldID) {
+		if proposal.Disposition != "" || !slices.Contains(selection.CurrentValueIDs, proposal.FieldID) {
 			return ErrFormJobAnswerConflict
 		}
 		value, found, err := currentFormIntakeValue(record, key, proposal.FieldID)
