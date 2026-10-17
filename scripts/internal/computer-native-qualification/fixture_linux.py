@@ -7,7 +7,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("GdkX11", "3.0")
-from gi.repository import Gtk, GdkX11, GLib
+from gi.repository import Gtk, Gdk, GdkX11, GLib
 
 windows = []
 entries = []
@@ -28,6 +28,11 @@ for index in range(2):
     window = Gtk.Window(title="MintClaw disposable fixture " + str(index))
     window.set_default_size(440, 240)
     window.move(100 + 460 * index, 100)
+    if index == 1 and os.environ.get("MINTCLAW_FIXTURE_TRANSIENT_OVERLAY") == "1":
+        window.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        window.set_transient_for(windows[0])
+        window.set_modal(True)
+        window.move(120, 120)
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
     box.set_border_width(25)
     window.add(box)
