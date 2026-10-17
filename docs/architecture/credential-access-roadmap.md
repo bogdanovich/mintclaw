@@ -113,8 +113,11 @@ behavior. Retain normal policy for subsequent authenticated actions.
 - TR1: unused Mac VM packaging is removed in
   [#1620](https://github.com/bogdanovich/mintclaw/pull/1620), and the private
   vault adapter is shared with the runtime in
-  [#1625](https://github.com/bogdanovich/mintclaw/pull/1625). Other unused
-  appliance commands/helpers and their obsolete qualification remain to retire.
+  [#1625](https://github.com/bogdanovich/mintclaw/pull/1625). The remaining unused
+  daemon, privileged launch/transport/browser stack and obsolete qualification
+  are removed in the [appliance retirement](credential-appliance-retirement.md).
+  Current policy, vault, approval, private setup and integrated browser tests
+  remain; historical documents preserve the earlier approach.
 - TR2: the dynamic model/log/trace output guard is merged in
   [#1623](https://github.com/bogdanovich/mintclaw/pull/1623). Private token entry,
   storage, SDK startup and lazy scoped consumption are merged in

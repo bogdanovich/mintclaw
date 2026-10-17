@@ -192,8 +192,7 @@ jobs:
           go test -count=1 -race -tags goolm,stdjson
           ./pkg/credentialbroker/...
           ./internal/credentials/...
-          ./internal/credentialipc
-          ./cmd/mintclaw-credential/...
+          ./cmd/mintclaw/internal/credentials
 
       - name: Run private browser credential race regressions
         run: >-
@@ -427,17 +426,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Qualify credential setup with synthetic data and real OS encryption
-        run: bash ./scripts/qualify-credential-provisioning.sh
-
-      - name: Qualify private credential loader with synthetic ACL and mount fixtures
-        run: bash ./scripts/qualify-credential-loader.sh
-
       - name: Qualify private passkey approval and protected owner storage
         run: bash ./scripts/qualify-credential-approval.sh
-
-      - name: Qualify protected native phone service startup and shutdown
-        run: bash ./scripts/qualify-credential-approval-service.sh
 
       - name: Setup Node.js for the synthetic phone approval fixture
         uses: actions/setup-node@v7
@@ -449,7 +439,7 @@ jobs:
           npm ci --ignore-scripts --prefix runtime/browser/playwright-library
           node runtime/browser/playwright-library/node_modules/playwright/cli.js install --with-deps chromium
 
-      - name: Qualify private enrollment console and browser passkey UI
+      - name: Qualify integrated private setup and browser passkey UI
         run: bash ./scripts/qualify-credential-phone.sh
 
       - name: Qualify direct private credential browser transactions
@@ -495,28 +485,6 @@ jobs:
             ./pkg/document | tee "$RUNNER_TEMP/document-read-process.txt"
           grep -Fq -- '--- PASS: TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts' \
             "$RUNNER_TEMP/document-read-process.txt"
-
-      - name: Qualify Root-protected credential browser runtime
-        run: bash ./scripts/qualify-credential-browser-runtime.sh
-
-      - name: Qualify private credential browser DOM and session retirement
-        run: >-
-          env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
-          node --test runtime/browser/credential-login/session-contract.test.cjs
-          runtime/browser/credential-login/session-browser.test.cjs
-          runtime/browser/credential-login/channel-contract.test.cjs
-
-      - name: Qualify private broker transport, fixed Root launcher, network and process forest
-        run: bash ./scripts/qualify-credential-browser-forest.sh
-
-      - name: Qualify private browser channel and enforcing TLS proxy
-        env:
-          MINTCLAW_SYNTHETIC_CREDENTIAL_BROWSER_FIXTURE: "1"
-        run: >-
-          env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
-          go test -race -tags goolm,stdjson -count=1 -timeout=10m
-          ./cmd/mintclaw-credential/internal/browserworker
-          ./cmd/mintclaw-credential/internal/egress
 
       - name: Run real companion vertical tests
         run: bash ./scripts/run-go-integration-tests.sh

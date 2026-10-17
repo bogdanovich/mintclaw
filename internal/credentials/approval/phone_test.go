@@ -61,7 +61,7 @@ func bootstrap(t *testing.T, enrollment *Enrollment) string {
 	t.Helper()
 	link, err := enrollment.issue(context.Background())
 	if err != nil {
-		t.Fatal("console bootstrap failed")
+		t.Fatal("operator bootstrap failed")
 	}
 	return strings.TrimPrefix(string(link), testOrigin+"/#enroll=")
 }
@@ -250,7 +250,7 @@ func TestEnrollmentBootstrapLifecycle(t *testing.T) {
 	}
 	secret := bootstrap(t, enrollment)
 	if _, err = enrollment.begin(context.Background(), oldSecret); !errors.Is(err, ErrDenied) {
-		t.Fatal("old console bootstrap survived")
+		t.Fatal("old operator bootstrap survived")
 	}
 	if _, exists := fixture.controller.ceremonies[old.ID]; exists {
 		t.Fatal("old enrollment ceremony survived")
@@ -283,7 +283,7 @@ func TestEnrollmentBootstrapLifecycle(t *testing.T) {
 		t.Fatal("fresh enrollment failed")
 	}
 	if _, err = enrollment.issue(context.Background()); err == nil {
-		t.Fatal("root console replaced enrolled owner")
+		t.Fatal("operator setup replaced enrolled owner")
 	}
 }
 
