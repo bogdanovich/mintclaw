@@ -393,7 +393,13 @@ func (tool *DocumentTool) processFormIntakeInput(
 	progress document.FormIntakeProgress, reference, trigger string,
 ) (formIntakeProcessedInput, error) {
 	var result formIntakeProcessedInput
+	result.failureStage = "input"
+	retained, retainedErr := tool.formJobs.ReadFormIntakeInput(ctx, reference, owner)
+	if retainedErr != nil {
+		return result, retainedErr
+	}
 	windows := formIntakeCandidateWindows(schema, progress.Context.CandidateFieldIDs)
+	prioritizeFormIntakeFindingWindows(windows, retained.Findings)
 	for _, ids := range windows {
 		result.failureStage = "input"
 		input, err := tool.formJobs.ReadFormIntakeInput(ctx, reference, owner)
@@ -539,6 +545,29 @@ func (tool *DocumentTool) processFormIntakeInput(
 	result.findings = input.Findings
 	result.failureStage = ""
 	return result, nil
+}
+
+// A clarification must reach known blockers before unrelated traversal spends
+// the remaining persisted budget. Reorder whole existing windows only: their
+// candidate, page, reservation and apply bindings are unchanged.
+func prioritizeFormIntakeFindingWindows(windows [][]string, findings []document.FormFieldMappingBlocker) {
+	if len(findings) == 0 {
+		return
+	}
+	slices.SortStableFunc(windows, func(first, second []string) int {
+		firstFinding, secondFinding := false, false
+		for _, finding := range findings {
+			firstFinding = firstFinding || slices.Contains(first, finding.FieldID)
+			secondFinding = secondFinding || slices.Contains(second, finding.FieldID)
+		}
+		if firstFinding == secondFinding {
+			return 0
+		}
+		if firstFinding {
+			return -1
+		}
+		return 1
+	})
 }
 
 // Windows are structural batches, not a semantic planner. Hash-sorted field
