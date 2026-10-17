@@ -104,6 +104,10 @@ eight unique keys per model, 16 KiB per key); declared user/judge aliases must e
 reads ignore ambient configuration/credential overrides. Native credential resolution handles the seed, and new
 private credential files plus native `file://` references handle the copy. The channel receives a new random token.
 No production sessions, memory, PID files, auth stores, browser state, journals, logs or unlisted files are cloned.
+For a PDF-enabled seed, preparation constructs a new empty native `state/document-writes/journal` with private
+directory permissions and records `pdf_journal_prepared: true`. It copies no operations and acquires no journal
+lock. This makes the real pre-task journal observable without letting the census initialize state or invent an
+empty baseline from an absent path. General-only profiles do not receive this hierarchy.
 
 The optional preset `workspace_files` list is an operator-reviewed, SHA-256-pinned allowlist:
 
@@ -138,12 +142,19 @@ remains the default. The owned mode does not provision a profile or copy any pro
 Use a fresh private home with only `config.json`, optional native `.security.yml` and `.security` credential-file
 directory, `workspace`, and `reports` at its root. The native repository's empty regular `0600`
 `.security.yml.lock` file is permitted; it is not gateway/process ownership.
+PDF-enabled profiles additionally require exactly the empty private `state/document-writes/journal` hierarchy
+created by preparation. Every directory must be direct and `0700`; any operation, lock, other entry or alias is
+refused before process launch. Missing roots are still unavailable to the census, not zero operations.
 The workspace must be the physical `HOME/workspace` directory and may initially contain only reviewed
-`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, and `skills`. Existing native state, sessions, memory,
+`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, and `skills`. Other native state, sessions, memory,
 PID files, ownership markers, logs, extra roots, and symlink entries are refused before launching. Existing
 prepared-target tool/channel/network/approval admission still applies. Provider credentials should use native
 file references in this private profile; the child does not inherit the parent's environment or secret stores.
-Only the explicit home/config, PATH, fixed language and admitted warn/error/fatal logging environment are supplied.
+Only the explicit home/config, PATH, fixed language, admitted warn/error/fatal logging and owned temporary-directory
+environment are supplied. Launch creates a new private `HOME/eval-tmp` and binds `TMPDIR`, `TMP` and `TEMP` to it,
+so native tools' default temporary scratch stays under the observed profile instead of the host's shared temp.
+An existing temp root is never adopted. It remains private after stop for raw inspection; this is not a promise
+that native scratch is empty or cleaned. Do not recursively delete it before inspecting retained evidence.
 
 Readiness must pass the authenticated native `/runtime` admission and identify the exact child PID. An existing
 service's healthy response is not adopted. Startup is bounded to 30 seconds; cleanup has a separate 35-second
