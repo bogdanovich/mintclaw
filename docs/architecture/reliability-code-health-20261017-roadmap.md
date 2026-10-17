@@ -36,6 +36,7 @@ repository; these counts are context, not coverage or quality scores.
 | R9 | Conditional | Decompose browser and coding integration files | Only when related work demonstrates a review or ownership benefit |
 | R10 | Conditional | Measure storage contention before redesign | Measurement admitted; replacement requires measured need |
 | R11 | Low | Improve current architecture navigation | Bounded documentation work; preserve historical evidence |
+| R12 | High | Triage and remediate frontend dependency advisories | Admitted follow-up from publication-time GitHub evidence |
 
 R1, R2, R3, and R5 are independent first-batch fixes and may be delivered in the
 order that keeps each PR smallest and easiest to validate. R4 follows a written
@@ -192,6 +193,23 @@ Provide a compact current-system map and active-work index using the existing
 architecture entry points. Separate active work from completed program evidence
 without discarding provenance. Avoid another parallel catalogue or rewriting
 historical completion records.
+
+## R12: Frontend Dependency Advisories
+
+Publication-time follow-up: GitHub reported 56 open Dependabot alerts, including
+three critical and 23 high alerts. Authenticated alert inspection located all
+56 in `web/frontend/pnpm-lock.yaml`. Advisory severity and dependency scope are
+triage inputs, not proof that a deployed browser or launcher exposes the issue.
+
+Identify the affected resolved versions, dependency paths, build-time versus
+shipped code, and reachable behavior. Prefer bounded compatible updates or
+removing unnecessary dependencies. Record evidence for any advisory requiring a
+different disposition. Do not apply an unreviewed force-upgrade across majors.
+
+Completion gates: addressed or explicitly evidenced dispositions for current
+alerts, reproducible frozen installation, frontend formatting/lint/tests/build,
+and a bounded repeatable advisory check that distinguishes actionable findings
+from accepted, documented exceptions. Keep this separate from runtime fixes.
 
 ## Validation And Delivery
 
