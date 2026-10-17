@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,7 +35,7 @@ func credentialProviderFixture(
 	cfg *config.Config,
 	running *services,
 	messageBus *bus.MessageBus,
-	expectedOutcome string,
+	providerKind, expectedOutcome string,
 	capture func([]byte),
 ) (func() (browser.CredentialLoginResult, error), func()) {
 	t.Helper()
@@ -64,6 +65,10 @@ func credentialProviderFixture(
 				Role    string          `json:"role"`
 				Content json.RawMessage `json:"content"`
 			} `json:"messages"`
+			Input []struct {
+				Type   string `json:"type"`
+				Output string `json:"output"`
+			} `json:"input"`
 		}
 		if json.Unmarshal(body, &input) != nil {
 			http.Error(writer, "fixture request invalid", http.StatusBadRequest)
@@ -74,6 +79,14 @@ func credentialProviderFixture(
 			if input.Messages[index].Role == "tool" {
 				_ = json.Unmarshal(input.Messages[index].Content, &toolContent)
 				break
+			}
+		}
+		if providerKind == "codex" {
+			for index := len(input.Input) - 1; index >= 0; index-- {
+				if input.Input[index].Type == "function_call_output" {
+					toolContent = input.Input[index].Output
+					break
+				}
 			}
 		}
 		mu.Lock()
@@ -153,6 +166,32 @@ func credentialProviderFixture(
 			http.Error(writer, "fixture transition unavailable", http.StatusBadRequest)
 			return
 		}
+		if providerKind == "codex" {
+			output := map[string]any{
+				"id": "fixture-message", "type": "message", "role": "assistant", "status": "completed",
+				"content": []any{map[string]any{"type": "output_text", "text": "fixture complete"}},
+			}
+			if name != "" {
+				encoded, _ := json.Marshal(arguments)
+				output = map[string]any{
+					"id": "fixture-function", "type": "function_call", "status": "completed",
+					"call_id": "fixture-call-" + string(rune('a'+calls)), "name": name, "arguments": string(encoded),
+				}
+			}
+			payload, _ := json.Marshal(map[string]any{
+				"type": "response.completed", "sequence_number": 1,
+				"response": map[string]any{
+					"id": "fixture-response", "object": "response", "status": "completed", "output": []any{output},
+				},
+			})
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = writer.Write(
+				append(
+					append([]byte("event: response.completed\ndata: "), payload...),
+					[]byte("\n\ndata: [DONE]\n\n")...),
+			)
+			return
+		}
 		if input.Stream {
 			delete(message, "role")
 			payload, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
@@ -188,6 +227,24 @@ func credentialProviderFixture(
 	provider, _, err := providers.CreateProviderFromConfig(model)
 	if err != nil {
 		t.Fatal("local provider adapter unavailable")
+	}
+	if providerKind == "codex" {
+		// Intercept the production SDK client without loading real OAuth
+		// credentials or adding a runtime endpoint override. These fixtures
+		// run sequentially; restore the client after the agent loop closes.
+		endpoint, parseErr := url.Parse(server.URL)
+		if parseErr != nil {
+			t.Fatal("local Codex endpoint unavailable")
+		}
+		previousClient := http.DefaultClient
+		http.DefaultClient = &http.Client{Transport: credentialCodexFixtureTransport{endpoint: endpoint}}
+		t.Cleanup(func() { http.DefaultClient = previousClient })
+		for _, key := range []string{"OPENAI_ORG_ID", "OPENAI_PROJECT_ID", "OPENAI_WEBHOOK_SECRET"} {
+			t.Setenv(key, "")
+		}
+		provider = providers.NewCodexProvider("synthetic-model-api-key", "synthetic-model-account")
+		model.Model = providers.CodexDefaultModel
+		model.Streaming.Enabled = true
 	}
 	loop, err := agent.NewAgentLoopChecked(cfg, messageBus, provider,
 		agent.WithStateManager(state.NewManager(cfg.WorkspacePath())))
@@ -252,6 +309,19 @@ func credentialProviderFixture(
 		})
 	}
 	return perform, finalize
+}
+
+type credentialCodexFixtureTransport struct{ endpoint *url.URL }
+
+func (transport credentialCodexFixtureTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.URL.Scheme != "https" || request.URL.Host != "chatgpt.com" ||
+		request.URL.Path != "/backend-api/codex/responses" {
+		return nil, errors.New("unexpected Codex fixture destination")
+	}
+	local := request.Clone(request.Context())
+	local.URL.Scheme, local.URL.Host = transport.endpoint.Scheme, transport.endpoint.Host
+	local.Host = transport.endpoint.Host
+	return http.DefaultTransport.RoundTrip(local)
 }
 
 func qualifyCredentialTraceExports(t *testing.T, cfg *config.Config, capture func([]byte)) {

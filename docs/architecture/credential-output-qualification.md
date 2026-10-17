@@ -13,10 +13,13 @@ grant authorizes sequential browser sessions without another notification;
 revocation retires authenticated access. The one-live-session limit is retained.
 
 The provider fixture additionally uses the real personal agent loop, real
-OpenAI-compatible HTTP adapter, canonical session history and Seahorse context
-manager. A local HTTP peer scripts ordinary tool choices and captures the
-actual serialized requests, including headers. It does not contact an LLM
-provider. The website is intercepted inside Chromium and has no real account.
+OpenAI-compatible HTTP adapter or production Codex OAuth/Responses adapter,
+canonical session history and Seahorse context manager. A local HTTP peer
+scripts ordinary tool choices and captures the actual serialized requests,
+including headers. The Codex variant uses synthetic authentication and
+intercepts the SDK's exact Responses destination locally; it does not load an
+OAuth store or add a production endpoint override. Neither variant contacts an
+LLM provider. The website is intercepted inside Chromium and has no real account.
 
 Each scenario runs two separate user-requested turns that open a browser,
 observe login fields, request the account alias and return a final response.
@@ -35,7 +38,7 @@ output, including after browser cleanup releases session guards.
 
 | Boundary | Evidence | Qualification limits |
 | --- | --- | --- |
-| Provider request | Actual local HTTP body/header capture through the production OpenAI-compatible adapter | Other provider protocols need equivalent wire qualification before being claimed |
+| Provider request | Actual local HTTP body/header capture through the production OpenAI-compatible and Codex OAuth/Responses adapters, including streaming Responses | Other provider/fallback protocols need equivalent wire qualification or exclusion from the pilot |
 | Tool arguments/results | Strict alias/ref input; fixed outcome; actual serialized tool results and authenticated observations | No model-facing value retrieval API |
 | Canonical history | Read back and serialize durable history after each completed turn; require history growth | Protected browser observations retain existing durable projection |
 | Seahorse/context state | Run the real context manager and inspect workspace state files | Does not establish arbitrary external store/export behavior |

@@ -33,23 +33,32 @@ import (
 // Opt-in real Chromium + virtual WebAuthn + production gateway/browser tools.
 // This qualifies synthetic flow integration, never a physical phone or account.
 func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
-	testCredentialAliasBrowserAndPhoneFixture(t, false, "logged_in")
+	testCredentialAliasBrowserAndPhoneFixture(t, "", "logged_in")
 }
 
 func TestCredentialProviderOutputFixture(t *testing.T) {
-	testCredentialAliasBrowserAndPhoneFixture(t, true, "logged_in")
+	testCredentialAliasBrowserAndPhoneFixture(t, "openai_compat", "logged_in")
 }
 
 func TestCredentialProviderOutcomeFixture(t *testing.T) {
 	for _, outcome := range []string{"handoff_required", "outcome_unknown"} {
 		t.Run(outcome, func(t *testing.T) {
-			testCredentialAliasBrowserAndPhoneFixture(t, true, outcome)
+			testCredentialAliasBrowserAndPhoneFixture(t, "openai_compat", outcome)
 		})
 	}
 }
 
-func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerMode bool, expectedOutcome string) {
+func TestCredentialCodexOutputFixture(t *testing.T) {
+	for _, outcome := range []string{"logged_in", "handoff_required", "outcome_unknown"} {
+		t.Run(outcome, func(t *testing.T) {
+			testCredentialAliasBrowserAndPhoneFixture(t, "codex", outcome)
+		})
+	}
+}
+
+func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expectedOutcome string) {
 	t.Helper()
+	providerMode := providerKind != ""
 	if os.Getenv("MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE") != "1" {
 		t.Skip("synthetic Chromium qualification only")
 	}
@@ -237,6 +246,7 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerMode bool, 
 			cfg,
 			running,
 			messageBus,
+			providerKind,
 			expectedOutcome,
 			func(data []byte) {
 				mu.Lock()
