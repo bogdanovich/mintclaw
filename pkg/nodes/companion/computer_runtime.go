@@ -209,6 +209,10 @@ func computerCommandFailure(err error) error {
 		return nil
 	}
 	switch {
+	case errors.Is(err, ErrInvocationOutcomeUnknown):
+		return errors.Join(ErrInvocationOutcomeUnknown, newCommandFailure(
+			nodes.InvocationDispatchUnknown, "computer command outcome is unknown", ErrInvocationOutcomeUnknown,
+		))
 	case errors.Is(err, computer.ErrDenied), errors.Is(err, computer.ErrInvalid):
 		return newCommandFailure(
 			nodes.InvocationDispatchCommandDenied,

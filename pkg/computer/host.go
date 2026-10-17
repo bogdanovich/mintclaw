@@ -269,6 +269,28 @@ func (host *ReadOnlyHost) Release(ctx context.Context, binding Binding) (Session
 	return host.transition(ctx, binding, EventRelease)
 }
 
+// Lose is a trusted lifetime invalidation, not part of the model-facing Host
+// interface. Loss spans handoff/control generations of this immutable resource
+// binding, but cannot revoke another owner, session, worker, policy or scope.
+func (host *ReadOnlyHost) Lose(ctx context.Context, binding Binding) (Session, error) {
+	if binding.Validate() != nil {
+		return Session{}, ErrInvalid
+	}
+	host.arbiter.mu.Lock()
+	defer host.arbiter.mu.Unlock()
+	entry, err := host.owned(ctx, binding.Principal, binding.SessionID)
+	if err != nil {
+		return Session{}, err
+	}
+	immutable := entry.session.Binding
+	immutable.Generation = binding.Generation
+	if immutable != binding {
+		return Session{}, ErrStale
+	}
+	host.revoke(entry)
+	return entry.session, nil
+}
+
 func (host *ReadOnlyHost) transition(ctx context.Context, binding Binding, event ControlEvent) (Session, error) {
 	host.arbiter.mu.Lock()
 	defer host.arbiter.mu.Unlock()
