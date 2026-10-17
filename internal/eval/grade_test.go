@@ -131,6 +131,37 @@ func TestGradeRetainsOwnedGatewayCleanupUncertaintyWithoutTargetWork(t *testing.
 	}
 }
 
+func TestGradePreservesPrivateSurfaceUncertaintyAndRefusesLeaks(t *testing.T) {
+	for _, code := range []string{"observed", "unavailable", "leak_observed", "invalid"} {
+		t.Run(code, func(t *testing.T) {
+			fixture, item, source, count := gradeFixture(t, false)
+			source.PrivateSurfaces = &PrivateSurfaceObservation{
+				Scope: "owned_profile_files_v1", Code: code, LeakObserved: code == "leak_observed",
+			}
+			writeAdmissionJSON(t, filepath.Join(source.ReportDir, "run.json"), source)
+			tasks, probes := fixture.tasks.Load(), fixture.probes.Load()
+			result, err := Grade(t.Context(), fixture.preset, []LoadedCase{item}, source.ReportDir, RunOptions{
+				Home: fixture.home, OutputParent: fixture.output,
+			})
+			if code == "leak_observed" || code == "invalid" {
+				if !errors.Is(err, ErrGrade) || result.ID != "" || count.Load() != 0 {
+					t.Fatal("unsafe source reached the judge", err)
+				}
+				return
+			}
+			want := Pass
+			if code == "unavailable" {
+				want = Inconclusive
+			}
+			if result.Verdict != want || result.PrivateSurfaces == nil || result.PrivateSurfaces.Code != code ||
+				count.Load() != 1 || fixture.tasks.Load() != tasks || fixture.probes.Load() != probes ||
+				want == Pass && err != nil || want != Pass && !errors.Is(err, ErrNotPassed) {
+				t.Fatal("regrade erased the file observation or started target work", err)
+			}
+		})
+	}
+}
+
 func TestGradeRejectsMissingDuplicatedOrMismatchedRepetitionsBeforeAnyCall(t *testing.T) {
 	for _, change := range []string{
 		"missing", "duplicate-id", "duplicate-session", "duplicate-ordinal", "ordinal", "trial-ordinal", "budget",

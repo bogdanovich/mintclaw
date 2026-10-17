@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -83,5 +84,39 @@ func TestEnrollmentRejectsUnavailableTerminalBeforeRequest(t *testing.T) {
 	command.SetArgs([]string{"enroll"})
 	if command.Execute() == nil || requested {
 		t.Fatal("setup without a terminal issued an enrollment request")
+	}
+}
+
+func TestTokenCommandExplainsDisabledProfileBeforePrivateInput(t *testing.T) {
+	const privateValue = "synthetic-private-configuration-U83"
+	for _, loadFails := range []bool{false, true} {
+		cfg := config.DefaultConfig()
+		cfg.Credentials.OwnerID = privateValue
+		read := false
+		command := newCredentialsCommand(commandDeps{
+			loadConfig: func() (*config.Config, error) {
+				if loadFails {
+					return cfg, errors.New(privateValue)
+				}
+				return cfg, nil
+			},
+			readToken: func() ([]byte, error) { read = true; return nil, errSetupUnavailable },
+		})
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetErr(&output)
+		command.SetArgs([]string{"token"})
+		err := command.Execute()
+		if err == nil || read || strings.Contains(output.String(), privateValue) ||
+			strings.Contains(err.Error(), privateValue) {
+			t.Fatal("unprepared token setup requested input or exposed configuration")
+		}
+		if loadFails {
+			if !errors.Is(err, errSetupUnavailable) {
+				t.Fatal("configuration load failure escaped its safe projection")
+			}
+		} else if !strings.Contains(err.Error(), "disabled in the selected profile") {
+			t.Fatal("disabled profile did not explain the setup prerequisite")
+		}
 	}
 }

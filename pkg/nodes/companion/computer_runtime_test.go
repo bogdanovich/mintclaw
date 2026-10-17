@@ -21,10 +21,15 @@ type fixtureComputerHost struct {
 	profile           nodes.ComputerProfileDescriptor
 	observed          int
 	opened            int
+	controlled        int
 	disconnected      int
+	openError         error
+	controlError      error
+	lastSession       computer.Session
 	observeError      error
 	mutateObservation func(*nodes.ComputerObservationResult)
 	forgeOpenOwner    bool
+	forgeControlOwner bool
 }
 
 func newFixtureComputerHost(t *testing.T) *fixtureComputerHost {
@@ -85,6 +90,10 @@ func (host *fixtureComputerHost) Open(
 		return nodes.ComputerSessionResult{}, computer.ErrDenied
 	}
 	session, err := host.core.Open(ctx, computer.OpenRequest{Principal: request.Principal, Target: targets[0]})
+	if err == nil {
+		host.lastSession = session
+		err = host.openError
+	}
 	if host.forgeOpenOwner {
 		session.Binding.Principal.ExecutionID = "different-turn"
 	}
@@ -103,6 +112,7 @@ func (host *fixtureComputerHost) Control(
 	ctx context.Context,
 	request nodes.ComputerHostControlRequest,
 ) (nodes.ComputerSessionResult, error) {
+	host.controlled++
 	status, err := host.Status(ctx, request.ComputerHostStatusRequest)
 	if err != nil {
 		return nodes.ComputerSessionResult{}, err
@@ -122,6 +132,13 @@ func (host *fixtureComputerHost) Control(
 		session, err = host.core.Release(ctx, status.Session.Binding)
 	default:
 		return nodes.ComputerSessionResult{}, computer.ErrInvalid
+	}
+	if err == nil {
+		host.lastSession = session
+		err = host.controlError
+	}
+	if host.forgeControlOwner {
+		session.Binding.Principal.ExecutionID = "different-turn"
 	}
 	return nodes.ComputerSessionResult{Session: session, ObservedAt: time.Now()}, err
 }
@@ -380,6 +397,149 @@ func TestComputerRuntimeDoesNotReexecuteUncertainOpen(t *testing.T) {
 	}
 	if host.opened != 1 {
 		t.Fatal("uncertain open was reexecuted")
+	}
+}
+
+func TestComputerRuntimePreservesSanitizedUncertainMutations(t *testing.T) {
+	for _, test := range []struct {
+		command string
+		before  []string
+		forged  bool
+	}{
+		{command: nodes.ComputerCommandOpen},
+		{command: nodes.ComputerCommandHandoff},
+		{command: nodes.ComputerCommandRequestResume, before: []string{nodes.ComputerCommandHandoff}},
+		{
+			command: nodes.ComputerCommandResume,
+			before:  []string{nodes.ComputerCommandHandoff, nodes.ComputerCommandRequestResume},
+		},
+		{command: nodes.ComputerCommandRelease},
+		{command: nodes.ComputerCommandOpen, forged: true},
+		{command: nodes.ComputerCommandHandoff, forged: true},
+	} {
+		t.Run(fmt.Sprintf("%s/forged=%t", test.command, test.forged), func(t *testing.T) {
+			host := newFixtureComputerHost(t)
+			path := filepath.Join(t.TempDir(), "invocations.json")
+			ledger, err := NewFileInvocationLedger(path, DefaultInvocationLedgerLimit, DefaultInvocationLedgerBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(ledger.Close)
+			runtime, plan := fixtureComputerRuntime(t, host, ledger)
+			open := plan(nodes.ComputerCommandOpen, nodes.ComputerOpenInput{
+				ComputerTurn: computerTestTurn(), Profile: host.profile.Alias, ProfileRevision: host.profile.Revision,
+			})
+			mutation := open
+			if test.command != nodes.ComputerCommandOpen {
+				if _, err = runtime.Invoke(t.Context(), open); err != nil {
+					t.Fatal(err)
+				}
+				for _, command := range test.before {
+					if _, err = runtime.Invoke(t.Context(), plan(command, nodes.ComputerControlInput{
+						ComputerTurn: computerTestTurn(), SessionID: host.lastSession.Binding.SessionID,
+						Generation: host.lastSession.Binding.Generation,
+					})); err != nil {
+						t.Fatal(err)
+					}
+				}
+				mutation = plan(test.command, nodes.ComputerControlInput{
+					ComputerTurn: computerTestTurn(), SessionID: host.lastSession.Binding.SessionID,
+					Generation: host.lastSession.Binding.Generation,
+				})
+			}
+			privateCause := errors.New("private uncertain mutation canary")
+			hostError := errors.Join(ErrInvocationOutcomeUnknown, computer.ErrStale, privateCause)
+			if test.forged {
+				host.forgeOpenOwner, host.forgeControlOwner = true, true
+			} else {
+				host.openError, host.controlError = hostError, hostError
+			}
+			for range 2 {
+				if _, err = runtime.Invoke(t.Context(), mutation); !errors.Is(err, ErrInvocationOutcomeUnknown) ||
+					errors.Is(err, privateCause) || strings.Contains(err.Error(), "canary") {
+					t.Fatal("uncertain mutation lost its marker or exposed its private cause", err)
+				}
+				code, message := invocationCommandFailure(err)
+				if code != nodes.InvocationDispatchUnknown || message != "invocation outcome is unknown" {
+					t.Fatalf("uncertain mutation or replay lost its remote classification: %q, %q", code, message)
+				}
+				record, found, lookupErr := ledger.Lookup(mutation.InvocationID)
+				if lookupErr != nil || !found || record.State != nodes.InvocationUnknown ||
+					record.Failure == nil || record.Failure.Code != nodes.InvocationDispatchUnknown {
+					t.Fatalf(
+						"uncertain mutation was not retained with a bounded diagnostic: %+v, %v",
+						record,
+						lookupErr,
+					)
+				}
+			}
+			wantControlled := len(test.before) + 1
+			if test.command == nodes.ComputerCommandOpen {
+				wantControlled = 0
+			}
+			if host.opened != 1 || host.controlled != wantControlled {
+				t.Fatalf("uncertain mutation was reexecuted: opens=%d controls=%d", host.opened, host.controlled)
+			}
+			status, statusErr := host.core.Status(
+				t.Context(), host.lastSession.Binding.Principal, host.lastSession.Binding.SessionID,
+			)
+			if statusErr != nil || status != host.lastSession {
+				t.Fatal("fixture did not commit the uncertain mutation", statusErr)
+			}
+			retained, readErr := os.ReadFile(path)
+			if readErr != nil || strings.Contains(string(retained), "canary") {
+				t.Fatal("private host cause entered the durable ledger", readErr)
+			}
+		})
+	}
+}
+
+func TestComputerCommandFailurePreservesOnlyPublicErrorSemantics(t *testing.T) {
+	privateCause := errors.New("private host failure canary")
+	for _, test := range []struct {
+		name   string
+		cause  error
+		public error
+		code   string
+	}{
+		{"denied", computer.ErrDenied, nodes.ErrCommandDenied, nodes.InvocationDispatchCommandDenied},
+		{"invalid", computer.ErrInvalid, nodes.ErrCommandDenied, nodes.InvocationDispatchCommandDenied},
+		{"stale", computer.ErrStale, computer.ErrStale, nodes.InvocationDispatchComputerStale},
+		{"conflict", computer.ErrConflict, computer.ErrStale, nodes.InvocationDispatchComputerStale},
+		{"busy", computer.ErrBusy, computer.ErrBusy, nodes.InvocationDispatchComputerBusy},
+		{"expired", computer.ErrExpired, computer.ErrExpired, nodes.InvocationDispatchComputerExpired},
+		{"canceled", context.Canceled, context.DeadlineExceeded, nodes.InvocationDispatchCommandTimeout},
+		{"deadline", context.DeadlineExceeded, context.DeadlineExceeded, nodes.InvocationDispatchCommandTimeout},
+		{"unclassified", nil, computer.ErrUnavailable, nodes.InvocationDispatchComputerUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, uncertain := range []bool{false, true} {
+				cause := errors.Join(test.cause, privateCause)
+				if uncertain {
+					cause = errors.Join(ErrInvocationOutcomeUnknown, cause)
+				}
+				failure := computerCommandFailure(cause)
+				diagnostic, found := boundedInvocationFailure(failure)
+				wantCode := test.code
+				if uncertain {
+					wantCode = nodes.InvocationDispatchUnknown
+				}
+				if errors.Is(failure, ErrInvocationOutcomeUnknown) != uncertain ||
+					errors.Is(failure, test.public) == uncertain || !found || diagnostic.Code != wantCode ||
+					errors.Is(failure, privateCause) || strings.Contains(failure.Error(), "canary") {
+					t.Fatalf("uncertain=%t: incorrect public semantics: %v, %+v", uncertain, failure, diagnostic)
+				}
+				if uncertain {
+					code, message := invocationCommandFailure(failure)
+					if code != nodes.InvocationDispatchUnknown || message != "invocation outcome is unknown" {
+						t.Fatalf("remote classification lost uncertainty: %q, %q", code, message)
+					}
+				}
+			}
+		})
+	}
+	if computerCommandFailure(nil) != nil {
+		t.Fatal("nil error became a failure")
 	}
 }
 

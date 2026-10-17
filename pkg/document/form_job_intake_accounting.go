@@ -7,11 +7,34 @@ import (
 )
 
 func formIntakeCurrentFindings(input formIntakeStoredInput) []FormFieldMappingBlocker {
+	return formIntakeFindingsThrough(input, nil)
+}
+
+func formIntakeCurrentModeFindings(mode *formIntakeStoredMode, input formIntakeStoredInput) []FormFieldMappingBlocker {
+	through := make(map[string]int)
+	if mode != nil {
+		for _, other := range mode.Inputs {
+			for _, pass := range other.Reservations {
+				if pass.Outcome == nil {
+					continue
+				}
+				for _, prior := range pass.Outcome.PriorResolutions {
+					if prior.InputID == input.ID && prior.ThroughPasses > through[prior.Span.FieldID] {
+						through[prior.Span.FieldID] = prior.ThroughPasses
+					}
+				}
+			}
+		}
+	}
+	return formIntakeFindingsThrough(input, through)
+}
+
+func formIntakeFindingsThrough(input formIntakeStoredInput, through map[string]int) []FormFieldMappingBlocker {
 	if input.State == formIntakeInputConsumed {
 		return nil
 	}
 	current := make(map[string]string, MaxFormIntakeCandidates)
-	for _, pass := range input.Reservations {
+	for passIndex, pass := range input.Reservations {
 		if pass.Outcome == nil {
 			continue
 		}
@@ -21,6 +44,9 @@ func formIntakeCurrentFindings(input formIntakeStoredInput) []FormFieldMappingBl
 			}
 		}
 		for _, finding := range pass.Outcome.Findings {
+			if passIndex < through[finding.FieldID] {
+				continue
+			}
 			prior := current[finding.FieldID]
 			if prior != "" && prior != "field_ambiguous" && prior != "field_confirmation_required" &&
 				(finding.Code == "field_ambiguous" || finding.Code == "field_confirmation_required") {
@@ -85,12 +111,14 @@ func formIntakeAccountedLiterals(input formIntakeStoredInput) []FormIntakeAccoun
 		return nil
 	}
 	result := make([]FormIntakeAccountedLiteral, 0, len(input.Accounted))
+	outputOnly := formIntakeOutputOnlyHistory(input)
 	for _, span := range input.Accounted {
 		text := input.Text[span.Start:span.End]
 		occurrence := formIntakeLiteralOccurrence(input.Text, span)
 		result = append(result, FormIntakeAccountedLiteral{
 			Literal: FormIntakeLiteral{Text: text, Occurrence: occurrence}, FieldID: span.FieldID,
-			ScopedInstruction: span.ScopedInstruction,
+			ScopedInstruction:    span.ScopedInstruction,
+			ReclassifiableOutput: outputOnly && span.ScopedInstruction,
 		})
 	}
 	return result

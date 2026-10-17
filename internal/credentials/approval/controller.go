@@ -93,7 +93,7 @@ type pendingCeremony struct {
 	request string
 	issued  time.Time
 	options []byte
-	// Private console issue time, retained independently of the browser data.
+	// Private operator issue time, retained independently of the browser data.
 	enrollmentIssued time.Time
 }
 

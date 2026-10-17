@@ -83,6 +83,11 @@ func selectFormIntakeDisposition(
 }
 
 func formIntakeHasScopedInstruction(input formIntakeStoredInput) bool {
+	if formIntakeOutputOnlyHistory(input) && !slices.ContainsFunc(input.Accounted, func(span formIntakeSpan) bool {
+		return span.ScopedInstruction
+	}) {
+		return false
+	}
 	return slices.ContainsFunc(input.Reservations, func(pass formIntakeStoredPass) bool {
 		return pass.Outcome != nil && pass.Outcome.ScopedInstruction
 	})

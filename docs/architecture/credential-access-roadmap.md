@@ -113,26 +113,48 @@ behavior. Retain normal policy for subsequent authenticated actions.
 - TR1: unused Mac VM packaging is removed in
   [#1620](https://github.com/bogdanovich/mintclaw/pull/1620), and the private
   vault adapter is shared with the runtime in
-  [#1625](https://github.com/bogdanovich/mintclaw/pull/1625). Other unused
-  appliance commands/helpers and their obsolete qualification remain to retire.
+  [#1625](https://github.com/bogdanovich/mintclaw/pull/1625). The remaining unused
+  daemon, privileged launch/transport/browser stack and obsolete qualification
+  are removed in the [appliance retirement](credential-appliance-retirement.md).
+  Current policy, vault, approval, private setup and integrated browser tests
+  remain; historical documents preserve the earlier approach.
 - TR2: the dynamic model/log/trace output guard is merged in
   [#1623](https://github.com/bogdanovich/mintclaw/pull/1623). Private token entry,
   storage, SDK startup and lazy scoped consumption are merged in
   [#1643](https://github.com/bogdanovich/mintclaw/pull/1643). Alias-only tool
-  wiring and complete end-to-end output qualification remain incomplete.
+  wiring and generic notifications are implemented by the
+  [integrated alias operation](credential-alias-browser-login.md), disabled by
+  default until qualification. Complete end-to-end output qualification remains
+  incomplete.
 - TR3: gateway-owned enrollment/approval/revocation is merged in
   [#1631](https://github.com/bogdanovich/mintclaw/pull/1631). Synthetic signed and
-  virtual-authenticator tests cover the component; actual Android enrollment
-  and generic notifications remain required.
+  virtual-authenticator tests cover the component. The alias operation queues
+  generic approval links through the existing outbound chat channel; actual
+  Android enrollment and notification delivery remain required.
 - TR4: the existing browser's private credential transaction is merged in
   [#1637](https://github.com/bogdanovich/mintclaw/pull/1637), including grant
   checks around preparation/retrieval and authenticated session retirement.
   Authenticated cookie rotation, native control-value suppression and browser
   catalog/diagnostic/artifact projections are described in the
-  [browser output boundary](credential-browser-output-privacy.md). User-facing
-  tool wiring, site/placement admission and complete companion/output
-  qualification remain rollout requirements.
-- TR5/TR6: the scoped connector, full serialized-output qualification and
+  [browser output boundary](credential-browser-output-privacy.md). The
+  [alias login operation](credential-alias-browser-login.md) joins these
+  components for synthetic qualification. Site/placement admission and complete
+  companion/output qualification remain rollout requirements.
+- TR6: synthetic [integrated output qualification](credential-output-qualification.md)
+  exercises two real agent turns, provider request serialization, canonical
+  history, Seahorse state, browser state, logs, traces and both support-bundle
+  modes. The fixture uses a local scripted provider and virtual passkey, with
+  no personal credentials or website traffic.
+- TR6 pilot selection: the operator selected Craigslist. The
+  [pilot sequence](credential-craigslist-pilot.md) records public form evidence,
+  private setup and the remaining Android/account acceptance checks.
+- TR5: the [GitHub read connector](credential-github-read-connector.md) is the
+  initial read-only default while the operator chooses a preferred API. It
+  reuses phone approval for exact configured repositories and an API Credential
+  item. Synthetic actual-HTTP/provider/phone tests cover protected result
+  release, grant reuse and cancellation on revocation. It remains disabled by
+  default pending deployment and real-token acceptance.
+- TR5/TR6: connector rollout, full serialized-output qualification and
   personal-account pilot are incomplete. No real token, login, or physical
   phone approval is claimed. Passing component tests do not prove the complete
   feature or absence of secrets from every enabled output.
