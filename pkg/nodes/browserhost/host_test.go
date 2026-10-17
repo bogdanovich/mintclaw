@@ -904,6 +904,10 @@ func TestBrowserHostAdvancesAuthorityAfterPostClickDownloadArtifactFailure(t *te
 	}
 }
 
+func TestBrowserHostPreservesDownloadNotDispatched(t *testing.T) {
+	testBrowserHostPostClickDownloadArtifactFailure(t, "not_dispatched")
+}
+
 func testBrowserHostPostClickDownloadArtifactFailure(t *testing.T, status string) {
 	t.Helper()
 	observation := browserworker.DriverObservation{
@@ -918,6 +922,11 @@ func testBrowserHostPostClickDownloadArtifactFailure(t *testing.T, status string
 			"%s: %w", status,
 			&browserworker.DownloadArtifactError{Err: browserworker.ErrDriverIncompatible},
 		),
+	}
+	expectedFailure := nodes.ErrBrowserHostArtifactUnavailable
+	if status == "not_dispatched" {
+		worker.downloadErr = browserworker.ErrDownloadNotDispatched
+		expectedFailure = nodes.ErrBrowserHostDownloadNotDispatched
 	}
 	profile := browserHostProfileFixture()
 	host, err := newBrowserHost(
@@ -952,7 +961,7 @@ func testBrowserHostPostClickDownloadArtifactFailure(t *testing.T, status string
 		t.Fatal(err)
 	}
 	if descriptor, downloadErr := host.Download(t.Context(), action); !errors.Is(
-		downloadErr, nodes.ErrBrowserHostArtifactUnavailable,
+		downloadErr, expectedFailure,
 	) || descriptor != (nodes.BrowserOutputDescriptor{}) {
 		t.Fatalf("Download() = %#v, %v", descriptor, downloadErr)
 	}
@@ -972,6 +981,12 @@ func testBrowserHostPostClickDownloadArtifactFailure(t *testing.T, status string
 	}
 	refreshedRequest := browserHostObserveFixture()
 	refreshedRequest.SnapshotGeneration = action.SnapshotGeneration + 1
+	if status == "not_dispatched" {
+		refreshedRequest.SnapshotGeneration = action.SnapshotGeneration
+		if worker.closeCalls != 0 {
+			t.Fatal("preflight failure closed the browser")
+		}
+	}
 	refreshed, err := host.Observe(t.Context(), refreshedRequest)
 	if err != nil || refreshed.SnapshotGeneration != refreshedRequest.SnapshotGeneration {
 		t.Fatalf("Observe() after artifact failure = %#v, %v", refreshed, err)

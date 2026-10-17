@@ -160,8 +160,12 @@ func (backend pdfCPUFormWriteBackend) fill(data []byte, request WorkerRequest) b
 	if err != nil || !present || sourceGroup == nil || len(sourceGroup.Forms) != 1 {
 		return failedFormWrite(StateFailed, FailureVerificationStructural, "document form structure changed")
 	}
+	sourceForm, schemaFailure := structuralPDFCPUForm(context, sourceGroup.Forms[0])
+	if schemaFailure != nil {
+		return failedFormWrite(failureState(schemaFailure.Code), schemaFailure.Code, schemaFailure.Message)
+	}
 	target, baseline, bindings, failure := preparePDFCPUFormWrite(
-		sourceGroup.Forms[0],
+		sourceForm,
 		*sourceFields.Facts,
 		*request.Fill,
 	)
@@ -189,7 +193,7 @@ func (backend pdfCPUFormWriteBackend) fill(data []byte, request WorkerRequest) b
 	}
 	_, pages, err := form.FillForm(
 		context,
-		form.FillDetails(&target, nil),
+		schemaBoundPDFCPUFillDetails(&target, bindings),
 		target.Pages,
 		form.JSON,
 	)
@@ -197,6 +201,9 @@ func (backend pdfCPUFormWriteBackend) fill(data []byte, request WorkerRequest) b
 		return classifyPDFCPUFormWriteError(err)
 	}
 	if err = ensurePDFCPUSelectedAppearances(context, bindings); err != nil {
+		return classifyPDFCPUFormWriteError(err)
+	}
+	if err = applyPDFCPUCanonicalTextValues(context, bindings); err != nil {
 		return classifyPDFCPUFormWriteError(err)
 	}
 	if err = disablePDFCPUAppearanceRegeneration(context); err != nil {
@@ -868,7 +875,15 @@ func (backend pdfCPUFormWriteBackend) verifyCandidate(
 			"document form candidate failed field verification",
 		)
 	}
-	values, failure := pdfCPUExportedFormValues(group.Forms[0])
+	exported, schemaFailure := structuralPDFCPUForm(context, group.Forms[0])
+	if schemaFailure != nil {
+		return failedFormWrite(
+			StateFailed,
+			FailureVerificationStructural,
+			"document form candidate failed field verification",
+		)
+	}
+	values, failure := pdfCPUExportedFormValues(exported)
 	if failure != nil || len(values) != len(baseline) {
 		return failedFormWrite(
 			StateFailed,
@@ -1146,6 +1161,42 @@ func pdfCPUWidgetContainsButtonState(context *model.Context, widget types.Dict, 
 		}
 	}
 	return found, true
+}
+
+// Do not let pdfcpu's value-based date guess impose date parsing on a native
+// text field. Its validated text and appearance are written canonically below.
+func schemaBoundPDFCPUFillDetails(target *form.Form, bindings map[string]pdfCPUFormBinding) func(
+	id, name string, fieldType form.FieldType, format form.DataFormat,
+) ([]string, bool, bool) {
+	details := form.FillDetails(target, nil)
+	return func(id, name string, fieldType form.FieldType, format form.DataFormat) ([]string, bool, bool) {
+		if fieldType == form.FTDate {
+			for _, binding := range bindings {
+				if binding.backendID == id && binding.field.Kind == FormFieldText {
+					return nil, false, false
+				}
+			}
+		}
+		return details(id, name, fieldType, format)
+	}
+}
+
+func applyPDFCPUCanonicalTextValues(context *model.Context, bindings map[string]pdfCPUFormBinding) error {
+	for _, binding := range bindings {
+		if binding.field.Kind != FormFieldText {
+			continue
+		}
+		field, err := pdfCPUFieldDict(context, binding.backendID)
+		if err != nil {
+			return err
+		}
+		literal, err := types.EscapedUTF16String(binding.expected.text)
+		if err != nil {
+			return err
+		}
+		field["V"] = types.StringLiteral(*literal)
+	}
+	return nil
 }
 
 func applyPDFCPUCanonicalChoiceValues(

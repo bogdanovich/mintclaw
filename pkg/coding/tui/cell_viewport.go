@@ -347,10 +347,13 @@ func cellSemanticForegroundCodes(role cellStyleRole, context cellRenderContext) 
 		}
 		return []string{"38", "2", "0", "104", "139"}
 	}
+	// SSH and multiplexer clients do not always forward COLORFGBG. Keep the
+	// dark-theme blues readable against both black and an undisclosed white
+	// background instead of relying on theme detection alone.
 	if role == cellStylePath {
-		return []string{"38", "2", "165", "214", "255"}
+		return []string{"38", "2", "51", "122", "183"}
 	}
-	return []string{"38", "2", "121", "192", "255"}
+	return []string{"38", "2", "59", "120", "180"}
 }
 
 func markdownForegroundCodes(context cellRenderContext, role string) []string {
@@ -382,7 +385,7 @@ func markdownForegroundCodes(context cellRenderContext, role string) []string {
 	if role == "quote" {
 		return []string{"38", "2", "104", "211", "145"}
 	}
-	return []string{"38", "2", "121", "192", "255"}
+	return []string{"38", "2", "51", "122", "183"}
 }
 
 func cellRowHasBackground(rowStyle cellRowStyle, context cellRenderContext, mode cellRenderMode) bool {

@@ -98,6 +98,15 @@ func TestInvocationCommandFailurePreservesBrowserClickNotDispatched(t *testing.T
 	}
 }
 
+func TestInvocationCommandFailurePreservesBrowserDownloadNotDispatched(t *testing.T) {
+	err := browserCommandFailure(nodes.ErrBrowserHostDownloadNotDispatched)
+	code, message := invocationCommandFailure(err)
+	if code != nodes.InvocationDispatchBrowserDownloadNotDispatched ||
+		message != "browser download was not dispatched" {
+		t.Fatalf("failure = %q, %q", code, message)
+	}
+}
+
 func TestInvocationCommandFailurePreservesCodingClassification(t *testing.T) {
 	for _, failureCode := range []string{
 		nodes.InvocationDispatchCodingScopeNotFound,

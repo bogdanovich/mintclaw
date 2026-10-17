@@ -1723,6 +1723,10 @@ func (host *BrowserHost) executeAction(
 				host.now().UTC().Before(actionDeadline) && browserworker.ClickNotDispatched(executeErr) {
 				return BrowserHostObservation{}, nodes.ErrBrowserHostClickNotDispatched
 			}
+			if action == "download" && actionContextErr == nil &&
+				host.now().UTC().Before(actionDeadline) && browserworker.DownloadNotDispatched(executeErr) {
+				return BrowserHostObservation{}, nodes.ErrBrowserHostDownloadNotDispatched
+			}
 			if errors.Is(executeErr, browserworker.ErrStale) {
 				return BrowserHostObservation{}, ErrBrowserHostStale
 			}

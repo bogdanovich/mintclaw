@@ -81,8 +81,11 @@ const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance
 	`Accounted evidence must not be copied to a different field. Facts outside this field view must NOT be non_data. ` +
 	`Finish accounting ordinary connective or role-setting prose containing no additional supplied field value, ` +
 	`even when every supplied fact is already accounted. Return exact non_data fragments for remaining prose; ` +
-	`do not reclassify accepted facts, uncertain facts or scoped instructions. A pending utterance requires ` +
-	`complete literal accounting; an empty proposal list alone does not mean the utterance has been consumed. ` +
+	`do not reclassify accepted facts, uncertain facts or scoped instructions. ` +
+	`Exception: accounted scoped fragments marked reclassifiable_output may be reclassified only when this entire ` +
+	`utterance is guidance with no supplied values or field dispositions. Return complete exact non_data coverage, ` +
+	`a guidance intent, and no proposals, findings or output instruction. Otherwise preserve their classification. ` +
+	`A pending utterance requires complete literal accounting; an empty proposal list alone does not mean it was consumed. ` +
 	`Do not overlap non_data, proposed facts or correction evidence. Correct or replace existing data only when the ` +
 	`utterance explicitly requests it; supply exact correction evidence and the supplied current event id. ` +
 	`For dispositions only, the same exact blanking instruction may also serve as correction evidence. ` +
@@ -238,16 +241,24 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 		evidence[index] = evidenceWire{Page: item.Page, Text: item.Text}
 	}
 	type accountedWire struct {
-		Literal           documentIntakeLiteralWire `json:"literal"`
-		FieldID           string                    `json:"field_id,omitempty"`
-		ScopedInstruction bool                      `json:"scoped_instruction,omitempty"`
+		Literal              documentIntakeLiteralWire `json:"literal"`
+		FieldID              string                    `json:"field_id,omitempty"`
+		ScopedInstruction    bool                      `json:"scoped_instruction,omitempty"`
+		ReclassifiableOutput bool                      `json:"reclassifiable_output,omitempty"`
 	}
 	accounted := make([]accountedWire, len(pass.Input.Accounted))
 	for index, item := range pass.Input.Accounted {
+		if item.ReclassifiableOutput && (!item.ScopedInstruction || item.FieldID != "") {
+			return nil, errDocumentIntakeInterpretationUnavailable
+		}
 		accounted[index] = accountedWire{
-			Literal:           documentIntakeLiteralWire{Text: item.Literal.Text, Occurrence: item.Literal.Occurrence},
-			FieldID:           item.FieldID,
-			ScopedInstruction: item.ScopedInstruction,
+			Literal: documentIntakeLiteralWire{
+				Text:       item.Literal.Text,
+				Occurrence: item.Literal.Occurrence,
+			},
+			FieldID:              item.FieldID,
+			ScopedInstruction:    item.ScopedInstruction,
+			ReclassifiableOutput: item.ReclassifiableOutput,
 		}
 	}
 	payload, err := json.Marshal(struct {

@@ -141,6 +141,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   exact-item adapter reused by the integrated runtime, preserving value and error projection.
 - [Private Browser Credential Login](credential-private-browser-login.md): scoped private form transactions,
   session-owned output guards, grant-driven retirement, and explicit rollout limits.
+- [Credential Browser Output Boundary](credential-browser-output-privacy.md): private cookie refresh,
+  authenticated snapshot/catalog projections, and artifact output admission.
 - [Historical Isolated Credential Roadmap](credential-isolated-runtime-history.md): superseded
   deployment design and preserved component PR/qualification evidence.
 - [Historical Mac Credential VM Package](credential-mac-vm-package.md): retired candidate launcher
