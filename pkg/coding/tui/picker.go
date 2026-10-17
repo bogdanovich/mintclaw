@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	codingpicker "github.com/bogdanovich/mintclaw/pkg/coding/picker"
@@ -143,7 +144,7 @@ func newPickerModel(
 	now func() time.Time,
 ) *pickerModel {
 	search := textinput.New()
-	search.Prompt = "search> "
+	search.Prompt = "Search: "
 	search.Placeholder = "title, preview, path, branch, or ID"
 	search.CharLimit = pickerSearchRunes
 	return &pickerModel{
@@ -206,52 +207,60 @@ func (m *pickerModel) updateSearch(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *pickerModel) updateKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if message.Type == tea.KeyRunes && len(message.Runes) == 1 {
+		switch message.Runes[0] {
+		case 'Q':
+			m.cancelLoad()
+			m.canceled = true
+			return m, tea.Quit
+		case 'A':
+			query := m.query
+			query.AllProjects = !query.AllProjects
+			query.Offset = 0
+			return m, m.load(query)
+		case 'Z':
+			query := m.query
+			query.Archived = !query.Archived
+			query.Offset = 0
+			return m, m.load(query)
+		case 'R':
+			query := m.query
+			query.Offset = 0
+			return m, m.load(query)
+		case 'E':
+			if len(m.page.Items) > 0 && m.selected < len(m.page.Items) {
+				m.expanded = !m.expanded
+			}
+			return m, nil
+		}
+	}
 	switch message.String() {
-	case "ctrl+c", "esc", "q", "Q":
+	case "ctrl+c", "esc":
 		m.cancelLoad()
 		m.canceled = true
 		return m, tea.Quit
-	case "/", "s", "S":
+	case "/":
 		m.searching = true
 		m.search.SetValue(m.query.Search)
 		m.search.CursorEnd()
 		return m, m.search.Focus()
-	case "a", "A":
-		query := m.query
-		query.AllProjects = !query.AllProjects
-		query.Offset = 0
-		return m, m.load(query)
-	case "z", "Z":
-		query := m.query
-		query.Archived = !query.Archived
-		query.Offset = 0
-		return m, m.load(query)
-	case "r", "R":
-		query := m.query
-		query.Offset = 0
-		return m, m.load(query)
-	case "up", "k":
+	case "up":
 		if m.selected > 0 {
 			m.selected--
 			m.expanded = false
 		}
-	case "down", "j":
+	case "down":
 		if m.selected+1 < len(m.page.Items) {
 			m.selected++
 			m.expanded = false
 		}
-	case "e", "E":
-		if len(m.page.Items) > 0 && m.selected < len(m.page.Items) &&
-			m.page.Items[m.selected].MatchSnippet != "" {
-			m.expanded = !m.expanded
-		}
-	case "pgup", "left", "h", "p":
+	case "pgup", "left":
 		if m.canPage() && m.query.Offset > 0 {
 			query := m.query
 			query.Offset = max(0, query.Offset-query.Limit)
 			return m, m.load(query)
 		}
-	case "pgdown", "right", "l", "n":
+	case "pgdown", "right":
 		if m.canPage() && m.page.HasMore {
 			query := m.query
 			query.Offset = m.page.NextOffset
@@ -259,6 +268,14 @@ func (m *pickerModel) updateKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		return m.selectCurrent()
+	}
+	if message.Type == tea.KeyRunes && len(message.Runes) > 0 {
+		m.searching = true
+		m.search.SetValue(m.query.Search)
+		m.search.CursorEnd()
+		focus := m.search.Focus()
+		updated, input := m.updateSearch(message)
+		return updated, tea.Batch(focus, input)
 	}
 	return m, nil
 }
@@ -324,75 +341,119 @@ func (m *pickerModel) selectCurrent() (tea.Model, tea.Cmd) {
 }
 
 func (m *pickerModel) View() string {
-	header := m.header()
 	if m.height <= 2 {
-		return clipLine(header, m.width)
-	}
-	lines := []string{clipLine(header, m.width)}
-	if m.searching {
-		lines = append(lines, clipLine(m.search.View(), m.width))
-	} else if m.notice != "" {
-		lines = append(lines, clipLine("notice: "+m.notice, m.width))
-	} else if m.err != nil {
-		lines = append(lines, clipLine("error: "+m.err.Error()+" · R retry", m.width))
-	} else if warning := m.catalogWarning(); warning != "" {
-		lines = append(lines, clipLine(warning, m.width))
-	}
-	if m.expanded && len(m.page.Items) > 0 && m.selected < len(m.page.Items) {
-		lines = append(lines, m.expandedMatchLines(m.page.Items[m.selected])...)
+		return pickerTitleStyle().Render(clipLine("Resume a previous session", m.width))
 	}
 
-	footer := "↑/↓ select · / search · A scope · Z archive · E match · Enter resume · Q cancel"
-	available := max(1, m.height-len(lines)-1)
+	chrome := m.chromeLines()
+	footer := m.footerLines()
+	available := max(1, m.height-len(chrome)-len(footer))
+	lines := append([]string(nil), chrome...)
+
+	var content []string
 	if len(m.page.Items) == 0 {
 		empty := "No coding threads found. Start one with mintclaw code <prompt>."
 		if m.query.Archived {
-			empty = "No archived coding threads found. Press Z to show active threads."
+			empty = "No archived coding threads found. Change Status to Active."
 		}
 		if m.query.Search != "" {
 			empty = "No coding threads match the current search. Press / to change it."
 		}
-		lines = append(lines, clipLine(empty, m.width))
+		content = []string{clipLine(empty, m.width)}
 	} else {
-		lines = append(lines, m.visibleItemLines(available)...)
+		content = m.visibleItemLines(available)
 	}
-	if len(lines) < m.height {
-		lines = append(lines, clipLine(footer, m.width))
+	lines = append(lines, content...)
+	for len(lines)+len(footer) < m.height {
+		lines = append(lines, "")
 	}
+	lines = append(lines, footer...)
 	if len(lines) > m.height {
 		lines = lines[:m.height]
 	}
 	return strings.Join(lines, "\n")
 }
 
-func (m *pickerModel) header() string {
-	scope := "current project"
-	if m.query.AllProjects {
-		scope = "all projects"
+func (m *pickerModel) chromeLines() []string {
+	lines := []string{
+		pickerTitleStyle().Render(clipLine("Resume a previous session", m.width)),
 	}
-	parts := []string{"MintClaw resume", "scope " + scope}
-	if m.query.Archived {
-		parts = append(parts, "archived")
-	} else {
-		parts = append(parts, "active")
+	if m.height >= 8 {
+		lines = append(lines, "")
 	}
-	if m.query.Search != "" {
-		parts = append(parts, "search "+fmt.Sprintf("%q", m.query.Search))
+	lines = append(lines, m.toolbarLine())
+	if m.height >= 10 {
+		lines = append(lines, "")
 	}
-	if m.loading {
-		parts = append(parts, "loading…")
-	} else if m.err != nil {
-		parts = append(parts, "load failed")
-	} else {
-		start := 0
-		end := 0
-		if len(m.page.Items) > 0 {
-			start = m.query.Offset + 1
-			end = m.query.Offset + len(m.page.Items)
+	lines = append(lines, m.searchLine())
+
+	if !m.searching && m.notice != "" {
+		lines = append(lines, pickerWarningStyle().Render(clipLine("Notice: "+m.notice, m.width)))
+	} else if !m.searching && m.err != nil {
+		lines = append(lines, pickerErrorStyle().Render(clipLine("Error: "+m.err.Error()+" · R retry", m.width)))
+	} else if !m.searching {
+		warning := m.catalogWarning()
+		if warning != "" {
+			lines = append(lines, pickerWarningStyle().Render(clipLine(warning, m.width)))
 		}
-		parts = append(parts, fmt.Sprintf("items %d-%d of %d", start, end, m.page.Matched))
 	}
-	return strings.Join(parts, " · ")
+	if m.height >= 12 {
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+func (m *pickerModel) toolbarLine() string {
+	scopeCurrent := !m.query.AllProjects
+	statusActive := !m.query.Archived
+	parts := []string{
+		pickerSecondaryStyle().Render("Filter: "),
+		pickerToolbarValue("Cwd", scopeCurrent),
+		pickerToolbarValue("All", !scopeCurrent),
+		"   ",
+		pickerSecondaryStyle().Render("Status: "),
+		pickerToolbarValue("Active", statusActive),
+		pickerToolbarValue("Archived", !statusActive),
+		"   ",
+		pickerSecondaryStyle().Render("Sort: "),
+		pickerToolbarValue("Updated", true),
+	}
+	return clipPickerStyledLine(strings.Join(parts, ""), m.width)
+}
+
+func (m *pickerModel) searchLine() string {
+	if m.searching {
+		return clipPickerStyledLine(m.search.View(), m.width)
+	}
+	if m.query.Search == "" {
+		return pickerSecondaryStyle().Render(clipLine("Type to search", m.width))
+	}
+	return clipLine("Search: "+m.query.Search, m.width)
+}
+
+func (m *pickerModel) footerLines() []string {
+	if m.height < 5 {
+		return nil
+	}
+	position := 0
+	if len(m.page.Items) > 0 {
+		position = m.query.Offset + m.selected + 1
+	}
+	total := m.page.Matched
+	progress := fmt.Sprintf(" %d / %d ", position, total)
+	if m.loading {
+		progress = fmt.Sprintf(" %d / %d · loading… ", position, total)
+	}
+	separatorWidth := max(0, m.width-pickerLineWidth(progress))
+	separator := strings.Repeat("─", separatorWidth) + progress
+	hints := "↑/↓ browse   enter resume   esc cancel   type search   A scope   Z status   E details"
+	if m.width < 78 {
+		hints = "↑/↓ browse · enter resume · esc cancel · type search"
+	}
+	return []string{
+		pickerSecondaryStyle().Render(clipLine(separator, m.width)),
+		pickerSecondaryStyle().Render(clipLine(hints, m.width)),
+	}
 }
 
 func (m *pickerModel) catalogWarning() string {
@@ -414,33 +475,75 @@ func (m *pickerModel) catalogWarning() string {
 }
 
 func (m *pickerModel) visibleItemLines(available int) []string {
-	rowsPerItem := 3
-	visible := max(1, available/rowsPerItem)
+	var expanded []string
+	if m.expanded && len(m.page.Items) > 0 && m.selected < len(m.page.Items) {
+		expanded = m.expandedItemLines(m.page.Items[m.selected])
+		maximum := max(0, available-1)
+		if len(expanded) > maximum {
+			expanded = append([]string(nil), expanded[:maximum]...)
+			if maximum > 0 {
+				expanded[maximum-1] = pickerSecondaryStyle().Render(clipLine("  └ …", m.width))
+			}
+		}
+	}
+	detailLines := len(expanded)
+	visible := max(1, available-detailLines)
 	start := min(max(0, m.selected-visible/2), max(0, len(m.page.Items)-visible))
 	end := min(len(m.page.Items), start+visible)
-	lines := make([]string, 0, (end-start)*rowsPerItem)
+	lines := make([]string, 0, end-start+detailLines)
 	for index := start; index < end; index++ {
 		item := m.page.Items[index]
-		marker := " "
+		marker := "  "
 		if index == m.selected {
-			marker = ">"
+			marker = pickerSelectedStyle().Render("› ")
 		}
-		lines = append(lines, clipLine(fmt.Sprintf(
-			"%s %d. %s · %s · %s",
-			marker,
-			m.query.Offset+index+1,
-			item.Title,
-			formatPickerAge(m.now(), item.UpdatedAt),
-			shortPickerID(item.ThreadID),
-		), m.width))
-		preview := item.Preview
+		age := formatPickerAge(m.now(), item.UpdatedAt)
+		title := item.Title
 		if item.MatchSnippet != "" {
-			preview = item.MatchSnippet
+			title += " — " + item.MatchSnippet
 		}
-		lines = append(lines, clipLine("  "+preview, m.width))
-		lines = append(lines, clipLine("  "+pickerItemState(item), m.width))
+		state := pickerItemBadge(item)
+		prefixWidth := 2 + 12
+		availableTitle := max(1, m.width-prefixWidth-pickerLineWidth(state))
+		title = clipLine(title, availableTitle)
+		if index == m.selected {
+			title = pickerSelectedStyle().Render(title)
+		}
+		line := marker + pickerSecondaryStyle().Render(fmt.Sprintf("%-12s", age)) + title
+		if state != "" {
+			line += pickerSecondaryStyle().Render(state)
+		}
+		lines = append(lines, clipPickerStyledLine(line, m.width))
+		if index == m.selected && m.expanded {
+			lines = append(lines, expanded...)
+		}
 	}
 	return lines
+}
+
+func pickerItemBadge(item codingpicker.Item) string {
+	states := make([]string, 0, 5)
+	switch item.Location {
+	case codingpicker.LocationMissing:
+		states = append(states, "missing")
+	case codingpicker.LocationMoved:
+		states = append(states, "moved")
+	case codingpicker.LocationUnknown:
+		states = append(states, "unknown")
+	}
+	if item.Dirty {
+		states = append(states, "dirty")
+	}
+	if item.Stale {
+		states = append(states, "stale")
+	}
+	if item.Locked {
+		states = append(states, "locked")
+	}
+	if len(states) == 0 {
+		return ""
+	}
+	return "  [" + strings.Join(states, ", ") + "]"
 }
 
 func pickerItemState(item codingpicker.Item) string {
@@ -469,46 +572,93 @@ func pickerItemState(item codingpicker.Item) string {
 	if item.StateIncomplete && item.Location != codingpicker.LocationUnknown {
 		states = append(states, "[state incomplete]")
 	}
-	if item.MatchKind != "" {
-		matched := "match " + item.MatchKind
-		if !item.MatchedAt.IsZero() {
-			matched += " at " + item.MatchedAt.Local().Format(time.RFC3339)
-		}
-		if item.MatchedMessage > 0 {
-			matched += fmt.Sprintf(" message %d", item.MatchedMessage)
-		}
-		states = append(states, matched)
+	if len(states) == 0 {
+		return "available"
 	}
-	branch := item.Branch
-	if branch == "" {
-		branch = "unknown"
-	}
-	states = append(states, "branch "+branch, item.InvocationCWD)
 	return strings.Join(states, " · ")
 }
 
-func (m *pickerModel) expandedMatchLines(item codingpicker.Item) []string {
-	header := fmt.Sprintf("match in %s", shortPickerID(item.ThreadID))
+func (m *pickerModel) expandedItemLines(item codingpicker.Item) []string {
+	lines := []string{
+		pickerSecondaryStyle().Render(clipLine("  │ Session:   "+item.ThreadID, m.width)),
+		pickerSecondaryStyle().Render(clipLine("  │ Directory: "+item.InvocationCWD, m.width)),
+		pickerSecondaryStyle().Render(clipLine("  │ Branch:    "+pickerItemBranch(item), m.width)),
+		pickerSecondaryStyle().Render(clipLine("  │ State:     "+pickerItemState(item), m.width)),
+	}
 	if item.MatchKind != "" {
-		header += " · " + item.MatchKind
+		match := item.MatchKind
+		if item.MatchedMessage > 0 {
+			match += fmt.Sprintf(" · message %d", item.MatchedMessage)
+		}
+		if !item.MatchedAt.IsZero() {
+			match += " · " + item.MatchedAt.Local().Format(time.RFC3339)
+		}
+		lines = append(lines, pickerSecondaryStyle().Render(clipLine("  │ Match:     "+match, m.width)))
 	}
-	if item.MatchedMessage > 0 {
-		header += fmt.Sprintf(" · message %d", item.MatchedMessage)
+	preview := strings.TrimSpace(item.Preview)
+	if item.MatchSnippet != "" {
+		preview = strings.TrimSpace(item.MatchSnippet)
 	}
-	lines := []string{clipLine(header, m.width)}
-	if !item.MatchedAt.IsZero() {
-		lines = append(lines, clipLine("matched at "+item.MatchedAt.Local().Format(time.RFC3339), m.width))
+	if preview == "" {
+		return lines
 	}
-	remaining := strings.TrimSpace(item.MatchSnippet)
+	lines = append(lines, pickerSecondaryStyle().Render(clipLine("  │ Preview:", m.width)))
+	remaining := preview
 	for range 3 {
 		if remaining == "" {
 			break
 		}
-		line, rest := splitPickerDetail(remaining, max(1, m.width-2))
-		lines = append(lines, clipLine("  "+line, m.width))
+		line, rest := splitPickerDetail(remaining, max(1, m.width-6))
+		prefix := "  │ "
+		if rest == "" {
+			prefix = "  └ "
+		}
+		lines = append(lines, pickerSecondaryStyle().Render(clipLine(prefix+line, m.width)))
 		remaining = rest
 	}
 	return lines
+}
+
+func pickerItemBranch(item codingpicker.Item) string {
+	if strings.TrimSpace(item.Branch) == "" {
+		return "unknown"
+	}
+	return item.Branch
+}
+
+func pickerTitleStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true)
+}
+
+func pickerSecondaryStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Faint(true)
+}
+
+func pickerSelectedStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#337AB7"))
+}
+
+func pickerWarningStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("#8A5A00"))
+}
+
+func pickerErrorStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("#B42318"))
+}
+
+func pickerToolbarValue(value string, active bool) string {
+	style := pickerSecondaryStyle()
+	if active {
+		style = lipgloss.NewStyle().Bold(true).Reverse(true)
+	}
+	return style.Render(" " + value + " ")
+}
+
+func clipPickerStyledLine(value string, width int) string {
+	if width <= 0 || ansi.StringWidth(value) <= width {
+		return value
+	}
+	return ansi.Truncate(value, width, "…")
 }
 
 func splitPickerDetail(value string, width int) (string, string) {
@@ -548,18 +698,9 @@ func formatPickerAge(now, updated time.Time) string {
 		return fmt.Sprintf("%dm ago", int(age/time.Minute))
 	case age < 24*time.Hour:
 		return fmt.Sprintf("%dh ago", int(age/time.Hour))
-	case age < 30*24*time.Hour:
-		return fmt.Sprintf("%dd ago", int(age/(24*time.Hour)))
 	default:
-		return updated.Local().Format("2006-01-02")
+		return fmt.Sprintf("%dd ago", int(age/(24*time.Hour)))
 	}
-}
-
-func shortPickerID(threadID string) string {
-	if len(threadID) > 8 {
-		return threadID[:8]
-	}
-	return threadID
 }
 
 func pickerLineWidth(value string) int {
