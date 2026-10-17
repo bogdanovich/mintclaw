@@ -105,6 +105,10 @@ func TestPlaywrightImageDownloadRealBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	var authenticated atomic.Int64
+	var svgScriptRequests atomic.Int64
+	svg := []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><text>Photo: 你好</text><script>fetch('/svg-script-executed')</script></svg>`,
+	)
 	var deniedRequests atomic.Int64
 	var denyRedirect atomic.Bool
 	denied := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -115,6 +119,12 @@ func TestPlaywrightImageDownloadRealBrowser(t *testing.T) {
 	uploaded := make(chan []byte, 1)
 	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/photo.svg":
+			w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
+			_, _ = w.Write(svg)
+		case "/svg-script-executed":
+			svgScriptRequests.Add(1)
+			_, _ = io.WriteString(w, "unexpected SVG execution")
 		case "/denied.png":
 			if denyRedirect.Load() {
 				http.Redirect(w, r, denied.URL+"/image.png", http.StatusFound)
@@ -152,6 +162,7 @@ func TestPlaywrightImageDownloadRealBrowser(t *testing.T) {
 			http.SetCookie(w, &http.Cookie{Name: "image-auth", Value: "fixture", Path: "/", HttpOnly: true})
 			_, _ = io.WriteString(w, `<title>Original image fixture</title>
 <img alt="Product photo" src="/redirect.png"><button>Unsupported target</button>
+<img alt="SVG photo" src="/photo.svg">
 <img alt="Denied photo" src="/denied.png">
 <img alt="Inline photo" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
 <a href="/attachment">Attachment fixture</a>
@@ -272,6 +283,22 @@ func TestPlaywrightImageDownloadRealBrowser(t *testing.T) {
 	if observation.URL != fixtureOrigin+"/" || observation.Title != "Original image fixture" {
 		t.Fatalf("source page changed: %+v", observation)
 	}
+	svgRef := mustSnapshotRef(t, observation.Snapshot, `img "SVG photo" \[ref=([a-z0-9]*e[0-9]+)\]`)
+	svgDownload, err := worker.Download(ctx, DriverAction{Kind: DriverDownloadAction, Target: svgRef}, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svgContent, err := os.ReadFile(svgDownload.Path)
+	if err != nil || !bytes.Equal(svgContent, svg) || svgDownload.Filename != "image.svg" ||
+		svgDownload.ContentType != "image/svg+xml" || svgScriptRequests.Load() != 0 {
+		t.Fatalf(
+			"SVG original-byte capture failed: %+v, script requests=%d, error=%v",
+			svgDownload,
+			svgScriptRequests.Load(),
+			err,
+		)
+	}
+	observation = observe()
 	chooser := mustSnapshotRef(t, observation.Snapshot, `button "Upload fixture" \[ref=([a-z0-9]*e[0-9]+)\]`)
 	identity, err := worker.NavigationIdentity(ctx)
 	if err != nil {
