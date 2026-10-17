@@ -2398,6 +2398,9 @@ func (*BrowserActTool) Description() string {
 		"For non-click actions, omit effect; a redundant value is ignored because the broker derives the fixed effect. " +
 		"Classify from the user request and runtime objective checklist, not from the element role or HTTP method. " +
 		"A succeeded action confirms input dispatch, not the requested outcome; verify fresh page state before claiming completion. " +
+		"Use download on a fresh HTTP(S) image ref to retain its original file, or on an attachment link; " +
+		"use the returned artifact_ref with upload/file_chooser. Screenshots are not original image files. " +
+		"If download_not_dispatched is returned, keep the same session and observe fresh state; never replay that invocation. " +
 		"Use external_commit immediately before an important external state change such as publishing, submitting an order, " +
 		"sending, deleting, or replying; use navigation for ordinary page/tab/form-step transitions. " +
 		"For top-level navigate, copy the session, tab, snapshot, and snapshot generation from one fresh " +
@@ -2759,6 +2762,9 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 	if invocation.State == browser.InvocationFailed && invocation.SafeFailure == "click_not_dispatched" {
 		return browserClickNotDispatchedResult(invocation)
 	}
+	if invocation.State == browser.InvocationFailed && invocation.SafeFailure == "download_not_dispatched" {
+		return browserDownloadNotDispatchedResult(invocation)
+	}
 	result := browserActionResult{
 		InvocationID: invocation.ID, Effect: invocation.Effect,
 		State: invocation.State, Reason: invocation.SafeFailure,
@@ -2915,6 +2921,24 @@ func browserClickNotDispatchedResult(invocation browser.Invocation) *toolshared.
 		"state":              invocation.State,
 		"reason":             invocation.SafeFailure,
 		"failure_class":      browser.OutcomeFailureClickNotDispatched,
+	})
+	return toolshared.ErrorResult(string(encoded))
+}
+
+func browserDownloadNotDispatchedResult(invocation browser.Invocation) *toolshared.ToolResult {
+	encoded, _ := json.Marshal(map[string]any{
+		"status":              "failed",
+		"code":                "download_not_dispatched",
+		"message":             "No download request or page action was sent. The same browser session remains available. Observe fresh state and choose an HTTP(S) image or attachment link; do not replay this invocation.",
+		"action":              "observe_same_session_then_choose_supported_download_target",
+		"session_preserved":   true,
+		"download_dispatched": false,
+		"invocation_id":       invocation.ID,
+		"browser_session_id":  invocation.SessionID,
+		"effect":              invocation.Effect,
+		"state":               invocation.State,
+		"reason":              invocation.SafeFailure,
+		"failure_class":       browser.OutcomeFailureDownloadNotDispatched,
 	})
 	return toolshared.ErrorResult(string(encoded))
 }

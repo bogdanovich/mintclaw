@@ -31,17 +31,18 @@ func playwrightCaptureDownloadCode(target string, maximumBytes int64) string {
 	// the interpolated ref and byte limit have already passed typed validation.
 	return fmt.Sprintf(`async (page) => {
   const maximumBytes = %d;
-  const cdp = await page.context().newCDPSession(page);
   const locator = page.locator("aria-ref=" + %q);
   if (await locator.count() !== 1) {
-    await cdp.detach();
     return "MINTCLAW_DL_V1|error|stale_target";
   }
+  %s
+  const targetKind = await locator.evaluate(element => element.tagName);
+  if (targetKind === "IMG") return await captureImage(locator);
   const expectedURL = await locator.evaluate(element => element instanceof HTMLAnchorElement ? element.href : "");
   if (!/^https?:\/\//i.test(expectedURL)) {
-    await cdp.detach();
     return "MINTCLAW_DL_V1|error|unsupported_target";
   }
+  const cdp = await page.context().newCDPSession(page);
   const frameTree = await cdp.send("Page.getFrameTree");
   const mainFrameID = String(frameTree.frameTree && frameTree.frameTree.frame && frameTree.frameTree.frame.id || "");
   if (!mainFrameID) {
@@ -147,7 +148,7 @@ func playwrightCaptureDownloadCode(target string, maximumBytes int64) string {
   }
   const parts = [];
   let total = 0;
-  const encodeUTF8Base64 = value => {
+  function encodeUTF8Base64(value) {
     const bytes = [];
     for (const character of value) {
       const point = character.codePointAt(0);
@@ -172,7 +173,7 @@ func playwrightCaptureDownloadCode(target string, maximumBytes int64) string {
         (index + 2 < bytes.length ? alphabet[third & 63] : "=");
     }
     return { bytes: bytes.length, encoded };
-  };
+  }
   try {
     for (;;) {
       const part = await cdp.send("IO.read", { handle: state.stream, size: %d });
@@ -206,7 +207,7 @@ func playwrightCaptureDownloadCode(target string, maximumBytes int64) string {
   if (state.multiple) return "MINTCLAW_DL_V1|error|multiple";
   return "MINTCLAW_DL_V1|complete|" + encodeURIComponent(state.disposition) + "|" +
     encodeURIComponent(state.contentType) + "|" + total + "|" + parts.join(",");
-}`, maximumBytes, target, playwrightDownloadChunkBytes)
+}`, maximumBytes, target, playwrightImageDownloadCode, playwrightDownloadChunkBytes)
 }
 
 // PlaywrightDownloadAvailable reports whether the configured private driver
@@ -314,6 +315,10 @@ func (worker *playwrightWorker) captureDownload(
 	}
 	if worker.networkProxy != nil && worker.networkProxy.Denials() > denialsBefore {
 		return DriverDownload{}, ErrDenied
+	}
+	if len(fields) == 3 && fields[1] == "error" &&
+		(fields[2] == "stale_target" || fields[2] == "unsupported_target") {
+		return DriverDownload{}, ErrDownloadNotDispatched
 	}
 	if len(fields) >= 3 && fields[1] == "error" &&
 		(fields[2] == "oversize" || fields[2] == "read_failed") {

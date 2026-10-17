@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import http.server
 import json
 import os
@@ -21,6 +23,11 @@ SCHEMA_VERSION = "mintclaw.browser_smoke.v1"
 MAX_INPUT_BYTES = 1024 * 1024
 
 SUITE_CHECKS = {
+    "image-transfer": (
+        "initial_blank", "image_observed", "download_not_dispatched",
+        "same_session_preserved", "original_artifact_retained", "upload_selected",
+        "upload_received", "source_page_preserved",
+    ),
     "semantic-observation": (
         "initial_blank", "map_context_preserved", "decorative_images_not_product_photos",
         "gallery_context_preserved", "unlabeled_image_evidence", "exact_gallery_control",
@@ -107,6 +114,10 @@ SUITE_CHECKS = {
 }
 
 SUITE_STAGES = {
+    "image-transfer": (
+        ("image-transfer", SUITE_CHECKS["image-transfer"],
+         {"browser_targets": 1, "browser_session": 2, "browser_observe": 5, "browser_act": 5}),
+    ),
     "semantic-observation": (
         ("semantic-observation", SUITE_CHECKS["semantic-observation"],
          {"browser_targets": 1, "browser_session": 2, "browser_observe": 4, "browser_act": 3}),
@@ -326,12 +337,55 @@ SEMANTIC_GALLERY = b"""<section aria-label="Product gallery">
   <output id="gallery-state">GALLERY_CLOSED</output>
 </section>"""
 
+TRANSFER_IMAGE = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+)
+TRANSFER_HTML = b"""<!doctype html><title>Original image transfer fixture</title><main>
+<h1>Original image transfer fixture</h1>
+<img alt="Original transfer photo" width="64" height="64" src="/browser-smoke/auth-photo-redirect"
+     onclick="fetch('/browser-smoke/image-click',{method:'POST'})">
+<button onclick="fetch('/browser-smoke/unsupported-click',{method:'POST'})">Not a download</button>
+<input type="file" aria-label="Upload original photo"
+       onchange="document.querySelector('#state').textContent='UPLOAD_SELECTED_'+this.files.length">
+<button onclick="fetch('/browser-smoke/image-upload',{method:'POST',body:document.querySelector('input[type=file]').files[0]})
+ .then(r=>r.text()).then(t=>document.querySelector('#state').textContent=t)
+ .catch(()=>document.querySelector('#state').textContent='UPLOAD_FAILED')">Send test upload</button>
+<output id="state">UPLOAD_NOT_SELECTED</output></main>"""
+
 
 class FixtureHandler(http.server.BaseHTTPRequestHandler):
     server_version = "MintClawBrowserSmoke/1"
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         path = self.path.split("?", 1)[0]
+        if path == "/browser-smoke/image-audit":
+            with self.server.semantic_lock:
+                body = json.dumps(self.server.image_events).encode()
+            self._reply("application/json", body)
+            return
+        if path == "/browser-smoke/image-transfer":
+            with self.server.semantic_lock:
+                self.server.image_events["source-visits"] += 1
+            self._reply("text/html; charset=utf-8", TRANSFER_HTML, {
+                "Set-Cookie": "mintclaw_image_fixture=authorized; Path=/browser-smoke/; HttpOnly; SameSite=Lax",
+            })
+            return
+        if path in ("/browser-smoke/auth-photo-redirect", "/browser-smoke/auth-photo.png"):
+            if "mintclaw_image_fixture=authorized" not in self.headers.get("Cookie", "").split("; "):
+                with self.server.semantic_lock:
+                    self.server.image_events["unauthorized-reads"] += 1
+                self.send_error(401)
+                return
+            if path.endswith("-redirect"):
+                self.send_response(302)
+                self.send_header("Location", "/browser-smoke/auth-photo.png")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            with self.server.semantic_lock:
+                self.server.image_events["authenticated-image-reads"] += 1
+            self._reply("image/png", TRANSFER_IMAGE)
+            return
         if path == "/browser-smoke/semantic-audit":
             with self.server.semantic_lock:
                 body = json.dumps(self.server.semantic_events).encode()
@@ -360,6 +414,28 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        if self.path in ("/browser-smoke/image-click", "/browser-smoke/unsupported-click"):
+            with self.server.semantic_lock:
+                self.server.image_events["unexpected-clicks"] += 1
+            self._reply("text/plain", b"unexpected")
+            return
+        if self.path == "/browser-smoke/image-upload":
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.send_error(400)
+                return
+            if size < 1 or size > 4096:
+                self.send_error(413)
+                return
+            self.connection.settimeout(5)
+            body = self.rfile.read(size)
+            with self.server.semantic_lock:
+                self.server.image_events["uploads"] += 1
+                self.server.image_events["uploaded-bytes"] = len(body)
+                self.server.image_events["uploaded-sha256"] = hashlib.sha256(body).hexdigest()
+            self._reply("text/plain", b"UPLOAD_RECEIVED_ORIGINAL" if body == TRANSFER_IMAGE else b"UPLOAD_WRONG_BYTES")
+            return
         event = self.path.removeprefix("/browser-smoke/semantic-event/")
         if event not in ("map", "gallery") or not self.path.startswith("/browser-smoke/semantic-event/"):
             self.send_error(404)
@@ -371,11 +447,13 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
-    def _reply(self, content_type: str, body: bytes) -> None:
+    def _reply(self, content_type: str, body: bytes, headers: dict[str, str] | None = None) -> None:
         self.send_response(200)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -384,6 +462,10 @@ def serve(args: argparse.Namespace) -> int:
     server = http.server.ThreadingHTTPServer((args.bind, 0), FixtureHandler)
     server.semantic_lock = threading.Lock()
     server.semantic_events = {"map-only": 0, "gallery": 0, "map-click": 0, "gallery-click": 0}
+    server.image_events = {
+        "source-visits": 0, "authenticated-image-reads": 0, "unauthorized-reads": 0,
+        "unexpected-clicks": 0, "uploads": 0, "uploaded-bytes": 0, "uploaded-sha256": "",
+    }
     host = args.advertise_host
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
@@ -403,7 +485,7 @@ def serve(args: argparse.Namespace) -> int:
 
 def semantic_probe(args: argparse.Namespace) -> int:
     try:
-        with urllib.request.urlopen(args.origin + "/browser-smoke/semantic-audit", timeout=5) as response:
+        with urllib.request.urlopen(args.origin + args.audit_path, timeout=5) as response:
             value = json.loads(response.read(4096))
     except (OSError, ValueError):
         value = {"unavailable": True}
@@ -703,13 +785,15 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
                 else None,
                 expected_tool_failures={"browser_execute": 1}
                 if stage_name == "privileged-execute"
-                else {"browser_act": 1} if stage_name == "click-recovery"
+                else {"browser_act": 1} if stage_name in {"click-recovery", "image-transfer"}
                 else None,
             )
-            if stage_name == "semantic-observation" and set(evidence["tool_calls"]).difference({
-                "browser_targets", "browser_session", "browser_observe", "browser_act", "tool_search_tool_bm25",
-            }):
-                raise ValueError("invalid_execution_evidence")
+            if stage_name in {"semantic-observation", "image-transfer"}:
+                allowed = {"browser_targets", "browser_session", "browser_observe", "browser_act", "tool_search_tool_bm25"}
+                if stage_name == "image-transfer":
+                    allowed.add("browser_contexts")  # Evidence admits only read-only list operations.
+                if set(evidence["tool_calls"]).difference(allowed):
+                    raise ValueError("invalid_execution_evidence")
             raw_capabilities = result.get("capabilities")
             capability_names = ("navigate", "click", "observe")
             if not isinstance(raw_capabilities, dict) or set(raw_capabilities) != set(
@@ -758,6 +842,18 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         ]
         suite_closed = all(result.get("session_closed") is True for result in stage_results)
         all_checks_passed = all(item["state"] == "passed" for item in report["checks"])
+        if args.suite == "image-transfer":
+            oracle = load_json(args.image_oracle)
+            expected_oracle = {
+                "source-visits": 1, "authenticated-image-reads": 2, "unauthorized-reads": 0,
+                "unexpected-clicks": 0, "uploads": 1, "uploaded-bytes": len(TRANSFER_IMAGE),
+                "uploaded-sha256": hashlib.sha256(TRANSFER_IMAGE).hexdigest(),
+            }
+            oracle_passed = oracle == expected_oracle
+            report["fixture_outcome_audit"] = {
+                "state": "passed" if oracle_passed else "failed", "events": oracle,
+            }
+            all_checks_passed = all_checks_passed and oracle_passed
         if args.suite == "semantic-observation":
             oracle = load_json(args.semantic_oracle)
             expected_oracle = {"map-only": 1, "gallery": 1, "map-click": 0, "gallery-click": 1}
@@ -845,7 +941,11 @@ def parser() -> argparse.ArgumentParser:
     probe_parser = subcommands.add_parser("semantic-probe")
     probe_parser.add_argument("--origin", required=True)
     probe_parser.add_argument("--output", required=True)
-    probe_parser.set_defaults(handler=semantic_probe)
+    probe_parser.set_defaults(handler=semantic_probe, audit_path="/browser-smoke/semantic-audit")
+    image_probe_parser = subcommands.add_parser("image-probe")
+    image_probe_parser.add_argument("--origin", required=True)
+    image_probe_parser.add_argument("--output", required=True)
+    image_probe_parser.set_defaults(handler=semantic_probe, audit_path="/browser-smoke/image-audit")
     report_parser = subcommands.add_parser("report")
     report_parser.add_argument("--suite", choices=tuple(SUITE_CHECKS), required=True)
     report_parser.add_argument("--target", required=True)
@@ -856,6 +956,7 @@ def parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--started-ns", required=True)
     report_parser.add_argument("--output", required=True)
     report_parser.add_argument("--semantic-oracle")
+    report_parser.add_argument("--image-oracle")
     report_parser.set_defaults(handler=write_report)
     return root
 

@@ -258,7 +258,7 @@ func (worker *actionTestWorker) UploadAfterNavigationCheck(
 
 func (worker *actionTestWorker) Download(_ context.Context, action DriverAction, _ int64) (DriverDownload, error) {
 	worker.actions = append(worker.actions, action)
-	return worker.download, nil
+	return worker.download, worker.executeErr
 }
 
 type actionTestFactory struct {
