@@ -747,13 +747,13 @@ func (m *Model) View() string {
 }
 
 func (m *Model) composerTopGapFits(sections []string) bool {
-	if len(sections) == 0 {
-		return false
+	sectionRows := 0
+	if len(sections) > 0 {
+		sectionRows = strings.Count(strings.Join(sections, "\n"), "\n") + 1
 	}
-	sectionRows := strings.Count(strings.Join(sections, "\n"), "\n") + 1
 	// Account for the proposed upper gap, the composer, the existing lower
-	// gap, and the one-line footer. Small command panels can otherwise exceed
-	// the terminal by one row while a turn is active.
+	// gap, and the one-line footer. This keeps an idle composer off the top
+	// edge while small command panels still avoid exceeding the terminal.
 	return sectionRows+m.composer.Height()+3 <= m.height
 }
 
