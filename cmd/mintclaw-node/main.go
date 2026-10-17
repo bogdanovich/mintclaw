@@ -33,13 +33,24 @@ func main() {
 
 func execute(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: mintclaw-node <run|coding-scopes|install|uninstall|status|version>")
+		var err error
+		args, err = defaultDesktopArgs()
+		if err != nil {
+			return err
+		}
+		if len(args) == 0 {
+			return errors.New(
+				"usage: mintclaw-node <run|desktop-readiness|coding-scopes|install|uninstall|status|version>",
+			)
+		}
 	}
 	switch args[0] {
 	case "run":
 		return run(args[1:])
 	case "coding-scopes":
 		return codingScopes(args[1:], os.Stdout)
+	case "desktop-readiness":
+		return desktopReadiness(args[1:], os.Stdout)
 	case "install", "uninstall", "status":
 		return runServiceLifecycle(args[0], args[1:])
 	case "version":
