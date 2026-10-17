@@ -17,7 +17,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
-	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
@@ -3372,20 +3371,7 @@ func browserOwnerFromIdentity(actorID, agentID, sessionKey, executionID string) 
 }
 
 func browserCanonicalActorID(ctx context.Context) string {
-	inbound := toolshared.ToolInboundContext(ctx)
-	channel := strings.ToLower(strings.TrimSpace(inbound.Channel))
-	actorID := strings.TrimSpace(inbound.ActorID)
-	if actorID == "" {
-		actorID = strings.TrimSpace(inbound.SenderID)
-	}
-	if channel == "" || actorID == "" {
-		return ""
-	}
-	if platform, platformID, ok := identity.ParseCanonicalID(actorID); ok &&
-		strings.EqualFold(strings.TrimSpace(platform), channel) {
-		return identity.BuildCanonicalID(channel, platformID)
-	}
-	return identity.BuildCanonicalID(channel, actorID)
+	return toolshared.CanonicalInboundActorID(ctx)
 }
 
 func browserRequestID(ctx context.Context) (string, error) {
