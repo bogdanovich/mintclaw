@@ -36,12 +36,17 @@ func (auditor *documentFormAuditor) InterpretFormIntake(
 	if err != nil || response == nil || len(response.ToolCalls) != 0 {
 		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
 	}
-	return decodeDocumentIntakeInterpretation(response.Content, view.Pass.CandidateIDs, view.RelatedInputs...)
+	result, err := decodeDocumentIntakeInterpretation(response.Content, view.Pass.CandidateIDs, view.RelatedInputs...)
+	if err != nil {
+		return document.FormIntakeInterpretation{}, err
+	}
+	return verifyDocumentIntakeBooleanAssertions(ctx, resolved, view, payload, result)
 }
 
 const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance against only the supplied fields. ` +
 	`Return exactly one JSON object, no markdown: {"intent":"facts|clarify|back|pause|resume|cancel|review|finish|draft",` +
 	`"proposals":[{"field_id":"supplied id","literals":[{"text":"exact utterance fragment","occurrence":1}],` +
+	`"boolean_assertion":true,` +
 	`"disposition":"intentionally_blank|not_applicable|deferred|included (omit for positive facts)",` +
 	`"supersedes_event_id":"current event id when correcting","replace_existing":false,` +
 	`"correction_evidence":[{"text":"exact explicit correction instruction","occurrence":1}],` +
@@ -59,13 +64,18 @@ const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance
 	`For finish requests referring to the current or already selected result/review, preserve its output scope. ` +
 	`Omit output unless this utterance explicitly changes complete-versus-draft scope; finish alone is not a scope change. ` +
 	`Arrays may be empty. Occurrences count exact token-aligned non-overlapping matches, starting at 1. ` +
-	`Use only literal text from the utterance, never generate, rephrase, infer or case-fold a value. ` +
+	`Use only literal text from the utterance, never generate, rephrase, infer or case-fold a text value. ` +
+	`Omit boolean_assertion for ordinary literal values. The only typed exception is a direct unambiguous ` +
+	`assertion about a supplied checkbox and the intended person: use boolean_assertion true or false with ONE ` +
+	`exact current-utterance quote proving that statement. It will undergo a separate private verification. ` +
+	`Never infer another status, unstated opposite, eligibility or legal/financial conclusion from a related fact. ` +
+	`If the person, field or assertion is ambiguous, return a finding instead. Never combine this with disposition. ` +
 	`A scalar field has one value. Multiple exact evidence literals are permitted only if each independently ` +
 	`normalizes to that same native value; never join them into a new value. Multi-select lists permit distinct choices. ` +
 	`Redundant evidence must refer to the same field/person; never merge same-valued facts from different roles. ` +
-	`For a checkbox, extract exact supplied tokens from boolean_literals (native comparison ignores case). ` +
+	`For a checkbox with an explicit boolean token, extract it from boolean_literals and omit boolean_assertion. ` +
 	`Never concatenate synonyms or a whole clause into that scalar. Keep the remaining connective prose in non_data. ` +
-	`Do not generate a boolean token or copy one from related input when the current utterance lacks one. ` +
+	`Do not generate a boolean text token or copy one from related input when the current utterance lacks one. ` +
 	`Conflicting or unclear supplied values require a finding, not several scalar literals or a guessed value. ` +
 	`For explicit operator instructions to leave a field blank or mark a section inapplicable, use disposition with ` +
 	`one exact instruction literal, not a generated blank or N/A string. Do not mark missing fields inapplicable by default. ` +
@@ -107,6 +117,7 @@ type documentIntakeLiteralWire struct {
 }
 
 type documentIntakeProposalWire struct {
+	BooleanAssertion   *bool                            `json:"boolean_assertion,omitempty"`
 	FieldID            string                           `json:"field_id"`
 	Disposition        document.FormIntakeDisposition   `json:"disposition,omitempty"`
 	Literals           []documentIntakeLiteralWire      `json:"literals"`
@@ -337,6 +348,9 @@ func decodeDocumentIntakeInterpretation(
 			}, proposal.Disposition) || (proposal.Disposition != "" && len(proposal.Literals) != 1) {
 			return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
 		}
+		if proposal.BooleanAssertion != nil && (proposal.Disposition != "" || len(proposal.Literals) != 1) {
+			return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+		}
 		seen[proposal.FieldID] = true
 		literals, ok := convert(proposal.Literals)
 		if !ok {
@@ -347,7 +361,8 @@ func decodeDocumentIntakeInterpretation(
 			return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
 		}
 		result.Proposals = append(result.Proposals, document.FormIntakeProposal{
-			FieldID: proposal.FieldID, Literals: literals, SupersedesEventID: proposal.SupersedesEventID,
+			BooleanAssertion: proposal.BooleanAssertion,
+			FieldID:          proposal.FieldID, Literals: literals, SupersedesEventID: proposal.SupersedesEventID,
 			Disposition:     proposal.Disposition,
 			ReplaceExisting: proposal.ReplaceExisting, CorrectionEvidence: correction,
 		})

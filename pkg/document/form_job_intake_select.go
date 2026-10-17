@@ -191,6 +191,17 @@ func resolveFormIntakeProposals(
 			(len(item.Literals) != 1 && item.Disposition != "") {
 			return nil, ErrFormJobAnswerConflict
 		}
+		if item.BooleanAssertion != nil {
+			if field.Kind != FormFieldCheckbox || item.Disposition != "" || len(item.Literals) != 1 {
+				return nil, ErrFormJobAnswerConflict
+			}
+			literal, known := deterministicBoolean(
+				FormProtectedValue{Kind: ProtectedValueText, Text: item.Literals[0].Text},
+			)
+			if known && literal != *item.BooleanAssertion {
+				return nil, ErrFormJobAnswerConflict
+			}
+		}
 		spans, err := resolveFormIntakeRefs(text, item.Literals, item.FieldID)
 		if err != nil {
 			return nil, err
@@ -303,6 +314,10 @@ func formIntakeProposalAmbiguous(
 
 func formIntakeAssignment(item formIntakeResolvedProposal) FormCompositeAssignment {
 	value := FormProtectedValue{Kind: ProtectedValueText, Text: item.Proposal.Literals[0].Text}
+	if item.Proposal.BooleanAssertion != nil {
+		assertion := *item.Proposal.BooleanAssertion
+		value = FormProtectedValue{Kind: ProtectedValueBoolean, Boolean: &assertion}
+	}
 	if item.Field.Kind == FormFieldList && item.Field.MultiSelect {
 		value = FormProtectedValue{Kind: ProtectedValueChoices}
 		for _, ref := range item.Proposal.Literals {
