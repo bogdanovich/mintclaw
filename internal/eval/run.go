@@ -100,6 +100,10 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	defer func() { _ = writer.root.Close() }()
 	result.ReportDir = writer.dir
+	result.WorkspaceInputs = &WorkspaceInputs{
+		Scope:  workspaceInputScope,
+		Before: observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter),
+	}
 	roles := prepareConversationRoles(target, cases)
 	if roles.user != nil {
 		defer roles.user.Close()
@@ -147,6 +151,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			return result, ErrReport
 		}
 	}
+	result.WorkspaceInputs.After = observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter)
 	stopTarget()
 	if lifecycle != nil {
 		result.TargetLifecycle = lifecycle
