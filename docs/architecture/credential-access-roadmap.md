@@ -140,6 +140,11 @@ behavior. Retain normal policy for subsequent authenticated actions.
   [alias login operation](credential-alias-browser-login.md) joins these
   components for synthetic qualification. Site/placement admission and complete
   companion/output qualification remain rollout requirements.
+- TR6: synthetic [integrated output qualification](credential-output-qualification.md)
+  exercises two real agent turns, provider request serialization, canonical
+  history, Seahorse state, browser state, logs, traces and both support-bundle
+  modes. The fixture uses a local scripted provider and virtual passkey, with
+  no personal credentials or website traffic.
 - TR5/TR6: the scoped connector, full serialized-output qualification and
   personal-account pilot are incomplete. No real token, login, or physical
   phone approval is claimed. Passing component tests do not prove the complete
