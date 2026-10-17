@@ -449,4 +449,7 @@ type ErrorPayload struct {
 	ProviderErrorKind    string
 	HTTPStatus           int
 	RequestID            string
+	// Route identity is supplied only for an unambiguous single-model call.
+	Provider   string
+	AuthMethod string
 }
