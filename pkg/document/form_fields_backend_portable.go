@@ -106,6 +106,10 @@ func normalizePDFCPUFields(
 	exported form.Form,
 	sourceSHA256 string,
 ) (*FormFieldsFacts, *Failure) {
+	exported, schemaFailure := structuralPDFCPUForm(context, exported)
+	if schemaFailure != nil {
+		return nil, schemaFailure
+	}
 	limits := defaultFormFieldLimits()
 	widgetLocations, failure := collectFormWidgetLocations(context, exported)
 	if failure != nil {
