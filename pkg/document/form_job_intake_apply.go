@@ -14,12 +14,21 @@ import (
 // Proposals are private interpreter output. Values are derived from exact
 // source literals, never from replacement text supplied by an interpreter.
 type FormIntakeProposal struct {
-	FieldID            string                `json:"field_id"`
-	Disposition        FormIntakeDisposition `json:"disposition,omitempty"`
-	Literals           []FormIntakeLiteral   `json:"-"`
-	SupersedesEventID  string                `json:"supersedes_event_id,omitempty"`
-	ReplaceExisting    bool                  `json:"replace_existing,omitempty"`
-	CorrectionEvidence []FormIntakeLiteral   `json:"-"`
+	FieldID            string                   `json:"field_id"`
+	Disposition        FormIntakeDisposition    `json:"disposition,omitempty"`
+	Literals           []FormIntakeLiteral      `json:"-"`
+	SupersedesEventID  string                   `json:"supersedes_event_id,omitempty"`
+	ReplaceExisting    bool                     `json:"replace_existing,omitempty"`
+	CorrectionEvidence []FormIntakeLiteral      `json:"-"`
+	Resolves           []FormIntakePriorLiteral `json:"-"`
+}
+
+// A private proposal to settle exact earlier rejected evidence. The replacement
+// remains the current proposal's validated literal, never text copied from here.
+type FormIntakePriorLiteral struct {
+	Reference      string            `json:"-"`
+	ExpectedPasses int               `json:"-"`
+	Literal        FormIntakeLiteral `json:"-"`
 }
 
 type FormIntakeApplyRequest struct {
@@ -158,6 +167,11 @@ func (store *FormJobStore) ApplyFormIntakePass(
 			ScopedIDs:         selection.ScopedIDs,
 		}
 		pass.Outcome.ResolvedGuidanceIDs = formIntakeResolvedGuidanceIDs(*input, *pass)
+		if resolveErr := store.resolvePriorFormIntakeLiterals(
+			&source, index, record, key, request, selection, digest,
+		); resolveErr != nil {
+			return false, resolveErr
+		}
 		consumed := len(formIntakeCurrentFindings(*input)) == 0 && (input.Intent != interactions.ProtectedAnswerValue ||
 			formIntakeTextAccounted(input.Text, input.Accounted))
 		if consumed && formIntakeHasScopedInstruction(*input) {
@@ -187,6 +201,11 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		Text       string
 		Occurrence int
 	}
+	type priorLiteral struct {
+		Reference string
+		Passes    int
+		Literal   literal
+	}
 	type proposal struct {
 		FieldID           string
 		Disposition       FormIntakeDisposition `json:"Disposition,omitempty"`
@@ -194,12 +213,14 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		SupersedesEventID string
 		ReplaceExisting   bool
 		Correction        []literal
+		Resolves          []priorLiteral `json:"Resolves,omitempty"`
 	}
 	type output struct {
 		Mode    FormIntakeOutputMode
 		Literal literal
 	}
 	count, bytes, valid := 0, 0, true
+	resolutionCount := 0
 	convert := func(refs []FormIntakeLiteral) []literal {
 		result := make([]literal, len(refs))
 		for i, ref := range refs {
@@ -233,6 +254,19 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 			FieldID: item.FieldID, Disposition: item.Disposition, Literals: convert(item.Literals),
 			SupersedesEventID: item.SupersedesEventID, ReplaceExisting: item.ReplaceExisting,
 			Correction: convert(item.CorrectionEvidence),
+		}
+		for _, prior := range item.Resolves {
+			resolutionCount++
+			if resolutionCount > MaxFormIntakeCandidates || prior.ExpectedPasses < 1 ||
+				prior.ExpectedPasses >= MaxFormIntakeExtractionPasses {
+				return "", ErrFormJobCapacityExceeded
+			}
+			if _, _, err := parseFormIntakeReceipt(prior.Reference); err != nil {
+				return "", ErrFormJobAnswerConflict
+			}
+			refs := convert([]FormIntakeLiteral{prior.Literal})
+			proposals[i].Resolves = append(proposals[i].Resolves,
+				priorLiteral{prior.Reference, prior.ExpectedPasses, refs[0]})
 		}
 	}
 	nonData := convert(request.NonData)
