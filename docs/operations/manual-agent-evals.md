@@ -6,7 +6,7 @@
 on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,
 bootstrap skills, deploy a binary, restart a gateway, grant broad approval, or retry uncertain task admission.
 
-Native browser execution, preset provisioning and complete domain qualification remain later packets.
+Native browser execution, effective-input witnesses and complete domain qualification remain later packets.
 Offline `compare` reports all retained trial counts, case compatibility and observed environment changes; it does
 not execute tasks, regrade evidence, or establish causal quality drift.
 Missing capabilities/drivers/domain evidence produce explicit non-passing coverage. A text response never proves
@@ -77,6 +77,56 @@ cases passing on Linux after that reviewed fix, without claiming PDF/browser or 
 
 ## Prepare The Target
 
+### Fresh Profile Preparation
+
+`eval prepare` creates a new private profile from an **already isolated, reviewed seed**. It is not a production
+configuration importer: the seed must pass the existing restrictive conversation/PDF policy. Broad tools, external
+channels, hooks, routing and production capabilities are refused before native repository lock/recovery or credential
+resolution. Set `MINTCLAW_HOME` to the seed's physical home; the output parent must already exist with mode `0700`
+and must be outside, and not contain, that home.
+
+```sh
+MINTCLAW_HOME=/private/eval-seed MINTCLAW_CONFIG=/private/eval-seed/config.json \
+  mintclaw eval prepare --preset /private/seed-preset.json --out /private/eval-profiles --json
+```
+
+The result names a fresh `eval-UUID` home and its `reports/preset.json`. Preparation does not start a gateway,
+construct providers or call models. It briefly binds a loopback port to choose an available number, then releases
+it; the port is not reserved until gateway startup. The owned gateway's exact-process admission still applies.
+Use the returned home/config/preset for a subsequent `eval run --start-target`, not the seed's environment.
+
+Only the seed's admitted public configuration and enabled HTTP API-key models are copied. Disabled models/channels
+and all other typed secrets are dropped. This first preparation contract refuses proxy, custom-header, OAuth and
+fallback or capability-override model configurations. Enabled aliases must have locally resolvable API keys
+(at most 16 model entries,
+eight unique keys per model, 16 KiB per key); declared user/judge aliases must exist. Native durable configuration
+reads ignore ambient configuration/credential overrides. Native credential resolution handles the seed, and new
+private credential files plus native `file://` references handle the copy. The channel receives a new random token.
+No production sessions, memory, PID files, auth stores, browser state, journals, logs or unlisted files are cloned.
+
+The optional preset `workspace_files` list is an operator-reviewed, SHA-256-pinned allowlist:
+
+```json
+"workspace_files": [
+  {"path": "AGENTS.md", "sha256": "<64 lowercase hexadecimal characters>"},
+  {"path": "skills/example/SKILL.md", "sha256": "<64 lowercase hexadecimal characters>"}
+]
+```
+
+Only the five bootstrap filenames listed below and explicit files below `skills/` are eligible. There is no
+recursive directory copy. Empty/absent lists copy no workspace inputs. Limits are 64 files, 64 KiB per file and
+1 MiB total; every path component must be non-symlink, and final entries must be regular files. Digests are checked
+before profile allocation. All copied files become `0600`, directories `0700`; executable bits are not retained.
+Known configured credential literals in workspace inputs are refused. This narrow literal guard and an operator's
+allowlist are not comprehensive secret detection, runtime privacy evidence or proof of effective loaded prompts.
+The seed remains operator-owned and immutable; hostile concurrent filesystem mutation is not certified.
+
+After allocation, a preparation error reports `outcome: incomplete` and the private home, retains partial files,
+and returns failure. Do not use that profile or hide its credential-bearing leftovers. Inspect and dispose of it
+under the same private evidence policy. Preparation is a separate one-time operation, not automatic per-trial
+provisioning, domain cleanup or full E5 qualification. For generic synthetic data use existing corpus fixtures;
+arbitrary workspace data and executable hook deployment are outside this first allowlist.
+
 ### Owned Gateway Mode
 
 `eval run --start-target` explicitly launches the current MintClaw executable's native `gateway` command and
@@ -107,7 +157,8 @@ log truncation. Captured child output is private and bounded to 1 MiB; native ru
 surfaces needing inspection. An exit-zero receipt does not grant PDF/browser idle, privacy, no-write, delivery,
 or domain cleanup checks, and does not rewrite per-trial remote state. Reports remain outside git. Judge-only
 regrading preserves source lifecycle uncertainty without starting a target; comparison distinguishes owned and
-attached modes. Profile provisioning and post-settlement domain witnesses remain later E5/qualification work.
+attached modes. Automatic per-trial provisioning, effective-input and post-settlement domain witnesses remain
+later E5/qualification work.
 
 Use a new private profile, not the production profile or a copy of its sessions, memory, ledgers, or auth store.
 Both runner and gateway must use the same explicit `MINTCLAW_HOME`. Keep configuration and profile files immutable

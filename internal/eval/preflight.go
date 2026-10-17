@@ -78,6 +78,18 @@ func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admit
 }
 
 func validateConversationProfile(cfg *config.Config, preset Preset, workspace string) error {
+	if err := validateConversationPolicy(cfg, preset, workspace); err != nil {
+		return err
+	}
+	if _, err := gatewayclient.ChannelSettings(cfg); err != nil {
+		return ErrUnsafeTarget
+	}
+	return nil
+}
+
+// Policy can be checked on public configuration before a native repository read
+// opens its lock or resolves credentials. Runtime admission also requires auth.
+func validateConversationPolicy(cfg *config.Config, preset Preset, workspace string) error {
 	pdfEnabled := slices.Contains(preset.Capabilities, "pdf")
 	if cfg == nil || cfg.ValidateModelList() != nil || cfg.ValidateAgents() != nil || len(cfg.Agents.List) != 1 ||
 		!cfg.Agents.Defaults.RestrictToWorkspace || cfg.Agents.Defaults.AllowReadOutsideWorkspace ||
@@ -119,9 +131,6 @@ func validateConversationProfile(cfg *config.Config, preset Preset, workspace st
 	}
 	plan, err := netbind.BuildPlan(cfg.Gateway.Host, netbind.DefaultLoopback)
 	if err != nil || !plan.IsLoopbackOnly() {
-		return ErrUnsafeTarget
-	}
-	if _, err := gatewayclient.ChannelSettings(cfg); err != nil {
 		return ErrUnsafeTarget
 	}
 	agent := cfg.Agents.List[0]
