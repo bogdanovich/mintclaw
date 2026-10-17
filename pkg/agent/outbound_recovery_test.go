@@ -52,31 +52,31 @@ func TestRecoveredDocumentDeliveryPublishesAndSettlesExactIntent(t *testing.T) {
 	t.Cleanup(func() { _ = second.Close() })
 	al.SetOutboundOutbox(second)
 	recovered, err := second.Recover()
-	if err != nil || len(recovered) != 1 {
+	if err != nil || len(recovered.Admissions) != 1 {
 		t.Fatalf("recovered admissions = %#v, err=%v", recovered, err)
 	}
-	publish, err := al.ReconcileRecoveredOutboundAdmission(recovered[0], time.Now().UTC())
+	publish, err := al.ReconcileRecoveredOutboundAdmission(recovered.Admissions[0], time.Now().UTC())
 	if err != nil || !publish {
 		t.Fatalf("reconcile recovered document = %t, %v", publish, err)
 	}
 	assertRecoveredDocumentState(
 		t, stateRoot, owner, operationID, document.WriteDeliveryPending, admission.Intent.ID,
 	)
-	if err = second.PrepareAdmission(recovered[0].Lease); err != nil {
+	if err = second.PrepareAdmission(recovered.Admissions[0].Lease); err != nil {
 		t.Fatal(err)
 	}
-	if err = second.CommitAdmission(recovered[0].Lease); err != nil {
+	if err = second.CommitAdmission(recovered.Admissions[0].Lease); err != nil {
 		t.Fatal(err)
 	}
-	if err = second.BeginAttempt(recovered[0].Intent.ID); err != nil {
+	if err = second.BeginAttempt(recovered.Admissions[0].Intent.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err = second.MarkDelivered(recovered[0].Intent.ID, outbox.Outcome{
+	if err = second.MarkDelivered(recovered.Admissions[0].Intent.ID, outbox.Outcome{
 		PlatformMessageIDs: []string{"remote-document-1"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = al.SettleRecoveredOutboundAdmission(t.Context(), recovered[0]); err != nil {
+	if err = al.SettleRecoveredOutboundAdmission(t.Context(), recovered.Admissions[0]); err != nil {
 		t.Fatal(err)
 	}
 	assertRecoveredDocumentState(
@@ -130,10 +130,10 @@ func TestRecoveredDocumentDeliveryDoesNotReplayTerminalOperation(t *testing.T) {
 	t.Cleanup(func() { _ = second.Close() })
 	al.SetOutboundOutbox(second)
 	recovered, err := second.Recover()
-	if err != nil || len(recovered) != 1 {
+	if err != nil || len(recovered.Admissions) != 1 {
 		t.Fatalf("recovered admissions = %#v, err=%v", recovered, err)
 	}
-	publish, err := al.ReconcileRecoveredOutboundAdmission(recovered[0], time.Now().UTC())
+	publish, err := al.ReconcileRecoveredOutboundAdmission(recovered.Admissions[0], time.Now().UTC())
 	if err != nil || publish {
 		t.Fatalf("terminal recovered document = %t, %v", publish, err)
 	}
@@ -205,10 +205,10 @@ func TestRecoveredExpiredFormDeliverySettlesBeforeAcknowledgement(t *testing.T) 
 	t.Cleanup(func() { _ = second.Close() })
 	al.SetOutboundOutbox(second)
 	recovered, err := second.Recover()
-	if err != nil || len(recovered) != 1 || !recovered[0].Dispatch {
+	if err != nil || len(recovered.Admissions) != 1 || !recovered.Admissions[0].Dispatch {
 		t.Fatalf("recovered admission = %#v, %v", recovered, err)
 	}
-	publish, err := al.ReconcileRecoveredOutboundAdmission(recovered[0], time.Now().UTC())
+	publish, err := al.ReconcileRecoveredOutboundAdmission(recovered.Admissions[0], time.Now().UTC())
 	if err != nil || publish {
 		t.Fatalf("expired recovered form = publish:%t, err:%v", publish, err)
 	}
@@ -224,7 +224,7 @@ func TestRecoveredExpiredFormDeliverySettlesBeforeAcknowledgement(t *testing.T) 
 		settled.FailureCode != string(document.FailureDeliveryFailed) || len(settled.Fields) != 0 {
 		t.Fatalf("settled expired form = %#v, %v", settled, err)
 	}
-	if recovered, err = second.Recover(); err != nil || len(recovered) != 0 {
+	if recovered, err = second.Recover(); err != nil || len(recovered.Admissions) != 0 {
 		t.Fatalf("recovery after settlement = %#v, %v", recovered, err)
 	}
 }

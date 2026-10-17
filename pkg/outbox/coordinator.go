@@ -329,22 +329,23 @@ func (c *Coordinator) AwaitTerminal(ctx context.Context, admission Admission) (I
 }
 
 // Recover classifies persisted crash states and claims every intent that is
-// safe for this process to publish again.
-func (c *Coordinator) Recover() ([]Admission, error) {
+// safe for this process to publish again. Isolated issues accompany successful
+// independent admissions in the report; fatal errors transfer no claims.
+func (c *Coordinator) Recover() (AdmissionRecoveryReport, error) {
 	if c == nil || c.store == nil {
-		return nil, errors.New("outbox coordinator is unavailable")
+		return AdmissionRecoveryReport{}, errors.New("outbox coordinator is unavailable")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.validateOpenLocked(); err != nil {
-		return nil, err
+		return AdmissionRecoveryReport{}, err
 	}
-	intents, err := c.store.Recover()
+	report, err := c.store.Recover()
 	if err != nil {
-		return nil, err
+		return AdmissionRecoveryReport{}, err
 	}
-	admissions := make([]Admission, 0, len(intents))
-	for _, intent := range intents {
+	admissions := make([]Admission, 0, len(report.Intents))
+	for _, intent := range report.Intents {
 		if intent.RecoverySettlementPending() || intent.TranscriptProjectionPending() {
 			admissions = append(admissions, Admission{Intent: intent, Settle: true})
 			continue
@@ -354,7 +355,7 @@ func (c *Coordinator) Recover() ([]Admission, error) {
 			admissions = append(admissions, admission)
 		}
 	}
-	return admissions, nil
+	return AdmissionRecoveryReport{Admissions: admissions, Issues: report.Issues}, nil
 }
 
 // MarkRecoverySettled records successful idempotent domain settlement for one

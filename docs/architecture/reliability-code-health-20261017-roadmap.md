@@ -65,6 +65,20 @@ Completion gates:
 - tests cover mixed valid/damaged records, startup behavior, repair/restart,
   and preservation of no-blind-replay and domain settlement guarantees.
 
+The first implementation isolates JSON syntax failures and per-record permission
+denials only under canonical delivery filenames. The original file remains the
+blocked identity and repair evidence. Typed recovery reports separate usable
+independent work from record issues; errors invalidate the whole result and
+transfer no dispatch claims.
+Unsupported schemas, identity conflicts, unknown filenames, missing records,
+directory failures, and recovery-write failures remain fatal. Gateway startup
+reports bounded identity/code diagnostics and accepts only that explicit partial
+recovery contract. No record migration or automatic deletion is introduced.
+Operational repair restores an authoritative original record and lets normal
+recovery classify its state again. Deleting an isolated file would remove its
+duplicate-prevention identity and is not a repair. If its original state cannot
+be established, retain the blocked record and its uncertain outcome.
+
 ## R2: MCP Discovery Failures
 
 Evidence: `pkg/mcp.listServerTools` logs iterator errors and returns a successful
