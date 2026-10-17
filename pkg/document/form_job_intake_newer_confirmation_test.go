@@ -1,6 +1,7 @@
 package document
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -178,12 +179,16 @@ func TestFormIntakeNewerGuidanceRequiresEveryNativeGate(t *testing.T) {
 				index = 0
 			}
 			mode := &formIntakeStoredMode{Inputs: []formIntakeStoredInput{old, {ID: "current", Text: "later"}}}
+			before, err := json.Marshal(old.Reservations)
+			if err != nil {
+				t.Fatal(err)
+			}
 			consumeOlderFormIntakeGuidance(mode, index, schema, record, outcome)
 			want := name == "acknowledged" || name == "accepted" || name == "confirmation advice"
 			got := mode.Inputs[0]
-			if (got.State == formIntakeInputConsumed) != want || want && got.Text != "" || !want && got.Text != old.Text ||
-				len(got.Reservations) != 1 ||
-				len(got.Reservations[0].Outcome.Findings) != len(old.Reservations[0].Outcome.Findings) {
+			after, err := json.Marshal(got.Reservations)
+			if err != nil || string(before) != string(after) || mode.Inputs[1].Text != "later" ||
+				(got.State == formIntakeInputConsumed) != want || want && got.Text != "" || !want && got.Text != old.Text {
 				t.Fatal("advisory settlement bypassed a native gate or mutated an old outcome")
 			}
 		})
