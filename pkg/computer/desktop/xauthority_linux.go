@@ -47,9 +47,10 @@ func x11Cookie(path, display string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", computer.ErrInvalid
 	}
-	// Open without following a symlink, then attest the opened file. No HOME or
-	// unauthenticated fallback is used; authority is never printed or persisted.
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	// Open without following a symlink or blocking on a FIFO, then attest the
+	// opened file. No HOME or unauthenticated fallback is used; authority is
+	// never printed or persisted.
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return "", computer.ErrDenied
 	}
