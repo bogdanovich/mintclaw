@@ -36,3 +36,12 @@ disposition/cardinality/token-contradiction refusals, person ambiguity, verifica
 mixed facts, correction, restart/replay and public JSON exclusion. Preserve ordinary behavior and native
 limits. Qualify unrelated and official large forms through the actual agent/artifact/channel after merged
 deployment. This stacked protocol follow-up does not complete PDFI4.
+
+### Exact Literal Formatting
+
+A real configured-provider probe using only the public two-field unit fixture returned valid JSON with
+two whitespace-padded literals, which the existing strict decoder correctly rejected. Explicitly require
+nonempty, trimmed exact fragments in the private interpretation contract, including prose/output/correction
+and prior-resolution quotes. The otherwise identical probe then returned two accepted proposals with no
+padded literals. Keep the decoder and native occurrence/accounting checks unchanged; do not silently trim
+model output. This is format evidence, not proof that an entire retained job or Telegram transaction passed.

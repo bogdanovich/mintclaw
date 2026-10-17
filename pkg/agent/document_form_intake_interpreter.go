@@ -65,6 +65,8 @@ const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance
 	`Omit output unless this utterance explicitly changes complete-versus-draft scope; finish alone is not a scope change. ` +
 	`Arrays may be empty. Occurrences count exact token-aligned non-overlapping matches, starting at 1. ` +
 	`Use only literal text from the utterance, never generate, rephrase, infer or case-fold a text value. ` +
+	`Every literal text must be nonempty and have no leading or trailing whitespace, including non_data, output, ` +
+	`correction_evidence and resolves literals. Select exact trimmed fragments; do not include surrounding separators. ` +
 	`Omit boolean_assertion for ordinary literal values. The only typed exception is a direct unambiguous ` +
 	`assertion about a supplied checkbox and the intended person: use boolean_assertion true or false with ONE ` +
 	`exact current-utterance quote proving that statement. It will undergo a separate private verification. ` +
