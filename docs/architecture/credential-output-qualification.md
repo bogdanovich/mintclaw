@@ -18,11 +18,18 @@ manager. A local HTTP peer scripts ordinary tool choices and captures the
 actual serialized requests, including headers. It does not contact an LLM
 provider. The website is intercepted inside Chromium and has no real account.
 
-Two turns each open a browser, observe login fields, request the account alias,
-observe the authenticated page, close the session and return a final response.
-The authenticated fixture deliberately echoes the synthetic username, password
-and cookie in its page/title. Those values must be absent from every captured
-public output, including after browser cleanup releases session guards.
+Each scenario runs two separate user-requested turns that open a browser,
+observe login fields, request the account alias and return a final response.
+Scenarios cover confirmed login, a configured MFA handoff and submission
+without confirmed success. Confirmed/handoff observations are inspected before
+closing the session; an unconfirmed result retires the browser. Each browser
+permits exactly one login submission, so an uncertain effect cannot silently
+replay. A second explicit user turn reuses the same signed approval.
+
+The fixture deliberately echoes the synthetic username, password and cookie in
+its result page/title. The MFA page also contains a synthetic one-time-code
+control value. All four values must be absent from every captured public
+output, including after browser cleanup releases session guards.
 
 ## Evidence inventory
 
@@ -38,7 +45,8 @@ public output, including after browser cleanup releases session guards.
 | Support bundles | Query both actual traces and generate metadata-only and private redacted-content bundles; scan every generated file | Export evidence covers the current typed diagnostics exporter |
 | Opaque artifacts | Credential-bearing screenshot/download/unrestricted-execution admission denies | Enabling an artifact path requires its own qualification |
 | Phone/grant lifetime | Actual virtual passkey approval/revoke and signed lease/component tests | Physical Android enrollment, notification delivery and personal-account pilot remain required |
-| Failure/cancel/MFA/expiry/restart | Existing focused component tests | The complete serialized-output scenario matrix remains incomplete |
+| MFA/unconfirmed submission | Actual provider-backed turns, fixed outcomes, single-submit assertion and browser cleanup; two actual traces and four bundles per scenario | MFA continuation/private operator interaction remains unqualified |
+| Cancel/expiry/restart | Existing focused component tests | The complete serialized-output scenario matrix remains incomplete |
 
 The tests report fixed stages and boolean assertions. They do not print a
 detected canary, HTTP request body, vault error or child-process output.

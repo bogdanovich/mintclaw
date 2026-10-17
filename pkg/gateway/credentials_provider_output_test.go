@@ -34,6 +34,7 @@ func credentialProviderFixture(
 	cfg *config.Config,
 	running *services,
 	messageBus *bus.MessageBus,
+	expectedOutcome string,
 	capture func([]byte),
 ) (func() (browser.CredentialLoginResult, error), func()) {
 	t.Helper()
@@ -111,13 +112,17 @@ func credentialProviderFixture(
 			}
 			name = "browser_login"
 		case 3:
-			if !decode(&lastLogin) || lastLogin.Alias != "fixture-account" || lastLogin.Outcome != "logged_in" {
-				failure = "provider did not receive the fixed successful alias outcome"
+			if !decode(&lastLogin) || lastLogin.Alias != "fixture-account" || lastLogin.Outcome != expectedOutcome {
+				failure = "provider did not receive the expected fixed alias outcome"
 			}
 			name, arguments = "browser_observe", map[string]any{"browser_session_id": sessionID}
+			if expectedOutcome == "outcome_unknown" {
+				name = "browser_session"
+				arguments["operation"] = "status"
+			}
 		case 4:
 			var observation browser.Observation
-			if !decode(&observation) || observation.SnapshotID == "" {
+			if expectedOutcome != "outcome_unknown" && (!decode(&observation) || observation.SnapshotID == "") {
 				failure = "provider did not receive an authenticated observation"
 			}
 			name = "browser_session"

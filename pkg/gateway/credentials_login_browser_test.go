@@ -33,14 +33,22 @@ import (
 // Opt-in real Chromium + virtual WebAuthn + production gateway/browser tools.
 // This qualifies synthetic flow integration, never a physical phone or account.
 func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
-	testCredentialAliasBrowserAndPhoneFixture(t, false)
+	testCredentialAliasBrowserAndPhoneFixture(t, false, "logged_in")
 }
 
 func TestCredentialProviderOutputFixture(t *testing.T) {
-	testCredentialAliasBrowserAndPhoneFixture(t, true)
+	testCredentialAliasBrowserAndPhoneFixture(t, true, "logged_in")
 }
 
-func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerMode bool) {
+func TestCredentialProviderOutcomeFixture(t *testing.T) {
+	for _, outcome := range []string{"handoff_required", "outcome_unknown"} {
+		t.Run(outcome, func(t *testing.T) {
+			testCredentialAliasBrowserAndPhoneFixture(t, true, outcome)
+		})
+	}
+}
+
+func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerMode bool, expectedOutcome string) {
 	t.Helper()
 	if os.Getenv("MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE") != "1" {
 		t.Skip("synthetic Chromium qualification only")
@@ -65,7 +73,7 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerMode bool) 
 	}
 	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	target.Driver, target.DriverServer, target.DriverExecutable = config.BrowserDriverPlaywrightLibrary, "", "node"
-	target.DriverArguments = []string{script, "driver"}
+	target.DriverArguments = []string{script, "driver", expectedOutcome}
 	target.DefaultProfile = "ephemeral"
 	target.Profiles = map[string]config.BrowserProfileConfig{
 		"ephemeral": {
@@ -101,6 +109,7 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerMode bool) 
 				NavigationURL: origin + "/login", EntryOrigin: origin, FormID: "login", UsernameID: "username",
 				PasswordID: "password", UsernameType: "email", SubmitURL: origin + "/session",
 				SuccessURL: origin + "/home", SuccessMarkerID: "authenticated",
+				HandoffURL: origin + "/challenge", HandoffMarkerID: "challenge",
 			},
 		}},
 	}
@@ -222,11 +231,19 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerMode bool) 
 	}
 	finalize := func() {}
 	if providerMode {
-		perform, finalize = credentialProviderFixture(t, ctx, cfg, running, messageBus, func(data []byte) {
-			mu.Lock()
-			outputs = append(outputs, append([]byte(nil), data...))
-			mu.Unlock()
-		})
+		perform, finalize = credentialProviderFixture(
+			t,
+			ctx,
+			cfg,
+			running,
+			messageBus,
+			expectedOutcome,
+			func(data []byte) {
+				mu.Lock()
+				outputs = append(outputs, append([]byte(nil), data...))
+				mu.Unlock()
+			},
+		)
 	}
 	defer finalize()
 	results := make(chan browser.CredentialLoginResult, 1)
@@ -313,7 +330,9 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerMode bool) 
 		t.Fatal("private synthetic enrollment unavailable")
 	}
 	defer clear(invite)
-	input, err := json.Marshal(map[string]string{"backend": server.URL, "invite": string(invite)})
+	input, err := json.Marshal(map[string]string{
+		"backend": server.URL, "invite": string(invite), "outcome": expectedOutcome,
+	})
 	if err != nil {
 		t.Fatal("synthetic phone configuration unavailable")
 	}
@@ -364,6 +383,7 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerMode bool) 
 	for _, output := range outputs {
 		for _, value := range []string{
 			"gateway-private-account@example.org", "gateway-private-password-Q68", "gateway-private-cookie-K82",
+			"gateway-private-otp-R49",
 		} {
 			if bytes.Contains(output, []byte(value)) {
 				t.Fatal("synthetic credential escaped into a serialized tool, browser state or logger sink")
