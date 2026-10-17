@@ -67,6 +67,10 @@ type ToolResult struct {
 	// persisted in canonical tool-result history.
 	ContextMedia []string `json:"-"`
 
+	// ContextMediaRequiresVision forbids stripping protected image context or
+	// silently using a text-only fallback for the next live model call.
+	ContextMediaRequiresVision bool `json:"-"`
+
 	// ContextText contains protected text exposed only to the current model
 	// turn. It is deliberately separate from ForLLM so canonical history,
 	// durable task state, and diagnostic previews retain only the safe report.

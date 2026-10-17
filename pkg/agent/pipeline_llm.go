@@ -103,7 +103,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 		if llm.requiresDocumentVision && hasMediaRefs(messagesForCall) && !documentVisionRouteAuthorized {
 			candidatesForCall = p.documentVisionCandidates(ts.agent.Workspace, candidatesForCall)
 			if len(candidatesForCall) == 0 {
-				return nil, errors.New("document render context requires a configured vision-capable model route")
+				return nil, errors.New("protected image context requires a configured vision-capable model route")
 			}
 		}
 

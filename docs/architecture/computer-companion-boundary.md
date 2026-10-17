@@ -5,7 +5,8 @@ runtime and authenticated connection. It does not enable desktop control in the
 normal companion configuration, install a driver, select an ambient desktop, or
 register public computer tools. A local host must be explicitly injected with
 `WithComputerHost`; the native configuration path below provides that host only
-for enabled operator profiles. Public gateway tools remain a later gate.
+for enabled operator profiles. The separate opt-in gateway tools and their
+additional grants are described in [computer gateway tools](computer-gateway-tools.md).
 
 ## Authority and lifecycle
 
@@ -164,4 +165,5 @@ app's own preflight confirms the correct bundle/GUI identity but reports both OS
 grants missing; positive macOS qualification is still pending. Development
 ad-hoc signatures do not establish permission persistence across rebuilds.
 Public gateway computer tools and their live-resource interaction integration
-remain a separate gate; enabling this native node host does not register them.
+require the [separate gateway grant](computer-gateway-tools.md); enabling this
+native node host does not register them.

@@ -4,7 +4,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: computer-companion-native-smoke.sh --driver /absolute/cua-driver --node /absolute/mintclaw-node [--app /absolute/Companion.app] [--test-binary /absolute/node.test] [--capture-dir /absolute/private/directory]'
+  echo 'Usage: computer-companion-native-smoke.sh --driver /absolute/cua-driver --node /absolute/mintclaw-node [--suite companion|gateway] [--app /absolute/Companion.app] [--test-binary /absolute/suite.test] [--capture-dir /absolute/private/directory]'
 }
 
 driver_path=''
@@ -12,6 +12,7 @@ node_path=''
 app_path=''
 test_path=''
 capture_dir=''
+suite='companion'
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 ]] || { usage; exit 2; }
   case "$1" in
@@ -20,10 +21,19 @@ while [[ $# -gt 0 ]]; do
     --app) app_path=$2 ;;
     --test-binary) test_path=$2 ;;
     --capture-dir) capture_dir=$2 ;;
+    --suite) suite=$2 ;;
     *) usage; exit 2 ;;
   esac
   shift 2
 done
+case "$suite" in
+  companion) test_name=TestCompanionNativeComputerLifecycleOverWSS; test_package=./cmd/mintclaw-node ;;
+  gateway)
+    test_name=TestGatewayNativeComputerToolsOverWSS; test_package=./pkg/gateway
+    [[ -z "$capture_dir" ]] || { echo '--capture-dir is companion-suite only.' >&2; exit 2; }
+    ;;
+  *) usage; exit 2 ;;
+esac
 for executable in "$driver_path" "$node_path"; do
   [[ "$executable" == /* && -f "$executable" && ! -L "$executable" && -x "$executable" ]] || {
     echo 'Supply absolute regular pinned-driver and companion executable paths.' >&2; exit 2;
@@ -60,12 +70,12 @@ case "$(uname -s)/$(uname -m)" in
 esac
 [[ "$actual_sha256" == "$driver_sha256" ]] || { echo 'Pinned driver checksum mismatch.' >&2; exit 2; }
 if [[ -z "$test_path" ]]; then
-  test_path="$qualification_dir/node.test"
-  (cd "$repository_root" && go test -c -tags integration -o "$test_path" ./cmd/mintclaw-node)
+  test_path="$qualification_dir/$suite.test"
+  (cd "$repository_root" && go test -c -tags goolm,stdjson,integration -o "$test_path" "$test_package")
 fi
 [[ "$test_path" == /* && -f "$test_path" && -x "$test_path" ]] || { usage; exit 2; }
-[[ $("$test_path" -test.list '^TestCompanionNativeComputerLifecycleOverWSS$') == TestCompanionNativeComputerLifecycleOverWSS ]] || {
-  echo 'The supplied test executable lacks native companion qualification.' >&2; exit 2;
+[[ $("$test_path" -test.list "^$test_name$") == "$test_name" ]] || {
+  echo 'The supplied test executable lacks the selected native qualification suite.' >&2; exit 2;
 }
 env MINTCLAW_COMPUTER_NATIVE_DRIVER="$driver_path" \
   MINTCLAW_COMPUTER_NATIVE_SHA256="$driver_sha256" \
@@ -74,4 +84,4 @@ env MINTCLAW_COMPUTER_NATIVE_DRIVER="$driver_path" \
   MINTCLAW_COMPUTER_NATIVE_CAPTURE_DIR="$capture_dir" \
   MINTCLAW_COMPUTER_NATIVE_LOSS_CASE=1 \
   MINTCLAW_NODE_TEST_BINARY="$node_path" \
-  "$test_path" -test.run='^TestCompanionNativeComputerLifecycleOverWSS$' -test.v -test.count=1 -test.timeout=3m
+  "$test_path" -test.run="^$test_name$" -test.v -test.count=1 -test.timeout=3m
