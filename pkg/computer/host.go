@@ -31,6 +31,8 @@ func (Capture) String() string     { return "computer capture (protected payload
 func (c Capture) GoString() string { return c.String() }
 
 type CaptureDriver interface {
+	// ErrStale reports permanent loss of the admitted scope. Other errors are
+	// sanitized without asserting that the native resource was destroyed.
 	Capture(context.Context, Target) (Capture, error)
 }
 
@@ -214,6 +216,12 @@ func (host *ReadOnlyHost) Observe(ctx context.Context, session Session) (Observa
 	host.arbiter.mu.Lock()
 	defer host.arbiter.mu.Unlock()
 	entry.cancel, entry.active = nil, false
+	if errors.Is(captureErr, ErrStale) || captureErr == nil && capture.Scope != stored.Binding.Target.Scope {
+		// A trusted identity failure invalidates this original lease even when
+		// the caller canceled or handed off while capture was in flight. Never
+		// let old capture completion revoke a newer lease on the same desktop.
+		host.revoke(entry)
+	}
 	if _, err = host.bound(ctx, stored.Binding); err != nil {
 		return Observation{}, err
 	}
@@ -225,9 +233,6 @@ func (host *ReadOnlyHost) Observe(ctx context.Context, session Session) (Observa
 			return Observation{}, ctx.Err()
 		}
 		return Observation{}, ErrUnavailable // driver errors can contain protected text
-	}
-	if capture.Scope != stored.Binding.Target.Scope {
-		return Observation{}, ErrStale
 	}
 	if len(capture.Screenshot) > MaxCaptureBytes || len(capture.AccessibilityText) > MaxAccessibilityBytes {
 		return Observation{}, ErrInvalid
