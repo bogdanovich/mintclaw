@@ -115,8 +115,7 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 				},
 			},
 			Login: &credentialbroker.LoginFlow{
-				NavigationURL: origin + "/login", EntryOrigin: origin, FormID: "login", UsernameID: "username",
-				PasswordID: "password", UsernameType: "email", SubmitURL: origin + "/session",
+				NavigationURL: origin + "/login", EntryOrigin: origin, SubmitURL: origin + "/session",
 				SuccessURL: origin + "/home", SuccessMarkerID: "authenticated",
 				HandoffURL: origin + "/challenge", HandoffMarkerID: "challenge",
 			},

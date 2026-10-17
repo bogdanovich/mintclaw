@@ -15,6 +15,16 @@ executable code. Caller identity comes from authenticated tool context. The
 gateway derives owner/actor/agent/host and current policy revision, checks the
 live browser origin and uses immutable configured outcome evidence.
 
+Account flow configuration does not require static HTML form/input IDs or a
+username-input type. The current native references select the exact live
+elements; the private driver verifies their types, common form and same-origin
+POST destination before retrieval and filling. This supports forms without an
+HTML `id`, including Craigslist's public login form. Operator configuration
+retains entry/navigation/submission metadata and positive success/handoff
+evidence. Old unused `form_id`, `username_id`, `password_id` and `username_type`
+properties can be removed; the ordinary config decoder ignores them. Removing
+them from the canonical policy changes its revision and requires fresh approval.
+
 Only the selected alias and a fixed outcome reach the model. Unexpected source
 outcomes are replaced with a fixed denial. Retrieval remains lazy: an approved
 lease and the browser's live form/document preparation precede SDK access.
