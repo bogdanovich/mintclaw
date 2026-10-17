@@ -139,12 +139,16 @@ func requestEnrollment(ctx context.Context, cfg *config.Config, data *pid.PidFil
 		data.Port < 1 || data.Port > 65535 {
 		return nil, errSetupUnavailable
 	}
-	ip := net.ParseIP(data.Host)
+	host := data.Host
+	if strings.EqualFold(host, "localhost") {
+		host = "127.0.0.1"
+	}
+	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
 		return nil, errSetupUnavailable
 	}
 	endpoint := url.URL{
-		Scheme: "http", Host: net.JoinHostPort(data.Host, strconv.Itoa(data.Port)),
+		Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(data.Port)),
 		Path: "/credentials/operator/enrollment",
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader("{}"))
