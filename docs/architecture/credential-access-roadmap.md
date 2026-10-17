@@ -148,7 +148,13 @@ behavior. Retain normal policy for subsequent authenticated actions.
 - TR6 pilot selection: the operator selected Craigslist. The
   [pilot sequence](credential-craigslist-pilot.md) records public form evidence,
   private setup and the remaining Android/account acceptance checks.
-- TR5/TR6: the scoped connector, full serialized-output qualification and
+- TR5: the [GitHub read connector](credential-github-read-connector.md) is the
+  initial read-only default while the operator chooses a preferred API. It
+  reuses phone approval for exact configured repositories and an API Credential
+  item. Synthetic actual-HTTP/provider/phone tests cover protected result
+  release, grant reuse and cancellation on revocation. It remains disabled by
+  default pending deployment and real-token acceptance.
+- TR5/TR6: connector rollout, full serialized-output qualification and
   personal-account pilot are incomplete. No real token, login, or physical
   phone approval is claimed. Passing component tests do not prove the complete
   feature or absence of secrets from every enabled output.

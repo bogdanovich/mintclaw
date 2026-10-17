@@ -149,6 +149,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   existing-channel phone notifications, signed-grant reuse and disabled-by-default rollout.
 - [Craigslist Credential Pilot](credential-craigslist-pilot.md): selected account, public form evidence,
   private token/Android setup and remaining personal-account acceptance steps.
+- [Private GitHub Pull Request Reads](credential-github-read-connector.md): scoped read-only API
+  authentication using the same vault, phone approval and protected output path.
 - [Retired Credential Appliance](credential-appliance-retirement.md): removal of the unused daemon,
   privileged launch/transport/browser stack and obsolete qualification; retained current boundaries.
 - [Integrated Credential Output Qualification](credential-output-qualification.md): actual provider-wire,

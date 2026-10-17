@@ -16,6 +16,7 @@ import (
 type CredentialConfig struct {
 	Enabled               bool                           `json:"enabled,omitempty"`
 	BrowserLoginEnabled   bool                           `json:"browser_login_enabled,omitempty"`
+	GitHubReadEnabled     bool                           `json:"github_read_enabled,omitempty"`
 	HostID                string                         `json:"host_id,omitempty"`
 	OwnerID               string                         `json:"owner_id,omitempty"`
 	Origin                string                         `json:"origin,omitempty"`
@@ -25,6 +26,10 @@ type CredentialConfig struct {
 }
 
 func (cfg *Config) ValidateCredentials() error {
+	if cfg != nil && cfg.Credentials.GitHubReadEnabled &&
+		(!cfg.Credentials.Enabled || !intent.ValidAlias(cfg.Credentials.HostID)) {
+		return errors.New("credential GitHub read configuration is invalid")
+	}
 	if cfg != nil && cfg.Credentials.BrowserLoginEnabled &&
 		(!cfg.Credentials.Enabled || !intent.ValidAlias(cfg.Credentials.HostID)) {
 		return errors.New("credential browser login configuration is invalid")
