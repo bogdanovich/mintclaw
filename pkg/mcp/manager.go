@@ -758,12 +758,7 @@ func listServerTools(
 
 	for tool, err := range session.Tools(ctx, nil) {
 		if err != nil {
-			logger.WarnCF("mcp", "Error listing tool",
-				map[string]any{
-					"server": name,
-					"error":  err.Error(),
-				})
-			continue
+			return nil, fmt.Errorf("list tools for MCP server %q: %w", name, err)
 		}
 		tools = append(tools, tool)
 	}
