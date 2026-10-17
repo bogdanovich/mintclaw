@@ -69,6 +69,10 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Live gateway agent smoke test](live-agent-smoke.md): authenticated,
   bounded testing of the running gateway agent and its live node sessions
   without Telegram or a second agent runtime.
+- [Manual agent evals](manual-agent-evals.md): bounded scripted/adaptive scenarios, private evidence,
+  separate judging, selection, repeats and offline comparison; no live-model CI runs.
+- [Owned general eval pilot](manual-agent-evals-owned-general-v1-20261017.md): exact-revision two-case Linux
+  results, native child stop/reap, available role usage, bounded credential scan and explicit qualification limits.
 - [Node JSON canonicalization v2 cutover](node-json-canonicalization-v2-cutover.md):
   gateway-first rollout, completed v2 fleet inventory, verification,
   checksummed rollback, and the retained-record zero-v1 gate.
