@@ -5,12 +5,12 @@ on:
     branches: [ "main" ]
 
 jobs:
-  checks:
-    name: Full CI
-    uses: ./.github/workflows/pr.yml
+  integration:
+    name: Integration Tests
+    uses: ./.github/workflows/integration.yml
 
   build:
-    needs: checks
+    needs: integration
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -85,10 +85,10 @@ Go changes run every integration suite. Dependency, workflow, build, and
 unrecognized inputs conservatively run all checks. A PR rename checks both
 the old and new paths.
 
-New commits cancel superseded runs of the same PR. Main builds reuse the
-complete CI suite before building binaries, and the complete suite also runs
-daily at 10:17 UTC and through manual dispatch. These full runs do not apply
-PR path filtering. The existing Nightly Build release workflow is separate.
+New commits cancel superseded runs of the same PR. Main builds run the complete
+integration suite before building binaries. The complete CI suite runs daily at
+10:17 UTC and through manual dispatch. These full runs do not apply PR path
+filtering. The existing Nightly Build release workflow is separate.
 
 Validate changes to CI selection locally with:
 

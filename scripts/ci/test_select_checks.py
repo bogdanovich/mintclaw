@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -89,6 +90,7 @@ class SelectionTests(unittest.TestCase):
             "go.mod",
             "go.sum",
             "nested/go.mod",
+            "web/frontend/go.mod",
             "Makefile",
             ".github/workflows/pr.yml",
             ".golangci.yaml",
@@ -166,15 +168,21 @@ class ScriptTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.log = self.root / "go.log"
-        self.go = self.root / "go"
-        self.go.write_text("""#!/usr/bin/env python3
-import json, os, sys
+        self.go = self.root / "mock_go.py"
+        self.go.write_text("""import json, os, sys
 with open(os.environ["CI_TEST_LOG"], "a") as log:
     log.write(json.dumps({"args": sys.argv[1:], "target": "/".join(os.environ.get(k, "") for k in ("GOOS", "GOARCH", "GOARM")), "cgo": os.environ.get("CGO_ENABLED")}) + "\\n")
 sys.exit(1 if os.environ.get("GOARCH") == os.environ.get("CI_FAIL_ARCH", "never") else 0)
 """)
-        self.go.chmod(0o755)
-        self.env = {**os.environ, "PATH": f"{self.root}:{os.environ['PATH']}", "CI_TEST_LOG": str(self.log)}
+        bash_env = self.root / "bash_env"
+        bash_env.write_text('go() { "$CI_TEST_PYTHON" "$CI_TEST_GO" "$@"; }\n')
+        self.env = {
+            **os.environ,
+            "BASH_ENV": str(bash_env),
+            "CI_TEST_PYTHON": sys.executable,
+            "CI_TEST_GO": str(self.go),
+            "CI_TEST_LOG": str(self.log),
+        }
 
     def records(self):
         import json

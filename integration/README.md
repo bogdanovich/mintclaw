@@ -30,8 +30,8 @@ Some integration-tagged tests are intentionally opt-in and not part of the Docke
 
 PR integration checks select credential/browser, document, companion, and
 Docker suites from changed paths. Shared Go and build inputs run every suite.
-Main builds, scheduled CI, and manual CI runs use the complete suite through
-[`.github/workflows/pr.yml`](../.github/workflows/pr.yml).
+Main builds, scheduled CI, and manual CI runs use the complete integration suite
+through [`.github/workflows/integration.yml`](../.github/workflows/integration.yml).
 
 Docker-backed suites run with:
 

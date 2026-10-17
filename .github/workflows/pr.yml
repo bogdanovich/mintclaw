@@ -452,99 +452,15 @@ jobs:
           .
 
   integration:
+    name: Integration Tests
     needs: changes
     if: needs.changes.outputs.integration == 'true'
-    name: Integration Tests
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-
-      - name: Qualify private passkey approval and protected owner storage
-        if: needs.changes.outputs.credentials == 'true'
-        run: bash ./scripts/qualify-credential-approval.sh
-
-      - name: Setup Node.js for the synthetic phone approval fixture
-        if: needs.changes.outputs.credentials == 'true'
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-
-      - name: Install pinned phone approval browser fixture
-        if: needs.changes.outputs.credentials == 'true'
-        run: |
-          npm ci --ignore-scripts --prefix runtime/browser/playwright-library
-          node runtime/browser/playwright-library/node_modules/playwright/cli.js install --with-deps chromium
-
-      - name: Qualify integrated private setup and browser passkey UI
-        if: needs.changes.outputs.credentials == 'true'
-        run: bash ./scripts/qualify-credential-phone.sh
-
-      - name: Qualify direct private credential browser transactions
-        if: needs.changes.outputs.credentials == 'true'
-        run: >-
-          env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
-          node --test runtime/browser/playwright-library/credential-login.test.cjs
-          runtime/browser/playwright-library/credential-protocol.test.cjs
-          runtime/browser/playwright-library/navigation-evidence.test.cjs
-
-      - name: Qualify integrated alias login and phone approval
-        if: needs.changes.outputs.credentials == 'true'
-        run: >-
-          env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
-          MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE=1
-          go test -count=1 -race -timeout 3m -tags goolm,stdjson
-          -run '^TestCredential(AliasBrowserAndPhone|ProviderOutput|ProviderOutcome|CodexOutput)Fixture$' ./pkg/gateway
-
-      - name: Install pinned document runtime
-        if: needs.changes.outputs.documents == 'true'
-        run: |
-          snapshot=20261011T000000Z
-          sudo apt-get update --snapshot "$snapshot"
-          sudo apt-get install --yes --no-install-recommends --allow-downgrades --snapshot "$snapshot" \
-            bubblewrap=0.9.0-1ubuntu0.3 \
-            ghostscript=10.02.1~dfsg1-0ubuntu7.9 \
-            libgs-common=10.02.1~dfsg1-0ubuntu7.9 \
-            poppler-utils=24.02.0-1ubuntu9.10 \
-            libpoppler134=24.02.0-1ubuntu9.10 \
-            fonts-dejavu-core=2.37-8 \
-            fonts-liberation=1:2.1.5-3
-
-      - name: Enable Bubblewrap namespaces
-        if: needs.changes.outputs.documents == 'true'
-        run: |
-          if sysctl -n kernel.apparmor_restrict_unprivileged_userns | grep -qx 1; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          /usr/bin/bwrap --ro-bind / / --unshare-net -- /bin/true
-
-      - name: Run Linux document read process contract
-        if: needs.changes.outputs.documents == 'true'
-        shell: bash
-        run: |
-          set -o pipefail
-          go test -count=1 -v \
-            -run '^TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts$' \
-            ./pkg/document | tee "$RUNNER_TEMP/document-read-process.txt"
-          grep -Fq -- '--- PASS: TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts' \
-            "$RUNNER_TEMP/document-read-process.txt"
-
-      - name: Run real companion vertical tests
-        if: needs.changes.outputs.companion == 'true'
-        run: bash ./scripts/run-go-integration-tests.sh companion
-
-      - name: Run real document vertical tests
-        if: needs.changes.outputs.documents == 'true'
-        run: bash ./scripts/run-go-integration-tests.sh documents
-
-      - name: Run Docker-backed integration suites
-        if: needs.changes.outputs.docker == 'true'
-        run: bash ./scripts/run-integration-tests.sh
+    uses: ./.github/workflows/integration.yml
+    with:
+      credentials: ${{ needs.changes.outputs.credentials == 'true' }}
+      documents: ${{ needs.changes.outputs.documents == 'true' }}
+      companion: ${{ needs.changes.outputs.companion == 'true' }}
+      docker: ${{ needs.changes.outputs.docker == 'true' }}
 
   browser_windows:
     needs: changes

@@ -56,14 +56,14 @@ def select_checks(paths, root):
     for path in paths:
         if documentation(path):
             continue
-        if path.startswith("web/frontend/"):
-            selected["frontend"] = True
-            continue
         # Dependency, build, workflow and unknown inputs receive complete coverage.
         if Path(path).name in {"go.mod", "go.sum", "Makefile"} or path.startswith(
             (".github/", ".golangci", "scripts/ci/")
         ):
             return dict.fromkeys(CHECKS, True)
+        if path.startswith("web/frontend/"):
+            selected["frontend"] = True
+            continue
 
         selected["backend"] = True
         pdf_input = dependency_input(path, pdf_dependencies) or path.startswith(
