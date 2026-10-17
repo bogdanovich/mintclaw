@@ -66,10 +66,12 @@ type SkillRevisionIdentity struct {
 }
 
 type ToolExecutionRecord struct {
-	Name         string   `json:"name"`
-	Success      bool     `json:"success"`
-	ErrorSummary string   `json:"error_summary,omitempty"`
-	SkillNames   []string `json:"skill_names,omitempty"`
+	// Kept only for current-turn control; display summaries are not authority.
+	fatalMCPTransport bool
+	Name              string   `json:"name"`
+	Success           bool     `json:"success"`
+	ErrorSummary      string   `json:"error_summary,omitempty"`
+	SkillNames        []string `json:"skill_names,omitempty"`
 }
 
 // TurnEndPayload describes the completion of a turn.
