@@ -132,10 +132,51 @@ identity and an active GUI session. TCC attributed its permission checks to
 permissions remained denied; capture and input qualification still require the
 corresponding grants.
 
+## Linux window incarnation admission
+
+The opt-in native window guard requires an explicitly selected local X11 socket
+and a private, current-user Xauthority file. It never tries ambient display
+settings, unauthenticated access, a forwarded TCP desktop, or another display.
+X-Resource 1.2 reports the native window's actual client PID; an application-set
+`_NET_WM_PID` property is not ownership evidence. A retained Linux pidfd identifies
+the original process even after a numeric PID could be reused.
+
+The guard subscribes to native destruction before admission and checks the
+selected X screen. Destruction, process exit or observer transport loss makes it
+permanently invalid. A newly admitted window receives a fresh generation. Closing
+the observer releases only its connection and process handle, not the application
+window. These checks remain mechanisms behind trusted host policy, not agent
+commands or a replacement for companion authority and capture-scope validation.
+
+On October 17, selected GNOME X11 native fixtures passed three detailed and
+twenty additional runs covering exact XID reuse by the same process, explicit
+replacement admission, wrong native owner rejection, owner-process exit and
+observer transport loss. Both observer close and transport loss preserved the
+fixture application window. Three further runs included 12,000 native window
+events while the observer was idle; observation and teardown remained bounded,
+and fresh admission still detected subsequent destruction. The screen reader
+remained disabled. macOS window
+incarnation admission is a separate prerequisite; this guard refuses unsupported
+platforms rather than accepting a PID-only substitute.
+
+For an explicitly selected X11 session, run the opt-in native tests with the
+desktop package's Linux test binary (or `go test` on the Linux host):
+
+```sh
+MINTCLAW_NATIVE_X11_GUARD_TEST=1 \
+  DISPLAY=:1 XAUTHORITY=/absolute/private/Xauthority \
+  go test ./pkg/computer/desktop -run '^TestNativeX11' -count=20
+```
+
+The test creates only disposable native windows and verifies lifetime effects
+through native X11 resources and kernel handles. It does not capture existing
+window contents, use the clipboard or change accessibility settings.
+
 ## Integration gates
 
 - Qualify the Mac companion's real launch identity and permission lifecycle.
-- Implement OS-backed window-incarnation admission and loss detection.
+- Qualify macOS window-incarnation admission and integrate native guards into
+  companion capture/session ownership.
 - Requalify Unicode insertion on a corrected pinned driver or another backend.
 - Add input contracts with fresh evidence, bounded actions, and independent
   effect verification before registering public tools or companion commands.
