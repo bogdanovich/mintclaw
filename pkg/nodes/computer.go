@@ -14,7 +14,7 @@ import (
 	"github.com/invopop/jsonschema"
 
 	"github.com/bogdanovich/mintclaw/pkg/computer"
-	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap/identity"
 )
 
 const (
@@ -57,17 +57,17 @@ type ComputerProfileDescriptor struct {
 // execution plan. Only the trusted first-party router constructs this input;
 // computer commands never receive a generic model invocation contract.
 type ComputerTurn struct {
-	Runtime     runtimecap.Kind `json:"runtime"`
-	ExecutionID string          `json:"execution_id"`
+	Runtime     identity.Kind `json:"runtime"`
+	ExecutionID string        `json:"execution_id"`
 }
 
-func (turn ComputerTurn) Principal(plan ExecutionPlan) (runtimecap.Principal, error) {
-	principal := runtimecap.Principal{
+func (turn ComputerTurn) Principal(plan ExecutionPlan) (identity.Principal, error) {
+	principal := identity.Principal{
 		Runtime: turn.Runtime, ExecutionID: turn.ExecutionID,
 		ActorID: plan.ActorID, AgentID: plan.AgentID, SessionID: plan.SessionID,
 	}
 	if principal.Validate() != nil {
-		return runtimecap.Principal{}, ErrCommandDenied
+		return identity.Principal{}, ErrCommandDenied
 	}
 	return principal, nil
 }
@@ -134,14 +134,14 @@ type ComputerObservationResult struct {
 }
 
 type ComputerHostOpenRequest struct {
-	Principal       runtimecap.Principal
+	Principal       identity.Principal
 	Profile         string
 	ProfileRevision string
 	InvocationID    string
 }
 
 type ComputerHostStatusRequest struct {
-	Principal runtimecap.Principal
+	Principal identity.Principal
 	SessionID string
 }
 
@@ -361,7 +361,7 @@ func validateComputerInvocationInput(descriptor CommandDescriptor, raw []byte) e
 	if json.Unmarshal(raw, &turn) != nil {
 		return ErrInvalidInvocation
 	}
-	if (runtimecap.Principal{
+	if (identity.Principal{
 		Runtime: turn.Runtime, ExecutionID: turn.ExecutionID,
 		ActorID: "shape", AgentID: "shape", SessionID: "shape",
 	}).Validate() != nil {
