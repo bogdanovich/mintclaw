@@ -2415,7 +2415,8 @@ func (*BrowserActTool) Description() string {
 		"Classify from the user request and runtime objective checklist, not from the element role or HTTP method. " +
 		"A succeeded action confirms input dispatch, not the requested outcome; verify fresh page state before claiming completion. " +
 		"Use download on a fresh HTTP(S) image ref to retain its original file, or on an attachment link; " +
-		"use the returned artifact_ref with upload/file_chooser. Screenshots are not original image files. " +
+		"copy the returned artifact.ref to action.artifact_ref for upload/file_chooser in the same session. " +
+		"Observe fresh destination state before uploading. Screenshots are not original image files. " +
 		"If download_not_dispatched is returned, keep the same session and observe fresh state; never replay that invocation. " +
 		"Use external_commit immediately before an important external state change such as publishing, submitting an order, " +
 		"sending, deleting, or replying; use navigation for ordinary page/tab/form-step transitions. " +
