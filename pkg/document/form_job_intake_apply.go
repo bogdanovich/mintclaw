@@ -41,6 +41,8 @@ type FormIntakeAccountedLiteral struct {
 	Literal           FormIntakeLiteral `json:"-"`
 	FieldID           string            `json:"field_id,omitempty"`
 	ScopedInstruction bool              `json:"-"`
+	// ReclassifiableOutput is native-derived, ephemeral eligibility, not a finding resolution.
+	ReclassifiableOutput bool `json:"-"`
 }
 
 type FormIntakeApplyResult struct {

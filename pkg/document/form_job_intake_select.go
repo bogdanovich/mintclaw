@@ -39,6 +39,8 @@ func selectFormIntakeProposals(
 		}
 		return result, nil
 	}
+	input.Accounted = reclassifyFormIntakeOutputGuidance(input, request)
+	result.Accounted = slices.Clone(input.Accounted)
 	if request.Output != nil {
 		span, err := resolveFormIntakeLiteral(input.Text, request.Output.Literal)
 		if err != nil {
