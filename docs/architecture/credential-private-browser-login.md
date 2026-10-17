@@ -44,7 +44,9 @@ session. The operation never retries a possibly executed submission.
 ## Lifetime and output
 
 The runtime registers username/password values before injection and registers
-private cookie values before allowing later observations. Cookie values remain
+private cookie values before allowing later observations. The
+[output boundary](credential-browser-output-privacy.md) harvests cookie rotations
+and registers values before ordinary driver results return. Cookie values remain
 inside a private parser/result with safe generic formatting; only an alias and
 fixed outcome are returned from the broker API. Output registrations belong to
 the browser session and are retained until worker cleanup acknowledges closure.
@@ -78,5 +80,5 @@ the SDK, send notifications or qualify all companion/artifact/persistence
 outputs. The later runtime coordinator must connect reviewed phone requests,
 exact-item vault bindings, private token setup and the model-facing browser
 operation. Site-specific outcome configuration, additional login forms and
-placements, current-cookie refresh, complete sink qualification, physical
+placements, complete sink qualification, physical
 Android approval and one personal login pilot remain required before rollout.

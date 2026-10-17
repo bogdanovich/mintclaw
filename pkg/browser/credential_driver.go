@@ -10,8 +10,6 @@ import (
 	"regexp"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/bogdanovich/mintclaw/internal/secretvalues"
 )
 
 var (
@@ -37,6 +35,44 @@ type privateCredentialDriver interface {
 	prepareCredential(context.Context, CredentialFields) (string, error)
 	submitCredential(context.Context, string, []byte, []byte) (credentialDriverResult, error)
 	discardCredential(context.Context, string) error
+	bindCredentialOutputs(func([]string) error) error
+}
+
+func (client *playwrightLibraryClient) bindCredentialOutputs(protect func([]string) error) error {
+	client.closeMu.Lock()
+	defer client.closeMu.Unlock()
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if protect == nil || client.credentialOutputs != nil || client.closed {
+		return errCredentialDriver
+	}
+	client.credentialOutputs = protect
+	return nil
+}
+
+// Cookie values travel in an envelope that stays inside the private parser.
+// Register them before releasing any observation, error or catalog to its
+// normal consumer. Binary outputs have no qualified credential projection.
+func decodeCredentialCall(result *sdkmcp.CallToolResult, err error, protect func([]string) error) (
+	*sdkmcp.CallToolResult, error,
+) {
+	text, ok := credentialDriverText(result, err)
+	if !ok || protect == nil {
+		return nil, ErrWorkerLost
+	}
+	var response struct {
+		Result  playwrightLibraryWireResult `json:"result"`
+		Cookies []string                    `json:"cookies"`
+	}
+	if decodeCredentialEnvelope(text, &response) != nil || protect(response.Cookies) != nil {
+		return nil, ErrWorkerLost
+	}
+	for _, content := range response.Result.Content {
+		if content.Type != "text" {
+			return nil, ErrWorkerLost
+		}
+	}
+	return decodePlaywrightLibraryResult(playwrightLibraryWireResponse{Result: &response.Result})
 }
 
 type credentialDriverResult struct {
@@ -50,24 +86,6 @@ func (credentialDriverResult) Format(state fmt.State, _ rune) {
 
 func (credentialDriverResult) MarshalJSON() ([]byte, error) {
 	return []byte(`"[private browser credential result]"`), nil
-}
-
-func (result credentialDriverResult) protectCookies() (func(), error) {
-	var releases []func()
-	release := func() {
-		for _, end := range releases {
-			end()
-		}
-	}
-	for _, cookie := range result.cookies {
-		end, err := secretvalues.Register([]byte(cookie))
-		if err != nil {
-			release()
-			return nil, errCredentialDriver
-		}
-		releases = append(releases, end)
-	}
-	return release, nil
 }
 
 func (client *playwrightLibraryClient) prepareCredential(ctx context.Context, fields CredentialFields) (string, error) {

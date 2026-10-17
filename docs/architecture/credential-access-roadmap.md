@@ -117,7 +117,7 @@ behavior. Retain normal policy for subsequent authenticated actions.
   appliance commands/helpers and their obsolete qualification remain to retire.
 - TR2: the dynamic model/log/trace output guard is merged in
   [#1623](https://github.com/bogdanovich/mintclaw/pull/1623). Private token entry,
-  storage, SDK startup and lazy scoped consumption are under review in
+  storage, SDK startup and lazy scoped consumption are merged in
   [#1643](https://github.com/bogdanovich/mintclaw/pull/1643). Alias-only tool
   wiring and complete end-to-end output qualification remain incomplete.
 - TR3: gateway-owned enrollment/approval/revocation is merged in
@@ -127,8 +127,11 @@ behavior. Retain normal policy for subsequent authenticated actions.
 - TR4: the existing browser's private credential transaction is merged in
   [#1637](https://github.com/bogdanovich/mintclaw/pull/1637), including grant
   checks around preparation/retrieval and authenticated session retirement.
-  User-facing tool wiring, site/placement admission, current-cookie refresh,
-  and all companion/artifact/persistence sinks remain rollout requirements.
+  Authenticated cookie rotation, native control-value suppression and browser
+  catalog/diagnostic/artifact projections are described in the
+  [browser output boundary](credential-browser-output-privacy.md). User-facing
+  tool wiring, site/placement admission and complete companion/output
+  qualification remain rollout requirements.
 - TR5/TR6: the scoped connector, full serialized-output qualification and
   personal-account pilot are incomplete. No real token, login, or physical
   phone approval is claimed. Passing component tests do not prove the complete

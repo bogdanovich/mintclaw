@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/internal/secretvalues"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 )
 
@@ -343,6 +344,9 @@ func (broker *Broker) contextSessionLocked(
 	if slot == nil || slot.safeFailure != "" {
 		return Session{}, nil, nil, ErrWorkerUnavailable
 	}
+	if slot.credentials != nil && slot.credentials.check(ctx, slot.credentials.request.Origin) != nil {
+		return Session{}, nil, nil, ErrDenied
+	}
 	worker, ok := slot.worker.(ContextWorker)
 	if !ok {
 		return Session{}, nil, nil, ErrDriverIncompatible
@@ -481,8 +485,13 @@ func (broker *Broker) applyContextFramePolicy(
 ) ContextCatalog {
 	projected := cloneContextCatalog(catalog)
 	for tabIndex := range projected.Tabs {
+		tab := &projected.Tabs[tabIndex]
+		tab.URL = secretvalues.Redact(tab.URL)
+		tab.Title = secretvalues.Redact(tab.Title)
 		for frameIndex := range projected.Tabs[tabIndex].Frames {
 			frame := &projected.Tabs[tabIndex].Frames[frameIndex]
+			frame.URL = secretvalues.Redact(frame.URL)
+			frame.Label = secretvalues.Redact(frame.Label)
 			if frame.Availability != FrameReady ||
 				(broker.originAllowed(session, frame.Origin) &&
 					broker.originNetworkAllowed(ctx, session, frame.Origin)) {
