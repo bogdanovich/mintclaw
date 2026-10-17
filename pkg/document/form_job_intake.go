@@ -389,7 +389,8 @@ func (store *FormJobStore) ReserveFormIntakePass(
 				!slices.Equal(reservation.CandidateIDs, request.CandidateIDs) {
 				return false, ErrFormJobAnswerConflict
 			}
-			if reservation.Outcome == nil && reservation.ReceiptCount != len(source.Intake.Inputs) {
+			if reservation.Outcome == nil && (reservation.ReceiptCount != len(source.Intake.Inputs) ||
+				formIntakeReservationSuperseded(source.Intake, input.ID, reservationIndex)) {
 				return false, ErrFormJobConflict
 			}
 		} else {
@@ -530,7 +531,7 @@ func formIntakeInput(record FormJobRecord, mode *formIntakeStoredMode, input for
 		Passes:       len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
 		Intent: input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
 		Accounted: formIntakeAccountedLiterals(input),
-		Findings:  formIntakeCurrentFindings(input),
+		Findings:  formIntakeCurrentModeFindings(mode, input),
 	}
 }
 
@@ -689,6 +690,9 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 		}
 	}
 	progress := formIntakeProgress(record, mode)
+	if err := validateFormIntakePriorResolutions(mode); err != nil {
+		return err
+	}
 	if staged > 1 || progress.PendingInputs > MaxFormIntakePendingInputs ||
 		progress.RetainedBytes > MaxFormIntakeRetainedBytes ||
 		mode.State == FormIntakeClosed && progress.PendingInputs != 0 {
