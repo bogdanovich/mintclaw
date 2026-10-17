@@ -100,7 +100,7 @@ func (handler *computerCommandHandler) execute(ctx context.Context, invocation c
 		if !computerResultOwned(result, principal, invocation.Plan.NodeID) ||
 			result.Session.Binding.Target.Alias != input.Profile || result.Session.Binding.PolicyRevision != input.ProfileRevision ||
 			result.Session.Control != computer.ControlAgent || result.Session.Binding.Generation != 1 {
-			return nil, errors.Join(ErrInvocationOutcomeUnknown, computerCommandFailure(computer.ErrStale))
+			return nil, computerCommandFailure(errors.Join(ErrInvocationOutcomeUnknown, computer.ErrStale))
 		}
 		return result, nil
 	case nodes.ComputerCommandStatus:
@@ -179,7 +179,7 @@ func (handler *computerCommandHandler) execute(ctx context.Context, invocation c
 		}
 		if !computerResultOwned(result, principal, invocation.Plan.NodeID) || binding.SessionID != input.SessionID ||
 			!validTransition {
-			return nil, errors.Join(ErrInvocationOutcomeUnknown, computerCommandFailure(computer.ErrStale))
+			return nil, computerCommandFailure(errors.Join(ErrInvocationOutcomeUnknown, computer.ErrStale))
 		}
 		return result, nil
 	}
@@ -207,6 +207,13 @@ func computerControlEvent(command string) (computer.ControlEvent, computer.Contr
 func computerCommandFailure(err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, ErrInvocationOutcomeUnknown) {
+		// Unknown outcomes must not retain a contradictory definitive cause or
+		// private host detail, including through the wire error classifier.
+		return newCommandFailure(
+			nodes.InvocationDispatchUnknown, "computer command outcome is unknown", ErrInvocationOutcomeUnknown,
+		)
 	}
 	switch {
 	case errors.Is(err, computer.ErrDenied), errors.Is(err, computer.ErrInvalid):
