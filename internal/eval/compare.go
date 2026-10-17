@@ -61,6 +61,7 @@ func Compare(baselineDirectory, currentDirectory string) (Comparison, error) {
 		EnvironmentUnknowns: []string{"instructions_and_skills", "target_all_call_models"},
 		Attribution:         "not_established", Cases: []CaseComparison{},
 	}
+	compareWorkspaceInputs(&result, baseline.report.WorkspaceInputs, current.report.WorkspaceInputs)
 	if baseline.report.TargetLifecycle.verdict() != Pass {
 		result.EnvironmentUnknowns = append(result.EnvironmentUnknowns, "baseline_target_cleanup")
 	}
@@ -159,7 +160,8 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		!validID(report.PresetID) || !slices.Contains([]string{"run", "grade"}, report.Mode) ||
 		report.Repeat < 0 || report.Repeat > MaxRepeat || len(report.Trials) == 0 ||
 		len(report.Trials) > MaxCorpusCases || report.DurationMS < 0 || report.StartedAt.IsZero() ||
-		report.Runtime.Version != 1 || !validDigest(report.Runtime.ConfigSHA256) || !report.TargetLifecycle.valid() {
+		report.Runtime.Version != 1 || !validDigest(report.Runtime.ConfigSHA256) || !report.TargetLifecycle.valid() ||
+		!report.WorkspaceInputs.valid() {
 		return result, ErrCompare
 	}
 	seen, sessions, roles := map[string]bool{}, map[string]bool{}, map[string]bool{}

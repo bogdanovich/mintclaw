@@ -284,6 +284,27 @@ or a shorter explicit suite limit; regrading defaults to one hour (maximum four 
 is non-passing, with available call usage retained. `calibration.json` with `complete: true` marks report completion,
 not target qualification. Stub tests and successful regrading are not real-model scenario evidence.
 
+## Workspace File Observations
+
+New runs retain optional `workspace_inputs` observations before the first trial and after all trials, before owned
+gateway shutdown. Scope `workspace_files_v1` covers only `AGENTS.md`, `SOUL.md`, `USER.md`, and the recursive
+workspace `skills` tree. Aggregate SHA-256 identities include relative names, absence, file contents and permission
+bits, but reports contain no file names, paths, content, or individual-file hashes. Absolute profile placement and
+mtimes do not affect these identities. Other workspace state is not read by this observer.
+
+Reads are confined with `os.Root`, capped at 64 KiB per file, 8 MiB total content and 4096 skill-tree entries,
+including the root. Symlinks, special files, unreadable/oversized sources and known credentials or private case
+facts withhold the whole snapshot as `unavailable`, without partial hashes or value-bearing errors. An unavailable
+diagnostic does not change a task verdict or claim privacy coverage. Runtime admission and hard checks still apply.
+Cancellation is checked between bounded file reads; a canceled observation withholds all hashes.
+
+These are two local filesystem samples, not an atomic snapshot or proof of files actually used by the target.
+They do not cover memory, user/system skills, effective catalog compatibility/selection, cached prompts, dynamic
+contributors or changes between samples. Prepared inputs remain operator-owned; hostile concurrent filesystem
+mutation is not certified. Judge-only regrading validates and retains the source observations, never replaces them
+with today's workspace files, and does not expose these observations to the judge. Old reports retain unknown
+workspace inputs rather than gaining reconstructed hashes.
+
 ## Compare Retained Runs
 
 ```sh
@@ -304,7 +325,9 @@ counts are shown as a sampling change, not paired retries or an automatic improv
 Recorded preset, public configuration, runtime revision/platform, grading mode and model-role/prompt changes are
 separate from case compatibility. Dynamic PID/instance tokens and per-call conversation prompt hashes are not
 cohort identities. No raw transcript, prompt, path, model configuration or artifact contents enter comparison output.
-Instruction/skill fingerprints and complete target-call model accounting remain explicitly unknown; current
-reports do not record them. `quality_attribution: not_established` is reported even when the available metadata
-matches. Complete preset/input fingerprints and live domain qualification remain later E5/exit work, not claims
-made by an offline comparison. Compare complete saved selections; use suite/tag/case selection when producing runs.
+When both runs have observed initial workspace samples, comparison separately lists instruction-file and skill-file
+changes. Missing/unavailable samples or different before/after samples add explicit per-source unknowns. The
+`instructions_and_skills` unknown still covers the effective runtime inputs excluded above, and complete target-call
+model accounting remains unknown. `quality_attribution: not_established` is reported even when available metadata
+matches. Complete preset/effective-input fingerprints and live domain qualification remain later E5/exit work, not
+claims made by an offline comparison. Compare complete saved selections; use suite/tag/case selection when producing runs.

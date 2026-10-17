@@ -44,6 +44,7 @@ type RunReport struct {
 	Cleanup         string              `json:"cleanup"`
 	Complete        bool                `json:"complete"`
 	TargetLifecycle *TargetLifecycle    `json:"target_lifecycle,omitempty"`
+	WorkspaceInputs *WorkspaceInputs    `json:"workspace_inputs,omitempty"`
 }
 
 type privateReport struct {
