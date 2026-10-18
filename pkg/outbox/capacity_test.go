@@ -339,3 +339,29 @@ func TestCapacityInvalidOrCancelledRequestCreatesNoStore(t *testing.T) {
 		t.Fatalf("bounded read=%d,%v", len(data), err)
 	}
 }
+
+// The pathname is still an occupied identity when its metadata cannot be read.
+// Its unknown byte size must not make the namespace count look smaller.
+type capacityUnavailableEntry struct{ os.DirEntry }
+
+func (capacityUnavailableEntry) Info() (os.FileInfo, error) {
+	return nil, os.ErrPermission
+}
+
+func TestCapacityCountsUnreadableIdentityNames(t *testing.T) {
+	dir := t.TempDir()
+	name := "out_" + strings.Repeat("a", 32) + ".json"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := CapacityReport{Reasons: make(map[string]int64)}
+	inspectCapacityEntry(dir, capacityUnavailableEntry{entries[0]}, &report, time.Now(), time.Now())
+	if report.TotalEntries != 1 || report.TotalRecords != 1 || report.TotalBytes != 0 ||
+		report.Unavailable.Count != 1 || report.Reasons["entry_unavailable"] != 1 {
+		t.Fatalf("unreadable identity accounting=%#v", report)
+	}
+}

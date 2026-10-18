@@ -149,19 +149,22 @@ func inspectCapacityEntry(dir string, entry os.DirEntry, report *CapacityReport,
 		return
 	}
 	report.TotalEntries++
+	id := strings.TrimSuffix(entry.Name(), ".json")
+	canonical := validateID(id) == nil && entry.Name() == id+".json"
+	if canonical {
+		report.TotalRecords++
+	}
 	if infoErr != nil {
 		report.Unavailable.add(0, time.Time{})
 		report.Reasons["entry_unavailable"]++
 		return
 	}
 	report.TotalBytes += info.Size()
-	id := strings.TrimSuffix(entry.Name(), ".json")
-	if validateID(id) != nil || entry.Name() != id+".json" {
+	if !canonical {
 		report.Unavailable.add(info.Size(), time.Time{})
 		report.Reasons["unexpected_entry"]++
 		return
 	}
-	report.TotalRecords++
 	if !info.Mode().IsRegular() || info.Size() > MaxInspectionBytes {
 		reason := "protected_nonregular_record"
 		if info.Mode().IsRegular() {
