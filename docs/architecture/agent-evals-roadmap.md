@@ -136,6 +136,9 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    Artifact and the
    other four scenarios remain gated. Submit/followup retain private-input gates; ambiguity/denial retain
    native-action evidence gates. No local fixture pass qualifies native browser behavior.
+   Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a
+   read-only native transfer inspection API rather than constructing/reconciling a store. This receipt does not
+   admit a judge, approve an action or validate actual wire/artifact bytes; those existing requirements remain.
 4. Exit: extend the exercised general repeats/regrade/comparison to qualified domain evidence, available all-call
    usage and remaining negative controls; record platform/transport/oracle limits and merge the exit record. Do not
    turn unavailable
