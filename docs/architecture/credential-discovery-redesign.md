@@ -3,8 +3,9 @@
 Status: D0–D3 delivered on 2026-10-18; the first owner-approved Facebook attempt
 found the Login but ended unknown. The reviewed continuation fix is merged;
 D4 still requires fresh authentication evidence.
-The owner subsequently requested a two-hour, automatically resumed phone wait;
-its [delivery plan](credential-approval-wait.md) precedes the next D4 attempt.
+The owner's two-hour, automatically resumed phone wait is also reviewed and
+deployed. The [composition](credential-approval-wait.md) resumed the fresh D4
+attempt automatically; that attempt stopped at the TOTP step.
 This replaces the requirement to
 preconfigure each browser account's item UUID, allowed origins and site-specific
 success markers. The new path is reviewed, qualified and deployed; see the
@@ -143,5 +144,6 @@ idle resources, preserve native cleanup evidence, wait durably, then resume with
 fresh website discovery and controls. The 20-hour grant begins at verified
 approval; five-minute passkey/setup ceremonies remain short. See the
 [approval roadmap and composition](credential-approval-wait.md). Native/provider
-qualification, reviewed deployment and the fresh owner Facebook pilot remain
-delivery gates; source changes alone do not certify a logged-in real account.
+qualification and reviewed deployment are complete. The fresh owner Facebook
+pilot remains the authentication gate; deployment alone does not certify a
+logged-in real account.

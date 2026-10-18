@@ -1,8 +1,9 @@
 # Phone approval without a short response race
 
-Status: source implementation and qualification in progress for the owner's
-2026-10-18 two-hour preference. Production rollout remains a separate gate. The
-previous deployed behavior is recorded in the
+Status: reviewed, qualified and deployed on 2026-10-18 at merge
+`80f00e37a0a915444fe1a8d65af7f65a402d0adf`. The owner's fresh Facebook
+pilot resumed automatically but stopped at TOTP; authentication remains a
+separate gate. See the
 [rollout evidence](credential-website-login-rollout.md).
 
 ## User behavior
