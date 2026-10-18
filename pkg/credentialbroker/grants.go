@@ -116,6 +116,22 @@ func (authority *Authority) Authorize(grantID string, request Request) error {
 	return authority.authorize(grantID, request)
 }
 
+// Active reports only the current lifetime of an already-issued grant. It is
+// used by the approval page, not to authorize a consumer or retrieve a value.
+func (authority *Authority) Active(grantID string) bool {
+	if authority == nil {
+		return false
+	}
+	authority.mu.Lock()
+	defer authority.mu.Unlock()
+	if authority.closed || authority.now == nil || !validGrantID(grantID) {
+		return false
+	}
+	authority.prune(authority.now())
+	_, active := authority.grants[grantID]
+	return active
+}
+
 // authorize requires the authority lock.
 func (authority *Authority) authorize(grantID string, request Request) error {
 	if authority.closed {

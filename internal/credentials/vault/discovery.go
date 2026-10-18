@@ -2,6 +2,7 @@ package vault
 
 import (
 	"context"
+	"net"
 	"net/url"
 	"runtime"
 	"slices"
@@ -13,8 +14,8 @@ import (
 	"golang.org/x/net/publicsuffix"
 )
 
-// DiscoveryQuery searches item overviews during private operator setup. A
-// website match suggests candidates; it never adds runtime origin authority.
+// DiscoveryQuery searches item overviews. A website match suggests candidates;
+// it never grants value access or authorizes a consumer by itself.
 type DiscoveryQuery struct {
 	Website string
 	Name    string
@@ -45,6 +46,28 @@ func FindLogins(ctx context.Context, token []byte, vaultID string, query Discove
 	}
 	defer runtime.KeepAlive(provider.client)
 	return findLogins(ctx, provider.client.Items(), vaultID, query)
+}
+
+// FindLogins reuses the private SDK client for live metadata-only lookup. It
+// serializes with retrieval, uses no full-item operation and caches no inventory.
+func (provider Provider) FindLogins(ctx context.Context, vaultID string, query DiscoveryQuery) ([]Candidate, error) {
+	if ctx == nil || ctx.Err() != nil || provider.items == nil || provider.slot == nil {
+		return nil, ErrUnavailable
+	}
+	items, ok := provider.items.(itemLister)
+	if !ok {
+		return nil, ErrUnavailable
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, providerTimeout)
+	defer cancel()
+	defer runtime.KeepAlive(provider.client)
+	select {
+	case provider.slot <- struct{}{}:
+		defer func() { <-provider.slot }()
+	case <-requestCtx.Done():
+		return nil, ErrUnavailable
+	}
+	return findLogins(requestCtx, items, vaultID, query)
 }
 
 func findLogins(ctx context.Context, items itemLister, vaultID string,
@@ -129,6 +152,9 @@ func websiteDomain(raw string) (string, bool) {
 		return "", false
 	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if net.ParseIP(host) != nil {
+		return "", false
+	}
 	domain, err := publicsuffix.EffectiveTLDPlusOne(host)
 	return domain, err == nil
 }

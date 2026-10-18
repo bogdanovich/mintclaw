@@ -16,10 +16,12 @@ import (
 // Consumers must watch Done and check trusted origin/frame/element authority
 // before every retrieval, injection and cookie-backed session operation.
 type LoginLease struct {
-	grant   credentialbroker.GrantLease
-	binding LoginBinding
-	flow    *credentialbroker.LoginFlow
-	origins []string
+	grant     credentialbroker.GrantLease
+	binding   LoginBinding
+	flow      *credentialbroker.LoginFlow
+	origins   []string
+	discovery bool
+	domain    string
 }
 
 func (controller *Controller) LeaseLogin(ctx context.Context, grantID string,
@@ -46,9 +48,10 @@ func (controller *Controller) loginLease(
 ) LoginLease {
 	account := controller.bindings[request.Account]
 	lease := LoginLease{
-		grant:   grant,
-		binding: LoginBinding{account.vaultID, account.itemID, controller.policy.Revision()},
-		origins: slices.Clone(account.origins),
+		grant:     grant,
+		binding:   LoginBinding{account.vaultID, account.itemID, controller.policy.Revision()},
+		origins:   slices.Clone(account.origins),
+		discovery: account.discoverLogins,
 	}
 	if flow, flowErr := controller.policy.LoginFlow(request); flowErr == nil {
 		lease.flow = &flow
@@ -57,13 +60,19 @@ func (controller *Controller) loginLease(
 }
 
 func (lease LoginLease) Binding(ctx context.Context, request credentialbroker.Request) (LoginBinding, error) {
-	if lease.grant.Check(ctx, request) != nil {
+	if lease.Check(ctx, request) != nil || lease.binding.ItemID == "" {
 		return LoginBinding{}, ErrDenied
 	}
 	return lease.binding, nil
 }
 
 func (lease LoginLease) Check(ctx context.Context, request credentialbroker.Request) error {
+	if lease.domain != "" {
+		domain, err := discoveryDomain(request.Origin)
+		if err != nil || domain != lease.domain {
+			return ErrDenied
+		}
+	}
 	return lease.grant.Check(ctx, request)
 }
 
@@ -99,6 +108,9 @@ func (controller *Controller) ActiveLogin(ctx context.Context, request credentia
 func (lease LoginLease) Done() <-chan struct{} { return lease.grant.Done() }
 
 func (lease LoginLease) Remaining(ctx context.Context, request credentialbroker.Request) (time.Duration, error) {
+	if lease.Check(ctx, request) != nil {
+		return 0, ErrDenied
+	}
 	return lease.grant.Remaining(ctx, request)
 }
 

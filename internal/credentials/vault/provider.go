@@ -47,7 +47,8 @@ type itemGetter interface {
 
 // Provider retains one private SDK client and permits one retrieval at a time.
 // Copies share the same client and retrieval queue; its zero value denies use.
-// No SDK operation other than Items.Get is exposed to service consumers.
+// Consumers can retrieve exact items privately or list projected Login metadata.
+// No arbitrary SDK operation or secret-reference resolver is exposed.
 type Provider struct {
 	client *onepassword.Client
 	items  itemGetter

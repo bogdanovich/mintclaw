@@ -44,6 +44,11 @@
   };
   const showScope = scope => {
     element("accounts").replaceChildren(...scope.accounts.map(alias => { const item = document.createElement("li"); item.textContent = alias; return item; }));
+    if (scope.vault_login_access) {
+      const item = document.createElement("li");
+      item.textContent = "All website-matching Login items in the dedicated 1Password vault, including stored one-time codes.";
+      element("accounts").append(item);
+    }
     for (const [id, key] of [["agent", "agent_id"], ["host", "host_id"], ["actor", "actor_id"], ["owner", "owner_id"]]) element(id).textContent = scope.principal[key];
     const hours = scope.duration_seconds / 3600;
     element("duration").textContent = hours >= 1 ? `${hours} hours` : `${scope.duration_seconds / 60} minutes`;

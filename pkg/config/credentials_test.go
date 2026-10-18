@@ -11,7 +11,7 @@ import (
 func TestCredentialConfigurationRequiresDedicatedVaultAndPrivateStateLocation(t *testing.T) {
 	for _, kind := range []string{
 		"valid", "workspace", "agent-workspace", "different-vault", "different-owner", "missing-workspace",
-		"login-valid", "login-disabled-runtime", "login-no-host", "login-invalid-host",
+		"login-valid", "login-disabled-runtime", "login-no-host", "login-invalid-host", "discovery-valid",
 	} {
 		t.Run(kind, func(t *testing.T) {
 			cfg := DefaultConfig()
@@ -34,6 +34,10 @@ func TestCredentialConfigurationRequiresDedicatedVaultAndPrivateStateLocation(t 
 				},
 			}
 			switch kind {
+			case "discovery-valid":
+				cfg.Credentials.BrowserLoginEnabled, cfg.Credentials.HostID = true, "host"
+				account := &cfg.Credentials.Accounts[0]
+				account.DiscoverLogins, account.ItemID, account.Origins = true, "", nil
 			case "login-valid", "login-disabled-runtime", "login-no-host", "login-invalid-host":
 				cfg.Credentials.BrowserLoginEnabled = true
 				cfg.Credentials.HostID = "gateway"
@@ -61,7 +65,8 @@ func TestCredentialConfigurationRequiresDedicatedVaultAndPrivateStateLocation(t 
 			case "different-owner":
 				cfg.Credentials.Accounts[0].Principals[0].OwnerID = "other-owner"
 			}
-			if (cfg.ValidateCredentials() == nil) != (kind == "valid" || kind == "login-valid") {
+			valid := kind == "valid" || kind == "login-valid" || kind == "discovery-valid"
+			if (cfg.ValidateCredentials() == nil) != valid {
 				t.Fatal("credential configuration admission differs from its scope/state contract")
 			}
 		})

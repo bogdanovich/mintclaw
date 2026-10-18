@@ -54,11 +54,12 @@ func (LoginBinding) MarshalJSON() ([]byte, error) { return []byte(`"[private log
 // Scope is the complete, service-owned scope displayed by the phone. It contains
 // aliases, not provider bindings. Returned account slices are independent copies.
 type Scope struct {
-	Principal       credentialbroker.Principal `json:"principal"`
-	Accounts        []string                   `json:"accounts"`
-	PolicyRevision  string                     `json:"policy_revision"`
-	DurationSeconds int                        `json:"duration_seconds"`
-	GrantID         string                     `json:"grant_id,omitempty"`
+	Principal        credentialbroker.Principal `json:"principal"`
+	Accounts         []string                   `json:"accounts"`
+	PolicyRevision   string                     `json:"policy_revision"`
+	DurationSeconds  int                        `json:"duration_seconds"`
+	GrantID          string                     `json:"grant_id,omitempty"`
+	VaultLoginAccess bool                       `json:"vault_login_access,omitempty"`
 }
 
 // Ceremony contains public WebAuthn options and a locator. The options are a
@@ -101,6 +102,7 @@ type pendingCeremony struct {
 type binding struct {
 	vaultID, itemID string
 	origins         []string
+	discoverLogins  bool
 }
 
 // Controller exclusively owns mutable approval authority. No Authority pointer
@@ -213,7 +215,10 @@ func freezePolicy(
 				return nil, nil, ErrUnavailable
 			}
 		}
-		bindings[rule.Alias] = binding{rule.VaultID, rule.ItemID, slices.Clone(rule.Origins)}
+		bindings[rule.Alias] = binding{
+			vaultID: rule.VaultID, itemID: rule.ItemID, origins: slices.Clone(rule.Origins),
+			discoverLogins: rule.DiscoverLogins,
+		}
 	}
 	return policy, bindings, nil
 }
@@ -237,23 +242,13 @@ func (controller *Controller) permits(principal credentialbroker.Principal, alia
 	}
 	seen := make(map[string]struct{}, len(aliases))
 	for _, alias := range aliases {
-		account, exists := controller.bindings[alias]
-		if !exists || len(account.origins) == 0 {
+		if !controller.policy.AllowsPrincipal(principal, alias) {
 			return false
 		}
 		if _, duplicate := seen[alias]; duplicate {
 			return false
 		}
 		seen[alias] = struct{}{}
-		err := controller.authority.Authorize("", credentialbroker.Request{
-			Principal:      principal,
-			Account:        alias,
-			Origin:         account.origins[0],
-			PolicyRevision: controller.policy.Revision(),
-		})
-		if !errors.Is(err, credentialbroker.ErrApprovalRequired) {
-			return false
-		}
 	}
 	return true
 }
@@ -287,7 +282,8 @@ func (controller *Controller) Request(ctx context.Context, principal credentialb
 	slices.Sort(accounts)
 	controller.requests[id] = &pendingRequest{scope: Scope{
 		Principal: principal, Accounts: accounts, PolicyRevision: controller.policy.Revision(),
-		DurationSeconds: int(lifetime / time.Second),
+		DurationSeconds:  int(lifetime / time.Second),
+		VaultLoginAccess: controller.includesDiscovery(accounts),
 	}, issued: controller.now()}
 	return id, nil
 }
@@ -401,7 +397,8 @@ func (controller *Controller) BeginRevocation(ctx context.Context, grantID strin
 	return controller.begin(revoke, Scope{
 		Principal: grant.Principal, Accounts: slices.Clone(grant.Accounts),
 		PolicyRevision: grant.PolicyRevision, DurationSeconds: int(grant.ExpiresAt.Sub(grant.IssuedAt) / time.Second),
-		GrantID: grant.ID,
+		GrantID:          grant.ID,
+		VaultLoginAccess: controller.includesDiscovery(grant.Accounts),
 	}, "")
 }
 
@@ -458,6 +455,9 @@ func (controller *Controller) AuthorizedBinding(ctx context.Context, grantID str
 		return LoginBinding{}, ErrDenied
 	}
 	account := controller.bindings[request.Account]
+	if account.itemID == "" {
+		return LoginBinding{}, ErrDenied
+	}
 	return LoginBinding{account.vaultID, account.itemID, controller.policy.Revision()}, nil
 }
 
@@ -524,13 +524,17 @@ func (controller *Controller) grantActive(id string) bool {
 	if !exists || len(grant.Accounts) == 0 {
 		return false
 	}
-	account, exists := controller.bindings[grant.Accounts[0]]
-	return exists && len(account.origins) != 0 && controller.authority.Authorize(id, credentialbroker.Request{
-		Principal:      grant.Principal,
-		Account:        grant.Accounts[0],
-		Origin:         account.origins[0],
-		PolicyRevision: grant.PolicyRevision,
-	}) == nil
+	return controller.permits(grant.Principal, grant.Accounts) &&
+		grant.PolicyRevision == controller.policy.Revision() && controller.authority.Active(id)
+}
+
+func (controller *Controller) includesDiscovery(aliases []string) bool {
+	for _, alias := range aliases {
+		if controller.bindings[alias].discoverLogins {
+			return true
+		}
+	}
+	return false
 }
 
 func withinLifetime(now, issued time.Time) bool {
