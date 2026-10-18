@@ -64,7 +64,7 @@ func Grade(
 			original,
 			filter,
 		) || !original.TargetLifecycle.valid() || !original.WorkspaceInputs.valid() ||
-		!original.PrivateSurfaces.valid() || !original.BrowserFixtures.valid() ||
+		!original.PrivateSurfaces.valid() || !original.BrowserFixtures.valid() || !original.TargetUsage.valid() ||
 		original.PrivateSurfaces != nil && original.PrivateSurfaces.LeakObserved {
 		return RunReport{}, ErrGrade
 	}
@@ -150,6 +150,7 @@ func Grade(
 		WorkspaceInputs: original.WorkspaceInputs,
 		PrivateSurfaces: original.PrivateSurfaces,
 		BrowserFixtures: original.BrowserFixtures,
+		TargetUsage:     newTargetUsage(),
 	}
 	writer, err := newPrivateReport(options.OutputParent, home, workspace, result.ID)
 	if err != nil {
@@ -159,6 +160,7 @@ func Grade(
 	result.ReportDir = writer.dir
 	calls := []RoleCall{}
 	for _, trial := range trials {
+		result.TargetUsage.addTrial(trial)
 		if raw := artifacts[trial.ID]; raw != nil {
 			if _, err = writer.retainBrowserArtifact(trial.ID, raw); err != nil {
 				return result, ErrReport
@@ -291,6 +293,9 @@ func validTrialConversation(trial Trial, agent, workspace string) bool {
 		return false
 	}
 	for _, event := range trial.Events {
+		if !validEventUsage(event) {
+			return false
+		}
 		if event.Kind == "input" {
 			continue
 		}

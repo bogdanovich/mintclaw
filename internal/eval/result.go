@@ -31,6 +31,7 @@ type Event struct {
 	InteractionShortID string              `json:"interaction_short_id,omitempty"`
 	Controls           string              `json:"controls,omitempty"`
 	InteractionKind    string              `json:"interaction_kind,omitempty"`
+	Usage              *TokenUsage         `json:"usage,omitempty"`
 }
 
 type CheckResult struct {

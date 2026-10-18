@@ -177,6 +177,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		return result, ErrCompare
 	}
 	seen, sessions, roles := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	targetUsage := newTargetUsage()
 	coverage := map[Verdict]int{}
 	verdicts := make([]Verdict, 0, len(report.Trials))
 	for _, summary := range report.Trials {
@@ -203,6 +204,12 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 			return result, ErrCompare
 		}
 		calls := trial.DriverCalls
+		for _, event := range trial.Events {
+			if !validEventUsage(event) {
+				return result, ErrCompare
+			}
+		}
+		targetUsage.addTrial(trial)
 		if trial.Judge != nil && trial.Judge.Call != nil {
 			calls = append(slices.Clone(calls), *trial.Judge.Call)
 		}
@@ -230,6 +237,9 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		if count.Trials != effectiveRepeat(report) {
 			return result, ErrCompare
 		}
+	}
+	if !report.TargetUsage.valid() || report.TargetUsage != nil && *report.TargetUsage != *targetUsage {
+		return result, ErrCompare
 	}
 	for verdict, count := range report.Coverage {
 		if !validComparisonVerdict(verdict) || count < 0 || coverage[verdict] != count {
