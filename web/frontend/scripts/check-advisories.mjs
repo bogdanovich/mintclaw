@@ -23,6 +23,14 @@ export function evaluateAudit(report, exceptions, now = new Date()) {
   ) {
     throw new Error("Missing or inconsistent pnpm audit evidence")
   }
+  for (const severity of severities) {
+    const advisoryCount = Object.values(advisories).filter(
+      (advisory) => advisory?.severity === severity,
+    ).length
+    if (advisoryCount !== counts[severity]) {
+      throw new Error("Missing or inconsistent pnpm audit evidence")
+    }
+  }
   for (const exception of exceptions) {
     const expiry = new Date(`${exception.expiresOn}T00:00:00Z`)
     if (

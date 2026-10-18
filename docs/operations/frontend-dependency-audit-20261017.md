@@ -65,11 +65,11 @@ findings with `scripts/advisory-exceptions.json`. Matching requires advisory ID,
 module, version, severity, every reported path, and an unexpired date. New,
 changed, or expired findings require action. Registry failure does not pass.
 
-Nine deterministic policy tests exercise expiry, changed identities/versions/
+Thirteen deterministic policy tests exercise expiry, changed identities/versions/
 severity/paths, an additional uncovered finding, missing/error/inconsistent
 reports, and invalid exception dates. They use the existing Vitest runner.
 
-Local validation on Node 22.23.1 passed frozen installation, all 22 tests in five
+Local validation on Node 22.23.1 passed frozen installation, all 26 tests in five
 files, lint, formatting, the advisory check, TypeScript, and the production
 bundle. The local installation used `--ignore-scripts`; PR CI uses the normal
 frozen installation. This record does not claim deployed or live browser-domain
@@ -80,3 +80,10 @@ To repeat the bundle witness, collect the keys of `chunk.modules` from a Vite
 module IDs for `/node_modules/esbuild/`, `/node_modules/braces/`, and
 `/node_modules/postcss-selector-parser/`. Keep the normal repository config and
 plugins so the witness covers the actual production graph.
+
+
+Review follow-up: severity metadata is checked against the advisory-object count
+at every severity, as well as the total. Four regressions move the reported high
+count into info, low, moderate or critical while leaving the total unchanged;
+all first failed against the original gate and now reject that inconsistent
+evidence. The fresh three-advisory report still passes its precise exceptions.

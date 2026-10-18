@@ -92,6 +92,18 @@ describe("frontend advisory policy", () => {
     expect(() => evaluateAudit(missingPath, [exception], reviewedAt)).toThrow()
   })
 
+  it.each(["info", "low", "moderate", "critical"])(
+    "rejects a high advisory reported as %s even when the total is unchanged",
+    (reportedSeverity) => {
+      const evidence = report()
+      evidence.metadata.vulnerabilities.high = 0
+      evidence.metadata.vulnerabilities[reportedSeverity] = 1
+      expect(() => evaluateAudit(evidence, [exception], reviewedAt)).toThrow(
+        "Missing or inconsistent pnpm audit evidence",
+      )
+    },
+  )
+
   it("rejects an invalid exception instead of accepting it indefinitely", () => {
     expect(() =>
       evaluateAudit(
