@@ -91,10 +91,12 @@ the completed grant. An `outcome_unknown` must not silently replay submission.
 
 Confirm the real account is logged in through the qualified private flow. A
 subsequent explicit login within the same scope should reuse the grant without
-another approval. Leave that authenticated session open for the revocation
-check. Use **Revoke access** on the phone page and confirm that the
-grant ends and MintClaw retires its authenticated browser. A new request then
-requires fresh approval. Complete any MFA only through a qualified private
+another approval. After the task ends, use **Revoke access** on the phone page
+and confirm that another login requires fresh approval. The headless ephemeral
+profile must be closed before task finalization; it cannot remain open as a
+human handoff. Revocation while a browser is active needs a separate in-progress
+task check; leaving a headless browser open after a completed task cannot
+establish that behavior. Complete any MFA only through a qualified private
 interaction; never send passwords, one-time codes or seeds through chat.
 
 Record fixed outcomes and qualification results, without capturing credentials,

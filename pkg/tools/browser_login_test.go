@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 type credentialBrowserToolFixture struct {
@@ -58,6 +59,37 @@ func TestBrowserLoginToolUsesAuthenticatedOwnerAndOnlyAliasReferences(t *testing
 	encoded, err := json.Marshal(tool.Parameters())
 	if err != nil || strings.Contains(string(encoded), "vault_id") || strings.Contains(string(encoded), "grant_id") {
 		t.Fatal("model schema exposed private credential bindings")
+	}
+	if len(result.WriteAudit) != 1 {
+		t.Fatal("confirmed alias login did not produce a runtime action receipt")
+	}
+	audit := result.WriteAudit[0]
+	if !audit.Success || audit.Kind != taskresult.ObjectiveKindExternalAction || audit.Tool != "browser_login" ||
+		audit.Action != "login" || audit.Target != "account:ebay" || audit.Metadata["outcome"] != "logged_in" ||
+		audit.Metadata["invocation_id"] == "" {
+		t.Fatal("login receipt did not describe its confirmed alias operation")
+	}
+	second := tool.Execute(ctx, credentialBrowserToolArguments())
+	if len(second.WriteAudit) != 1 ||
+		second.WriteAudit[0].Metadata["invocation_id"] == audit.Metadata["invocation_id"] {
+		t.Fatal("distinct completed logins reused a runtime receipt")
+	}
+}
+
+func TestBrowserLoginToolDoesNotCertifyUnconfirmedLogin(t *testing.T) {
+	for _, outcome := range []string{
+		"approval_required", "handoff_required", "outcome_unknown", "denied", "failed",
+	} {
+		t.Run(outcome, func(t *testing.T) {
+			source := &credentialBrowserToolFixture{
+				credentialAvailable: true, result: browser.CredentialLoginResult{Outcome: outcome},
+			}
+			result := NewBrowserLoginTool(browserToolTestConfig(), source).
+				Execute(browserToolTestContext(), credentialBrowserToolArguments())
+			if result == nil || len(result.WriteAudit) != 0 {
+				t.Fatal("unconfirmed login acquired an action receipt")
+			}
+		})
 	}
 }
 
