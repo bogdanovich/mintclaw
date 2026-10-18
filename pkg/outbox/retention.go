@@ -17,9 +17,10 @@ const (
 // RetirementPolicy selects a bounded offline batch. Apply defaults to false.
 // MinAge is explicit; delivery identities never expire with their payloads.
 type RetirementPolicy struct {
-	DeliveryIDs []string
-	MinAge      time.Duration
-	Apply       bool
+	DeliveryIDs    []string
+	MinAge         time.Duration
+	Apply          bool
+	CapacityBudget *CapacityBudget
 }
 
 type RetirementItem struct {
@@ -29,11 +30,15 @@ type RetirementItem struct {
 	AfterBytes  int64  `json:"after_bytes"`
 }
 
-// RetirementReport describes only the selected batch, not all instance storage.
+// RetirementReport describes the selected batch and optional whole-store
+// capacity snapshots taken under the same writer ownership.
 // Items contain opaque delivery keys and fixed outcome codes, never payloads.
 type RetirementReport struct {
-	DryRun bool             `json:"dry_run"`
-	Items  []RetirementItem `json:"items"`
+	SchemaVersion  string           `json:"schema_version"`
+	CapacityBefore *CapacityReport  `json:"capacity_before,omitempty"`
+	CapacityAfter  *CapacityReport  `json:"capacity_after,omitempty"`
+	DryRun         bool             `json:"dry_run"`
+	Items          []RetirementItem `json:"items"`
 }
 
 // RetirePayloadsOffline opens a fresh exclusive coordinator for one bounded
@@ -45,6 +50,11 @@ func RetirePayloadsOffline(
 	instanceRoot string,
 	policy RetirementPolicy,
 ) (report RetirementReport, err error) {
+	report.SchemaVersion = "mintclaw.outbox.retirement.v1"
+	report.DryRun = !policy.Apply
+	if policy.CapacityBudget != nil && (policy.CapacityBudget.MaxBytes < 0 || policy.CapacityBudget.MaxRecords < 0) {
+		return report, errors.New("outbox retirement requires nonnegative capacity budgets")
+	}
 	if policy.MinAge <= 0 || len(policy.DeliveryIDs) == 0 || len(policy.DeliveryIDs) > MaxRetirementBatch {
 		return report, errors.New("outbox retention requires a positive age and 1..64 delivery IDs")
 	}
@@ -74,8 +84,25 @@ func RetirePayloadsOffline(
 		return report, err
 	}
 	defer func() { err = errors.Join(err, coordinator.Close()) }()
-	report.DryRun = !policy.Apply
 	report.Items = make([]RetirementItem, 0, len(policy.DeliveryIDs))
+	var capacityPolicy CapacityPolicy
+	if policy.CapacityBudget != nil {
+		capacityPolicy = CapacityPolicy{
+			MinAge:     policy.MinAge,
+			MaxBytes:   policy.CapacityBudget.MaxBytes,
+			MaxRecords: policy.CapacityBudget.MaxRecords,
+		}
+		beforeReport, capacityErr := inspectCapacityOwned(ctx, coordinator, capacityPolicy)
+		report.CapacityBefore = &beforeReport
+		if capacityErr != nil {
+			return report, capacityErr
+		}
+		// Unknown, corrupt, unreadable and nonregular authorities are an
+		// operator preflight failure; no selected payload is changed.
+		if !beforeReport.ScanComplete || beforeReport.Unavailable.Count > 0 {
+			return report, errors.New("outbox capacity preflight contains unavailable records")
+		}
+	}
 	now := time.Now().UTC()
 	before := now.Add(-policy.MinAge)
 	for _, id := range policy.DeliveryIDs {
@@ -85,6 +112,8 @@ func RetirePayloadsOffline(
 		item := RetirementItem{DeliveryID: id}
 		info, statErr := os.Lstat(coordinator.store.recordPath(id))
 		if statErr != nil {
+			item.Outcome = "record_unavailable"
+			report.Items = append(report.Items, item)
 			return report, fmt.Errorf("inspect outbox retirement identity %s: unavailable", id)
 		}
 		item.BeforeBytes, item.AfterBytes = info.Size(), info.Size()
@@ -100,6 +129,8 @@ func RetirePayloadsOffline(
 		}
 		intent, readErr := coordinator.store.Get(id)
 		if readErr != nil {
+			item.Outcome = "invalid_or_unreadable"
+			report.Items = append(report.Items, item)
 			return report, fmt.Errorf("inspect outbox retirement identity %s: invalid_or_unreadable", id)
 		}
 		if intent.PayloadRetired {
@@ -136,6 +167,13 @@ func RetirePayloadsOffline(
 			}
 		}
 		report.Items = append(report.Items, item)
+	}
+	if policy.CapacityBudget != nil && policy.Apply {
+		afterReport, capacityErr := inspectCapacityOwned(ctx, coordinator, capacityPolicy)
+		report.CapacityAfter = &afterReport
+		if capacityErr != nil {
+			return report, capacityErr
+		}
 	}
 	return report, nil
 }
