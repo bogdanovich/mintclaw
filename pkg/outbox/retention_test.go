@@ -597,3 +597,46 @@ func TestClassifiedRecordIsAtomicAdmissionFence(t *testing.T) {
 		})
 	}
 }
+
+// Keep the preflight path distinct from the coordinator's trimmed root. Some
+// filesystems alias trailing spaces, in which case this fixture does not apply.
+func offlineRootPreflightFixture(t *testing.T) (string, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "instance")
+	alias := root + " "
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(alias, 0o700); err != nil {
+		t.Skipf("filesystem cannot represent distinct trailing-space roots: %v", err)
+	}
+	plain, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spaced, err := os.Stat(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(plain, spaced) {
+		t.Skip("filesystem aliases trailing-space roots")
+	}
+	if err = os.MkdirAll(Path(alias), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return root, alias
+}
+
+func TestRetirementPreflightChecksTheCanonicalStore(t *testing.T) {
+	root, alias := offlineRootPreflightFixture(t)
+	_, err := RetirePayloadsOffline(t.Context(), alias, RetirementPolicy{
+		DeliveryIDs: []string{"out_" + strings.Repeat("a", 32)}, MinAge: time.Hour,
+	})
+	if err == nil {
+		t.Fatal("retirement accepted an absent canonical store")
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("offline preflight created canonical state: entries=%v error=%v", entries, readErr)
+	}
+}

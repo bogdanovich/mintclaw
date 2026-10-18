@@ -61,6 +61,10 @@ func RetirePayloadsOffline(
 	if err = ctx.Err(); err != nil {
 		return report, err
 	}
+	instanceRoot, err = canonicalInstanceRoot(instanceRoot)
+	if err != nil {
+		return report, err
+	}
 	// A typo or a dry run must not create a new outbox and imply it was read.
 	if info, statErr := os.Stat(Path(instanceRoot)); statErr != nil || !info.IsDir() {
 		return report, errors.New("outbox retirement requires an existing store directory")
