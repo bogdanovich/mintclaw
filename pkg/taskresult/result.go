@@ -322,21 +322,41 @@ func NormalizeObjectiveOutput(
 }
 
 // StandaloneResultOutput returns the one machine-validated result payload that
-// can be projected independently from presentation text. Mixed objectives,
-// incomplete outcomes, and oversized values deliberately have no standalone
-// projection.
+// can be projected independently from presentation text after the whole outcome
+// succeeds. Other completed objectives must carry their verified runtime receipts;
+// receipt ownership and completion remain the authoritative producer's concern.
+// Ambiguous results, incomplete outcomes, and oversized values are not projected.
 func StandaloneResultOutput(input *Deliverable) *ObjectiveOutput {
 	if input == nil || input.ObjectiveOutcome == nil ||
 		input.ObjectiveOutcome.Status != OutcomeSucceeded ||
-		len(input.ObjectiveOutcome.MissingItems) != 0 ||
-		len(input.ObjectiveOutcome.CompletedItems) != 1 {
+		len(input.ObjectiveOutcome.MissingItems) != 0 {
 		return nil
 	}
-	item := input.ObjectiveOutcome.CompletedItems[0]
-	if item.Kind != ObjectiveKindResult || item.Output == nil {
+	var result *ObjectiveOutput
+	for _, item := range input.ObjectiveOutcome.CompletedItems {
+		switch item.Kind {
+		case ObjectiveKindResult:
+			if result != nil || item.Output == nil {
+				return nil
+			}
+			result = item.Output
+		case ObjectiveKindExternalAction, ObjectiveKindLiveHandoff:
+			if item.Output != nil || len(item.Receipts) == 0 {
+				return nil
+			}
+			for _, receipt := range item.Receipts {
+				if strings.TrimSpace(receipt.ID) == "" || receipt.Kind != item.Kind {
+					return nil
+				}
+			}
+		default:
+			return nil
+		}
+	}
+	if result == nil {
 		return nil
 	}
-	output, reason := NormalizeObjectiveOutput(item.Output, nil)
+	output, reason := NormalizeObjectiveOutput(result, nil)
 	if reason != "" {
 		return nil
 	}

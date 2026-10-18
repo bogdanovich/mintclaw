@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/internal/credentials/githubread"
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -35,7 +36,9 @@ func credentialProviderFixture(
 	cfg *config.Config,
 	running *services,
 	messageBus *bus.MessageBus,
-	providerKind, expectedOutcome string,
+	providerKind string,
+	connectorMode bool,
+	expectedOutcome string,
 	capture func([]byte),
 ) (func() (browser.CredentialLoginResult, error), func()) {
 	t.Helper()
@@ -44,6 +47,10 @@ func credentialProviderFixture(
 	sessionID := ""
 	lastLogin := browser.CredentialLoginResult{}
 	failure := ""
+	stepsPerTurn := 6
+	if connectorMode {
+		stepsPerTurn = 2
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(request.Body, 2*1024*1024))
 		if err != nil {
@@ -91,61 +98,85 @@ func credentialProviderFixture(
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		phase := calls % 6
+		phase := calls % stepsPerTurn
 		calls++
 		decode := func(target any) bool {
 			return json.NewDecoder(strings.NewReader(toolContent)).Decode(target) == nil
 		}
 		name := ""
 		var arguments map[string]any
-		switch phase {
-		case 0:
-			name = "browser_session"
-			arguments = map[string]any{
-				"operation": "open", "target": config.BrowserDefaultTarget, "profile": "ephemeral",
-				"interaction_language": "en",
+		if connectorMode {
+			if phase == 0 {
+				name = "github_pull_requests"
+				arguments = map[string]any{
+					"account_alias": "fixture-account",
+					"repository":    "fixture-owner/fixture-repo",
+				}
+			} else if !decode(&lastLogin) || lastLogin.Alias != "fixture-account" || lastLogin.Outcome != expectedOutcome {
+				failure = "provider did not receive the scoped connector result"
+			} else {
+				var result struct {
+					Repository   string                   `json:"repository"`
+					PullRequests []githubread.PullRequest `json:"pull_requests"`
+				}
+				if !decode(&result) || result.Repository != "fixture-owner/fixture-repo" ||
+					len(result.PullRequests) != 1 ||
+					result.PullRequests[0].Number != 7 ||
+					!strings.Contains(result.PullRequests[0].Title, "Pull request") ||
+					result.PullRequests[0].URL != "https://github.com/fixture-owner/fixture-repo/pull/7" {
+					failure = "provider did not receive the requested pull request projection"
+				}
 			}
-		case 1:
-			var opened struct {
-				ID string `json:"browser_session_id"`
-			}
-			if !decode(&opened) || opened.ID == "" {
-				failure = "provider did not receive the session result"
-			}
-			sessionID = opened.ID
-			name, arguments = "browser_observe", map[string]any{"browser_session_id": sessionID}
-		case 2:
-			var observation browser.Observation
-			if !decode(&observation) {
-				failure = "provider did not receive an observation"
-			}
-			arguments, err = credentialFixtureLoginArguments(observation)
-			if err != nil {
-				failure = "provider did not receive usable current references"
-			}
-			name = "browser_login"
-		case 3:
-			if !decode(&lastLogin) || lastLogin.Alias != "fixture-account" || lastLogin.Outcome != expectedOutcome {
-				failure = "provider did not receive the expected fixed alias outcome"
-			}
-			name, arguments = "browser_observe", map[string]any{"browser_session_id": sessionID}
-			if expectedOutcome == "outcome_unknown" {
+		} else {
+			switch phase {
+			case 0:
 				name = "browser_session"
-				arguments["operation"] = "status"
-			}
-		case 4:
-			var observation browser.Observation
-			if expectedOutcome != "outcome_unknown" && (!decode(&observation) || observation.SnapshotID == "") {
-				failure = "provider did not receive an authenticated observation"
-			}
-			name = "browser_session"
-			arguments = map[string]any{"operation": "close", "browser_session_id": sessionID}
-		case 5:
-			var closed struct {
-				State browser.SessionState `json:"state"`
-			}
-			if !decode(&closed) || !closed.State.Terminal() {
-				failure = "provider did not receive acknowledged browser cleanup"
+				arguments = map[string]any{
+					"operation": "open", "target": config.BrowserDefaultTarget, "profile": "ephemeral",
+					"interaction_language": "en",
+				}
+			case 1:
+				var opened struct {
+					ID string `json:"browser_session_id"`
+				}
+				if !decode(&opened) || opened.ID == "" {
+					failure = "provider did not receive the session result"
+				}
+				sessionID = opened.ID
+				name, arguments = "browser_observe", map[string]any{"browser_session_id": sessionID}
+			case 2:
+				var observation browser.Observation
+				if !decode(&observation) {
+					failure = "provider did not receive an observation"
+				}
+				arguments, err = credentialFixtureLoginArguments(observation)
+				if err != nil {
+					failure = "provider did not receive usable current references"
+				}
+				name = "browser_login"
+			case 3:
+				if !decode(&lastLogin) || lastLogin.Alias != "fixture-account" || lastLogin.Outcome != expectedOutcome {
+					failure = "provider did not receive the expected fixed alias outcome"
+				}
+				name, arguments = "browser_observe", map[string]any{"browser_session_id": sessionID}
+				if expectedOutcome == "outcome_unknown" {
+					name = "browser_session"
+					arguments["operation"] = "status"
+				}
+			case 4:
+				var observation browser.Observation
+				if expectedOutcome != "outcome_unknown" && (!decode(&observation) || observation.SnapshotID == "") {
+					failure = "provider did not receive an authenticated observation"
+				}
+				name = "browser_session"
+				arguments = map[string]any{"operation": "close", "browser_session_id": sessionID}
+			case 5:
+				var closed struct {
+					State browser.SessionState `json:"state"`
+				}
+				if !decode(&closed) || !closed.State.Terminal() {
+					failure = "provider did not receive acknowledged browser cleanup"
+				}
 			}
 		}
 		message := map[string]any{"role": "assistant", "content": "fixture complete"}
@@ -214,6 +245,9 @@ func credentialProviderFixture(
 			Allow:   []string{"browser_session", "browser_observe", "browser_login"},
 		},
 	}}
+	if connectorMode {
+		cfg.Agents.List[0].ToolPolicy.Allow = []string{"github_pull_requests"}
+	}
 	cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.Provider = "fixture-model", "openai"
 	cfg.Agents.Defaults.ContextManager = "seahorse"
 	cfg.Agents.Defaults.MaxToolIterations = 12
@@ -254,6 +288,9 @@ func credentialProviderFixture(
 	if setupErr := setupBrowserTools(cfg, loop, running); setupErr != nil {
 		t.Fatalf("provider-backed browser tool fixture unavailable: %v", setupErr)
 	}
+	if setupCredentialTools(cfg, loop, running) != nil {
+		t.Fatal("provider-backed credential tool fixture unavailable")
+	}
 	messageBus.SetEventPublisher(loop.RuntimeEventBus())
 	var closeOnce sync.Once
 	closeLoop := func() { closeOnce.Do(loop.Close) }
@@ -262,8 +299,12 @@ func credentialProviderFixture(
 	previousHistoryMessages := 0
 	perform := func() (browser.CredentialLoginResult, error) {
 		turns++
+		prompt := "Log in to fixture-account, observe the result, close the browser, then report completion."
+		if connectorMode {
+			prompt = "Read open pull requests from fixture-owner/fixture-repo with fixture-account, then report completion."
+		}
 		response, runErr := loop.ProcessDirectWithOptions(ctx,
-			"Log in to fixture-account, observe the result, close the browser, then report completion.",
+			prompt,
 			"fixture-provider-session-"+string(rune('a'+turns)), "telegram", "fixture-owner-chat",
 			agent.DirectTurnOptions{SuppressBackgroundCompaction: true})
 		mu.Lock()
@@ -303,7 +344,7 @@ func credentialProviderFixture(
 			qualifyCredentialTraceExports(t, cfg, capture)
 			mu.Lock()
 			defer mu.Unlock()
-			if calls != 12 || failure != "" {
+			if calls != 2*stepsPerTurn || failure != "" {
 				t.Error("provider qualification did not complete its two real request sequences")
 			}
 		})

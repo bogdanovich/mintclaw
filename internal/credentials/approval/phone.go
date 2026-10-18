@@ -110,8 +110,16 @@ func (boundary phoneBoundary) admit(writer http.ResponseWriter, request *http.Re
 		return false
 	}
 	if site := request.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
-		writePhoneError(writer, http.StatusForbidden)
-		return false
+		// Notification links arrive from other sites/apps. Only the public
+		// top-level page may be navigated to; API calls retain same-origin checks.
+		navigation := request.Method == http.MethodGet && boundary.routePath(request) == "/" &&
+			request.Header.Get("Sec-Fetch-Mode") == "navigate" &&
+			request.Header.Get("Sec-Fetch-Dest") == "document" && origin == "" &&
+			(site == "cross-site" || site == "same-site")
+		if !navigation {
+			writePhoneError(writer, http.StatusForbidden)
+			return false
+		}
 	}
 	if post {
 		media, parameters, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
@@ -294,7 +302,11 @@ func (handler *PhoneHandler) ServeHTTP(writer http.ResponseWriter, request *http
 	}
 	defer cancel()
 	fields := []string{"id"}
-	finish := routePath == "/api/approve/finish" || routePath == "/api/revoke/finish"
+	if routePath == "/api/verify/begin" {
+		fields = nil
+	}
+	finish := routePath == "/api/approve/finish" || routePath == "/api/revoke/finish" ||
+		routePath == "/api/verify/finish"
 	if finish {
 		fields = append(fields, "credential")
 	}
@@ -304,6 +316,15 @@ func (handler *PhoneHandler) ServeHTTP(writer http.ResponseWriter, request *http
 		return
 	}
 	switch routePath {
+	case "/api/verify/begin":
+		ceremony, beginErr := handler.controller.BeginVerification(ctx)
+		serveCeremony(writer, ceremony, beginErr)
+	case "/api/verify/finish":
+		if handler.controller.FinishVerification(ctx, body.ID, body.Credential) != nil {
+			writePhoneError(writer, http.StatusForbidden)
+			return
+		}
+		writePhoneResponse(writer, phoneResponse{Status: "verified"})
 	case "/api/approve/begin":
 		ceremony, beginErr := handler.controller.BeginApproval(ctx, body.ID)
 		serveCeremony(writer, ceremony, beginErr)

@@ -155,6 +155,12 @@ elif [ "$stage" = ephemeral-verify ]; then
 elif [ "$stage" = click-recovery ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","click_not_dispatched":"true","same_session_preserved":"true","no_photo_click":"true","alternative_control_succeeded":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = image-transfer ]; then
+	if ! printf '%s' "$message" | grep -Fq 'exactly two objectives: one external_action objective and one result objective' ||
+		! printf '%s' "$message" | grep -Fq 'Set kind=external_action and omit acceptance for this item.' ||
+		! printf '%s' "$message" | grep -Fq 'Require actual runtime receipts for every completed externally classified download, upload, and submit action'; then
+		echo "image transfer smoke omitted its external-action objective and receipts" >&2
+		exit 1
+	fi
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","image_observed":"true","download_not_dispatched":"true","same_session_preserved":"true","original_artifact_retained":"true","upload_selected":"true","upload_received":"true","source_page_preserved":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = semantic-observation ]; then
 	if ! printf '%s' "$message" | grep -Fq 'GALLERY_OPEN and MAP_INLINE together' ||

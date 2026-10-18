@@ -27,6 +27,9 @@ func assertEnrollmentInactive(t *testing.T, controller *Controller) {
 	if controller.ready(context.Background()) || !controller.owner.EnrollmentPending || len(controller.grants) != 0 {
 		t.Fatal("unaccepted registration became active authority")
 	}
+	if _, err := controller.BeginVerification(context.Background()); err == nil {
+		t.Fatal("unaccepted owner key could begin verification")
+	}
 	if controller.Check(context.Background(), "", checkedRequest(controller.policy.Revision())) == nil {
 		t.Fatal("unaccepted owner admitted credential use")
 	}

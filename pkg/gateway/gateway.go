@@ -1186,6 +1186,9 @@ func setupAndStartServicesWithHooks(
 	if err = setupBrowserTools(cfg, agentLoop, runningServices); err != nil {
 		return nil, fmt.Errorf("error setting up browser tools: %w", err)
 	}
+	if err = setupCredentialTools(cfg, agentLoop, runningServices); err != nil {
+		return nil, errors.New("credential tool setup unavailable")
+	}
 	if err = checkpoint(gatewayStartupBrowserToolsReady); err != nil {
 		return nil, err
 	}

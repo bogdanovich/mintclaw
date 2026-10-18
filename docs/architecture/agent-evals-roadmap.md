@@ -61,7 +61,11 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    explicit fresh-profile preparation. The merged one-time conversation/PDF seed provisioner and file samples do
    not complete automatic per-trial/browser provisioning or effective loaded prompt/catalog proof.
 2. E3: finish native post-settlement delivery/no-write/privacy/cleanup witnesses and qualify all six PDF cases,
-   including adaptive conversation and deterministic denial/cancel. Preserve earlier failures and unknowns.
+   including adaptive conversation and deterministic denial/cancel. The owned post-stop raw file observation retains
+   private facts until scanning and fails known leaks, but is not whole-runtime or per-trial privacy/idle proof.
+   PDF preparation supplies only a new empty native write journal; owned child temp stays inside its private home.
+   These isolation prerequisites do not grant positive checks or complete the post-settlement work.
+   Preserve earlier failures and unknowns.
 3. E4: integrate native browser admission, fixture execution, approval/artifact/context correlation and owned
    cleanup; qualify all six cases, including adaptive and denied-action evidence. Browser cases still skip today.
 4. Exit: extend the exercised general repeats/regrade/comparison to qualified domain evidence, available all-call

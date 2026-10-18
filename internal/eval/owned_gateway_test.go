@@ -19,16 +19,19 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/bogdanovich/mintclaw/internal/gatewayclient"
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/health"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/pid"
 )
 
 type ownedGatewayControl struct {
 	Mode      string `json:"mode"`
 	ParentPID int    `json:"parent_pid"`
+	LateValue string `json:"late_value,omitempty"`
 }
 
 // The test binary accepts the same literal gateway command as the product.
@@ -54,6 +57,28 @@ func runOwnedGatewayTestChild() int {
 	cfg, err := config.LoadConfigReadOnly(filepath.Join(home, "config.json"))
 	if err != nil {
 		return 8
+	}
+	temporary := filepath.Join(home, ownedGatewayTempDirectory)
+	if os.TempDir() != temporary || os.Getenv("TMPDIR") != temporary || os.Getenv("TMP") != temporary ||
+		os.Getenv("TEMP") != temporary {
+		return 8
+	}
+	file, err := os.CreateTemp("", "owned-temp-proof-")
+	if err != nil {
+		return 8
+	}
+	_, writeErr := file.WriteString("owned-gateway-private-temp-control")
+	if file.Close() != nil || writeErr != nil {
+		return 8
+	}
+	settings, err := gatewayclient.ChannelSettings(cfg)
+	if err != nil {
+		return 8
+	}
+	if cfg.Tools.IsToolEnabled("document") {
+		if _, err = outbox.Open(cfg.WorkspacePath()); err != nil {
+			return 8
+		}
 	}
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
@@ -98,7 +123,7 @@ func runOwnedGatewayTestChild() int {
 				_ = json.NewEncoder(w).Encode(probe)
 				return
 			}
-			if r.URL.Path != "/mintclaw/ws" || r.Header.Get("Authorization") != "Bearer test-channel-token" {
+			if r.URL.Path != "/mintclaw/ws" || r.Header.Get("Authorization") != "Bearer "+settings.Token.String() {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
@@ -150,6 +175,16 @@ func runOwnedGatewayTestChild() int {
 	defer cancel()
 	if server.Shutdown(ctx) != nil {
 		return 8
+	}
+	if control.LateValue != "" {
+		data, err := json.Marshal(map[string]string{"value": control.LateValue})
+		if err != nil {
+			return 8
+		}
+		if os.WriteFile(filepath.Join(os.TempDir(), "late-runtime.json"),
+			data, 0o600) != nil {
+			return 8
+		}
 	}
 	if control.Mode == "bad_exit" {
 		return 9

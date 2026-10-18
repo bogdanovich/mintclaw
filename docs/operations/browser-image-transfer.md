@@ -11,10 +11,12 @@ boundaries, not a site-specific scraper or screenshot substitution.
 2. Call `browser_act` with `action.kind=download` and the image's exact fresh
    `ref`. Copy session, tab, snapshot, and any required context authority from
    the same observation. Do not supply a URL, cookie, selector, or file path.
-3. Require a committed artifact. Keep its opaque `artifact_ref`; do not infer
+3. Require a committed artifact. Keep its opaque `artifact.ref`; do not infer
    success from the action status if `artifact_state=unavailable`.
-4. Observe again, then use `upload` or `file_chooser` with that artifact and
-   the destination's fresh chooser reference.
+4. In the same browser session, observe the destination again, then use
+   `upload` or `file_chooser` with `action.artifact_ref` copied from `artifact.ref`
+   and the destination's fresh chooser reference. The retained file may come
+   from an earlier observation or another tab; destination authority must be fresh.
 5. Complete any separate Save/Submit step under the effective approval policy
    and verify the site's resulting state. File assignment alone does not prove
    that the website received or saved the image.
@@ -80,3 +82,10 @@ and the absence of unintended clicks. Claimed success with different image
 bytes must fail the smoke runner's self-test. Trace evidence must show the
 first-party operations, and cleanup must close the session and immediately
 reopen the profile successfully. No third-party listing is edited or published.
+The image-transfer probe declares its download/upload/submission work as an
+`external_action` objective with runtime receipts, separately from its one
+machine-readable result objective. It does not bypass completion accounting.
+The native protocol can return that one result alongside receipted effects only
+when the entire objective succeeds. Partial, unreceipted, ambiguous, invalid,
+and oversized results do not receive a standalone success projection. Human
+presentation remains separate from these machine-readable records.

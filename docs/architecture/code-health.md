@@ -36,6 +36,23 @@ archives the execution ledgers and records the deployed state.
   behavior belong to one `codingModelSession`; turn and review paths consume
   immutable snapshots from it.
 
+## Start here for changes
+
+| Change area | Existing owner / source entry | Contract and active work |
+| --- | --- | --- |
+| Turn execution and tool outcomes | `pkg/agent`, generation-owned runtime and finalization | [Runtime host](agentloop-runtime.md); [reliability roadmap](reliability-code-health-20261017-roadmap.md) R5/R7 |
+| Inbound persistence and canonical history | `pkg/ingress`, `pkg/session`, Seahorse reconciliation | [Durable ingress](durable-ingress.md); [session system](session-system.md); [reconciliation](seahorse-reconciliation.md) |
+| Outbound delivery and domain settlement | `pkg/outbox`, `pkg/agent/outbound_transaction.go`, `outbound_recovery.go` | [Durable delivery](durable-outbound-delivery.md); [retention decision](outbox-retention-decision-20261017.md) |
+| Tool discovery and transport classification | `pkg/mcp`; tool adapters consume its outcomes | Reliability R2/R5; preserve uncertain-call no-replay behavior |
+| Web UI chat and credential requests | `web/frontend/src/features/chat/controller.ts`, `src/api`, shared model form | Reliability R3/R8/R12; asynchronous request/socket ownership and secret preservation |
+| Behavioral quality evidence | Existing manual eval runner and independent domain witnesses | [Agent evals roadmap](agent-evals-roadmap.md), especially its Next Mandatory Work; harness tests do not qualify live domains |
+| Production lifecycle and data cutovers | Existing deployment procedures and explicit owner inventories | [Operations index](../operations/README.md); keep deployment and rollback evidence separate from merged code |
+
+Use the [architecture index](README.md) to find domain-specific contracts and
+exit records. The October reliability roadmap is the active code-health work
+index; completed programs below retain their original provenance. An active eval
+program or conditional refactor is not a reopened historical completion claim.
+
 ## Bounded compatibility
 
 All three connected companions negotiate node protocol v2. Protocol-v1
