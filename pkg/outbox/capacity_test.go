@@ -365,3 +365,15 @@ func TestCapacityCountsUnreadableIdentityNames(t *testing.T) {
 		t.Fatalf("unreadable identity accounting=%#v", report)
 	}
 }
+
+func TestCapacityPreflightChecksTheCanonicalStore(t *testing.T) {
+	root, alias := offlineRootPreflightFixture(t)
+	_, err := InspectCapacityOffline(t.Context(), alias, CapacityPolicy{MinAge: time.Hour})
+	if err == nil {
+		t.Fatal("capacity accepted an absent canonical store")
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("offline inspection created canonical state: entries=%v error=%v", entries, readErr)
+	}
+}

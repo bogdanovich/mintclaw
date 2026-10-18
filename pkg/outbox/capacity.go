@@ -82,6 +82,10 @@ func InspectCapacityOffline(
 	if err = ctx.Err(); err != nil {
 		return report, err
 	}
+	instanceRoot, err = canonicalInstanceRoot(instanceRoot)
+	if err != nil {
+		return report, err
+	}
 	info, statErr := os.Stat(Path(instanceRoot))
 	if statErr != nil || !info.IsDir() {
 		return report, errors.New("outbox capacity requires an existing store directory")
