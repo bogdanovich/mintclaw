@@ -12,6 +12,10 @@ Unix-socket path limit under deep private temporary roots. The native Linux libr
 private working directory and a relative Chrome temp-path spelling; no external temp alias is added. This startup
 fix does not upgrade the historical report or qualify native browser grading.
 
+The [v2 pilot](manual-agent-evals-browser-read-v2-pilot-20261018.md) verified startup on the fix but stopped at native
+navigation approval with zero page visits. `navigation` is a separate native effect from `read`; the harness did not
+send an unbound approval. Exact fixture-navigation admission and native correlation remain unfinished.
+
 ## Corpus Contracts
 
 ```sh

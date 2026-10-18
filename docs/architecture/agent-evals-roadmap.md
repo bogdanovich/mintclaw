@@ -54,6 +54,11 @@ zero page visits. Model-free long/short temporary-path controls identified a Chr
 The owned gateway/listener stopped and five credential copies were removed; native grading/privacy/cleanup and all
 six browser cases remain unqualified. The temporary-path prerequisite must preserve native isolation and recovery.
 
+The [browser read v2 pilot](../operations/manual-agent-evals-browser-read-v2-pilot-20261018.md) on merged #1748
+then verified repaired startup but stopped at an unbound native navigation approval, again with zero fixture visits.
+Native `navigation` is distinct from the current read/local-edit allow rules. Both attempts remain inconclusive;
+exact fixture-navigation admission/action correlation is next, not broad approval or a promoted page-read pass.
+
 ## Milestones
 
 | Stage | Outcome | Dependency | Status |
