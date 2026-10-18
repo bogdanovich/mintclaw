@@ -98,6 +98,18 @@ type PDFTrialEvidence struct {
 	Census       *PDFCensusEvidence       `json:"census,omitempty"`
 	Cancellation *PDFCancellationEvidence `json:"cancellation,omitempty"`
 	Wire         *PDFWireEvidence         `json:"wire,omitempty"`
+	PostStop     *PDFPostStopEvidence     `json:"post_stop,omitempty"`
+}
+
+// Post-stop evidence is scoped to the admitted owned runtime and native stores,
+// not all privacy surfaces or the independent artifact oracle.
+type PDFPostStopEvidence struct {
+	Version        int                `json:"version"`
+	Code           string             `json:"code"`
+	RuntimeStopped bool               `json:"runtime_stopped"`
+	LogicalSettled bool               `json:"logical_settled"`
+	FixtureRemoved bool               `json:"fixture_removed"`
+	Census         *PDFCensusEvidence `json:"census,omitempty"`
 }
 
 // This observes native-bound messages on one client connection, not future

@@ -8,8 +8,9 @@ isolated profile, using protected facts and owned fixtures. The write-intent pac
 confirmation and exact fixture-scoped approval. Read-only native receipts bind consumed approval to a completed
 form job, delivered write operation, and recovered outbox intent. Authenticated artifact collection retains the exact
 downloaded PDF for independent field/structure/appearance checks. Delivery uniqueness, complete private-surface
-coverage, and owned-resource cleanup remain pending.
-Required PDF checks therefore remain inconclusive; a first question, caption, or oracle control is not qualification.
+coverage, and complete owned-resource cleanup remain pending. Owned post-stop census can establish a scoped no-write
+check and remove a verified settled source fixture. Required missing evidence still prevents a passing trial;
+a first question, caption, or oracle control is not qualification.
 
 The cases cover loan filling, correction/Back, own-request conditional intent, empty required values, cancel/no-write,
 and a bounded large-form section. Four use an adaptive user. The large case requests two Safety findings in an editable
@@ -70,6 +71,39 @@ do not independently establish file type or artifact correctness. A complete bou
 `native_idle_unproven`; it grants no positive no-write, single-delivery, whole-runtime privacy or cleanup check.
 Those require separate native activity/settlement and independent artifact witnesses. This packet is not E3 exit
 or real-model PDF qualification.
+
+## Owned Post-Stop Finalization
+
+Owned PDF trials keep private `pending-trial-<id>.json` checkpoints until the admitted gateway stops and the raw
+profile scan runs. Only then is the immutable canonical `trial-<id>.json` written. A complete `run.json` references
+the final verdicts and coverage, not the earlier checkpoint. Attach mode cannot claim this post-stop observation.
+Report failure retains private partial evidence; it never restarts a target or replays a task.
+
+The runner retains source handles and native baselines within a 128 MiB run-wide budget, refusing the next PDF task
+before sending it if retention cannot fit. Artifact-oracle source byte caches are cleared after use. Finalization
+has a separate 30-second budget and reuses one bounded final native inventory; limits do not become empty counts.
+The original conversation census remains in `pdf.census`; `pdf.post_stop` records the distinct later observation.
+
+Only a verified clean owned-child exit, complete owner-bound census, unchanged source, zero pending operations and
+no unexplained foreign changes can establish `native_post_stop_observed`. For a canceled forbidden-output case,
+the current native interaction and, when present, protected form job must still match the cancellation witness.
+Zero owned writes, media intents and document deliveries, plus a complete client window with no observed media,
+can then pass `pdf_no_write` for a successfully executed cancellation. Exit zero or final prose
+alone cannot. Late forbidden writes and changed sources fail even if the earlier conversation looked safe.
+
+Batch finalization explains only known cohort effects: an unchanged write hash previously bound to that trial's
+native settlement, or a terminal native outbox record whose route and platform IDs match actual observed messages.
+Unknown routes/IDs, pending records, unexplained changes and disappeared records remain non-passing uncertainty.
+Records are still decoded and raw-scanned before this filtering; cohort membership is not a blanket ignore rule.
+
+Source removal additionally requires current logical settlement, a completed raw profile scan, original workspace,
+parent/directory/file identities, pinned source bytes and a directory containing only that source. Unexpected files,
+replacement objects and incomplete scans are retained rather than recursively removed. The receipt reports only
+this owned fixture cleanup, not deletion of native history, protected state, outputs or all temporary resources.
+
+`pdf.post_stop` never grants whole-runtime privacy, positive PDF delivery qualification or PDF judge/regrade eligibility.
+Those witnesses and real-model qualification remain mandatory. These deterministic controls use native stores and
+an owned protocol child stub; they are not evidence of a live model/backend scenario passing.
 
 ## Post-Stop Raw File Observation
 
