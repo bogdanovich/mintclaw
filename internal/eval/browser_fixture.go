@@ -1,21 +1,16 @@
 package eval
 
 import (
-	"context"
 	"encoding/csv"
 	"errors"
 	"html/template"
 	"io"
-	"log"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -73,22 +68,15 @@ type browserFixture struct {
 	nonce  string
 	page   []byte
 	file   []byte
-	server *http.Server
-	done   chan struct{}
 	mu     sync.Mutex
 	state  browserFixtureState
 }
 
-// The caller chooses an unused loopback port, or port zero before provisioning
-// a profile with the resulting exact origin. This never attaches to an existing
-// HTTP service or widens the native browser network policy.
-func newBrowserFixture(sessionID, address string) (*browserFixture, error) {
+// One trial's private handler and witness. Its host owns the listener; sealing
+// this handler must not release the run's configured network destination.
+func makeBrowserFixture(sessionID, origin string) (*browserFixture, error) {
 	id, err := uuid.Parse(sessionID)
-	host, port, addressErr := net.SplitHostPort(address)
-	number, portErr := strconv.Atoi(port)
-	ip := net.ParseIP(host)
-	if err != nil || id.String() != sessionID || addressErr != nil || portErr != nil ||
-		number < 0 || number > 65535 || ip == nil || !ip.IsLoopback() {
+	if err != nil || id.String() != sessionID {
 		return nil, ErrBrowserFixture
 	}
 	nonce, err := uuid.NewRandom()
@@ -100,8 +88,8 @@ func newBrowserFixture(sessionID, address string) (*browserFixture, error) {
 		return nil, ErrBrowserFixture
 	}
 	fixture := &browserFixture{
-		path: "/eval/" + sessionID + "/", nonce: nonce.String(), code: "MC-" + code.String(),
-		done: make(chan struct{}), state: browserFixtureState{submissions: []browserFixtureSubmission{}},
+		origin: origin, path: "/eval/" + sessionID + "/", nonce: nonce.String(), code: "MC-" + code.String(),
+		state: browserFixtureState{submissions: []browserFixtureSubmission{}},
 	}
 	page, err := template.New("fixture").Parse(browserFixtureHTML)
 	if err != nil {
@@ -118,24 +106,6 @@ func newBrowserFixture(sessionID, address string) (*browserFixture, error) {
 		return nil, ErrBrowserFixture
 	}
 	fixture.file = []byte(output.String())
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return nil, ErrBrowserFixture
-	}
-	fixture.origin = "http://" + listener.Addr().String()
-	fixture.server = &http.Server{
-		Handler: fixture, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second,
-		WriteTimeout: 2 * time.Second, IdleTimeout: 2 * time.Second, MaxHeaderBytes: 8192,
-		ErrorLog: log.New(io.Discard, "", 0),
-	}
-	go func() {
-		defer close(fixture.done)
-		if serveErr := fixture.server.Serve(listener); !errors.Is(serveErr, http.ErrServerClosed) {
-			fixture.mu.Lock()
-			fixture.state.failed = true
-			fixture.mu.Unlock()
-		}
-	}()
 	return fixture, nil
 }
 
@@ -263,17 +233,8 @@ func (fixture *browserFixture) snapshot() browserFixtureState {
 	return state
 }
 
-func (fixture *browserFixture) close() error {
+func (fixture *browserFixture) seal() {
 	fixture.mu.Lock()
 	fixture.state.closed = true
 	fixture.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := fixture.server.Shutdown(ctx); err != nil {
-		_ = fixture.server.Close()
-		<-fixture.done
-		return ErrBrowserFixture
-	}
-	<-fixture.done
-	return nil
 }

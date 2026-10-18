@@ -41,10 +41,17 @@ unfinished work or cleanup uncertainty cannot become pass. No approval policy is
 
 ## Owned Local Fixture
 
-Each trial creates a fresh UUID path, unpredictable nonce and reference code, and its own numeric loopback TCP
-listener. Port zero is appropriate before provisioning an isolated profile; a fixed port is admitted only if it
-is unused. The fixture never attaches to an existing HTTP service. DNS names, wildcard and external bindings are
-refused. Admission errors do not include supplied identities, addresses, or private values.
+One fixture host owns a numeric loopback TCP listener for the bounded run, preserving one origin for its immutable
+browser profile. Port zero is appropriate before provisioning an isolated profile; an explicit unprivileged port
+is admitted only if unused. Only canonical `127.0.0.1` and `::1` bindings are admitted. The host never attaches to an
+existing HTTP service. DNS names, wildcard and external bindings are refused. Admission errors do not include
+supplied identities, addresses, or private values.
+
+Each serial trial gets a fresh UUID path, unpredictable nonce/reference and separate in-memory state. The previous
+trial must be sealed before the next is admitted. At most 256 trial identities can be retained; retired identities
+are never reused or evicted to make room. Sealing blocks subsequent reads and mutations, including bodies that
+started arriving earlier, but retains the listener. Retired paths return Gone instead of routing to the next trial.
+No per-trial bind/close/rebind gap can hand the configured port to another local service.
 
 The page has an accessible synthetic form, a CSV download, and two account sections with identically named
 `Remove account` controls. These removals affect only in-memory synthetic fixture state, not a real account. The
@@ -62,9 +69,12 @@ endpoint. These private fields are not JSON-exported and must never be placed di
 The source CSV bytes are immutable and independently parsable; a caption or claimed successful download is not
 an artifact witness.
 
-Witnesses retain at most 256 reads and 64 mutations combined. Overflow is explicit and prevents a complete-
-evidence claim. Successful fixture shutdown marks the fixture closed, stops its own HTTP server and releases its
-listener. Late mutations are refused. Shutdown does not mean native browser resources have been closed.
+Each trial retains at most 256 reads and 64 mutations combined. Overflow is explicit and prevents a complete-
+evidence claim. The oracle's `fixture_closed` means the trial is sealed to further effects, not that the shared
+listener was released or native work stopped. Host shutdown seals every retained trial, joins its HTTP server and
+releases only its owned listener. Unexpected server failure invalidates even previously sealed witnesses. Native
+quiescence must be independently established before the caller releases this host; neither sealing nor local
+shutdown means native browser resources have been closed.
 
 Future E4 integration must bind each observation to native session, owner, execution, profile, prepared action,
 approval and delivery evidence. Fixture state alone cannot prove that a browser (rather than another tool) did
@@ -82,6 +92,12 @@ an observed download plus strictly parsed, exact source bytes from this trial. A
 without a download or a different trial's artifact cannot pass. The projection contains recipe-byte hashes,
 counts and predicate outcomes, not submitted values, nonce, origin, reference or raw artifact.
 
+Positive read and artifact predicates also require a sealed, healthy, non-overflowed witness. Host failure must
+not leave a passing read/artifact verdict or passing artifact digest behind. An independently observed wrong
+reference or wrong CSV remains a failure even when the witness is subsequently unavailable.
+Final run grading must reread retained witnesses after host shutdown and join; an earlier positive projection
+cannot be carried past a later host failure as a final receipt.
+
 These predicates are scoped to `local_fixture_only`. They do not prove authenticated browser origin, native
 intent/approval, clarification ordering, retained context, logical delivery, privacy or browser cleanup. Closing
 the fixture stops accepting writes; it cannot prove that a still-running browser would never have attempted one.
@@ -95,7 +111,9 @@ go test -race -tags goolm,stdjson ./internal/eval -run '^TestBrowserFixture' -co
 
 The controls cover fresh authority, real local HTTP page/CSV/form access, exact server-observed values, scoped
 ambiguous controls, malformed/foreign/oversized input refusal, snapshot isolation, bounded concurrent witnesses,
-idempotent concurrent closure, late-action refusal and owned-port release. They use no model or native browser.
+idempotent concurrent sealing/shutdown, late-action refusal and owned-port release. Host controls also cover serial
+origin retention, retired-route and cross-trial nonce refusal, a delayed POST body crossing a trial transition,
+cohort bounds and unexpected serve failure. They use no model or native browser.
 Oracle controls additionally cover every frozen scenario, wrong/duplicate effects, unknown/failed witnesses,
 missing/wrong reference and malformed/foreign/missing CSV, plus value-free projections and unqualified native checks.
 
@@ -124,8 +142,9 @@ an explicit unprivileged port, no DNS and no HTTPS/CONNECT. It requires a local 
 target, ephemeral restricted profile, deny-default policy, exact-origin non-deny rules, no hook, no privileged
 execute and no fallback. See [the policy contract](../architecture/browser-policy-modes.md#isolated-loopback-fixture-network).
 
-Integration still needs to bind and retain the owned listener before provisioning the profile, correlate native
-authority and establish native quiescence before releasing that listener. A network grant is not listener
+The owned host supports listener retention across serial fixtures, but is not yet connected to `eval run` or
+browser profile preparation. Integration still needs to bind it before provisioning the profile, correlate native
+authority and establish native quiescence before releasing it. A network grant is not listener
 ownership or browser cleanup evidence. Do not silently widen SSRF/network policy, enable privileged execute,
 copy a live browser profile, or treat this fixture's nonce as native approval. `eval run` still skips browser cases.
 
