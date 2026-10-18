@@ -26,25 +26,26 @@ type TrialSummary struct {
 }
 
 type RunReport struct {
-	Version         int                 `json:"version"`
-	ID              string              `json:"id"`
-	PresetID        string              `json:"preset_id"`
-	Runtime         health.RuntimeProbe `json:"runtime"`
-	Verdict         Verdict             `json:"verdict"`
-	StartedAt       time.Time           `json:"started_at"`
-	DurationMS      int64               `json:"duration_ms"`
-	Trials          []TrialSummary      `json:"trials"`
-	Coverage        map[Verdict]int     `json:"coverage"`
-	Usage           string              `json:"usage"`
-	RoleUsage       []RoleUsage         `json:"role_usage,omitempty"`
-	Mode            string              `json:"mode,omitempty"`
-	Repeat          int                 `json:"repeat,omitempty"`
-	SourceRun       string              `json:"source_run,omitempty"`
-	ReportDir       string              `json:"-"`
-	Cleanup         string              `json:"cleanup"`
-	Complete        bool                `json:"complete"`
-	TargetLifecycle *TargetLifecycle    `json:"target_lifecycle,omitempty"`
-	WorkspaceInputs *WorkspaceInputs    `json:"workspace_inputs,omitempty"`
+	Version         int                        `json:"version"`
+	ID              string                     `json:"id"`
+	PresetID        string                     `json:"preset_id"`
+	Runtime         health.RuntimeProbe        `json:"runtime"`
+	Verdict         Verdict                    `json:"verdict"`
+	StartedAt       time.Time                  `json:"started_at"`
+	DurationMS      int64                      `json:"duration_ms"`
+	Trials          []TrialSummary             `json:"trials"`
+	Coverage        map[Verdict]int            `json:"coverage"`
+	Usage           string                     `json:"usage"`
+	RoleUsage       []RoleUsage                `json:"role_usage,omitempty"`
+	Mode            string                     `json:"mode,omitempty"`
+	Repeat          int                        `json:"repeat,omitempty"`
+	SourceRun       string                     `json:"source_run,omitempty"`
+	ReportDir       string                     `json:"-"`
+	Cleanup         string                     `json:"cleanup"`
+	Complete        bool                       `json:"complete"`
+	TargetLifecycle *TargetLifecycle           `json:"target_lifecycle,omitempty"`
+	WorkspaceInputs *WorkspaceInputs           `json:"workspace_inputs,omitempty"`
+	PrivateSurfaces *PrivateSurfaceObservation `json:"private_surfaces,omitempty"`
 }
 
 type privateReport struct {

@@ -422,6 +422,12 @@ make_stage_prompt() {
 	stage_name=$1
 	stage_workflow=$2
 	stage_checks=$3
+	objective_shape='exactly one result objective'
+	external_objective=''
+	if [ "$suite" = image-transfer ]; then
+		objective_shape='exactly two objectives: one external_action objective and one result objective'
+		external_objective='Set the external_action item to exactly: Capture the original image, attach it, and submit one upload to the owned image-transfer fixture. Set kind=external_action and omit acceptance for this item. Require actual runtime receipts for every completed externally classified download, upload, and submit action; do not treat these effects as an unclaimed result-only workflow.'
+	fi
 	cat <<EOF
 Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
 
@@ -435,7 +441,8 @@ Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact tar
 Return one record of browser smoke predicates using string true or false values only, with exactly the required fields supplied by the result objective. On failure, close every opened session and set each predicate from the actual terminal state.
 END_BROWSER_TASK
 
-When calling delegate, set objective_items to exactly one result objective with acceptance output_kind=records, min_items=1, and required_fields exactly: target_ready, capability_observe, capability_navigate, capability_click, ${stage_checks}, session_closed, safe_error_absent. Set the objective item to exactly: Return one record of browser smoke predicates using string true or false values only. Require the child to return exactly one record with exactly those fields and use only the strings true or false for every value. On failure, still close every opened session and set each predicate from the actual terminal state. Do not ask for JSON text and do not add separate workflow or report objectives.
+When calling delegate, set objective_items to ${objective_shape}. ${external_objective}
+For the result objective, use acceptance output_kind=records, min_items=1, and required_fields exactly: target_ready, capability_observe, capability_navigate, capability_click, ${stage_checks}, session_closed, safe_error_absent. Set the result item to exactly: Return one record of browser smoke predicates using string true or false values only. Require the child to return exactly one record with exactly those fields and use only the strings true or false for every value. On failure, still close every opened session and set each predicate from the actual terminal state. Do not ask for JSON text and do not add any other objectives.
 EOF
 }
 

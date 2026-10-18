@@ -43,12 +43,13 @@ type Principal struct {
 // not model-visible secret references. All origins must be exact public HTTPS
 // origins; live DNS and browser/frame authority still require separate checks.
 type AccountRule struct {
-	Alias      string      `json:"alias"`
-	VaultID    string      `json:"vault_id"`
-	ItemID     string      `json:"item_id"`
-	Origins    []string    `json:"origins"`
-	Principals []Principal `json:"principals"`
-	Login      *LoginFlow  `json:"login,omitempty"`
+	Alias      string           `json:"alias"`
+	VaultID    string           `json:"vault_id"`
+	ItemID     string           `json:"item_id"`
+	Origins    []string         `json:"origins"`
+	Principals []Principal      `json:"principals"`
+	Login      *LoginFlow       `json:"login,omitempty"`
+	GitHub     *GitHubReadScope `json:"github_read,omitempty"`
 }
 
 // Request describes one credential use or authenticated browser operation.
@@ -71,6 +72,7 @@ type accountPolicy struct {
 	origins    []string
 	principals map[Principal]struct{}
 	login      *LoginFlow
+	github     *GitHubReadScope
 }
 
 // NewPolicy constructs a defensively copied, default-deny policy. Empty policy
@@ -121,8 +123,20 @@ func NewPolicy(rules []AccountRule) (*Policy, error) {
 			}
 			canonical.Login = &flow
 		}
+		if rule.GitHub != nil {
+			if rule.Login != nil || len(origins) != 1 || origins[0] != GitHubAPIOrigin {
+				return nil, ErrInvalidPolicy
+			}
+			scope, scopeErr := normalizeGitHubReadScope(*rule.GitHub)
+			if scopeErr != nil {
+				return nil, ErrInvalidPolicy
+			}
+			canonical.GitHub = &scope
+		}
 		normalized = append(normalized, canonical)
-		policy.accounts[rule.Alias] = accountPolicy{origins: origins, principals: principals, login: canonical.Login}
+		policy.accounts[rule.Alias] = accountPolicy{
+			origins: origins, principals: principals, login: canonical.Login, github: canonical.GitHub,
+		}
 	}
 	slices.SortFunc(normalized, func(left, right AccountRule) int { return cmp.Compare(left.Alias, right.Alias) })
 	encoded, err := json.Marshal(normalized)

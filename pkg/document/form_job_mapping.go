@@ -456,6 +456,32 @@ func deterministicFormValue(
 	return protectedValueFromNormalized(normalized), FormValueValidationValid, ""
 }
 
+var formBooleanLiterals = [...]struct {
+	text    string
+	checked bool
+}{
+	{"yes", true},
+	{"true", true},
+	{"1", true},
+	{"on", true},
+	{"checked", true},
+	{"no", false},
+	{"false", false},
+	{"0", false},
+	{"off", false},
+	{"unchecked", false},
+}
+
+// FormIntakeBooleanLiterals projects the native text policy into the protected
+// interpreter. It is not permission to generate a token absent from the input.
+func FormIntakeBooleanLiterals() []string {
+	result := make([]string, len(formBooleanLiterals))
+	for index, literal := range formBooleanLiterals {
+		result[index] = literal.text
+	}
+	return result
+}
+
 func deterministicBoolean(value FormProtectedValue) (bool, bool) {
 	if value.Kind == ProtectedValueBoolean && value.Boolean != nil {
 		return *value.Boolean, true
@@ -463,14 +489,13 @@ func deterministicBoolean(value FormProtectedValue) (bool, bool) {
 	if value.Kind != ProtectedValueText {
 		return false, false
 	}
-	switch strings.ToLower(strings.TrimSpace(value.Text)) {
-	case "yes", "true", "1", "on", "checked":
-		return true, true
-	case "no", "false", "0", "off", "unchecked":
-		return false, true
-	default:
-		return false, false
+	text := strings.ToLower(strings.TrimSpace(value.Text))
+	for _, literal := range formBooleanLiterals {
+		if text == literal.text {
+			return literal.checked, true
+		}
 	}
+	return false, false
 }
 
 func deterministicChoices(
