@@ -3,7 +3,7 @@
 ## Decision
 
 PDFI4 is **not complete**. This is a dated evidence checkpoint, not an exit report. The
-[implementation goal](pdf-agentic-intake-pdfi4-goal.md) remains authoritative. As of 2026-10-18 02:56 UTC,
+[implementation goal](pdf-agentic-intake-pdfi4-goal.md) remains authoritative. As of 2026-10-18 04:14 UTC,
 implementation is merged and deployed, five artifact lanes have passed independent checks, and the complete
 official I-134 transaction and actual Telegram qualification remain outstanding. Do not infer a complete milestone
 from a merged implementation, ready review, or successful headless response.
@@ -29,30 +29,42 @@ daemon, alternate planner or form-specific production rules. Major merged packet
 | Closed failure reasons and bounded clarification-window priority | [#1649](https://github.com/bogdanovich/mintclaw/pull/1649), [#1653](https://github.com/bogdanovich/mintclaw/pull/1653) |
 | Value-independent PDF schema and output-only guidance | [#1662](https://github.com/bogdanovich/mintclaw/pull/1662), [#1663](https://github.com/bogdanovich/mintclaw/pull/1663) |
 | Current-proof correction/guidance settlement and verified quoted booleans | [#1667](https://github.com/bogdanovich/mintclaw/pull/1667), [#1674](https://github.com/bogdanovich/mintclaw/pull/1674), [#1677](https://github.com/bogdanovich/mintclaw/pull/1677) |
+| Delayed advisory reconciliation against current native accepted events | [#1709](https://github.com/bogdanovich/mintclaw/pull/1709) |
 
-The final protocol packet #1677 merged as `223b9af0dd0a7a4243e56100df0470212703c452` after all 17 checks
+The quoted-boolean packet #1677 merged as `223b9af0dd0a7a4243e56100df0470212703c452` after all 17 checks
 were green on reviewed head `b3a25ae0fc7ce09d99349caa458e2fc0d5790814`, substantive clean review
 `6244296064`, owner PR-level rocket `576720481`, clean mergeability and no actionable unresolved thread.
 Its final local evidence includes the document/tool/agent intake selections, focused races, formatting, scoped
 production lint and documentation lint. This is not a claim that the entire agent package suite ran on that head.
 
-The actual main gateway used by the latest qualification runs executes merged `223b9af0d`; its process and
-runtime-binary SHA-256 are `6de69d361198439c1145c103ff92f6055fc1cf340b07455a1b6d964d6931e320`.
-A parallel workflow subsequently advanced the checkout and CLI to `aa6b3767a`; those are not proof that the
-running gateway changed. Fresh qualification traces identify their actual source revision. Do not downgrade or
-overwrite another workflow's checkout to make version labels agree.
+The delayed-advice fix #1709 merged as `694d716db119e14044faffbe4cd68fb1567cba25`, after exact head
+`36419e63cb61fadea00b84f1c8c6324cba9ef04a` passed 13 CI checks; Frontend was skipped by the existing path
+filter. Clean substantive review `6245417076`, owner PR-level rocket `576855612`, clean mergeability and no
+actionable thread preceded normal merge. Full local document tests, tools/agent intake selections, complete
+three-package intake races, repository formatting, scoped test-inclusive production lint and docs lint passed.
 
-The coherent stopped-main backup is `/home/server/mintclaw-pdfi4-backup.IYZquw`, with a 4,342,702,080-byte
-profile archive plus binary/config/unit backups. Archive and all six backed-up binary checksums passed.
-The old main process exceeded the normal shutdown deadline during deployment and systemd forcibly stopped it;
-this warning is recorded, not described as a clean shutdown. The new main and all ten expected services were active,
-with no failed units, legacy processes or error-level journal entries at the post-deployment check.
+The current main gateway executes merged `694d716db`; process, CLI and runtime-binary SHA-256 agree:
+`caa371ecbf119d402101b2fcb6f9a9e17a0564f211e05e0d4bd9798e9abb4cee`.
+Before this deployment the checkout/CLI had advanced to `aa6b3767a`, but the actual main still executed `223b9af0d`.
+Both distinct old binaries were preserved. Fresh traces identify actual runtime source; a checkout or CLI version
+alone is not proof of the running version. The workspace and harness revisions were not changed.
 
-Stateless smoke trace `trace-turn-df46bfb593ba806342f0974b` identifies exact source `223b9af0d`, is complete
-and untruncated, and contains one request, one response and no tools. Its response hash matches the exact smoke
-marker. The original retained source/schema and accepted field revisions survived the actual restart.
+The current coherent stopped-main backup is `/home/server/mintclaw-pdfi4-backup.78F76h`, with a
+4,346,920,960-byte profile archive, six binary backups, five configurations and systemd units. Archive and binary
+checksums passed; live configurations remained byte-identical. Independent coding workspaces were excluded from
+the quiescent-main snapshot and left running. The old main exceeded its shutdown deadline and systemd forcibly
+stopped it, as in the previous deployment; this is not described as a clean shutdown. All ten expected services
+were subsequently active, with no failed units, legacy processes or error-level journal entries.
 
-New protected settlement payloads require compatible readers. Prefer forward repair after new writes. Do not
+Native Linux intake tests passed on the staged merged source before switching: document 28.522s, tools 14.238s,
+agent 2.557s. All five configurations loaded with zero error findings; existing policy findings were retained.
+Stateless smoke trace `trace-turn-0b6c72559ff1dae174887ac7` identifies exact source `694d716db`, is complete
+and untruncated, and contains one request, one response and no tools. Its 23-byte response hash matches the exact
+smoke marker. The retained generic role test kept revision 5, ledger 4 and its three text values plus explicit blank
+across this actual restart. Earlier artifact evidence below retains its actual older runtime attribution.
+
+The #1709 reconciliation itself keeps the persisted shape; the #1677 reader reopened the updated private copy.
+Earlier protected settlement payload changes still require compatible readers. Prefer forward repair after new writes. Do not
 perform binary-only rollback to an old strict reader or restore stale profile data over later operator answers.
 A deliberate data restore requires quiescence, a separately preserved current snapshot and an explicit decision.
 
@@ -110,6 +122,38 @@ claim this run exercised telephone correction. That remains part of the actual T
 
 ## Privacy, Recovery And Negative Results
 
+### Same-Name Role Clarification And Delayed Advice
+
+A separate medium-form test deliberately used two different people with the same full name, an initially
+unassigned telephone and mixed explanatory guidance. Initially neither role received that telephone. A later
+clarification assigned it to the emergency contact without repeating the number and explicitly left the borrower
+telephone unanswered. Native readback verified both names, the contact telephone and a valid explicit borrower
+blank. However, two fully accounted inputs still retained ambiguous/confirmation advice on source `223b9af0d`.
+This was a real stale-advice defect, not successful clarification or the separate I-134 capacity failure.
+
+#1709 reconciles only fully accounted advisory findings against a still-current accepted native event whose
+admission snapshot includes the target input. It does not change values, clear native validation failures, discard
+unaccounted text, reset counters or introduce a persisted/model protocol. Its checkpoint records the
+[native gates and private-copy compatibility proof](pdf-agentic-intake-pdfi4-delayed-guidance-checkpoint.md).
+
+After merged deployment, an explicit `/retry_form` used the same job
+`form_job_5de92f1697c0396503e537e7df4b8863` and retained inputs, without resending facts. Exact-source trace
+`trace-turn-96a16eb4d83fefc0176eb52b`, sequence 8, reports zero accepted values, two acknowledgements,
+zero pending inputs and zero retained bytes at revision 5. A later collect action at sequence 18 updated the plan
+to revision 6. An independent owner-authorized native read verified the three original text values and explicit
+blank, with ledger revision still 4. The ordinary reply asked for remaining details, not those names or telephone.
+This proves the deployed fix, not merely the earlier private-copy transition.
+
+A separate `/cancel_form` on that job reached canceled revision 7, ledger 4. The protected record retained only
+public metadata and its integrity digest: wrapped keys, source, values and pending input were erased. No PDF was
+delivered or found in this test's output directories. Before and after cancellation, two distinctive private
+sentinels had zero hits across canonical metadata/history, 34 derived messages, two summaries, 24 tool parts,
+six matching untruncated traces, public/encrypted records and the bounded main journal. The old I-134 job remained
+collecting at revision 47, ledger 45. This same-name negative/recovery case is headless real-agent evidence,
+not a complete-form output or an actual Telegram pass.
+
+### Earlier Artifact Privacy And Remaining Failures
+
 Per-case sentinel scans covered the exact canonical session/history/summary, derived context and tool parts,
 retained matching untruncated traces, public job, encrypted record and bounded main journal. They found zero hits:
 conditional 1 distinctive sentinel; small 2; medium partial 5; large partial 20; medium full 9. The medium-full scan
@@ -134,6 +178,10 @@ Two failures must not be hidden:
    No counter reset, retention extension, live-store rewrite or replacement is claimed. The ordinary model called
    the limit temporary and asked a misleading status/address clarification; that wording is not authoritative
    native state and is not a successful large-form UX result.
+
+The choice between a separately identified fresh current-code I-134 qualification and forward recovery of that
+exhausted original job remains with the operator. The original job has not been reset, canceled, replaced or
+misrepresented as recovered; the delayed-advice fix does not bypass its capacity or unaccounted-input gates.
 
 Earlier evidence-stage failures left accepted data and input intact. Subsequent real requests succeeded, but the
 specific transient cause was not established. Private source/evidence probes do not substitute for actual runtime
