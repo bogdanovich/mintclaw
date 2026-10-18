@@ -39,6 +39,9 @@ func (domain *browserConversation) initialTask() string { return domain.question
 func (domain *browserConversation) request(
 	ctx context.Context, action Action, prompt Event,
 ) (protocol.MintClawMessage, bool, error) {
+	if action.Kind == "cancel" && prompt.Kind == "approval" && domain.item.Browser.Scenario == "denied" {
+		return protocol.MintClawMessage{}, false, domain.prepareCancellation(prompt)
+	}
 	if action.Kind == "allow_once" && prompt.Kind == "approval" && domain.item.Browser.Scenario == "artifact" {
 		request, err := domain.approveDownload(prompt)
 		return request, true, err
@@ -59,4 +62,7 @@ func (domain *browserConversation) observe(ctx context.Context, prompt Event) er
 
 func (domain *browserConversation) conclude(_ context.Context, trial *Trial) {
 	trial.EvidenceEligible = false
+	if domain.item.Browser.Scenario == "denied" {
+		trial.Browser = &BrowserTrialEvidence{Denial: domain.denialEvidence()}
+	}
 }

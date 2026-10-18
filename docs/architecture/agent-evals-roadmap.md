@@ -145,16 +145,19 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    cases and protected/private-value/worker/output behavior still require actual qualification.
    Preserve earlier failures and unknowns.
 3. E4: finish native browser admission, fixture execution, approval/artifact/context correlation and owned
-   cleanup; qualify the other five cases, including adaptive and denied-action evidence. Read/artifact tasks can run on
+   cleanup; qualify the other five cases, including adaptive and denied-action evidence. Read/artifact/denied tasks can run on
    owned profiles. The read post-stop assessment now binds raw native owner/action/policy records and final outbox
    replies, requires native shutdown, complete scoped privacy and empty owned temporary roots, and admits separate
    judging/offline regrade only after those witnesses. One Linux read trial and judge-only regrade now passed on #1754.
    Artifact now has a bounded native prompt/HMAC-bound allow-once, authenticated actual CSV collection, exact
    post-stop approval/transfer/wire join and separate judge/offline-regrade path; its live qualification is still
    pending. Its first live attempt refused a click that did not match the scoped download grant; investigate actual
-   tool exposure/action choice before any new experiment. The other four scenarios remain gated. Submit/followup
-   retain private-input gates; ambiguity/denial retain
-   native-action evidence gates. No local fixture pass qualifies native browser behavior.
+   tool exposure/action choice before any new experiment. Denial now has exact native approval/HMAC-bound cancel,
+   post-stop unconsumed cancellation/unaccepted invocation/outbox evidence and independent no-effect/privacy/cleanup
+   checks before separate judging or offline regrade. It never grants the removal or claims which identically named
+   account button would have been dispatched; live denial qualification remains pending. The other three scenarios
+   remain gated. Submit/followup retain private-input gates; ambiguity retains its native-action evidence gate.
+   No local fixture pass qualifies native browser behavior.
    Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a
    read-only native transfer inspection API rather than constructing/reconciling a store. This receipt does not
    admit a judge, approve an action or validate actual wire/artifact bytes; the full artifact contract requires

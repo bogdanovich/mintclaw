@@ -130,27 +130,23 @@ func (domain *questionConversation) matchesPromptKind(
 }
 
 func (domain *questionConversation) observeCancellation(_ context.Context, prompt, reply Event) error {
+	return domain.observeCancellationKind(prompt, reply, interactions.KindQuestion)
+}
+
+func (domain *questionConversation) observeCancellationKind(prompt, reply Event, kind interactions.Kind) error {
 	if domain.cancelAt.IsZero() || domain.cancellation != nil || prompt.MessageID != domain.prompt.MessageID ||
 		prompt.InteractionID != domain.waiting.ID || prompt.InteractionShortID != domain.waiting.ShortID ||
 		!boundedIdentity(reply.MessageID, 128) ||
 		reply.AgentID != domain.agent || reply.SessionKey != domain.waiting.Route.SessionKey ||
-		reply.Controls != bus.OutboundInteractionControlsRemove || reply.InteractionKind != "question" {
+		reply.Controls != bus.OutboundInteractionControlsRemove || reply.InteractionKind != string(kind) ||
+		domain.waiting.Kind != kind {
 		return errQuestionEvidence
 	}
-	current, err := domain.record(domain.waiting.ID)
+	current, err := domain.cancelledRecord(kind)
 	if err != nil {
 		return err
 	}
 	before := domain.waiting
-	if current.ShortID != before.ShortID || current.CreatedAt != before.CreatedAt ||
-		current.PromptDeliveryID != before.PromptDeliveryID || current.Route != before.Route ||
-		!reflect.DeepEqual(current.Origin, before.Origin) || !reflect.DeepEqual(current.Questions, before.Questions) ||
-		current.Kind != before.Kind || current.ProtectedAnswer != nil || current.Answer != nil ||
-		current.Status != interactions.StatusCancelled || current.Outcome != "" ||
-		current.FailureCode != "session_control_stop" || current.Revision <= before.Revision ||
-		current.ResolvedAt < domain.cancelAt.UnixMilli() || current.ResolvedAt > time.Now().UnixMilli() {
-		return errQuestionEvidence
-	}
 	domain.cancellation = &QuestionCancellationEvidence{
 		Version: Version, InteractionID: current.ID, ShortID: current.ShortID,
 		PromptMessageID: prompt.MessageID, PromptRequestID: prompt.RequestID,
@@ -161,6 +157,25 @@ func (domain *questionConversation) observeCancellation(_ context.Context, promp
 		TerminalRevision: current.Revision, ResolvedAt: current.ResolvedAt,
 	}
 	return nil
+}
+
+func (domain *questionConversation) cancelledRecord(kind interactions.Kind) (interactions.Record, error) {
+	current, err := domain.record(domain.waiting.ID)
+	if err != nil {
+		return interactions.Record{}, err
+	}
+	before := domain.waiting
+	if current.ShortID != before.ShortID || current.CreatedAt != before.CreatedAt ||
+		current.PromptDeliveryID != before.PromptDeliveryID || current.Route != before.Route ||
+		!reflect.DeepEqual(current.Origin, before.Origin) || !reflect.DeepEqual(current.Questions, before.Questions) ||
+		current.Kind != kind || before.Kind != kind || current.ProtectedAnswer != nil || current.Answer != nil ||
+		current.ApprovalAction != before.ApprovalAction || current.ApprovalConsumedAt != 0 ||
+		current.Status != interactions.StatusCancelled || current.Outcome != "" ||
+		current.FailureCode != "session_control_stop" || current.Revision <= before.Revision ||
+		current.ResolvedAt < domain.cancelAt.UnixMilli() || current.ResolvedAt > time.Now().UnixMilli() {
+		return interactions.Record{}, errQuestionEvidence
+	}
+	return current, nil
 }
 
 func (domain *questionConversation) conclude(_ context.Context, trial *Trial) {

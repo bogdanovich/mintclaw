@@ -89,7 +89,7 @@ func finalizeBrowserArtifact(
 		}
 		return nil
 	}
-	artifact.Native = inspectBrowserTask(*trial, target, pending.fixture, observed, temporaryEmpty, download)
+	artifact.Native = inspectBrowserTask(*trial, target, pending.fixture, observed, temporaryEmpty, download, nil)
 	if artifact.Native.Code != "native_post_stop_observed" || trial.Browser.Fixture == nil ||
 		trial.Browser.Fixture.Effects != Pass || trial.Browser.Fixture.Artifact != Pass {
 		return nil

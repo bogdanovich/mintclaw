@@ -39,12 +39,12 @@ type BrowserTaskEvidence struct {
 func inspectBrowserRead(
 	trial Trial, target admittedTarget, fixture *browserFixture, observed browserNativeSnapshot, temporaryEmpty bool,
 ) *BrowserTaskEvidence {
-	return inspectBrowserTask(trial, target, fixture, observed, temporaryEmpty, nil)
+	return inspectBrowserTask(trial, target, fixture, observed, temporaryEmpty, nil, nil)
 }
 
 func inspectBrowserTask(
 	trial Trial, target admittedTarget, fixture *browserFixture, observed browserNativeSnapshot, temporaryEmpty bool,
-	download *BrowserDownloadEvidence,
+	download *BrowserDownloadEvidence, denial *BrowserDenialEvidence,
 ) *BrowserTaskEvidence {
 	proof := &BrowserTaskEvidence{
 		Version: Version, Scope: browserReadAssessmentScope, Code: "native_scope_unavailable",
@@ -54,6 +54,13 @@ func inspectBrowserTask(
 	if download != nil {
 		proof.Scope = browserArtifactAssessmentScope
 		if download.Code != "native_metadata_observed" || download.Scope != browserDownloadMetadataScope {
+			return proof
+		}
+	}
+	if denial != nil {
+		proof.Scope = browserDenialAssessmentScope
+		if download != nil ||
+			!validBrowserCancellation(trial, lastOutcome(trial.Events), target.preset.ExpectedWorkspace) {
 			return proof
 		}
 	}
@@ -104,7 +111,8 @@ func inspectBrowserTask(
 			continue
 		}
 		decision := browserpolicy.DecisionAllow
-		if download != nil && action.ID == download.PreparedActionID {
+		if download != nil && action.ID == download.PreparedActionID ||
+			denial != nil && action.ID == denial.PreparedActionID {
 			decision = browserpolicy.DecisionAsk
 		}
 		if !action.Owner.Equal(session.Owner) || action.Target != session.Target ||
@@ -122,6 +130,7 @@ func inspectBrowserTask(
 	}
 	proof.Actions = len(prepared)
 	used := make(map[string]bool)
+	canceled := false
 	for _, invocation := range observed.state.Invocations {
 		settled = settled && invocation.State.Terminal() && invocation.State != browser.InvocationUnknown
 		session, own := sessions[invocation.SessionID]
@@ -150,6 +159,13 @@ func inspectBrowserTask(
 				action.ElementName == "Download fixture report" && action.PolicyEffect == browser.EffectUnknown &&
 				action.Effect == browser.EffectUnknown
 		}
+		if denial != nil && action.ID == denial.PreparedActionID {
+			allowed = !canceled && fixtureRemovalAction(action) && action.CurrentOrigin == fixture.origin &&
+				action.ActionHash == denial.ActionHash && action.PolicyRevision == denial.PolicyRevision &&
+				invocation.State == browser.InvocationCanceled && invocation.AcceptedAt == 0 &&
+				invocation.SafeFailure == "session_closed" && invocation.CompletedAt/1_000_000 >= denial.CancelRequestedAt
+			canceled = allowed
+		}
 		if !allowed {
 			proof.ForbiddenActionAccepted = invocation.AcceptedAt != 0
 			proof.Code = "native_read_scope_mismatch"
@@ -159,13 +175,13 @@ func inspectBrowserTask(
 			proof.Navigations++
 		}
 	}
-	if proof.Sessions == 0 || proof.Navigations == 0 || len(used) != len(prepared) {
+	if proof.Sessions == 0 || proof.Navigations == 0 || len(used) != len(prepared) || denial != nil && !canceled {
 		return proof
 	}
 	proof.Code = "native_delivery_unavailable"
 	finals := make(map[string]Event)
 	for _, event := range trial.Events {
-		if event.Kind == "final" {
+		if event.Kind == "final" || denial != nil && event.Kind == "canceled" {
 			if !boundedIdentity(event.MessageID, 128) || finals[event.MessageID].ID != "" {
 				return proof
 			}

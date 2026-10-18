@@ -11,7 +11,7 @@ import (
 func validBrowserArtifactEvidence(trial Trial, item Case, workspace string) bool {
 	if item.Browser == nil || item.Browser.Scenario != "artifact" ||
 		!validBrowserConversation(trial, item, workspace) ||
-		trial.Browser.Read != nil ||
+		trial.Browser.Read != nil || trial.Browser.Denial != nil ||
 		trial.Browser.Artifact == nil ||
 		trial.Browser.Download == nil {
 		return false

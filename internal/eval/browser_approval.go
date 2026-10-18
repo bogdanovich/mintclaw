@@ -47,7 +47,9 @@ type browserApprovalObservation struct {
 }
 
 func (domain *browserConversation) observeApproval(ctx context.Context, prompt Event) error {
-	if domain.item.Browser == nil || domain.item.Browser.Scenario != "artifact" || prompt.Kind != "approval" ||
+	if domain.item.Browser == nil ||
+		domain.item.Browser.Scenario != "artifact" &&
+			domain.item.Browser.Scenario != "denied" || prompt.Kind != "approval" ||
 		domain.approval != nil {
 		return errBrowserEvidence
 	}
@@ -127,12 +129,10 @@ func (domain *browserConversation) readApproval(prompt Event) (*browserApprovalO
 			session.ProfileRevision != profile.Revision || session.PolicyRevision != policy ||
 			session.CreatedAt < domain.questions.started.UnixNano() || session.SnapshotID != action.SnapshotID ||
 			session.SnapshotGeneration != action.SnapshotGeneration || session.TabID != action.TabID ||
-			action.Action.Kind != browser.ActionDownload || !action.Action.Deliver || action.DryRun ||
+			!domain.matchesApprovalAction(action) || action.DryRun ||
 			action.Target != session.Target || action.Profile != session.Profile ||
 			action.ProfileRevision != session.ProfileRevision || action.PolicyRevision != policy ||
-			action.CurrentOrigin != domain.fixture.origin || action.ElementRole != "link" ||
-			action.ElementName != "Download fixture report" || action.Effect != browser.EffectUnknown ||
-			action.PolicyEffect != browser.EffectUnknown || action.CapabilityMode != browserpolicy.CapabilityRestricted ||
+			action.CurrentOrigin != domain.fixture.origin || action.CapabilityMode != browserpolicy.CapabilityRestricted ||
 			action.ApprovalMode != browserpolicy.ApprovalPolicy || action.RestrictedPolicyRevision != restricted ||
 			action.RestrictedDecision != browserpolicy.DecisionAsk || action.LocalRestrictedDecision != browserpolicy.DecisionAsk ||
 			action.WorkerRestrictedDecision != "" || action.CreatedAt/1_000_000 > record.CreatedAt ||
@@ -179,6 +179,9 @@ func (domain *browserConversation) readApproval(prompt Event) (*browserApprovalO
 }
 
 func (domain *browserConversation) approveDownload(prompt Event) (protocol.MintClawMessage, error) {
+	if domain.item.Browser == nil || domain.item.Browser.Scenario != "artifact" {
+		return protocol.MintClawMessage{}, errBrowserEvidence
+	}
 	previous := domain.approval
 	if previous == nil || previous.requestID != "" || prompt.MessageID != previous.prompt.MessageID ||
 		prompt.InteractionID != previous.record.ID {

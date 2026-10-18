@@ -234,12 +234,12 @@ func TestOwnedBrowserRunKeepsPrivateAndActionCasesVisiblyGated(t *testing.T) {
 	enableAdmissionBrowser(t, fixture)
 	cases := []LoadedCase{
 		browserCorpusCase(t, "submit"), browserCorpusCase(t, "followup"),
-		browserCorpusCase(t, "ambiguous"), browserCorpusCase(t, "denied"),
+		browserCorpusCase(t, "ambiguous"),
 	}
 	result, err := Run(t.Context(), fixture.preset, cases, RunOptions{
 		Home: fixture.home, OutputParent: fixture.output, StartTarget: true,
 	})
-	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 4 || result.Coverage[Skipped] != 4 ||
+	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 3 || result.Coverage[Skipped] != 3 ||
 		result.BrowserFixtures == nil || result.BrowserFixtures.Trials != 0 {
 		t.Fatal("gated mandatory browser coverage was omitted or attempted", err)
 	}
@@ -251,6 +251,19 @@ func TestOwnedBrowserRunKeepsPrivateAndActionCasesVisiblyGated(t *testing.T) {
 		if trial.Code != code {
 			t.Fatal("missing native prerequisite was not recorded precisely")
 		}
+	}
+}
+
+func TestOwnedBrowserDenialAttemptsTheScenarioWithoutInventingApprovalEvidence(t *testing.T) {
+	fixture := newOwnedGatewayFixture(t, "browser_read")
+	enableAdmissionBrowser(t, fixture)
+	result, err := Run(t.Context(), fixture.preset, []LoadedCase{browserCorpusCase(t, "denied")}, RunOptions{
+		Home: fixture.home, OutputParent: fixture.output, StartTarget: true,
+	})
+	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 1 ||
+		result.Trials[0].Verdict == Pass || result.Trials[0].Verdict == Skipped ||
+		result.BrowserFixtures == nil || result.BrowserFixtures.Trials != 1 {
+		t.Fatal("denial was skipped or a final-only stub qualified native cancellation", err, result.Trials)
 	}
 }
 

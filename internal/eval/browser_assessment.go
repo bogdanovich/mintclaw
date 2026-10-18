@@ -9,7 +9,7 @@ import (
 
 func validBrowserReadEvidence(trial Trial, item Case, workspace string) bool {
 	if item.Browser == nil || item.Browser.Scenario != "read" || !validBrowserConversation(trial, item, workspace) ||
-		trial.Browser.Artifact != nil || trial.Browser.Download != nil {
+		trial.Browser.Artifact != nil || trial.Browser.Download != nil || trial.Browser.Denial != nil {
 		return false
 	}
 	fixture := trial.Browser.Fixture
@@ -28,10 +28,11 @@ func validBrowserConversation(trial Trial, item Case, workspace string) bool {
 		trial.Browser.NativeAuthority != "observed" || trial.Browser.NativeCleanup != "observed" ||
 		!validID(trial.ID) || !validID(trial.SessionID) || !boundedIdentity(trial.SessionKey, 512) ||
 		trial.ExecutionVerdict != Pass || !trial.TransportClosed || !observedRoleBoundaries(trial) ||
-		!validTrialConversation(trial, trial.AgentID, workspace) || lastOutcome(trial.Events).Kind != "final" {
+		!validTrialConversation(trial, trial.AgentID, workspace) {
 		return false
 	}
-	return true
+	return lastOutcome(trial.Events).Kind == "final" && item.Browser.Scenario != "denied" ||
+		lastOutcome(trial.Events).Kind == "canceled" && item.Browser.Scenario == "denied"
 }
 
 func validBrowserTaskProof(trial Trial, proof *BrowserTaskEvidence, scope string) bool {
@@ -47,7 +48,7 @@ func validBrowserTaskProof(trial Trial, proof *BrowserTaskEvidence, scope string
 	}
 	finals := 0
 	for _, event := range trial.Events {
-		if event.Kind == "final" {
+		if event.Kind == "final" || scope == browserDenialAssessmentScope && event.Kind == "canceled" {
 			finals++
 		}
 	}
@@ -62,11 +63,15 @@ func observedBrowserHost(evidence *BrowserTrialEvidence, host *BrowserFixtureHos
 	if evidence.Artifact != nil {
 		proof = evidence.Artifact.Native
 	}
+	if evidence.Denial != nil {
+		proof = evidence.Denial.Native
+	}
 	return proof != nil && host.OriginSHA256 == proof.OriginSHA256
 }
 
 func validBrowserEvidence(trial Trial, item Case, workspace string) bool {
-	return validBrowserReadEvidence(trial, item, workspace) || validBrowserArtifactEvidence(trial, item, workspace)
+	return validBrowserReadEvidence(trial, item, workspace) || validBrowserArtifactEvidence(trial, item, workspace) ||
+		validBrowserDenialEvidence(trial, item, workspace)
 }
 
 func gradeFinalizedBrowserChecks(item Case, trial Trial) []CheckResult {
@@ -74,6 +79,9 @@ func gradeFinalizedBrowserChecks(item Case, trial Trial) []CheckResult {
 	source := "browser.read"
 	if item.Browser != nil && item.Browser.Scenario == "artifact" {
 		source = "browser.artifact"
+	}
+	if item.Browser != nil && item.Browser.Scenario == "denied" {
+		source = "browser.denial"
 	}
 	for index, check := range item.Checks {
 		switch check.Kind {
