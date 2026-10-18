@@ -1,9 +1,10 @@
 # Manual Browser Evals: Fixture Witness
 
-This guide describes offline-tested fixture/corpus prerequisites for E4, not a qualified browser suite. Six
-browser case definitions are visible in `eval list` and `validate`; the fixture is not yet integrated with live
-`eval run`. Browser cases explicitly produce non-passing `skipped: browser_evidence_unavailable` coverage without
-sending target tasks. No native browser, model, companion, or denied-action scenario is exercised by these controls.
+This guide describes a partial E4 execution path, not a qualified browser suite. Six case definitions are visible in
+`eval list` and `validate`. With an admitted owned profile, `eval run --start-target` now sends read/artifact tasks
+through the normal gateway and retains independent fixture witnesses after shutdown. Native authority, artifact
+delivery, privacy and browser cleanup remain unqualified; these trials cannot pass or reach the judge. Private-input
+and action-bound cases remain visible skips. The offline controls use no model or native browser.
 
 ## Corpus Contracts
 
@@ -40,6 +41,45 @@ silently reopening a browser does not qualify native context retention. A missin
 unfinished work or cleanup uncertainty cannot become pass. No approval policy is widened by these manifests.
 
 ## Owned Local Fixture
+
+### Owned Profile Execution
+
+Use [the browser seed template](../../evals/profiles/browser.template.json) with reviewed absolute driver/browser
+paths, an isolated private home/workspace, admitted HTTP model credentials and a separate MintClaw channel token.
+Credential references use the existing [profile procedure](manual-agent-evals.md); no keys belong in the template.
+Add `browser` to the preset's capabilities. A production profile is not a valid seed.
+
+`eval prepare` provisions new empty `.eval-browser/ephemeral` and `.eval-browser/locks` directories, rebases their
+paths and all rules naming the seed fixture origin, and records `browser_prepared`. It never copies old browser
+state or starts a browser. The selected port is not reserved after preparation; a later collision refuses run
+admission instead of attaching to that service.
+
+```sh
+MINTCLAW_HOME=/private/eval-seed MINTCLAW_CONFIG=/private/eval-seed/config.json \
+  mintclaw eval prepare --preset /private/eval-seed/preset.json --out /private/eval-profiles
+MINTCLAW_HOME=/private/eval-profiles/GENERATED_HOME \
+  MINTCLAW_CONFIG=/private/eval-profiles/GENERATED_HOME/config.json \
+  mintclaw eval run --root ./evals --suite browser --start-target \
+  --preset /private/eval-profiles/GENERATED_HOME/reports/preset.json \
+  --out /private/eval-profiles/GENERATED_HOME/reports
+```
+
+The owned runner binds the exact fixture origin before launching its gateway child and retains the listener
+through native child stop/reap. Browser attachment to an unrelated running gateway is refused. One local headless
+ephemeral library profile is admitted for the native sender and routed agent; broad/cloud/companion/attached
+profiles, hooks, privileged execution and approval bypasses remain excluded. Allow rules must explicitly match
+only read/local-edit effects on the fixture origin; commits and unknown effects cannot be silently allowed.
+
+The first execution stage attempts `read` and `artifact`. Missing native approval evidence interrupts an approval
+prompt without sending `allow_once`. Submit/followup report `browser_private_input_unavailable`; ambiguity/denial
+report `browser_action_evidence_unavailable`. No private canary is substituted into ordinary chat. All six cases
+remain mandatory first-release work. The expected run exit is nonzero while these qualifications are missing.
+
+`browser_fixtures` describes only the owned HTTP host. Trial `browser.fixture` describes only independent local
+state; matching state or a download cannot establish browser provenance or delivered artifact bytes. Finalization
+retains unknown native hard checks and judge/regrade ineligibility, preserves observed fixture mismatches as
+failures, and checks the raw private profile before canonical reports. Fixture failure interrupts the suite and
+stops only its owned gateway process; it does not authorize replay or imply that a disconnected task was canceled.
 
 One fixture host owns a numeric loopback TCP listener for the bounded run, preserving one origin for its immutable
 browser profile. Port zero is appropriate before provisioning an isolated profile; an explicit unprivileged port
@@ -101,7 +141,7 @@ cannot be carried past a later host failure as a final receipt.
 These predicates are scoped to `local_fixture_only`. They do not prove authenticated browser origin, native
 intent/approval, clarification ordering, retained context, logical delivery, privacy or browser cleanup. Closing
 the fixture stops accepting writes; it cannot prove that a still-running browser would never have attempted one.
-Native hard checks remain inconclusive and `eval run` continues to skip browser cases until integration exists.
+Native hard checks remain inconclusive; read/artifact execution is not native browser grading.
 
 ## Offline Controls
 
@@ -142,11 +182,11 @@ an explicit unprivileged port, no DNS and no HTTPS/CONNECT. It requires a local 
 target, ephemeral restricted profile, deny-default policy, exact-origin non-deny rules, no hook, no privileged
 execute and no fallback. See [the policy contract](../architecture/browser-policy-modes.md#isolated-loopback-fixture-network).
 
-The owned host supports listener retention across serial fixtures, but is not yet connected to `eval run` or
-browser profile preparation. Integration still needs to bind it before provisioning the profile, correlate native
-authority and establish native quiescence before releasing it. A network grant is not listener
+The owned runner now connects the host to isolated profile preparation and gateway lifetime. Qualification still
+needs native action/session/approval/context and delivery correlation, protected browser answers and proven browser
+quiescence. A network grant is not listener
 ownership or browser cleanup evidence. Do not silently widen SSRF/network policy, enable privileged execute,
-copy a live browser profile, or treat this fixture's nonce as native approval. `eval run` still skips browser cases.
+copy a live browser profile, or treat this fixture's nonce as native approval. The four remaining cases stay gated.
 
 Real qualification must record the actual platform, browser driver and gateway/companion placement, plus retained
 independent state/artifact checks and cleanup results. These offline controls make none of those runtime claims.

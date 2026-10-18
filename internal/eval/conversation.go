@@ -188,8 +188,12 @@ func runDomainConversation(
 		}
 		trial.Verdict = combined
 	}
-	if _, err := visibleConversation(trial.Events, item.Case.Driver.Facts); verdict == Pass && err == nil &&
-		len(item.Case.Driver.Facts) == 0 && len(item.Case.Fixtures) == 0 {
+	if _, err := visibleConversation(
+		trial.Events,
+		item.Case.Driver.Facts,
+	); item.Case.Browser == nil && verdict == Pass && err == nil &&
+		len(item.Case.Driver.Facts) == 0 &&
+		len(item.Case.Fixtures) == 0 {
 		trial.EvidenceEligible = true
 	}
 	if len(item.Case.Rubric) > 0 {

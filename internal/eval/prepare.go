@@ -37,6 +37,7 @@ type Preparation struct {
 	WorkspaceFileCount int    `json:"workspace_file_count"`
 	RuntimeRun         bool   `json:"runtime_run"`
 	PDFJournalPrepared bool   `json:"pdf_journal_prepared,omitempty"`
+	BrowserPrepared    bool   `json:"browser_prepared,omitempty"`
 }
 
 // PrepareProfile copies only an admitted isolated seed, never production state.
@@ -136,6 +137,10 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 	clone.Agents.Defaults.Workspace = result.Workspace
 	clone.Agents.List[0].Workspace = result.Workspace
 	clone.Gateway.Host, clone.Gateway.Port = "127.0.0.1", port
+	if prepareBrowserRuntime(root, clone, newHome) != nil {
+		return result, ErrPreparation
+	}
+	result.BrowserPrepared = clone.Tools.Browser.Enabled
 	for modelIndex, model := range clone.ModelList {
 		model.Workspace = ""
 		values := model.APIKeys.Values()

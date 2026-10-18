@@ -57,16 +57,21 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	suiteCtx, cancel := context.WithTimeout(ctx, options.SuiteTimeout)
 	defer cancel()
 	var child *ownedGateway
+	var fixtures *browserFixtureHost
 	var target admittedTarget
 	var err error
 	if options.StartTarget {
-		child, target, err = startOwnedGateway(suiteCtx, preset, options.Home)
+		fixtures, err = bindOwnedBrowserFixture(preset, options.Home)
+		if err == nil {
+			child, target, err = startOwnedGatewayWithBrowser(suiteCtx, preset, options.Home, fixtures)
+		}
 	} else {
 		target, err = admitPreparedTarget(suiteCtx, preset, options.Home)
 	}
 	var lifecycle *TargetLifecycle
 	var retainedFacts privateFactRetention
 	var pendingPDF pdfRunFinalization
+	pendingBrowser := browserRun{host: fixtures}
 	var privateSurfaces *PrivateSurfaceObservation
 	stopTarget := func() {
 		if child == nil || lifecycle != nil {
@@ -79,6 +84,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	defer func() {
 		stopTarget()
+		pendingBrowser.close(lifecycle)
 		// Even report I/O failures must not discard the only private fact set
 		// before attempting the post-stop raw observation.
 		if options.StartTarget && retainedFacts.values != nil && privateSurfaces == nil {
@@ -93,6 +99,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	if err != nil {
 		return RunReport{}, err
 	}
+	joinFixtureWatch := watchBrowserFixture(suiteCtx, target.config, fixtures, child, cancel)
+	defer joinFixtureWatch()
 	filter := target.config.SensitiveDataReplacer()
 	if credentialJSONValue(preset, filter) || credentialJSONValue(target.probe, filter) {
 		return RunReport{}, ErrUnsafeTarget
@@ -137,8 +145,12 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		item := cases[ordinal/options.Repeat]
 		trial := newUnattemptedTrial(item, preset.ExpectedAgent)
 		switch {
-		case item.Case.Browser != nil:
+		case item.Case.Browser != nil && fixtures == nil:
 			trial.Verdict, trial.Code = Skipped, "browser_evidence_unavailable"
+		case item.Case.Browser != nil && len(item.Case.Driver.Facts) != 0:
+			trial.Verdict, trial.Code = Skipped, "browser_private_input_unavailable"
+		case item.Case.Browser != nil && item.Case.Browser.Scenario != "read" && item.Case.Browser.Scenario != "artifact":
+			trial.Verdict, trial.Code = Skipped, "browser_action_evidence_unavailable"
 		case !containsAll(preset.Capabilities, item.Case.Requires):
 			trial.Verdict, trial.Code = Skipped, "capability_unavailable"
 		case item.Case.Driver.Mode == "llm_user" && roles.user == nil:
@@ -149,7 +161,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			trial.Verdict, trial.Code = Inconclusive, "suite_interrupted"
 		default:
 			trial = runAdmittedTrial(suiteCtx, target, item, trial.SessionID, roles, options, writer,
-				&retainedFacts, &pendingPDF)
+				&retainedFacts, &pendingPDF, &pendingBrowser)
 		}
 		trial.Repetition = ordinal%options.Repeat + 1
 		pendingPDF.observeTrial(trial)
@@ -170,6 +182,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		if _, pending := pendingPDF.trials[trial.ID]; pending {
 			checkpoint = "pending-trial-" + trial.ID + ".json"
 		}
+		if _, pending := pendingBrowser.trials[trial.ID]; pending {
+			checkpoint = "pending-trial-" + trial.ID + ".json"
+		}
 		if writer.write(checkpoint, trial) != nil {
 			result.Trials[len(result.Trials)-1].File = ""
 			result.Verdict = combineVerdicts(result.Verdict, Error)
@@ -179,6 +194,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	result.WorkspaceInputs.After = observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter)
 	stopTarget()
+	result.BrowserFixtures = pendingBrowser.close(lifecycle)
 	if options.StartTarget && retainedFacts.values != nil {
 		scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		observation := observePrivateSurfaces(scanCtx, home, retainedFacts.values, filter, retainedFacts.documents)
@@ -217,6 +233,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			}
 		})
 	finalCancel()
+	if pendingBrowser.finish(writer, &result, retainedFacts.values, filter) != nil {
+		err = ErrReport
+	}
 	result.RoleUsage = []RoleUsage{summarizeRoleCalls("user", roleCalls), summarizeRoleCalls("judge", roleCalls)}
 	if err != nil {
 		result.Verdict = combineVerdicts(result.Verdict, Error)
@@ -224,7 +243,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		return result, ErrReport
 	}
 	result.Coverage = map[Verdict]int{}
-	result.Verdict = combineVerdicts(result.TargetLifecycle.verdict(), result.PrivateSurfaces.verdict())
+	result.Verdict = combineVerdicts(result.TargetLifecycle.verdict(), result.PrivateSurfaces.verdict(),
+		result.BrowserFixtures.verdict())
 	for _, summary := range result.Trials {
 		result.Coverage[summary.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, summary.Verdict)
@@ -273,6 +293,7 @@ func runAdmittedTrial(
 	runOptions RunOptions, report *privateReport,
 	retainedFacts *privateFactRetention,
 	pendingPDF *pdfRunFinalization,
+	pendingBrowser *browserRun,
 ) (trial Trial) {
 	trial = newUnattemptedTrial(item, target.preset.ExpectedAgent)
 	trial.SessionID = sessionID
@@ -296,6 +317,21 @@ func runAdmittedTrial(
 		// adds new facts. Late frames must also respect earlier trial canaries.
 		return inspectNativeJSON(data, retainedFacts.values, roles.filter)
 	}}
+	var browser *browserConversation
+	if item.Case.Browser != nil {
+		name, _ := browserEvalProfile(target.config)
+		if pendingBrowser.host == nil || name != item.Case.Browser.Profile ||
+			!browserFixtureMatches(target.config, pendingBrowser.host) || !retainedFacts.add(nil) {
+			trial.Verdict, trial.Code = Inconclusive, "browser_preparation_unavailable"
+			return trial
+		}
+		fixture, fixtureErr := pendingBrowser.host.newTrial(sessionID)
+		if fixtureErr != nil {
+			trial.Verdict, trial.Code = Inconclusive, "browser_fixture_unavailable"
+			return trial
+		}
+		browser = newBrowserConversation(item.Case, fixture, target, sessionID)
+	}
 	if item.Case.PDF != nil {
 		prepared, prepareErr := preparePDFTrial(item, target.preset.IsolationRoot,
 			target.preset.ExpectedWorkspace, sessionID, target.preset.ExpectedAgent)
@@ -333,11 +369,20 @@ func runAdmittedTrial(
 	}
 	client, err := gatewayclient.Connect(caseCtx, target.config, sessionID, options)
 	if err != nil {
+		if browser != nil {
+			browser.fixture.seal()
+		}
 		if domain != nil {
 			_ = domain.prepared.release(true)
 		}
 		trial.Verdict, trial.Code = Inconclusive, "gateway_unavailable"
 		trial.DurationMS = time.Since(trial.StartedAt).Milliseconds()
+		return trial
+	}
+	if browser != nil {
+		trial = runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, browser)
+		pendingBrowser.retain(item.Case, trial, browser.fixture)
 		return trial
 	}
 	if domain != nil {

@@ -118,6 +118,10 @@ func runOwnedGatewayTestChild() int {
 	var mediaSent atomic.Bool
 	var sessionMu sync.Mutex
 	firstSession := ""
+	browserURLs := make(map[string]string)
+	browserLastURL := ""
+	browserMessages := 0
+	browserChoices := []string{}
 	upgrader := websocket.Upgrader{}
 	server := &http.Server{
 		ReadHeaderTimeout: time.Second,
@@ -191,6 +195,22 @@ func runOwnedGatewayTestChild() int {
 				response.Payload[protocol.PayloadKeyTraceScopes] = []events.TraceScope{{
 					Workspace: cfg.WorkspacePath(), TurnID: request.ID,
 				}}
+				if strings.HasPrefix(control.Mode, "browser_") {
+					sessionMu.Lock()
+					previous := browserURLs[request.SessionID]
+					sessionMu.Unlock()
+					current, ok := ownedBrowserChildResponse(control.Mode, cfg, previous, request, &response)
+					if !ok {
+						return
+					}
+					sessionMu.Lock()
+					browserURLs[request.SessionID], browserLastURL = current, current
+					browserMessages++
+					if choice := payloadString(request.Payload, protocol.PayloadKeyInteractionChoice); choice != "" {
+						browserChoices = append(browserChoices, choice)
+					}
+					sessionMu.Unlock()
+				}
 				if connection.WriteJSON(response) != nil {
 					return
 				}
@@ -215,6 +235,14 @@ func runOwnedGatewayTestChild() int {
 	defer cancel()
 	if server.Shutdown(ctx) != nil {
 		return 8
+	}
+	if strings.HasPrefix(control.Mode, "browser_") {
+		sessionMu.Lock()
+		err := ownedBrowserChildStop(home, cfg, browserLastURL, browserMessages, browserChoices, browserURLs)
+		sessionMu.Unlock()
+		if err != nil {
+			return 8
+		}
 	}
 	if control.LateSourceChange {
 		entries, readErr := os.ReadDir(filepath.Join(home, "reports"))
