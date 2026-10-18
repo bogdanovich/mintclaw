@@ -98,7 +98,7 @@ type PDFTrialEvidence struct {
 	Artifact     *PDFArtifactEvidence     `json:"artifact,omitempty"`
 	Census       *PDFCensusEvidence       `json:"census,omitempty"`
 	Cancellation *PDFCancellationEvidence `json:"cancellation,omitempty"`
-	Wire         *PDFWireEvidence         `json:"wire,omitempty"`
+	Wire         *MediaWireEvidence       `json:"wire,omitempty"`
 	PostStop     *PDFPostStopEvidence     `json:"post_stop,omitempty"`
 }
 
@@ -115,8 +115,8 @@ type PDFPostStopEvidence struct {
 }
 
 // This observes native-bound messages on one client connection, not future
-// delivery uniqueness, PDF contents, no-write safety, privacy or remote cleanup.
-type PDFWireEvidence struct {
+// delivery uniqueness, file contents, no-write safety, privacy or remote cleanup.
+type MediaWireEvidence struct {
 	Version          int    `json:"version"`
 	Scope            string `json:"scope"`
 	Code             string `json:"code"`

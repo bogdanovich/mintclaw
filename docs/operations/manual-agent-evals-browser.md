@@ -3,7 +3,8 @@
 This guide describes a partial E4 execution path, not a qualified browser suite. Six case definitions are visible in
 `eval list` and `validate`. With an admitted owned profile, `eval run --start-target` now sends read/artifact tasks
 through the normal gateway and retains independent fixture witnesses after shutdown. Read now has a bounded native
-post-stop assessment contract and one qualified Linux read run/regrade; artifact, private-input and action-bound
+post-stop assessment contract and one qualified Linux read run/regrade. Artifact now has a complete bounded
+approval/byte/delivery assessment path, but no live qualification yet; private-input and other action-bound
 qualification remains unfinished. Offline controls use no model or installed browser and are not live qualification.
 
 The [first owned read pilot](manual-agent-evals-browser-read-v1-pilot-20261018.md) retained an inconclusive result
@@ -106,8 +107,9 @@ destination origin; the harness does not relabel a click or unknown effect as na
 has only read-only GET routes; submissions/removals require nonce-bound POST requests. This grant does not apply to
 arbitrary loopback services, public sites or an unowned running gateway.
 
-The first execution stage attempts `read` and `artifact`. Missing native approval evidence interrupts an approval
-prompt without sending `allow_once`. Submit/followup report `browser_private_input_unavailable`; ambiguity/denial
+The first execution stage attempts `read` and `artifact`. An artifact download can receive one native prompt-bound
+`allow_once` only after exact fixture/action/HMAC verification. Missing or different approval evidence interrupts
+the prompt without sending a grant. Submit/followup report `browser_private_input_unavailable`; ambiguity/denial
 report `browser_action_evidence_unavailable`. No private canary is substituted into ordinary chat. All six cases
 remain mandatory first-release work. A full-suite run still cannot pass while these qualifications are missing;
 an independently qualified read-only selection can pass.
@@ -182,7 +184,7 @@ Artifact hard checks remain inconclusive without native artifact/delivery eviden
 
 ### Native Read Assessment
 
-Only `browser.fixture.read`, without private case facts, can currently reach a post-stop judge. Before promotion,
+`browser.fixture.read`, without private case facts, can reach a post-stop judge. Before promotion,
 the owned gateway must exit natively with an untruncated capture, the fixture host must close/join, and the existing
 raw-profile observer must report complete scoped coverage. Earlier opaque captures and inconclusive trials are
 not rewritten. The assessment then requires all of the following:
@@ -227,6 +229,41 @@ the spool's data file, download media, grant `allow_once`, change manifests/poli
 for a judge/regrade. A valid receipt can therefore coexist with an inconclusive artifact trial. Missing consumed
 native approval, authenticated bounded byte collection, wire identity/uniqueness and independent CSV checks remain
 mandatory before artifact qualification. The qualified read path is unchanged; no live artifact result is claimed.
+
+### Native Artifact Assessment
+
+The artifact case uses `owned_post_stop_browser_artifact_v1`; a metadata receipt alone still cannot pass. The
+script waits for the native approval prompt, permits only the fixture's exact `Download fixture report` action
+with `deliver: true`, then asks for a final confirmation without another copy. Unknown-effect download policy
+remains `ask`, not a new allow rule. The native registry, broker, media delivery and resource cleanup retain authority.
+
+Before sending the one prompt-bound `allow_once`, the runner joins the waiting registry record and delivered
+prompt to the native runtime execution/tool call, ready session, current snapshot, admitted profile/policy and
+prepared action. It verifies the original native argument HMAC using the same payload projection as `browser_act`.
+A changed action/record, foreign route/prompt or repeated grant is refused. Finalization requires that native
+approval was actually consumed for that same input before the download invocation was accepted.
+
+That verified HMAC also supplies one exact native signer-file identity for the post-stop raw-profile scan. Only
+the unchanged, owner-only 32-byte key at its bound path can be classified as cryptographic state. Literal and
+known JSON-escape leak guards run first; missing/changed/foreign keys and other opaque files remain unavailable.
+The receipt exports only an authorized-key count, not key bytes or paths. No generic binary whitelist is added.
+
+After the client reader joins, collection admits exactly one routed CSV media message. It never fetches a wire
+URL: an authenticated, bounded GET uses the configured owned gateway and a strict native media reference, without
+redirects, proxies or retries. Original response bytes are scanned before metadata checks/clearing, including the
+existing bounded raw JSON-escape canary guard. Uninspectable content is unknown; known private leaks fail. Exact
+source digest/size and the independent fixture CSV oracle must match before owner-only retention.
+
+After native shutdown, the assessment binds those actual bytes and the joined wire message/delivery/trace to the
+native download, transfer and settled outbox receipt. It also requires the read path's exact final reply binding,
+terminal native work, closed sessions, empty owned temporary roots and complete scoped profile/role privacy.
+Duplicate/conflicting wire delivery or fixture mutation cannot become a pass. The separate tools-disabled judge
+can run only after all these witnesses. Other four browser scenarios remain gated.
+
+Offline `grade` admits all selected receipts and actual retained CSV files before any judge call; altered/missing,
+aliased or non-private files are refused. Verified bytes are retained in the new private grade report. No gateway,
+browser, original native state or tool execution is required. These deterministic controls do not qualify a live
+artifact run, macOS browser execution, companion delivery or completion of E4.
 
 ## Offline Controls
 

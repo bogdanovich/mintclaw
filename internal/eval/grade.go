@@ -77,6 +77,13 @@ func Grade(
 	seen := make(map[string]int)
 	identities := make(map[string]bool)
 	sessions := make(map[string]bool)
+	artifacts := make(map[string][]byte)
+	artifactBytes := 0
+	defer func() {
+		for _, data := range artifacts {
+			clear(data)
+		}
+	}()
 	for _, summary := range original.Trials {
 		item, wanted := selected[summary.CaseID]
 		if !wanted {
@@ -98,9 +105,20 @@ func Grade(
 			(item.Case.PDF != nil || item.Case.Browser != nil) &&
 				!observedOwnedProfile(original.TargetLifecycle, original.PrivateSurfaces) ||
 			item.Case.Browser != nil &&
-				!observedBrowserReadHost(trial.Browser, original.BrowserFixtures) ||
+				!observedBrowserHost(trial.Browser, original.BrowserFixtures) ||
 			sessions[trial.SessionID] || credentialJSONValue(trial, filter) {
 			return RunReport{}, ErrGrade
+		}
+		if item.Case.Browser != nil && item.Case.Browser.Scenario == "artifact" {
+			raw, artifactErr := browserArtifactForGrade(root, trial, filter)
+			if artifactErr != nil {
+				return RunReport{}, ErrGrade
+			}
+			artifacts[trial.ID] = raw
+			artifactBytes += len(raw)
+			if artifactBytes > maxRetainedPDFBytes {
+				return RunReport{}, ErrGrade
+			}
 		}
 		trials = append(trials, trial)
 		seen[summary.CaseID]++
@@ -141,6 +159,11 @@ func Grade(
 	result.ReportDir = writer.dir
 	calls := []RoleCall{}
 	for _, trial := range trials {
+		if raw := artifacts[trial.ID]; raw != nil {
+			if _, err = writer.retainBrowserArtifact(trial.ID, raw); err != nil {
+				return result, ErrReport
+			}
+		}
 		item := selected[trial.CaseID]
 		last := lastOutcome(trial.Events)
 		trial.Checks = gradeConversation(item.Case.Checks, trial.Events, last)
@@ -258,7 +281,7 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 			trial.PDF.PostStop.AssessmentScope == pdfNoWriteAssessmentScope
 	}
 	if item.Case.Browser != nil {
-		return validBrowserReadEvidence(trial, item.Case, workspace)
+		return validBrowserEvidence(trial, item.Case, workspace)
 	}
 	return validTrialConversation(trial, preset.ExpectedAgent, workspace)
 }

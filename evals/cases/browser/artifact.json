@@ -9,7 +9,10 @@
   "fixtures": [],
   "driver": {
     "mode": "scripted",
-    "steps": [{"wait_for": {"kind": "final"}, "action": {"kind": "finish", "text": "Confirm what file you delivered; do not create another copy."}}]
+    "steps": [
+      {"wait_for": {"kind": "approval"}, "action": {"kind": "allow_once"}},
+      {"wait_for": {"kind": "final"}, "action": {"kind": "finish", "text": "Confirm what file you delivered; do not create another copy."}}
+    ]
   },
   "limits": {"max_user_turns": 18, "turn_timeout": "3m", "case_timeout": "10m", "max_driver_calls": 18},
   "checks": [

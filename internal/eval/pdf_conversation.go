@@ -36,7 +36,7 @@ type pdfConversation struct {
 	censusOwner           *document.Authority
 	ordinary              *questionConversation
 	protectedCancel       *pdfCancellationObservation
-	wire                  *pdfWireObservation
+	wire                  *mediaWireObservation
 	censusWrites          map[string]string
 	outputSnapshot        pdfOutputSnapshot
 }

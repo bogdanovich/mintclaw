@@ -31,6 +31,8 @@ type BrowserDownloadEvidence struct {
 	ArtifactRef       string `json:"artifact_ref,omitempty"`
 	ArtifactSHA256    string `json:"artifact_sha256,omitempty"`
 	ArtifactBytes     int64  `json:"artifact_bytes,omitempty"`
+	Filename          string `json:"filename,omitempty"`
+	ContentType       string `json:"content_type,omitempty"`
 	MediaRef          string `json:"media_ref,omitempty"`
 	DeliveryID        string `json:"delivery_id,omitempty"`
 	PlatformMessageID string `json:"platform_message_id,omitempty"`
@@ -143,6 +145,7 @@ func inspectBrowserDownload(
 			candidate.PreparedActionID, candidate.InvocationID = action.ID, invocation.ID
 			candidate.ArtifactRef, candidate.ArtifactSHA256, candidate.ArtifactBytes = record.Ref,
 				record.Spec.SHA256, record.Spec.DeclaredSize
+			candidate.Filename, candidate.ContentType = record.Spec.Filename, record.Spec.ContentType
 			candidate.MediaRef, candidate.DeliveryID = record.MediaRef, intent.ID
 			candidate.PlatformMessageID = intent.PlatformMessageIDs[0]
 			selected = &candidate

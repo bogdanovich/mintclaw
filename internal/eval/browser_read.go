@@ -14,9 +14,9 @@ import (
 
 const browserReadAssessmentScope = "owned_post_stop_browser_read_v1"
 
-// This receipt binds one read trial to native persisted authority and delivered
+// This receipt binds one scoped trial to native persisted authority and delivered
 // replies after owned shutdown. It is not a grant or a browser-wide certificate.
-type BrowserReadEvidence struct {
+type BrowserTaskEvidence struct {
 	Version                 int    `json:"version"`
 	Scope                   string `json:"scope"`
 	Code                    string `json:"code"`
@@ -38,11 +38,24 @@ type BrowserReadEvidence struct {
 
 func inspectBrowserRead(
 	trial Trial, target admittedTarget, fixture *browserFixture, observed browserNativeSnapshot, temporaryEmpty bool,
-) *BrowserReadEvidence {
-	proof := &BrowserReadEvidence{
+) *BrowserTaskEvidence {
+	return inspectBrowserTask(trial, target, fixture, observed, temporaryEmpty, nil)
+}
+
+func inspectBrowserTask(
+	trial Trial, target admittedTarget, fixture *browserFixture, observed browserNativeSnapshot, temporaryEmpty bool,
+	download *BrowserDownloadEvidence,
+) *BrowserTaskEvidence {
+	proof := &BrowserTaskEvidence{
 		Version: Version, Scope: browserReadAssessmentScope, Code: "native_scope_unavailable",
 		StateSHA256: observed.stateSHA256, OutboxSHA256: observed.outboxSHA256,
 		SessionScope: browser.OpaqueSessionKey(trial.SessionKey), TemporaryEmpty: temporaryEmpty,
+	}
+	if download != nil {
+		proof.Scope = browserArtifactAssessmentScope
+		if download.Code != "native_metadata_observed" || download.Scope != browserDownloadMetadataScope {
+			return proof
+		}
 	}
 	if !boundedIdentity(trial.SessionKey, 512) || !validID(trial.SessionID) || fixture == nil ||
 		target.config == nil || trial.AgentID != target.preset.ExpectedAgent ||
@@ -90,6 +103,10 @@ func inspectBrowserRead(
 			}
 			continue
 		}
+		decision := browserpolicy.DecisionAllow
+		if download != nil && action.ID == download.PreparedActionID {
+			decision = browserpolicy.DecisionAsk
+		}
 		if !action.Owner.Equal(session.Owner) || action.Target != session.Target ||
 			action.Profile != session.Profile || action.ProfileRevision != profile.Revision ||
 			action.PolicyRevision != policy || action.DryRun || action.TabID != session.TabID ||
@@ -97,8 +114,8 @@ func inspectBrowserRead(
 			action.CapabilityMode != browserpolicy.CapabilityRestricted ||
 			action.ApprovalMode != browserpolicy.ApprovalPolicy ||
 			action.RestrictedPolicyRevision != restrictedPolicy ||
-			action.RestrictedDecision != browserpolicy.DecisionAllow ||
-			action.LocalRestrictedDecision != browserpolicy.DecisionAllow || action.WorkerRestrictedDecision != "" {
+			action.RestrictedDecision != decision ||
+			action.LocalRestrictedDecision != decision || action.WorkerRestrictedDecision != "" {
 			return proof
 		}
 		prepared[id] = action
@@ -127,6 +144,12 @@ func inspectBrowserRead(
 				action.Effect == browser.EffectNavigation && action.DestinationOrigin == fixture.origin &&
 				action.Action.URL == fixture.origin+fixture.path &&
 				(action.CurrentOrigin == "about:blank" || action.CurrentOrigin == fixture.origin)
+		if download != nil && action.ID == download.PreparedActionID && invocation.ID == download.InvocationID {
+			allowed = action.Action.Kind == browser.ActionDownload && action.Action.Deliver &&
+				action.CurrentOrigin == fixture.origin && action.ElementRole == "link" &&
+				action.ElementName == "Download fixture report" && action.PolicyEffect == browser.EffectUnknown &&
+				action.Effect == browser.EffectUnknown
+		}
 		if !allowed {
 			proof.ForbiddenActionAccepted = invocation.AcceptedAt != 0
 			proof.Code = "native_read_scope_mismatch"
@@ -160,6 +183,10 @@ func inspectBrowserRead(
 			return proof
 		}
 		if intent.Media != nil {
+			if download != nil && intent.ID == download.DeliveryID && len(intent.PlatformMessageIDs) == 1 &&
+				intent.PlatformMessageIDs[0] == download.PlatformMessageID {
+				continue
+			}
 			proof.ForbiddenActionAccepted = true
 			proof.Code = "unexpected_browser_media"
 			return proof

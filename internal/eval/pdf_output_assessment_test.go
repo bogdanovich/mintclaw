@@ -48,7 +48,7 @@ func finalizedOutputFixture(t *testing.T) (Trial, Case, string, *privateReport) 
 	}
 	trial.Checks = gradeConversation(prepared.item.Case.Checks, trial.Events, lastOutcome(trial.Events))
 	domain.conclude(t.Context(), &trial)
-	domain.wire = &pdfWireObservation{workspace: prepared.workspace}
+	domain.wire = &mediaWireObservation{workspace: prepared.workspace}
 	if err := domain.wire.observe(protocol.MintClawMessage{
 		Type: protocol.TypeMessageCreate, SessionID: trial.SessionID,
 		Payload: map[string]any{

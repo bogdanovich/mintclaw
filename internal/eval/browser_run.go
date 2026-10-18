@@ -37,8 +37,9 @@ type BrowserTrialEvidence struct {
 	Fixture         *browserFixtureOracle    `json:"fixture,omitempty"`
 	NativeAuthority string                   `json:"native_authority"`
 	NativeCleanup   string                   `json:"native_cleanup"`
-	Read            *BrowserReadEvidence     `json:"read,omitempty"`
+	Read            *BrowserTaskEvidence     `json:"read,omitempty"`
 	Download        *BrowserDownloadEvidence `json:"download,omitempty"`
+	Artifact        *BrowserArtifactEvidence `json:"artifact,omitempty"`
 }
 
 type browserRun struct {
@@ -48,9 +49,10 @@ type browserRun struct {
 }
 
 type browserPendingTrial struct {
-	item      Case
-	sessionID string
-	fixture   *browserFixture
+	item         Case
+	sessionID    string
+	fixture      *browserFixture
+	conversation *browserConversation
 }
 
 func (run *browserRun) retain(item Case, trial Trial, fixture *browserFixture) {
@@ -80,13 +82,18 @@ func (run *browserRun) close(target *TargetLifecycle) *BrowserFixtureHostEvidenc
 }
 
 // A fixture predicate cannot promote native checks. Capture native authority
-// independently after shutdown; only the finalized read contract can judge it.
+// independently after shutdown; only a finalized domain contract can judge it.
 func (run *browserRun) finish(
 	ctx context.Context, target admittedTarget, writer *privateReport, report *RunReport,
 	facts map[string]string, filter *strings.Replacer, assess func(Case, *Trial),
 ) error {
 	if len(run.trials) == 0 {
 		return nil
+	}
+	for _, pending := range run.trials {
+		if pending.conversation != nil && pending.conversation.wire != nil {
+			defer func(wire *mediaWireObservation) { clear(wire.messages) }(pending.conversation.wire)
+		}
 	}
 	observed, observationErr := observeBrowserNative(ctx, target.preset.ExpectedWorkspace, facts, filter)
 	var transfers browserTransferSnapshot
@@ -125,12 +132,19 @@ func (run *browserRun) finish(
 			credentialJSONValue(trial, filter) || privateJSONValue(trial, facts) {
 			return ErrReport
 		}
-		oracle, err := inspectBrowserFixture(pending.item, pending.fixture, trial.Events, nil)
+		data = retainedBrowserArtifact(writer, &trial, facts, filter)
+		oracle, err := inspectBrowserFixture(pending.item, pending.fixture, trial.Events, data)
+		clear(data)
+		var artifact *BrowserArtifactEvidence
+		if trial.Browser != nil {
+			artifact = trial.Browser.Artifact
+		}
 		trial.Browser = &BrowserTrialEvidence{
 			Version:         Version,
 			Scope:           "owned_fixture_execution_v1",
 			NativeAuthority: "unavailable",
 			NativeCleanup:   "unavailable",
+			Artifact:        artifact,
 		}
 		if err == nil {
 			trial.Browser.Fixture = &oracle
@@ -144,6 +158,18 @@ func (run *browserRun) finish(
 		}
 		if observationErr == nil && pending.item.Browser.Scenario == "artifact" {
 			trial.Browser.Download = inspectBrowserDownload(trial, target, observed, transfers)
+			if finalizeErr := finalizeBrowserArtifact(
+				&trial,
+				pending,
+				target,
+				observed,
+				temporaryEmpty,
+			); errors.Is(
+				finalizeErr,
+				ErrPrivateEvidence,
+			) {
+				failBrowserArtifact(&trial, Fail, "private_media_evidence")
+			}
 		}
 		trial.EvidenceEligible = false
 		for checkIndex, check := range pending.item.Checks {
@@ -163,7 +189,8 @@ func (run *browserRun) finish(
 				}
 			case "private_surfaces":
 				if report.PrivateSurfaces != nil && report.PrivateSurfaces.LeakObserved ||
-					errors.Is(observationErr, ErrPrivateEvidence) || errors.Is(transferErr, ErrPrivateEvidence) {
+					errors.Is(observationErr, ErrPrivateEvidence) || errors.Is(transferErr, ErrPrivateEvidence) ||
+					trial.Browser.Artifact != nil && trial.Browser.Artifact.Code == "private_media_evidence" {
 					*result = CheckResult{
 						ID:          check.ID,
 						Verdict:     Fail,
@@ -172,10 +199,14 @@ func (run *browserRun) finish(
 					}
 				}
 			case "browser_authority":
-				if trial.Browser.Read != nil && trial.Browser.Read.ForbiddenActionAccepted {
+				proof, source := trial.Browser.Read, "browser.read"
+				if trial.Browser.Artifact != nil {
+					proof, source = trial.Browser.Artifact.Native, "browser.artifact"
+				}
+				if proof != nil && proof.ForbiddenActionAccepted {
 					*result = CheckResult{
 						ID: check.ID, Verdict: Fail,
-						Code: "native_read_scope_mismatch", EvidenceIDs: []string{"browser.read"},
+						Code: "native_read_scope_mismatch", EvidenceIDs: []string{source},
 					}
 				}
 			}

@@ -35,6 +35,20 @@ func OpaqueSessionKey(sessionKey string) string {
 	return "session_" + hex.EncodeToString(digest[:16])
 }
 
+// OpaqueExecutionID projects runtime execution identity, not a trace turn ID.
+func OpaqueExecutionID(executionID string) string {
+	digest := sha256.Sum256([]byte("execution\x00" + strings.TrimSpace(executionID)))
+	return "execution_" + hex.EncodeToString(digest[:16])
+}
+
+// OpaqueRequestID projects the native browser request for one runtime tool call.
+func OpaqueRequestID(executionID, toolCallID string) string {
+	digest := sha256.Sum256(
+		[]byte("request\x00" + strings.TrimSpace(executionID) + "\x00" + strings.TrimSpace(toolCallID)),
+	)
+	return "request_" + hex.EncodeToString(digest[:16])
+}
+
 const (
 	initialBlankOrigin    = "about:blank"
 	MaxIdentifierBytes    = browseraction.MaxIdentifierBytes

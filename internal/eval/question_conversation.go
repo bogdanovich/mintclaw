@@ -79,11 +79,17 @@ func (domain *questionConversation) observe(ctx context.Context, prompt Event) e
 }
 
 func (domain *questionConversation) matchesPrompt(record interactions.Record, prompt Event) (bool, error) {
+	return domain.matchesPromptKind(record, prompt, interactions.KindQuestion, "request_user_input")
+}
+
+func (domain *questionConversation) matchesPromptKind(
+	record interactions.Record, prompt Event, kind interactions.Kind, tool string,
+) (bool, error) {
 	route := record.Route
 	now := time.Now().UnixMilli()
 	if record.ID != prompt.InteractionID || record.ShortID != prompt.InteractionShortID ||
-		record.Kind != interactions.KindQuestion || record.Status != interactions.StatusWaiting ||
-		record.ProtectedAnswer != nil || record.Origin.ToolName != "request_user_input" ||
+		record.Kind != kind || record.Status != interactions.StatusWaiting ||
+		record.ProtectedAnswer != nil || record.Origin.ToolName != tool ||
 		record.CreatedAt < domain.started.UnixMilli() || record.CreatedAt > now || record.ExpiresAt <= now ||
 		record.UpdatedAt > now || record.Origin.ExecutionContext == nil ||
 		record.Origin.ExecutionContext.MessageID != prompt.RequestID ||
@@ -118,7 +124,7 @@ func (domain *questionConversation) matchesPrompt(record interactions.Record, pr
 		intent.Identity.SessionKey == route.SessionKey && intent.Message != nil &&
 		intent.Message.AgentID == route.AgentID && intent.Message.SessionKey == route.SessionKey &&
 		intent.Message.Metadata.InteractionID == record.ID && intent.Message.Metadata.InteractionShortID == record.ShortID &&
-		intent.Message.Metadata.InteractionKind == "question" &&
+		intent.Message.Metadata.InteractionKind == string(kind) &&
 		intent.Message.Metadata.InteractionControls == bus.OutboundInteractionControlsPrompt &&
 		slices.Contains(intent.PlatformMessageIDs, prompt.MessageID) && !intent.CreatedAt.Before(domain.started), nil
 }

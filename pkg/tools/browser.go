@@ -2705,13 +2705,19 @@ func (tool *BrowserActTool) ApprovalArguments(ctx context.Context, args map[stri
 	if err != nil {
 		return nil, &browserActionSafeDenialError{cause: err}
 	}
+	return BrowserActionApprovalArguments(preparation), nil
+}
+
+// BrowserActionApprovalArguments projects the native approval payload without
+// preparing an action or granting authority to execute it.
+func BrowserActionApprovalArguments(preparation browser.Preparation) map[string]any {
 	return map[string]any{
 		"prepared_action_id": preparation.Approval.PreparedActionID,
 		"action_hash":        preparation.Approval.ActionHash,
 		"policy_revision":    preparation.Approval.PolicyRevision,
 		"expires_at":         preparation.Approval.ExpiresAt,
 		"preview":            browserApprovalSummary(preparation),
-	}, nil
+	}
 }
 
 type browserActionResult struct {
@@ -3421,7 +3427,7 @@ func browserOwnerFromIdentity(actorID, agentID, sessionKey, executionID string) 
 		ActorID:     browser.OpaqueActorID(actorID),
 		AgentID:     browser.OpaqueAgentID(routing.NormalizeAgentID(agentID)),
 		SessionKey:  browser.OpaqueSessionKey(sessionKey),
-		ExecutionID: browserContextID("execution", executionID),
+		ExecutionID: browser.OpaqueExecutionID(executionID),
 	}, nil
 }
 
@@ -3435,7 +3441,7 @@ func browserRequestID(ctx context.Context) (string, error) {
 	if callID == "" || executionID == "" {
 		return "", errors.New("browser tool call identity is incomplete")
 	}
-	return browserContextID("request", executionID+"\x00"+callID), nil
+	return browser.OpaqueRequestID(executionID, callID), nil
 }
 
 func browserContextID(prefix, value string) string {

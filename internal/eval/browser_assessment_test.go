@@ -90,7 +90,7 @@ func TestFinalizedBrowserReadAdmitsJudgeOnlyWithAllIndependentEvidence(t *testin
 			case "execution":
 				trial.ExecutionVerdict = Inconclusive
 			}
-			assessFinalizedBrowserRead(t.Context(), judge, control.item.Case, &trial,
+			assessFinalizedBrowser(t.Context(), judge, control.item.Case, &trial,
 				control.fixture.workspace, lifecycle, surfaces, host)
 			if mode == "complete" {
 				if trial.Verdict != Pass || !trial.EvidenceEligible || provider.calls != 1 ||
@@ -128,7 +128,7 @@ func TestFinalizedBrowserReadRejectsContradictoryNativeReplyBeforeJudge(t *testi
 		Content: browserJudgePass(trial), FinishReason: "stop",
 	}}
 	judge := &ModelRole{provider: provider, identity: RoleIdentity{Role: "judge"}}
-	assessFinalizedBrowserRead(t.Context(), judge, control.item.Case, &trial, control.fixture.workspace,
+	assessFinalizedBrowser(t.Context(), judge, control.item.Case, &trial, control.fixture.workspace,
 		cleanPDFLifecycle(), &PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "observed"},
 		browserReadHost(control))
 	if trial.Verdict == Pass || trial.EvidenceEligible || provider.calls != 0 ||
@@ -166,7 +166,7 @@ func TestFinalizedBrowserReadPreservesHardAndRolePrivacyFailures(t *testing.T) {
 			if mode == "private" {
 				judge.retained = &privateFactRetention{values: map[string]string{"fact": "private-judge-canary"}}
 			}
-			assessFinalizedBrowserRead(ctx, judge, control.item.Case, &trial, control.fixture.workspace,
+			assessFinalizedBrowser(ctx, judge, control.item.Case, &trial, control.fixture.workspace,
 				cleanPDFLifecycle(), &PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "observed"},
 				browserReadHost(control))
 			if trial.Verdict == Pass || mode == "hard" && trial.Verdict != Fail ||
@@ -183,7 +183,7 @@ func TestGradeBrowserReadUsesRetainedEvidenceWithoutTargetOrBrowserFiles(t *test
 	fixture := control.fixture
 	surfaces := &PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "observed"}
 	host := browserReadHost(control)
-	assessFinalizedBrowserRead(
+	assessFinalizedBrowser(
 		t.Context(),
 		nil,
 		control.item.Case,
@@ -260,7 +260,7 @@ func TestGradeBrowserReadUsesRetainedEvidenceWithoutTargetOrBrowserFiles(t *test
 	if marshalErr != nil {
 		t.Fatal(marshalErr)
 	}
-	for _, mode := range []string{"legacy", "privacy", "lifecycle", "host", "host-origin", "host-empty", "route", "scope", "cleanup", "not-eligible"} {
+	for _, mode := range []string{"missing-browser", "legacy", "privacy", "lifecycle", "host", "host-origin", "host-empty", "route", "scope", "cleanup", "not-eligible"} {
 		t.Run(mode, func(t *testing.T) {
 			copy, decodeErr := decodeDocument[Trial](originalTrial, 8*1024*1024)
 			if decodeErr != nil {
@@ -272,6 +272,8 @@ func TestGradeBrowserReadUsesRetainedEvidenceWithoutTargetOrBrowserFiles(t *test
 			hostCopy := *host
 			changed.PrivateSurfaces, changed.TargetLifecycle, changed.BrowserFixtures = &profile, &lifecycle, &hostCopy
 			switch mode {
+			case "missing-browser":
+				copy.Browser = nil
 			case "legacy":
 				copy.Browser.Read = nil
 			case "privacy":
@@ -362,7 +364,7 @@ func TestBrowserReadFinalizationCapturesBeforeJudgingAndKeepsLateRawLeaks(t *tes
 			judge := &ModelRole{provider: provider, identity: RoleIdentity{Role: "judge"}}
 			if err = pending.finish(t.Context(), control.target(), report, &result, facts, nil,
 				func(item Case, current *Trial) {
-					assessFinalizedBrowserRead(t.Context(), judge, item, current, control.fixture.workspace,
+					assessFinalizedBrowser(t.Context(), judge, item, current, control.fixture.workspace,
 						result.TargetLifecycle, result.PrivateSurfaces, result.BrowserFixtures)
 				}); err != nil {
 				t.Fatal("finalization failed", err)

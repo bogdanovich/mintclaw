@@ -91,6 +91,12 @@ type browserDownloadControl struct {
 // Native broker, transfer spool and outbox producers generate identities and
 // hashes. The stub worker/approval is not a live browser or approval qualification.
 func newBrowserDownloadControl(t *testing.T) *browserDownloadControl {
+	return browserDownloadControlWithHook(t, nil)
+}
+
+func browserDownloadControlWithHook(
+	t *testing.T, beforeExecute func(*browserDownloadControl, browser.Preparation),
+) *browserDownloadControl {
 	t.Helper()
 	read := newBrowserReadControl(t)
 	read.item = browserCorpusCase(t, "artifact")
@@ -115,6 +121,7 @@ func newBrowserDownloadControl(t *testing.T) *browserDownloadControl {
 		t.Fatal(err)
 	}
 	owner := read.session.Owner
+	owner.ExecutionID = browser.OpaqueExecutionID("fixture-runtime-execution")
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
 		Owner: owner, Target: config.BrowserDefaultTarget, Profile: "eval-browser",
 	})
@@ -129,7 +136,8 @@ func newBrowserDownloadControl(t *testing.T) *browserDownloadControl {
 		t.Fatal("native download observation unavailable", err)
 	}
 	prepared, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
-		Owner: owner, RequestID: "native_download_request", SessionID: session.ID, TabID: session.TabID,
+		Owner: owner, RequestID: browser.OpaqueRequestID("fixture-runtime-execution", "fixture-download-call"),
+		SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
 		Action: browser.Action{Kind: browser.ActionDownload, Ref: ref, Deliver: true},
 	})
@@ -137,6 +145,9 @@ func newBrowserDownloadControl(t *testing.T) *browserDownloadControl {
 		t.Fatal("native download preparation unavailable", err)
 	}
 	control.action = prepared.Action
+	if beforeExecute != nil {
+		beforeExecute(control, prepared)
+	}
 	spool, err := nodes.NewGatewayTransferSpool(nodes.GatewayTransferSpoolPath(read.fixture.workspace), 0, 0, time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -407,7 +418,7 @@ func TestBrowserDownloadFinalizationRetainsMetadataButCannotJudgeOrHideRawLeak(t
 			judge := &ModelRole{provider: provider, identity: RoleIdentity{Role: "judge"}}
 			if err = pending.finish(t.Context(), control.target(), writer, &result, facts, nil,
 				func(item Case, current *Trial) {
-					assessFinalizedBrowserRead(t.Context(), judge, item, current, control.fixture.workspace,
+					assessFinalizedBrowser(t.Context(), judge, item, current, control.fixture.workspace,
 						result.TargetLifecycle, result.PrivateSurfaces, result.BrowserFixtures)
 				}); err != nil {
 				t.Fatal(err)
