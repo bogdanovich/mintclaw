@@ -3,8 +3,8 @@
 This guide describes a partial E4 execution path, not a qualified browser suite. Six case definitions are visible in
 `eval list` and `validate`. With an admitted owned profile, `eval run --start-target` now sends read/artifact tasks
 through the normal gateway and retains independent fixture witnesses after shutdown. Read now has a bounded native
-post-stop assessment contract; artifact, private-input and action-bound qualification remains unfinished. No new
-live qualification is claimed by the offline controls, which use no model or installed browser.
+post-stop assessment contract and one qualified Linux read run/regrade; artifact, private-input and action-bound
+qualification remains unfinished. Offline controls use no model or installed browser and are not live qualification.
 
 The [first owned read pilot](manual-agent-evals-browser-read-v1-pilot-20261018.md) retained an inconclusive result
 with zero fixture visits and a native driver startup failure. Separate model-free controls identified Chrome's
@@ -33,6 +33,10 @@ New owned runs also request native JSON console records and retain bounded stdou
 existing raw-record privacy scanner rather than interpreting console prose or skipping logs. Earlier `.log` results
 are unchanged. This removes a capture-format obstacle, not the remaining native authority, context, artifact,
 private-input or all-resource cleanup requirements.
+
+The [v4 pilot](manual-agent-evals-browser-read-v4-pilot-20261018.md) on merged #1754 passed one read trial and one
+judge-only regrade with native action/delivery, scoped raw privacy and cleanup evidence. Earlier inconclusive
+reports remain unchanged. This qualifies one Linux local-owned read path, not the other five browser cases or E4.
 
 ## Corpus Contracts
 
@@ -105,7 +109,8 @@ arbitrary loopback services, public sites or an unowned running gateway.
 The first execution stage attempts `read` and `artifact`. Missing native approval evidence interrupts an approval
 prompt without sending `allow_once`. Submit/followup report `browser_private_input_unavailable`; ambiguity/denial
 report `browser_action_evidence_unavailable`. No private canary is substituted into ordinary chat. All six cases
-remain mandatory first-release work. The expected run exit is nonzero while these qualifications are missing.
+remain mandatory first-release work. A full-suite run still cannot pass while these qualifications are missing;
+an independently qualified read-only selection can pass.
 
 `browser_fixtures` describes only the owned HTTP host. Trial `browser.fixture` describes only independent local
 state; matching state or a download cannot establish browser provenance or delivered artifact bytes. Finalization
@@ -190,7 +195,9 @@ not rewritten. The assessment then requires all of the following:
 - Observe successful native navigation to this trial's exact immutable fixture path, allow only the read/navigation
   action scope, and retain the independent fresh-reference/no-effect fixture predicates.
 - Bind every observed final reply to a settled native outbox intent, exact wire message ID, input request and
-  trace scope. Request binding accepts the native context message ID when optional metadata has no request ID.
+  trace scope, and exactly match its content after the existing configured native footer projection. No suffix
+  stripping or heuristic normalization is used. Request binding accepts the native context message ID when optional
+  metadata has no request ID.
 - Require closed native sessions, terminal non-unknown invocations, and empty owned browser-ephemeral and gateway-temp roots.
   The harness observes native cleanup; it does not delete evidence or control a broker to make the check pass.
 
@@ -198,8 +205,8 @@ Missing, foreign, ambiguous or incomplete evidence cannot invoke the judge or gr
 leaks and fixture contradictions remain failures. Separate tools-disabled judging runs only after native/profile
 observations; unavailable or private role-boundary evidence revokes privacy/retained eligibility. Eligible read
 reports can be regraded without a gateway or original browser state files. This is scoped Linux/macOS local-owned
-read evidence, not all browser resources, browser-provider parity or completion of E4. The other five browser cases
-and real merged-revision qualification remain mandatory.
+read evidence, not all browser resources, browser-provider parity or completion of E4. The v4 result qualifies one
+Linux merged-revision read trial; the other five cases and macOS live coverage remain unfinished.
 
 ## Offline Controls
 
