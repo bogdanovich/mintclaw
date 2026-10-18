@@ -70,7 +70,11 @@ func (cfg *Config) ValidateCredentials() error {
 		return errors.New("credential account policy is invalid")
 	}
 	vault := c.Accounts[0].VaultID
+	discoveryScopes := 0
 	for _, account := range c.Accounts {
+		if account.DiscoverLogins {
+			discoveryScopes++
+		}
 		if account.VaultID != vault {
 			return errors.New("credential accounts must use one dedicated vault")
 		}
@@ -79,6 +83,9 @@ func (cfg *Config) ValidateCredentials() error {
 				return errors.New("credential account owner is invalid")
 			}
 		}
+	}
+	if discoveryScopes > 1 {
+		return errors.New("credential browser discovery requires one vault scope")
 	}
 	return nil
 }

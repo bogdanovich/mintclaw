@@ -15,13 +15,23 @@ let stage = 'start';
 
 async function driver() {
   const outcome = process.argv[3] || 'logged_in';
-  assert.equal(['logged_in', 'handoff_required', 'outcome_unknown'].includes(outcome), true);
+  assert.equal(['logged_in', 'handoff_required', 'outcome_unknown', 'discovery'].includes(outcome), true);
+  const discovery = outcome === 'discovery';
+  const siteOrigin = discovery ? 'https://example.org' : origin;
+  const computedCode = '19482673';
   const instance = new Driver({ browser: 'chromium', headless: true });
   await instance.start();
   let submissions = 0;
   await instance.context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url());
-    if (url.origin !== origin) { await route.abort(); return; }
+    if (url.origin !== siteOrigin) { await route.abort(); return; }
+    if (discovery && url.pathname === '/totp') {
+      const fields = new URLSearchParams(request.postData());
+      assert.equal(fields.get('code') === computedCode, true);
+      await route.fulfill({contentType: 'text/html', body: `<script>alert("${computedCode}");location.replace("/home")</script>`,
+        headers: {'set-cookie': `mfa=${computedCode}; Secure; HttpOnly; Path=/`}});
+      return;
+    }
     if (url.pathname === '/session') {
       assert.equal(++submissions, 1);
       const fields = new URLSearchParams(request.postData());
@@ -35,16 +45,20 @@ async function driver() {
         assert.equal(checkpoint.status, 200);
         if ((await checkpoint.json()).hold) await new Promise(() => {});
       }
-      const destination = outcome === 'logged_in' ? '/home' : outcome === 'handoff_required' ? '/challenge' : '/unconfirmed';
+      const destination = outcome === 'logged_in' ? '/home' :
+        outcome === 'handoff_required' || discovery ? '/challenge' : '/unconfirmed';
       await route.fulfill({ contentType: 'text/html',
         headers: { 'set-cookie': `session=${cookie}; Secure; HttpOnly; Path=/` },
         body: `<script>location.replace("${destination}")</script>` });
     } else if (['/home', '/challenge', '/unconfirmed'].includes(url.pathname)) {
       const marker = url.pathname === '/home' ? 'authenticated' : url.pathname === '/challenge' ? 'challenge' : 'unconfirmed';
-      const challenge = url.pathname === '/challenge' ?
+      const challenge = url.pathname === '/challenge' ? discovery ?
+        '<form method="post" action="/totp"><input name="code" aria-label="Verification code" autocomplete="one-time-code">' +
+        '<button>Verify</button></form>' :
         `<input aria-label="Verification code" autocomplete="one-time-code" value="${oneTimeCode}">` : '';
+      const logout = discovery && url.pathname === '/home' ? `<button type="button">Log out</button><p>${computedCode}</p>` : '';
       await route.fulfill({ contentType: 'text/html',
-        body: `<title>${cookie}</title><div id="${marker}">Ready</div><p>${username} ${password} ${cookie}</p>${challenge}` });
+        body: `<title>${cookie}</title><div id="${marker}">Ready</div><p>${username} ${password} ${cookie}</p>${challenge}${logout}` });
     } else {
       await route.fulfill({ contentType: 'text/html', body: '<form method="post" action="/session">' +
         '<input name="username" type="email" aria-label="Account">' +
@@ -52,7 +66,7 @@ async function driver() {
         '<button type="submit">Sign in</button></form>' });
     }
   });
-  await instance.page.goto(origin + '/login');
+  await instance.page.goto(siteOrigin + '/login');
   process.stderr.write(`${username} ${password} ${cookie}\n`);
   await runProtocol(instance, process.stdin, process.stdout);
 }
@@ -104,7 +118,8 @@ async function phone() {
     stage = 'approve';
     await page.goto(pending.link);
     await page.getByRole('button', { name: 'Approve with passkey' }).waitFor();
-    assert.equal(await page.locator('#accounts').innerText(), 'fixture-account');
+    if (config.discovery) assert.match(await page.locator('#accounts').innerText(), /All website-matching Login items/);
+    else assert.equal(await page.locator('#accounts').innerText(), 'fixture-account');
     const duration = config.lifetime === 'expiry' ? `${10 / 60} minutes` : '20 hours';
     assert.equal(await page.locator('#duration').innerText(), duration);
     await page.getByRole('button', { name: 'Approve with passkey' }).click();

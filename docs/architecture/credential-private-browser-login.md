@@ -1,5 +1,10 @@
 # Private Browser Credential Login
 
+This document describes the original fixed-flow transaction. The
+[website-discovered login extension](credential-website-login.md) adds generic
+form steps, TOTP and fresh verification while reusing its private transport,
+output protection and grant lifetime. It does not require per-site flow setup.
+
 This is the browser transaction portion of the
 [trusted-runtime design](credential-trusted-runtime-design.md). It extends the
 existing browser broker and direct Playwright library driver; it creates no

@@ -42,8 +42,8 @@ func (client *credentialTestClient) submitCredential(
 	_ context.Context, _ string, username, password []byte,
 ) (credentialDriverResult, error) {
 	client.submitted++
-	if secretvalues.Redact(string(username)) != secretvalues.Marker ||
-		secretvalues.Redact(string(password)) != secretvalues.Marker {
+	if (len(username) != 0 && secretvalues.Redact(string(username)) != secretvalues.Marker) ||
+		(len(password) != 0 && secretvalues.Redact(string(password)) != secretvalues.Marker) {
 		return credentialDriverResult{}, errCredentialDriver
 	}
 	return client.result, nil

@@ -841,7 +841,7 @@ class Driver {
     const request = { ...pending.request, username: args.username, password: args.password };
     try {
       code = await performCredentialLogin(pending.page, pending.capsule, request);
-      const cookies = ['logged_in', 'handoff_required'].includes(code) ? await this.harvestCredentialCookies() : [];
+      const cookies = ['logged_in', 'handoff_required', 'submitted', 'unverified'].includes(code) ? await this.harvestCredentialCookies() : [];
       // This response goes only to the trusted runtime's private parser. Cookie
       // values must be registered before allowing any later observations.
       return textResult(JSON.stringify({ code, cookies }));

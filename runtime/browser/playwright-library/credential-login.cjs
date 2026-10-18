@@ -4,6 +4,7 @@
 // exceptions, page content, credential values, or authentication cookies.
 const REF = /^(?:f[1-9][0-9]{0,9})?e[1-9][0-9]{0,9}$/;
 const MARKER = /^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/;
+const {prepareWebsiteStep, performWebsiteStep} = require('./credential-steps.cjs');
 
 function validOrigin(value) {
   try {
@@ -22,6 +23,7 @@ function validRequest(request) {
 // This check runs before vault retrieval, and again in the same document just
 // before filling. No observation or snapshot is produced by either check.
 async function prepareCredentialLogin(page, request) {
+  if (request?.step) return prepareWebsiteStep(page, request);
   if (!validRequest(request) || new URL(page.url()).origin !== request.origin) return null;
   let capsule;
   const elements = [];
@@ -70,6 +72,7 @@ async function prepareCredentialLogin(page, request) {
 }
 
 async function performCredentialLogin(page, capsule, request) {
+  if (request?.step) return performWebsiteStep(page, capsule, request);
   let attempted = false;
   try {
     if (!capsule || !validRequest(request) || typeof request.username !== 'string' ||

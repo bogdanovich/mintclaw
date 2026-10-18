@@ -115,6 +115,8 @@ The existing grant timer and revocation signal remain the lifetime owner.
 
 D1 alone does not enable the new browser path or migrate deployed configuration.
 D2 supplies the browser consumer; D3 qualifies and deploys the composed feature.
+Its operations, evidence semantics and limits are documented in
+[Login by live website discovery](credential-website-login.md).
 
 ## Related evidence
 

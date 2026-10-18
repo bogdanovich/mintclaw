@@ -1,5 +1,9 @@
 # Find credential items by website or name
 
+The setup command below supports the earlier fixed-binding path. The new
+[live website login](credential-website-login.md) discovers records at browser
+runtime and does not require `--bind` or per-site UUID configuration.
+
 Item UUIDs are saved references in local operator configuration, not site rules
 or hard-coded values in Go. The private setup command can discover Login items
 by website or item name instead of requiring you to copy each UUID yourself.

@@ -2,7 +2,10 @@ package browser
 
 import (
 	"context"
+	"net/url"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 
 	"github.com/bogdanovich/mintclaw/internal/secretvalues"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
@@ -21,18 +24,30 @@ type CredentialLoginRequest struct {
 	SnapshotID         string
 	SnapshotGeneration uint64
 	Account            string
+	CredentialID       string
+	LoginName          string
 	Principal          credentialbroker.Principal
 	PolicyRevision     string
 	Fields             CredentialFields
 }
 
 type CredentialLoginResult struct {
-	Alias   string `json:"alias"`
-	Outcome string `json:"outcome"`
+	Alias        string                `json:"alias"`
+	Outcome      string                `json:"outcome"`
+	CredentialID string                `json:"credential_id,omitempty"`
+	Candidates   []CredentialCandidate `json:"candidates,omitempty"`
+}
+
+// CredentialCandidate projects overview metadata only; never login values.
+type CredentialCandidate struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Domains []string `json:"domains"`
 }
 
 // PrivateLoginConsumer lends credentials to the synchronous callback. The
 // runtime implementation is the exact-item vault adapter, after approval.
+// The second buffer is a password or computed TOTP according to Fields.Step.
 type PrivateLoginConsumer func(context.Context, func([]byte, []byte) error) error
 
 // CredentialGrant is the live authority supplied by the trusted runtime.
@@ -44,12 +59,13 @@ type CredentialGrant interface {
 }
 
 type credentialSession struct {
-	lease   CredentialGrant
-	request credentialbroker.Request
-	release []func()
-	cookies map[string]struct{}
-	closed  bool
-	done    chan struct{}
+	lease        CredentialGrant
+	request      credentialbroker.Request
+	release      []func()
+	cookies      map[string]struct{}
+	closed       bool
+	done         chan struct{}
+	credentialID string
 }
 
 func (bound *credentialSession) check(ctx context.Context, origin string) error {
@@ -116,7 +132,7 @@ func (broker *Broker) LoginCredential(
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
 	session, slot, worker, err := broker.actionSessionLocked(ctx, request.Owner, request.SessionID, request.TabID)
-	if err != nil || slot.credentials != nil || session.DryRun || session.FrameID != "" ||
+	if err != nil || session.DryRun || session.FrameID != "" ||
 		session.SnapshotID != request.SnapshotID || session.SnapshotGeneration != request.SnapshotGeneration {
 		return result
 	}
@@ -126,30 +142,40 @@ func (broker *Broker) LoginCredential(
 		return result
 	}
 	fields := request.Fields
-	if fields.UsernameRef == fields.PasswordRef || fields.UsernameRef == fields.SubmitRef ||
-		fields.PasswordRef == fields.SubmitRef {
+	if !resolveCredentialStepRefs(&fields, slot.refs) {
 		return result
 	}
-	for ref, destination := range map[string]*string{
-		fields.UsernameRef: &fields.UsernameRef,
-		fields.PasswordRef: &fields.PasswordRef,
-		fields.SubmitRef:   &fields.SubmitRef,
-	} {
-		element, found := slot.refs[ref]
-		// Native Playwright may prefix main-document refs after navigation too.
-		// Frame authority remains excluded by session.FrameID above and the
-		// private driver's exact main-document/form validation before retrieval.
-		if !found || !playwrightTargetPattern.MatchString(element.Target) {
+	fields.Origin = session.SnapshotOrigin
+	if fields.Step != "" {
+		entry, parseErr := url.Parse(fields.Origin)
+		if parseErr != nil {
 			return result
 		}
-		*destination = element.Target
+		fields.WebsiteDomain, err = publicsuffix.EffectiveTLDPlusOne(entry.Hostname())
+		if err != nil {
+			return result
+		}
 	}
-	fields.Origin = session.SnapshotOrigin
 	scope := credentialbroker.Request{
 		Principal: request.Principal, Account: request.Account,
 		Origin: fields.Origin, PolicyRevision: request.PolicyRevision,
 	}
 	if lease.Check(ctx, scope) != nil {
+		return result
+	}
+	fresh := slot.credentials == nil
+	bound := slot.credentials
+	if fresh {
+		if fields.Step == "totp" || fields.Step == "verify" ||
+			(fields.Step != "" && !intent.ValidAlias(request.CredentialID)) {
+			return result
+		}
+		bound = &credentialSession{
+			lease: lease, request: scope, done: make(chan struct{}), credentialID: request.CredentialID,
+		}
+	} else if fields.Step == "" || request.CredentialID != bound.credentialID ||
+		bound.request.Principal != scope.Principal || bound.request.Account != scope.Account ||
+		bound.request.PolicyRevision != scope.PolicyRevision || bound.check(ctx, fields.Origin) != nil {
 		return result
 	}
 	private, ok := worker.(*playwrightWorker)
@@ -171,7 +197,6 @@ func (broker *Broker) LoginCredential(
 	if err != nil {
 		return result
 	}
-	bound := &credentialSession{lease: lease, request: scope, done: make(chan struct{})}
 	slot.credentials = bound
 	operationCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -179,7 +204,7 @@ func (broker *Broker) LoginCredential(
 	go func() {
 		defer close(watchDone)
 		select {
-		case <-lease.Done():
+		case <-bound.lease.Done():
 			cancel()
 		case <-operationCtx.Done():
 		}
@@ -192,6 +217,9 @@ func (broker *Broker) LoginCredential(
 			return errCredentialDriver
 		}
 		for _, value := range [][]byte{username, password} {
+			if len(value) == 0 {
+				continue
+			}
 			release, registerErr := secretvalues.Register(value)
 			if registerErr != nil {
 				return errCredentialDriver
@@ -210,10 +238,20 @@ func (broker *Broker) LoginCredential(
 	// must precede retrieval itself, not only the callback after retrieval.
 	err = bound.check(operationCtx, fields.Origin)
 	if err == nil {
-		err = consume(operationCtx, consumeValues)
+		if fields.Step == "verify" {
+			outcome, err = driver.submitCredential(operationCtx, id, nil, nil)
+		} else {
+			err = consume(operationCtx, consumeValues)
+		}
+	}
+	validOutcome := outcome.code == "logged_in" || outcome.code == "handoff_required"
+	if fields.Step == "verify" {
+		validOutcome = outcome.code == "logged_in" || outcome.code == "unverified"
+	} else if fields.Step != "" {
+		validOutcome = outcome.code == "submitted"
 	}
 	if err != nil || bound.check(ctx, fields.Origin) != nil ||
-		(outcome.code != "logged_in" && outcome.code != "handoff_required") {
+		!validOutcome {
 		if attempted {
 			private.lost = true
 			// The caller's context may be canceled. Abort the private transport so
@@ -228,14 +266,15 @@ func (broker *Broker) LoginCredential(
 				private.lost = true
 				_ = private.client.Close()
 				broker.retireCredentialSession(request.Owner, request.SessionID)
-			} else {
+			} else if fresh {
 				bound.close()
 				slot.credentials = nil
 			}
 		}
 		return result
 	}
-	if bound.protectCookies(outcome.cookies) != nil || driver.bindCredentialOutputs(bound.protectCookies) != nil {
+	if bound.protectCookies(outcome.cookies) != nil ||
+		(fresh && driver.bindCredentialOutputs(bound.protectCookies) != nil) {
 		private.lost = true
 		_ = private.client.Close()
 		broker.retireCredentialSession(request.Owner, request.SessionID)
@@ -245,10 +284,14 @@ func (broker *Broker) LoginCredential(
 	slot.refs, slot.refPositions, slot.inputs = nil, nil, nil
 	slot.navigationID = ""
 	result.Alias, result.Outcome = request.Account, outcome.code
+	result.CredentialID = request.CredentialID
+	if !fresh {
+		return result
+	}
 	closed := bound.done
 	go func() {
 		select {
-		case <-lease.Done():
+		case <-bound.lease.Done():
 		case <-closed:
 			return
 		}

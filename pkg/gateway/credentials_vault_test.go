@@ -22,7 +22,11 @@ func TestCredentialVaultStartupGuardsTokenAndClearsReadBuffer(t *testing.T) {
 		t.Fatal("private vault startup fixture unavailable")
 	}
 	var retained []byte
-	_, err := newCredentialVault(dir, func(_ context.Context, token []byte) (vault.Provider, error) {
+	_, err := newCredentialVault(dir, func(ctx context.Context, token []byte) (vault.Provider, error) {
+		deadline, exists := ctx.Deadline()
+		if !exists || time.Until(deadline) < 30*time.Second || time.Until(deadline) > time.Minute {
+			t.Fatal("SDK startup cannot accommodate the observed cold start within a bounded deadline")
+		}
 		retained = token
 		if secretvalues.Redact(string(token)) != secretvalues.Marker {
 			t.Fatal("SDK initialization began without output protection")

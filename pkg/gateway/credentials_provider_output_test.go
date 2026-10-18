@@ -52,6 +52,11 @@ func credentialProviderFixture(
 	lastLogin := browser.CredentialLoginResult{}
 	failure := ""
 	stepsPerTurn := 6
+	discoveryMode := cfg.Credentials.Accounts[0].DiscoverLogins
+	websiteScript := &credentialWebsiteProviderScript{}
+	if discoveryMode {
+		stepsPerTurn = 11
+	}
 	if connectorMode {
 		stepsPerTurn = 2
 	}
@@ -132,6 +137,12 @@ func credentialProviderFixture(
 					failure = "provider did not receive the requested pull request projection"
 				}
 			}
+		} else if discoveryMode {
+			name, arguments, err = websiteScript.next(phase, decode)
+			if err != nil {
+				failure = err.Error()
+			}
+			lastLogin = websiteScript.login
 		} else {
 			switch phase {
 			case 0:
@@ -313,8 +324,12 @@ func credentialProviderFixture(
 		defer cancelTurn()
 		mu.Lock()
 		step, activeCancel = 0, cancelTurn
+		websiteScript = &credentialWebsiteProviderScript{}
 		mu.Unlock()
 		prompt := "Log in to fixture-account, observe the result, close the browser, then report completion."
+		if discoveryMode {
+			prompt = "Find the saved website Login, submit it, fill its stored authenticator code, verify login, close the browser."
+		}
 		if connectorMode {
 			prompt = "Read open pull requests from fixture-owner/fixture-repo with fixture-account, then report completion."
 		}

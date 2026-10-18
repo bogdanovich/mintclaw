@@ -31,19 +31,22 @@ type credentialRoutes interface {
 // credentialRuntime is the gateway's sole approval owner. It creates neither
 // a separate listener nor a model-facing secret retrieval API.
 type credentialRuntime struct {
-	controller        *approval.Controller
-	routes            credentialRoutes
-	once              sync.Once
-	closeErr          error
-	consumeLogin      func(context.Context, vault.Binding, func([]byte, []byte) error) error
-	consumeAPIKey     func(context.Context, vault.Binding, func([]byte) error) error
-	loginEnabled      bool
-	githubReadEnabled bool
-	githubReader      credentialGitHubReader
-	ownerID           string
-	hostID            string
-	origin            string
-	notify            credentialNotifier
+	controller          *approval.Controller
+	routes              credentialRoutes
+	once                sync.Once
+	closeErr            error
+	consumeLogin        func(context.Context, vault.Binding, func([]byte, []byte) error) error
+	findLogins          func(context.Context, string, vault.DiscoveryQuery) ([]vault.Candidate, error)
+	consumeWebsiteLogin func(context.Context, vault.Binding, string, string, func([]byte, []byte) error) error
+	discoveryAlias      string
+	consumeAPIKey       func(context.Context, vault.Binding, func([]byte) error) error
+	loginEnabled        bool
+	githubReadEnabled   bool
+	githubReader        credentialGitHubReader
+	ownerID             string
+	hostID              string
+	origin              string
+	notify              credentialNotifier
 }
 
 func setupCredentialRuntime(
@@ -68,6 +71,11 @@ func setupCredentialRuntime(
 	}
 	runtime := &credentialRuntime{controller: controller, routes: routes}
 	runtime.loginEnabled = cfg.Credentials.BrowserLoginEnabled
+	for _, account := range cfg.Credentials.Accounts {
+		if account.DiscoverLogins {
+			runtime.discoveryAlias = account.Alias
+		}
+	}
 	runtime.githubReadEnabled = cfg.Credentials.GitHubReadEnabled
 	if runtime.githubReadEnabled {
 		runtime.githubReader = githubread.New(nil)
@@ -80,6 +88,8 @@ func setupCredentialRuntime(
 	// An unavailable SDK never provides a login consumer or value access.
 	if provider, vaultErr := newCredentialVault(cfg.Credentials.StateDirectory, vault.New); vaultErr == nil {
 		runtime.consumeLogin = provider.UseLogin
+		runtime.findLogins = provider.FindLogins
+		runtime.consumeWebsiteLogin = provider.UseWebsiteLogin
 		runtime.consumeAPIKey = provider.UseAPIKey
 	}
 	phone, err := approval.NewPhoneHandler(controller)
