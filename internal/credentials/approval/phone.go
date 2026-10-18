@@ -331,9 +331,9 @@ func (handler *PhoneHandler) ServeHTTP(writer http.ResponseWriter, request *http
 	}
 }
 
-// ServeHTTP admits enrollment only with the private console bootstrap token.
+// ServeHTTP admits enrollment only with the private operator bootstrap token.
 // There is no HTTP route to issue or refresh one. Startup mounts this handler
-// separately from PhoneHandler, after qualifying the private console boundary.
+// separately from PhoneHandler, after qualifying the private operator setup boundary.
 func (enrollment *Enrollment) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if !enrollment.valid() {
 		writePhoneError(writer, http.StatusServiceUnavailable)

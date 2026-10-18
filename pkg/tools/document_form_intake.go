@@ -345,7 +345,6 @@ func (tool *DocumentTool) continueFormIntake(
 		if pending == reference {
 			intake.Intent = result.intent
 		}
-		intake.Findings = append(intake.Findings, result.findings...)
 		if processErr != nil {
 			intake.Failure = &safeDocumentFormFailure{
 				Code:    "intake_pending",
@@ -370,9 +369,23 @@ func (tool *DocumentTool) continueFormIntake(
 		return documentFormToolError(document.ErrFormJobConflict)
 	}
 	intake.Progress = *progress
-	if len(intake.Findings) > document.MaxFormIntakeCandidates {
-		intake.FindingsTruncated = true
-		intake.Findings = intake.Findings[:document.MaxFormIntakeCandidates]
+	// A later input may settle earlier findings in this same atomic ledger.
+	// Project current native state, not the earlier intermediate pass results.
+	for _, pending := range references {
+		current, readErr := tool.formJobs.ReadFormIntakeInput(ctx, pending, owner)
+		if readErr != nil {
+			return documentFormToolError(readErr)
+		}
+		for _, finding := range current.Findings {
+			if len(intake.Findings) < document.MaxFormIntakeCandidates {
+				intake.Findings = append(intake.Findings, finding)
+			} else {
+				intake.FindingsTruncated = true
+			}
+		}
+	}
+	if progress.PendingInputs == 0 {
+		intake.Failure = nil
 	}
 	record, err := tool.formJobs.Get(ctx, input.JobID, owner)
 	if err != nil {

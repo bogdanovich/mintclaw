@@ -2,20 +2,28 @@ package eval
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
 
 type Preset struct {
-	Version           int      `json:"version"`
-	ID                string   `json:"id"`
-	ConfigPath        string   `json:"config_path"`
-	ExpectedAgent     string   `json:"expected_agent"`
-	ExpectedWorkspace string   `json:"expected_workspace"`
-	IsolationRoot     string   `json:"isolation_root"`
-	Capabilities      []string `json:"capabilities"`
-	UserModel         string   `json:"user_model,omitempty"`
-	JudgeModel        string   `json:"judge_model,omitempty"`
+	Version           int             `json:"version"`
+	ID                string          `json:"id"`
+	ConfigPath        string          `json:"config_path"`
+	ExpectedAgent     string          `json:"expected_agent"`
+	ExpectedWorkspace string          `json:"expected_workspace"`
+	IsolationRoot     string          `json:"isolation_root"`
+	Capabilities      []string        `json:"capabilities"`
+	UserModel         string          `json:"user_model,omitempty"`
+	JudgeModel        string          `json:"judge_model,omitempty"`
+	WorkspaceFiles    []WorkspaceFile `json:"workspace_files,omitempty"`
+}
+
+// WorkspaceFile admits one reviewed input, not a directory or runtime state.
+type WorkspaceFile struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
 }
 
 // LoadPreset checks the manifest only. Loading credentials, contacting a
@@ -59,7 +67,37 @@ func (preset Preset) Validate() error {
 		preset.JudgeModel != "" && !validID(preset.JudgeModel) {
 		return ErrInvalidPreset
 	}
+	if len(preset.WorkspaceFiles) > 64 {
+		return ErrInvalidPreset
+	}
+	paths := make(map[string]bool, len(preset.WorkspaceFiles))
+	for _, file := range preset.WorkspaceFiles {
+		key := strings.ToLower(file.Path)
+		if !preparableWorkspacePath(file.Path) || !validDigest(file.SHA256) || paths[key] {
+			return ErrInvalidPreset
+		}
+		paths[key] = true
+	}
+	for name := range paths {
+		for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
+			if paths[parent] {
+				return ErrInvalidPreset
+			}
+		}
+	}
 	return nil
+}
+
+func preparableWorkspacePath(name string) bool {
+	if !safeRelativePath(name) {
+		return false
+	}
+	switch name {
+	case "AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md":
+		return true
+	default:
+		return strings.HasPrefix(name, "skills/")
+	}
 }
 
 func localPath(value string) bool {
