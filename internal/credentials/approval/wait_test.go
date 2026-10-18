@@ -183,3 +183,73 @@ func TestApprovalWaitRequiresCurrentPolicyAndVerifiedMatchingGrant(t *testing.T)
 		t.Fatal("invented reference resolved")
 	}
 }
+
+func TestDiscardPendingRequestRequiresOriginalPrincipalAndRetiresChallenge(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.enroll(t)
+	id, ceremony := fixture.approval(t, time.Hour)
+	foreign := testPrincipal
+	foreign.ActorID = "other"
+	if fixture.controller.DiscardPendingRequest(foreign, id) {
+		t.Fatal("foreign principal discarded an approval request")
+	}
+	if status, _ := fixture.controller.Status(t.Context(), testPrincipal, id); status != intent.ApprovalPending {
+		t.Fatal("foreign cleanup changed the pending request")
+	}
+	if !fixture.controller.DiscardPendingRequest(testPrincipal, id) {
+		t.Fatal("original principal could not discard an unattempted request")
+	}
+	if _, err := fixture.controller.FinishApproval(
+		t.Context(),
+		ceremony.ID,
+		fixture.assertion(
+			t,
+			ceremony,
+			testOrigin,
+			protocol.FlagUserPresent|protocol.FlagUserVerified,
+			1,
+			false,
+		),
+	); err == nil {
+		t.Fatal("discarded challenge authorized a grant")
+	}
+	if _, err := fixture.controller.BeginApproval(t.Context(), id); err == nil {
+		t.Fatal("discarded request could be reopened")
+	}
+	if _, err := fixture.controller.Request(t.Context(), testPrincipal, []string{"facebook"}, time.Hour); err != nil {
+		t.Fatal("cleanup did not allow a fresh request")
+	}
+}
+
+func TestDiscardPendingRequestCannotChangeAttemptedApproval(t *testing.T) {
+	for _, valid := range []bool{false, true} {
+		name := "failed"
+		if valid {
+			name = "verified"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := newFixture(t)
+			fixture.enroll(t)
+			id, ceremony := fixture.approval(t, time.Hour)
+			flags := protocol.FlagUserPresent
+			if valid {
+				flags |= protocol.FlagUserVerified
+			}
+			grant, err := fixture.controller.FinishApproval(t.Context(), ceremony.ID,
+				fixture.assertion(t, ceremony, testOrigin, flags, 1, false))
+			if (err == nil) != valid {
+				t.Fatal("attempted approval fixture outcome changed")
+			}
+			if fixture.controller.DiscardPendingRequest(testPrincipal, id) {
+				t.Fatal("notification cleanup removed an attempted approval")
+			}
+			status, active := fixture.controller.Status(t.Context(), testPrincipal, id)
+			if valid && (status != intent.GrantActive || active != grant.ID) {
+				t.Fatal("notification cleanup revoked a verified grant")
+			}
+			if !valid && status != intent.Denied {
+				t.Fatal("notification cleanup revived a failed approval")
+			}
+		})
+	}
+}

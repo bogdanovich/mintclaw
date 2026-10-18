@@ -72,6 +72,9 @@ creates a fresh challenge without renewing the original request deadline.
 The phone page refreshes that challenge on the approval click as well, so a page
 left open past five minutes can still approve its live two-hour request.
 Finishing a challenge checks that deadline again after durable owner persistence.
+If a phone notification cannot be admitted, the controller discards the new
+unattempted request for its original principal, including its challenge. Cleanup
+works after caller cancellation and cannot revoke an already attempted approval.
 
 The browser source returns immediately with a JSON-excluded wait descriptor.
 Its durable reference is SHA-256 of the private phone locator, not that locator

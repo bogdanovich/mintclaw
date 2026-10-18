@@ -27,6 +27,25 @@ func requestWaitReference(id string) string {
 	return hex.EncodeToString(digest[:])
 }
 
+// DiscardPendingRequest releases an unpublished request and its challenge for
+// its original principal. Cleanup must work after caller cancellation; it never
+// removes an attempted approval or revokes a verified grant.
+func (controller *Controller) DiscardPendingRequest(principal credentialbroker.Principal, id string) bool {
+	if controller == nil {
+		return false
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	request := controller.requests[id]
+	if !intent.ValidReference(id) || request == nil || request.scope.Principal != principal ||
+		request.attempted || request.grant != "" {
+		return false
+	}
+	delete(controller.ceremonies, request.ceremony)
+	delete(controller.requests, id)
+	return true
+}
+
 func (controller *Controller) requestStatusLocked(
 	principal credentialbroker.Principal,
 	id string,

@@ -64,6 +64,7 @@ func (runtime *credentialRuntime) credentialLeaseOrApproval(
 	}
 	waiting, err := runtime.controller.WaitReference(ctx, scope.Principal, reference)
 	if err != nil || runtime.notify(ctx, runtime.origin+credentialPagePath+"#request="+reference) != nil {
+		runtime.controller.DiscardPendingRequest(scope.Principal, reference)
 		return approval.LoginLease{}, approval.Wait{}, errCredentialsUnavailable
 	}
 	return approval.LoginLease{}, waiting, errCredentialApprovalRequired

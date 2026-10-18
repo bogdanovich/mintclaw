@@ -34,7 +34,10 @@ import (
 // Opt-in real Chromium + virtual WebAuthn + production gateway/browser tools.
 // This qualifies synthetic flow integration, never a physical phone or account.
 func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
-	testCredentialAliasBrowserAndPhoneFixture(t, "", "logged_in")
+	t.Run("login", func(t *testing.T) { testCredentialAliasBrowserAndPhoneFixture(t, "", "logged_in") })
+	t.Run("notification-failure", func(t *testing.T) {
+		testCredentialBrowserFixtureScenario(t, "", "logged_in", "notification_failure")
+	})
 }
 
 func TestCredentialDiscoveredBrowserAndPhoneFixture(t *testing.T) {
@@ -111,7 +114,8 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	restart, canceled, expiry := mode == "restart", mode == "cancel", mode == "expiry"
 	durableApproval := mode == "discovery_wait"
 	discovery := mode == "discovery" || durableApproval
-	if mode != "" && !restart && !canceled && !expiry && !discovery {
+	failedNotifications := mode == "notification_failure"
+	if mode != "" && !restart && !canceled && !expiry && !discovery && !failedNotifications {
 		t.Fatal("unknown credential fixture scenario")
 	}
 	connectorMode := strings.HasPrefix(providerKind, "github:")
@@ -536,7 +540,10 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 				runtimeMu.RLock()
 				defer runtimeMu.RUnlock()
 				var performErr error
-				if !durableApproval && !connectorMode {
+				if failedNotifications {
+					performErr = credentialFixtureRejectNotifications(ctx, credentials, cfg, origin)
+				}
+				if performErr == nil && !durableApproval && !connectorMode {
 					performErr = awaitCredentialFixturePhoneGrant(ctx, credentials, cfg, origin)
 				}
 				var result browser.CredentialLoginResult

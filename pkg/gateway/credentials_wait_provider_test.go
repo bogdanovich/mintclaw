@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/internal/credentials/approval"
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -26,6 +27,43 @@ type credentialProviderHarness struct {
 	cancel        func()
 	notifications <-chan bus.OutboundMessage
 	waiting       <-chan struct{}
+}
+
+// A temporary delivery outage must not occupy the two-hour pending pool.
+// The real synthetic phone enrolls first; no grant or vault values exist yet.
+func credentialFixtureRejectNotifications(
+	ctx context.Context, runtime *credentialRuntime, cfg *config.Config, origin string,
+) error {
+	account := cfg.Credentials.Accounts[0]
+	scope, _, err := runtime.controller.LoginRequest(ctx, account.Principals[0], account.Alias, origin)
+	if err != nil {
+		return errors.New("notification capacity fixture scope unavailable")
+	}
+	original := runtime.notify
+	defer func() { runtime.notify = original }()
+	notified := 0
+	for _, canceled := range []bool{false, true} {
+		for range approval.MaxPending + 1 {
+			callCtx, cancel := context.WithCancel(ctx)
+			runtime.notify = func(context.Context, string) error {
+				notified++
+				if canceled {
+					cancel()
+					return callCtx.Err()
+				}
+				return errors.New("synthetic notification admission failure")
+			}
+			_, waiting, requestErr := runtime.credentialLeaseOrApproval(callCtx, scope)
+			cancel()
+			if !errors.Is(requestErr, errCredentialsUnavailable) || waiting.Reference != "" {
+				return errors.New("failed notification provided a usable approval wait")
+			}
+		}
+	}
+	if notified != 2*(approval.MaxPending+1) {
+		return errors.New("failed notifications exhausted the pending approval pool")
+	}
+	return nil
 }
 
 type credentialWaitDelivery struct {
