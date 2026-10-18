@@ -34,9 +34,12 @@ creation consumes its reservation because the billable outcome may be unknown.
 
 Steel meters browser time, proxy bandwidth, and CAPTCHA solves separately. Its
 session creation API does not offer a hard USD, bandwidth, or CAPTCHA-count cap.
-A cost stop threshold therefore stops a session when reported cost reaches the
-threshold, with possible overshoot while usage and billing reports propagate.
-Document that limitation explicitly. Use a small prepaid account balance with
+Steel Cloud currently reports HTTP 409 for cost until a session is released, so
+USD reservations are admission allowances and cannot enforce a live spending
+stop. Pending final usage must not close a healthy session. Keep the independent
+provider timeout and session/seconds limits; unexpected metering failures still
+stop a session, as does a reported amount at the threshold if available.
+Document those limitations explicitly. Use a small prepaid account balance with
 automatic top-up disabled to bound account exposure during the initial trial.
 
 ## Acceptance exercise

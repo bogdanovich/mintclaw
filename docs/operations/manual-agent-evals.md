@@ -38,6 +38,22 @@ provider defaults of the recorded code revision. The recorded model is the confi
 independently observed effective model. Returned usage is preserved as raw integers per call; missing usage and
 unobservable provider-internal attempts remain unknown.
 
+New role-call `boundary` receipts describe only `typed_provider_arguments_and_response_v1`: the actual tool-free
+provider arguments and every string/byte field of its typed response, including reasoning and discarded tool
+fields. Inspection precedes prompt hashing, response projection, and provider-error/shape handling. A rejected
+input retains no prompt hash or unverified model identity. Late partial responses are inspected even after caller
+cancellation. The bounded walk does not invoke custom marshaling methods; cycles, unsupported values, and exhausted
+limits remain unavailable. Limits are 4,096 visited nodes, depth 24, and 64 KiB total strings/bytes per boundary.
+This is not a claim about raw HTTP bytes, provider-internal attempts, arbitrary encodings, or whole-runtime privacy.
+
+During a serial run, both roles guard against private values retained from all prepared PDF trials, even after an
+earlier trial releases its fixture. A direct role call guards only its supplied facts and configured credentials;
+the receipt distinguishes `run_retained_facts`, `call_facts`, and `credentials_only`. Fact values never enter the
+receipt or the user role's fact-handle catalog. Known leaks fail; unavailable boundary inspection cannot qualify
+evidence, even with an optional rubric. Regrade refuses unsafe role receipts before any billable call; comparison
+rejects a pass that contradicts a retained leak or unknown. Legacy receipts stay legacy, without new coverage.
+These guards do not grant PDF judge/regrade eligibility or complete the domain suites.
+
 Calibration compares judge findings to labels only after the call; it does not expose labels to the judge. A
 calibration pass means agreement on these examples, not a passing target task. Deterministic stub-provider tests
 verify contracts, privacy boundaries, and reduction only. They are not live LLM calibration or domain qualification.

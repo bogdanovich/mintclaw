@@ -16,8 +16,9 @@ type MessageBus interface {
 	// PublishInbound sends an inbound message to be processed.
 	PublishInbound(ctx context.Context, msg bus.InboundMessage) error
 
-	// AckInbound confirms that a durable inbound message has been accepted or processed.
-	AckInbound(ctx context.Context, msg bus.InboundMessage) error
+	// AckInbound removes an inbound source. A nonzero receipt proves durable
+	// removal of a validated native record, rather than completion of its turn.
+	AckInbound(ctx context.Context, msg bus.InboundMessage) (bus.InboundAckReceipt, error)
 
 	// PersistInboundContext stores route-owned facts learned before a durable
 	// inbound message starts execution.

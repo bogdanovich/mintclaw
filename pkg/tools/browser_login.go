@@ -4,9 +4,12 @@ import (
 	"context"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/credentialbroker/intent"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -120,5 +123,18 @@ func (tool *BrowserLoginTool) Execute(ctx context.Context, args map[string]any) 
 		return denied()
 	}
 	result.Alias = request.Account
-	return tool.runtime.result(result)
+	output := tool.runtime.result(result)
+	if result.Outcome == "logged_in" {
+		// Only the private consumer's confirmed outcome certifies the action.
+		// Keep the public result alias-only; normal runtime receipt recovery
+		// supplies this opaque ID when a declared action needs to claim it.
+		output.WithWriteAudit(toolshared.WriteAuditEntry{
+			Kind: taskresult.ObjectiveKindExternalAction, Target: "account:" + request.Account,
+			Action: "login", Tool: tool.Name(), Summary: "Account login confirmed.",
+			Metadata: map[string]string{
+				"invocation_id": "browser_login_" + uuid.NewString(), "outcome": result.Outcome,
+			},
+		})
+	}
+	return output
 }

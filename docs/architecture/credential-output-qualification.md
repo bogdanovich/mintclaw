@@ -21,13 +21,16 @@ intercepts the SDK's exact Responses destination locally; it does not load an
 OAuth store or add a production endpoint override. Neither variant contacts an
 LLM provider. The website is intercepted inside Chromium and has no real account.
 
-Each scenario runs two separate user-requested turns that open a browser,
-observe login fields, request the account alias and return a final response.
-Scenarios cover confirmed login, a configured MFA handoff and submission
-without confirmed success. Confirmed/handoff observations are inspected before
-closing the session; an unconfirmed result retires the browser. Each browser
-permits exactly one login submission, so an uncertain effect cannot silently
-replay. A second explicit user turn reuses the same signed approval.
+The browser/provider scenarios make two separate explicit login attempts that
+open a browser, observe login fields and request the account alias. Normal
+scenarios cover confirmed login, a configured MFA handoff and submission without
+confirmed success. Confirmed/handoff observations are inspected before closing
+the session; an unconfirmed result retires the browser. Each browser permits
+exactly one login submission, so an uncertain effect cannot silently replay.
+The second attempt reuses the signed approval except in runtime-recreation and
+expiry scenarios, which require a fresh phone assertion before another retrieval.
+The caller-cancellation scenario cancels the first actual turn during submission;
+its second explicit turn reuses the still-valid approval.
 
 The fixture deliberately echoes the synthetic username, password and cookie in
 its result page/title. The MFA page also contains a synthetic one-time-code
@@ -47,10 +50,11 @@ output, including after browser cleanup releases session guards.
 | Diagnostic traces | Enable `redacted_content` capture, validate and inspect both actual turn traces | Recovery paths still require explicit inventory |
 | Support bundles | Query both actual traces and generate metadata-only and private redacted-content bundles; scan every generated file | Export evidence covers the current typed diagnostics exporter |
 | Opaque artifacts | Credential-bearing screenshot/download/unrestricted-execution admission denies | Enabling an artifact path requires its own qualification |
-| Phone/grant lifetime | Actual virtual passkey approval/revoke and signed lease/component tests | Physical Android enrollment, notification delivery and personal-account pilot remain required |
+| Phone/grant lifetime | Actual virtual passkey approval/revoke and signed lease/component tests; Pixel setup and first real Android-approved Craigslist login recorded in the pilot | Physical same-scope grant reuse and revocation retiring an open authenticated browser remain required |
 | MFA/unconfirmed submission | Actual provider-backed turns, fixed outcomes, single-submit assertion and browser cleanup; two actual traces and four bundles per scenario | MFA continuation/private operator interaction remains unqualified |
 | Credential runtime recreation | Two actual provider-backed browser turns for each qualified adapter, with the credential runtime closed/recreated from its owner store between turns; retained passkey, denied old lease/grant, fresh notification/assertion before another retrieval; inspect both traces/history/exports | Exercises component recreation inside the fixture, not an OS process crash |
-| Cancel/expiry | Existing focused component tests | The complete serialized-output scenario matrix remains incomplete |
+| Caller cancellation during submission | Codex-backed turn canceled only after Chromium confirms the synthetic username/password POST; require browser retirement before a second explicit turn; inspect requests, history, traces and exports after cleanup | Qualifies this cancellation point and adapter, alongside focused component tests |
+| Grant expiry during submission | Real short-lived signed approval, positive live-lease check at POST, held website response until expiry, cancellation observed inside the private consumer before login returns, uncertain outcome and browser retirement checked before the provider can explicitly close it; a fresh phone assertion precedes the second retrieval; inspect both Codex-backed turns | The fixture shortens the grant to ten seconds; production account requests retain their 20-hour maximum |
 
 The tests report fixed stages and boolean assertions. They do not print a
 detected canary, HTTP request body, vault error or child-process output.

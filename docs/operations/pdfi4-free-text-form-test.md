@@ -119,6 +119,9 @@ partial scope to bypass required missing-data checks.
 Use fresh jobs as necessary; do not corrupt the baseline transaction while trying every negative scenario.
 
 1. Supply an unqualified name when both people are candidates. Expect a role clarification, not copying to both.
+   Also test two distinct people with the same name and one telephone whose owner is initially unspecified.
+   Clarify which person owns it without repeating the number; accepted names must not be requested again,
+   and the other person's telephone must remain unfilled unless explicitly supplied or intentionally blanked.
 2. Mix a fact with “что означает это поле?”. The explanation request must not be written wholesale into a field.
 3. Give an invalid date or contradictory phone. Only targeted clarification/correction may resolve it; other
    accepted facts must survive unchanged.
@@ -138,10 +141,23 @@ Use fresh jobs as necessary; do not corrupt the baseline transaction while tryin
 
 After a failure, preserve the source/job/interaction/operation/trace identifiers and exact error code, not protected
 values. Do not resend finish/approval blindly or create a second job merely because a response timed out.
+`/retry_form` cannot recover an exhausted persisted extraction budget by waiting or resetting it. Retain the
+original task and obtain an explicit decision before substituting a separately labeled fresh qualification;
+do not describe that new test as recovery of old input. Native capacity state outranks a model's “temporary” wording.
+Also compare acceptance counts with the failure stage: a turn can accept the new clarification while older retained
+input is still capacity-blocked. Do not treat “could not apply” prose as authoritative or resend confirmed facts.
+The 2026-10-18 fresh I-134 run still exposed this incorrect reporting/repeated-question behavior; it is an open
+qualification finding, not an instruction to keep retrying the exhausted input.
 
 ## Large Public Form And Unsupported Output
 
 The official I-134 is a separate required complete-applicable transaction, not a substitute for the unrelated form.
+It is **not fully qualified today**. The fresh 2026-10-18 test found three applicable read-only source fields
+controlled by XFA conditional/calculation scripts; the current backend neither executes those scripts nor writes
+those fields. The operator deferred that capability to the
+[separate follow-up](../architecture/pdf-conditional-calculated-fields-roadmap.md). Do not bypass flags, omit
+these targets from a full-output oracle, or label a static subset as a complete I-134. Test ordinary-form intake
+independently while this official-form gate remains open.
 Use the pinned edition/hash/provenance from the goal's qualification record, synthetic sponsor/beneficiary/address/
 financial data and actual role/applicability instructions. Do not infer legal or financial facts, sign, certify or submit.
 Inspect every visible page independently and correlate the one delivered PDF to the verified native operation.

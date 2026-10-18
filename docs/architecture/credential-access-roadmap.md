@@ -127,8 +127,9 @@ qualification and physical-device acceptance are recorded separately below.
   [#1643](https://github.com/bogdanovich/mintclaw/pull/1643). Alias-only tool
   wiring and generic notifications are implemented by the
   [integrated alias operation](credential-alias-browser-login.md), merged in
-  [#1654](https://github.com/bogdanovich/mintclaw/pull/1654). Browser login remains
-  disabled in the pilot profile until the remaining acceptance gates pass.
+  [#1654](https://github.com/bogdanovich/mintclaw/pull/1654). Browser login is now
+  enabled for the selected Craigslist account/principal after the preparation
+  gates passed; broader rollout still requires the remaining acceptance checks.
 - TR2 setup: [private item discovery](credential-item-discovery.md) in
   [#1679](https://github.com/bogdanovich/mintclaw/pull/1679) searches the dedicated
   vault's Login overviews by website or item name. The operator chooses a
@@ -136,6 +137,10 @@ qualification and physical-device acceptance are recorded separately below.
   UUIDs or retrieving password fields. Website matching does not expand runtime
   origins; site flow and actor scope stay in local configuration. Personal item
   identifiers and site-specific behavior do not belong in production Go code.
+  This CLI update is merged and installed, including the localhost enrollment
+  repair. The CLI installation preserved the running gateway and owner key;
+  the operator subsequently provisioned the token privately. Website and name
+  discovery both found the configured Login item without reading passwords.
 - TR3: gateway-owned enrollment/approval/revocation is merged in
   [#1631](https://github.com/bogdanovich/mintclaw/pull/1631). Synthetic signed and
   virtual-authenticator tests cover the component. The alias operation queues
@@ -145,9 +150,10 @@ qualification and physical-device acceptance are recorded separately below.
   update is deployed through the existing HTTPS route. The operator completed
   verification on a Pixel using Android Chrome and 1Password; server metadata
   confirms enrollment is durably activated. This retrieved no credentials and
-  issued no account grant. Actual account-request notification, approval and
-  revocation remain acceptance steps. State-changing API calls retain the exact
-  same-origin boundary.
+  issued no account grant. The first subsequent real account request delivered
+  its chat notice, the owner reported Android approval, and the private login
+  succeeded. Physical grant reuse and revocation remain acceptance steps.
+  State-changing API calls retain the exact same-origin boundary.
 - TR4: the existing browser's private credential transaction is merged in
   [#1637](https://github.com/bogdanovich/mintclaw/pull/1637), including grant
   checks around preparation/retrieval and authenticated session retirement.
@@ -158,21 +164,33 @@ qualification and physical-device acceptance are recorded separately below.
   components for synthetic qualification. The initial supported placement is
   the gateway's local Playwright library with an ephemeral profile. Credential
   use through companion, cloud and managed browser profiles remains denied.
-  The selected site's success evidence still requires private qualification.
+  The selected site's success URL and visible logout marker were privately
+  qualified and saved in reference-only local flow configuration.
 - TR6: synthetic [integrated output qualification](credential-output-qualification.md)
   exercises two real agent turns, provider request serialization, canonical
   history, Seahorse state, browser state, logs, traces and both support-bundle
   modes through the production OpenAI-compatible and Codex OAuth/Responses
   adapters, including MFA handoff and uncertain-submission outcomes. The merged
-  phone-fix deployment passed all nine combined browser, provider and GitHub
-  fixture scenarios with the race detector. These use local scripted peers and
-  virtual passkeys, with no personal credentials or website traffic. The
-  inventory retains its explicit cancellation/expiry/restart and recovery
-  qualification limits; unqualified fallback providers must be excluded from
-  the pilot.
+  phone-fix deployment passed the initial nine combined browser, provider and
+  GitHub fixture scenarios. Merged
+  [#1700](https://github.com/bogdanovich/mintclaw/pull/1700) adds credential-runtime
+  recreation for both qualified adapters;
+  [#1704](https://github.com/bogdanovich/mintclaw/pull/1704) adds actual Codex turn
+  cancellation and signed-grant expiry during submission. All thirteen cases
+  passed with the race detector at the reviewed test head. Expiry must cancel
+  the private consumer and retire the browser before provider-scripted cleanup;
+  isolated negative controls fail when either mechanism is disabled. These use
+  local scripted peers and virtual passkeys, with no personal credentials or
+  website traffic. OS process-crash recovery, private MFA continuation and
+  other provider protocols retain explicit qualification limits; unqualified
+  fallback providers must be excluded from the pilot.
 - TR6 pilot selection: the operator selected Craigslist. The
   [pilot sequence](credential-craigslist-pilot.md) records public form evidence,
-  private setup and the remaining Android/account acceptance checks.
+  completed private setup and the first real Android-approved login on qualified
+  runtime `694d716db119e14044faffbe4cd68fb1567cba25`. Its tool returned only the
+  alias and `logged_in`; same-scope grant reuse and revocation remain pending.
+  The selected headless ephemeral browser is separate from the remote desktop
+  and does not retain a website session after closure.
 - TR5: the [GitHub read connector](credential-github-read-connector.md) is the
   initial read-only default while the operator chooses a preferred API. It
   reuses phone approval for exact configured repositories and an API Credential
@@ -181,12 +199,14 @@ qualification and physical-device acceptance are recorded separately below.
   merged in [#1673](https://github.com/bogdanovich/mintclaw/pull/1673) and included
   in the deployed binary. The connector remains disabled pending configuration
   and real-token acceptance.
-- TR5/TR6: connector rollout, full serialized-output qualification and
-  personal-account pilot are incomplete. At the latest protected-setup check,
-  no service-account token was provisioned. Read-only dedicated-vault scope,
-  protected token entry, exact site outcome metadata, real phone approval,
-  login, grant reuse and revocation remain. Verified phone setup alone does not
-  establish any of those outcomes. Passing component tests do not prove the
-  complete feature or absence of secrets from every enabled output.
+- TR5/TR6: real connector rollout and the personal-account pilot are incomplete.
+  Synthetic output qualification covers the explicitly inventoried routes and
+  scenarios, not every possible provider or recovery path.
+  Dedicated-vault read-only scope is operator-confirmed; protected token entry,
+  exact site outcome metadata and the first real Android-approved login are
+  recorded. Physical grant reuse and revocation remain. These observations do
+  not expand the synthetic inventory's provider/recovery limits. Passing
+  component tests or one successful login do not prove the complete feature or
+  absence of secrets from every possible output.
 - Earlier PR and qualification records are preserved in the
   [historical roadmap](credential-isolated-runtime-history.md).

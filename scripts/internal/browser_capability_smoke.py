@@ -23,6 +23,10 @@ SCHEMA_VERSION = "mintclaw.browser_smoke.v1"
 MAX_INPUT_BYTES = 1024 * 1024
 
 SUITE_CHECKS = {
+    "image-transfer-freeform": (
+        "initial_blank", "image_observed", "original_artifact_retained",
+        "upload_selected", "upload_received", "source_page_preserved",
+    ),
     "image-transfer": (
         "initial_blank", "image_observed", "download_not_dispatched",
         "same_session_preserved", "original_artifact_retained", "upload_selected",
@@ -114,6 +118,10 @@ SUITE_CHECKS = {
 }
 
 SUITE_STAGES = {
+    "image-transfer-freeform": (
+        ("image-transfer-freeform", SUITE_CHECKS["image-transfer-freeform"],
+         {"browser_targets": 1, "browser_session": 2, "browser_observe": 5, "browser_act": 4}),
+    ),
     "image-transfer": (
         ("image-transfer", SUITE_CHECKS["image-transfer"],
          {"browser_targets": 1, "browser_session": 2, "browser_observe": 5, "browser_act": 5}),
@@ -434,6 +442,7 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
                 self.server.image_events["uploads"] += 1
                 self.server.image_events["uploaded-bytes"] = len(body)
                 self.server.image_events["uploaded-sha256"] = hashlib.sha256(body).hexdigest()
+                self.server.image_events["uploaded-content-type"] = self.headers.get("Content-Type", "")
             self._reply("text/plain", b"UPLOAD_RECEIVED_ORIGINAL" if body == TRANSFER_IMAGE else b"UPLOAD_WRONG_BYTES")
             return
         event = self.path.removeprefix("/browser-smoke/semantic-event/")
@@ -465,6 +474,7 @@ def serve(args: argparse.Namespace) -> int:
     server.image_events = {
         "source-visits": 0, "authenticated-image-reads": 0, "unauthorized-reads": 0,
         "unexpected-clicks": 0, "uploads": 0, "uploaded-bytes": 0, "uploaded-sha256": "",
+        "uploaded-content-type": "",
     }
     host = args.advertise_host
     if ":" in host and not host.startswith("["):
@@ -788,9 +798,9 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
                 else {"browser_act": 1} if stage_name in {"click-recovery", "image-transfer"}
                 else None,
             )
-            if stage_name in {"semantic-observation", "image-transfer"}:
+            if stage_name in {"semantic-observation", "image-transfer", "image-transfer-freeform"}:
                 allowed = {"browser_targets", "browser_session", "browser_observe", "browser_act", "tool_search_tool_bm25"}
-                if stage_name == "image-transfer":
+                if stage_name in {"image-transfer", "image-transfer-freeform"}:
                     allowed.add("browser_contexts")  # Evidence admits only read-only list operations.
                 if set(evidence["tool_calls"]).difference(allowed):
                     raise ValueError("invalid_execution_evidence")
@@ -842,12 +852,13 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         ]
         suite_closed = all(result.get("session_closed") is True for result in stage_results)
         all_checks_passed = all(item["state"] == "passed" for item in report["checks"])
-        if args.suite == "image-transfer":
+        if args.suite in {"image-transfer", "image-transfer-freeform"}:
             oracle = load_json(args.image_oracle)
             expected_oracle = {
                 "source-visits": 1, "authenticated-image-reads": 2, "unauthorized-reads": 0,
                 "unexpected-clicks": 0, "uploads": 1, "uploaded-bytes": len(TRANSFER_IMAGE),
                 "uploaded-sha256": hashlib.sha256(TRANSFER_IMAGE).hexdigest(),
+                "uploaded-content-type": "image/png",
             }
             oracle_passed = oracle == expected_oracle
             report["fixture_outcome_audit"] = {

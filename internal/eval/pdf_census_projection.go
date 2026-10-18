@@ -83,20 +83,40 @@ func (prepared *pdfTrial) projectInventory(
 }
 
 func (domain *pdfConversation) concludeNativeCensus(ctx context.Context, trial *Trial) {
+	if domain.prepared.census == nil {
+		return
+	}
+	after, err := domain.prepared.nativeInventory(ctx)
+	defer after.close()
+	inspection := domain.inspectNativeCensus(ctx, trial, after, err, nil)
+	trial.PDF.Census = inspection.evidence
+	domain.censusWrites = inspection.writes
+	if inspection.violation != "" {
+		failPDFArtifact(trial, Fail, inspection.violation)
+	}
+}
+
+type pdfCensusInspection struct {
+	evidence  *PDFCensusEvidence
+	writes    map[string]string
+	violation string
+}
+
+func (domain *pdfConversation) inspectNativeCensus(
+	ctx context.Context, trial *Trial, after *pdfNativeInventory, observationErr error, known map[string]string,
+) (inspection pdfCensusInspection) {
 	prepared := domain.prepared
 	if prepared.census == nil {
 		return
 	}
 	evidence := &PDFCensusEvidence{Version: Version, Code: "census_unavailable"}
-	trial.PDF.Census = evidence
-	after, err := prepared.nativeInventory(ctx)
-	defer after.close()
-	if errors.Is(err, ErrPrivateEvidence) || errors.Is(prepared.census.err, ErrPrivateEvidence) {
+	inspection.evidence = evidence
+	if errors.Is(observationErr, ErrPrivateEvidence) || errors.Is(prepared.census.err, ErrPrivateEvidence) {
 		evidence.Code = "private_native_census"
-		failPDFArtifact(trial, Fail, evidence.Code)
+		inspection.violation = evidence.Code
 		return
 	}
-	if err != nil || prepared.census.err != nil || prepared.census.before == nil {
+	if observationErr != nil || prepared.census.err != nil || prepared.census.before == nil {
 		return
 	}
 	owner := domain.censusOwner
@@ -119,6 +139,7 @@ func (domain *pdfConversation) concludeNativeCensus(ctx context.Context, trial *
 	if err != nil {
 		return
 	}
+	inspection.writes = afterProjection.writes
 	evidence.BaselineSHA256 = prepared.census.before.fingerprint()
 	evidence.ObservedSHA256 = after.fingerprint()
 	counts := &PDFCensusCounts{
@@ -127,12 +148,13 @@ func (domain *pdfConversation) concludeNativeCensus(ctx context.Context, trial *
 	}
 	evidence.Counts = counts
 	for key, sha := range beforeProjection.foreign {
-		if afterProjection.foreign[key] != sha {
+		observed := afterProjection.foreign[key]
+		if observed != sha && (observed == "" || known[key] != observed) {
 			counts.ForeignChanges++
 		}
 	}
 	for key := range afterProjection.foreign {
-		if _, found := beforeProjection.foreign[key]; !found {
+		if _, found := beforeProjection.foreign[key]; !found && known[key] != afterProjection.foreign[key] {
 			counts.ForeignChanges++
 		}
 	}
@@ -167,8 +189,9 @@ func (domain *pdfConversation) concludeNativeCensus(ctx context.Context, trial *
 	}
 	if violation != "" {
 		evidence.Code = violation
-		failPDFArtifact(trial, Fail, violation)
+		inspection.violation = violation
 	}
 	// Media intent cardinality alone neither proves a PDF type nor remote
 	// acceptance. No positive delivery/no-write/privacy/cleanup check is granted.
+	return
 }

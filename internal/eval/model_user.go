@@ -25,7 +25,7 @@ func nextModelAction(
 		result.Code = "ineligible_user_evidence"
 		return result
 	}
-	output, call, err := user.Call(ctx, version, system, input)
+	output, call, err := user.call(ctx, version, system, input, item.Driver.Facts)
 	result.Call = &call
 	if err != nil {
 		result.Code = "user_call_failed"

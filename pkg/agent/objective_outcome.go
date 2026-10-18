@@ -258,7 +258,10 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 			"invocation_id values from successful browser_act results into receipt_ids. Do not claim an external action " +
 			"without its runtime receipt. If the commit ran but later verification cannot confirm the requested external " +
 			"effect, keep the external_action item missing and explain the unverified postcondition instead of claiming it " +
-			"completed. "
+			"completed. A confirmed browser_login also produces an external_action receipt; claim its runtime-provided " +
+			"receipt ID when login is a declared action. approval_required, handoff_required, and outcome_unknown " +
+			"do not certify a completed login. Preparatory authentication for a result needs no extra action objective. " +
+			"Never repeat a completed login just to obtain a receipt ID. "
 	}
 	instruction += "For partial or blocked outcomes, include one concise, specific explanation of the first blocker; " +
 		"the runtime bounds it. For every status, put one complete, natural answer in result, in the root user's " +
@@ -564,8 +567,11 @@ func objectiveRuntimeReceiptEvidence(
 ) map[string]taskresult.Receipt {
 	receipts := make(map[string]taskresult.Receipt)
 	for _, audit := range audits {
-		if !audit.Success || audit.Kind != "external_action" || audit.Tool != "browser_act" ||
-			!isBrowserExternalActionReceiptEffect(audit.Metadata["effect"]) {
+		confirmedBrowserAction := audit.Tool == "browser_act" &&
+			isBrowserExternalActionReceiptEffect(audit.Metadata["effect"])
+		confirmedLogin := audit.Tool == "browser_login" && audit.Action == "login" &&
+			audit.Metadata["outcome"] == "logged_in"
+		if !audit.Success || audit.Kind != "external_action" || (!confirmedBrowserAction && !confirmedLogin) {
 			continue
 		}
 		id := strings.TrimSpace(audit.Metadata["invocation_id"])
@@ -804,7 +810,11 @@ func validateObjectiveOutcomeWithPolicy(
 		}
 		switch receipt.Kind {
 		case taskresult.ObjectiveKindExternalAction:
-			unclaimedExternalReceipts++
+			// Authentication can satisfy a declared action or prepare a read-only
+			// result. Its optional receipt is not an unexpected durable commit.
+			if receipt.Tool != "browser_login" {
+				unclaimedExternalReceipts++
+			}
 		case taskresult.ObjectiveKindLiveHandoff:
 			unclaimedHandoffReceipts++
 		}

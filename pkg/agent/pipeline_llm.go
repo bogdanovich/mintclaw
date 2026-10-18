@@ -856,7 +856,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		exec.continuationDecision.modelCalls++
 		if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
 			exec.markSteeringObserved()
-			exec.pendingInputs.AppendSteering(steerMsgs...)
+			exec.pendingInputs.AppendSteeringEntries(steerMsgs...)
 			exec.continuationDecision.invalidAttempts = 0
 			logger.InfoCF("agent", "New guidance superseded interaction continuation preflight", map[string]any{
 				"agent_id":       ts.agent.ID,
@@ -948,7 +948,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 						"iteration":      iteration,
 						"steering_count": len(steerMsgs),
 					})
-				exec.pendingInputs.AppendSteering(steerMsgs...)
+				exec.pendingInputs.AppendSteeringEntries(steerMsgs...)
 				return LLMCallOutcome{Control: turnStepContinue}, nil
 			}
 		}

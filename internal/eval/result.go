@@ -97,6 +97,31 @@ type PDFTrialEvidence struct {
 	Artifact     *PDFArtifactEvidence     `json:"artifact,omitempty"`
 	Census       *PDFCensusEvidence       `json:"census,omitempty"`
 	Cancellation *PDFCancellationEvidence `json:"cancellation,omitempty"`
+	Wire         *PDFWireEvidence         `json:"wire,omitempty"`
+	PostStop     *PDFPostStopEvidence     `json:"post_stop,omitempty"`
+}
+
+// Post-stop evidence is scoped to the admitted owned runtime and native stores,
+// not all privacy surfaces or the independent artifact oracle.
+type PDFPostStopEvidence struct {
+	Version        int                `json:"version"`
+	Code           string             `json:"code"`
+	RuntimeStopped bool               `json:"runtime_stopped"`
+	LogicalSettled bool               `json:"logical_settled"`
+	FixtureRemoved bool               `json:"fixture_removed"`
+	Census         *PDFCensusEvidence `json:"census,omitempty"`
+}
+
+// This observes native-bound messages on one client connection, not future
+// delivery uniqueness, PDF contents, no-write safety, privacy or remote cleanup.
+type PDFWireEvidence struct {
+	Version          int    `json:"version"`
+	Scope            string `json:"scope"`
+	Code             string `json:"code"`
+	Complete         bool   `json:"complete"`
+	ObservedMessages int    `json:"observed_messages"`
+	MatchingMessages int    `json:"matching_messages"`
+	MessageID        string `json:"message_id,omitempty"`
 }
 
 // This records bounded native observations, not an idle or privacy proof.

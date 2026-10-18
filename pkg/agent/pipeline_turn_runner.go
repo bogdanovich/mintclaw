@@ -110,7 +110,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 		if !repairIteration && iteration == 1 && !ts.opts.mode.skipsInitialSteeringPoll() {
 			if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
 				exec.markSteeringObserved()
-				exec.pendingInputs.AppendSteering(steerMsgs...)
+				exec.pendingInputs.AppendSteeringEntries(steerMsgs...)
 			}
 		}
 
@@ -236,7 +236,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 			}
 			if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
 				exec.markSteeringObserved()
-				exec.pendingInputs.AppendSteering(steerMsgs...)
+				exec.pendingInputs.AppendSteeringEntries(steerMsgs...)
 			}
 			if result, ok := ts.dequeuePendingResult(); ok {
 				msg, visible := p.acceptPendingSubTurnResult(exec, result)

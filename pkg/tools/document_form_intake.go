@@ -189,6 +189,23 @@ func (tool *DocumentTool) collectFormIntake(
 	if err != nil {
 		return documentFormToolFailure("invalid_input", "intake requires a bounded candidate field selection")
 	}
+	// Browsed windows are presentation, not collection authority. Validate the
+	// proposed group against the current native owner/schema/revision instead
+	// of retaining another registry of fields seen in earlier windows.
+	mapping, err := tool.formJobs.FormMappingSummary(ctx, record.JobID, owner, schema)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	if mapping.Revision != record.Revision {
+		return documentFormToolError(document.ErrFormJobConflict)
+	}
+	for _, id := range ids {
+		if !slices.ContainsFunc(mapping.Unresolved, func(field document.FormFieldMappingBlocker) bool {
+			return field.FieldID == id
+		}) {
+			return documentFormToolFailure("invalid_input", "intake selected a resolved or unrelated field")
+		}
+	}
 	context := document.FormIntakeContext{
 		CandidateFieldIDs: ids, FocusFieldID: stringDocumentArg(args, "field_id"),
 		RoleContext: strings.TrimSpace(stringDocumentArg(args, "role_context")),

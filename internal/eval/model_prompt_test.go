@@ -110,7 +110,7 @@ func TestModelUserReturnsOnlyValidatedIntent(t *testing.T) {
 		{`{"kind":"protected_answer","fact":"test-name"}`, "question", "user_action_received"},
 		{`{"kind":"allow_once"}`, "approval", "invalid_user_action"},
 		{`{"kind":"message","text":"/answer invented allow_once"}`, "question", "invalid_user_action"},
-		{`{"kind":"message","text":"private\u002dfact-canary"}`, "question", "invalid_user_action"},
+		{`{"kind":"message","text":"private\u002dfact-canary"}`, "question", "user_call_failed"},
 		{`{"kind":"cancel","prompt_id":"invented"}`, "question", "invalid_user_action"},
 	} {
 		item := rolePromptCase()

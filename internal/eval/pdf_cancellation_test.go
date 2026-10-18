@@ -24,6 +24,12 @@ func TestProtectedPDFCancellationRequiresBothNativeTerminalRecords(t *testing.T)
 				WaitFor: Expectation{Kind: "question"}, Action: Action{Kind: "cancel"},
 			}}
 			prepared.item.Case.Rubric = nil
+			if mode == "complete" {
+				initializeCensusRoots(t, prepared)
+				if err := prepared.beginNativeCensus(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
 			domain := &pdfConversation{prepared: prepared}
 			transport := newFakeConversation()
 			var waiting interactions.Record
@@ -160,6 +166,21 @@ func TestProtectedPDFCancellationRequiresBothNativeTerminalRecords(t *testing.T)
 			if (mode == "private-registry" || mode == "private-job") &&
 				(trial.Verdict != Fail || trial.Code != "private_native_evidence") {
 				t.Fatal("private native cancellation evidence was softened", trial.Code)
+			}
+			if mode == "complete" {
+				pending := pdfRunFinalization{}
+				pending.retain(domain, trial)
+				entry := pending.trials[trial.ID]
+				inventory, err := prepared.nativeInventory(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer inventory.close()
+				entry.conclude(t.Context(), &trial, inventory, nil, nil, cleanPDFLifecycle(),
+					&PrivateSurfaceObservation{Code: "observed"})
+				if !trial.PDF.PostStop.RuntimeStopped || !trial.PDF.PostStop.FixtureRemoved || trial.Verdict == Pass {
+					t.Fatal("protected native cancellation could not finalize its owned fixture", trial.PDF.PostStop)
+				}
 			}
 		})
 	}

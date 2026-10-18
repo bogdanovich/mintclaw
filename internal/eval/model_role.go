@@ -28,15 +28,16 @@ type RoleIdentity struct {
 }
 
 type RoleCall struct {
-	Identity      RoleIdentity         `json:"identity"`
-	PromptVersion string               `json:"prompt_version"`
-	PromptSHA256  string               `json:"prompt_sha256"`
-	DurationMS    int64                `json:"duration_ms"`
-	Attempted     bool                 `json:"attempted"`
-	Code          string               `json:"code"`
-	ActionKind    string               `json:"action_kind,omitempty"`
-	UsageSource   string               `json:"usage_source"`
-	Usage         *providers.UsageInfo `json:"usage,omitempty"`
+	Identity      RoleIdentity             `json:"identity"`
+	PromptVersion string                   `json:"prompt_version"`
+	PromptSHA256  string                   `json:"prompt_sha256"`
+	DurationMS    int64                    `json:"duration_ms"`
+	Attempted     bool                     `json:"attempted"`
+	Code          string                   `json:"code"`
+	ActionKind    string                   `json:"action_kind,omitempty"`
+	UsageSource   string                   `json:"usage_source"`
+	Usage         *providers.UsageInfo     `json:"usage,omitempty"`
+	Boundary      *RoleBoundaryObservation `json:"boundary,omitempty"`
 }
 
 // ModelRole never runs an agent or a tool. Its caller owns admission, permitted
@@ -46,6 +47,7 @@ type ModelRole struct {
 	identity RoleIdentity
 	provider providers.LLMProvider
 	filter   *strings.Replacer
+	retained *privateFactRetention
 	close    sync.Once
 }
 
@@ -110,24 +112,56 @@ func (role *ModelRole) Call(
 	ctx context.Context,
 	promptVersion, system, input string,
 ) (output string, call RoleCall, callErr error) {
+	return role.call(ctx, promptVersion, system, input, nil)
+}
+
+func (role *ModelRole) call(
+	ctx context.Context, promptVersion, system, input string, facts map[string]string,
+) (output string, call RoleCall, callErr error) {
 	started := time.Now()
 	call = RoleCall{
-		Identity:      role.identity,
-		PromptVersion: promptVersion,
-		Code:          "invalid_input",
-		UsageSource:   "unknown",
+		Code:        "invalid_input",
+		UsageSource: "unknown",
+		Boundary: &RoleBoundaryObservation{
+			Scope: roleBoundaryScope, FactScope: "credentials_only", Input: "not_observed", Output: "not_observed",
+		},
+	}
+	if role.identity.Role == "user" || role.identity.Role == "judge" {
+		call.Identity.Role = role.identity.Role
+	}
+	if len(facts) != 0 {
+		call.Boundary.FactScope = "call_facts"
+	}
+	if role.retained != nil {
+		call.Boundary.FactScope = "run_retained_facts"
 	}
 	defer func() { call.DurationMS = time.Since(started).Milliseconds() }()
 	if !validID(promptVersion) || !boundedText(system, MaxRoleOutputBytes) ||
-		!boundedText(input, MaxInputBytes) || len(system)+len(input) > MaxInputBytes || ctx.Err() != nil ||
+		!boundedText(
+			input,
+			MaxInputBytes,
+		) || len(system)+len(input) > MaxInputBytes || ctx == nil || ctx.Err() != nil ||
 		!providers.Capabilities(role.provider).CallerMediatedTools {
 		return "", call, ErrModelRole
 	}
-	if credentialJSONValue([]string{system, input}, role.filter) {
-		call.Code = "private_input"
-		return "", call, ErrPrivateEvidence
-	}
 	messages := []providers.Message{{Role: "system", Content: system}, {Role: "user", Content: input}}
+	options := providers.CallerMediatedToolsOptions(map[string]any{"max_tokens": 4096})
+	request := struct {
+		Identity RoleIdentity
+		Prompt   string
+		Messages []providers.Message
+		Options  map[string]any
+	}{role.identity, promptVersion, messages, options}
+	if err := role.inspectBoundary(ctx, request, facts); err != nil {
+		call.Boundary.Input = roleBoundaryCode(err)
+		call.Code = "input_evidence_unavailable"
+		if errors.Is(err, ErrPrivateEvidence) {
+			call.Code = "private_input"
+		}
+		return "", call, err
+	}
+	call.Boundary.Input = "observed"
+	call.Identity, call.PromptVersion = role.identity, promptVersion
 	data, err := json.Marshal(messages)
 	if err != nil {
 		return "", call, ErrModelRole
@@ -136,8 +170,17 @@ func (role *ModelRole) Call(
 	callCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	call.Attempted = true
-	response, err := role.provider.Chat(callCtx, messages, nil, role.identity.Model,
-		providers.CallerMediatedToolsOptions(map[string]any{"max_tokens": 4096}))
+	response, err := role.provider.Chat(callCtx, messages, nil, role.identity.Model, options)
+	var boundaryErr error
+	call.Boundary.Output = "not_returned"
+	if response != nil {
+		// Inspect late/partial responses before projection, even after provider
+		// errors or conversation deadlines, under a separate cleanup budget.
+		inspectCtx, inspectCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		boundaryErr = role.inspectBoundary(inspectCtx, response, facts)
+		inspectCancel()
+		call.Boundary.Output = roleBoundaryCode(boundaryErr)
+	}
 	if response != nil && validRoleUsage(response.Usage) {
 		usage := *response.Usage
 		if usage.CacheReadInputTokens != nil {
@@ -150,6 +193,13 @@ func (role *ModelRole) Call(
 		}
 		call.Usage, call.UsageSource = &usage, "provider_response"
 	}
+	if boundaryErr != nil {
+		call.Code = "output_evidence_unavailable"
+		if errors.Is(boundaryErr, ErrPrivateEvidence) {
+			call.Code = "private_output"
+		}
+		return "", call, boundaryErr
+	}
 	if err != nil || callCtx.Err() != nil {
 		call.Code = "provider_unavailable"
 		return "", call, ErrModelRole
@@ -159,10 +209,6 @@ func (role *ModelRole) Call(
 		response.FinishReason != "stop" && response.FinishReason != "end_turn" {
 		call.Code = "invalid_output"
 		return "", call, ErrModelRole
-	}
-	if credentialJSONValue(response.Content, role.filter) {
-		call.Code = "private_output"
-		return "", call, ErrPrivateEvidence
 	}
 	call.Code = "response_received"
 	return response.Content, call, nil

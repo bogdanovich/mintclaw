@@ -36,6 +36,19 @@ meaning and the existing native identity/validation/correction gates. Ambiguous 
 legal/financial implications, unstated opposites and another person's status must not be inferred. Other value kinds
 retain their literal contract. See the [bounded protocol checkpoint](pdf-agentic-intake-pdfi4-boolean-assertions-checkpoint.md).
 
+### Operator-Deferred Conditional And Calculated Backend Follow-Up
+
+On 2026-10-18 the operator authorized a separately identified fresh I-134 test, then chose to finish the current
+intake fixes and defer conditional/calculated XFA support to a separate backend stage. Source inspection proved
+that three predeclared full-output targets are read-only AcroForm fields whose XFA scripts enable employment
+details or calculate an asset total. The current print-ready backend does not execute those scripts.
+
+The [separate follow-up roadmap](pdf-conditional-calculated-fields-roadmap.md) records the ordered admission and
+verification gates. Do not expand PDFI4 intake fixes into a script engine, bypass read-only flags, remove those
+targets from the original oracle or call I-134 fully qualified. The complete official-form acceptance and final
+PDFI4 exit remain open; this deferral is not a retrospective full-output pass. Existing accepted facts and both
+old and fresh test identities remain intact. Editable hybrid output is a different, already deferred capability.
+
 ## Verified Motivating Incident
 
 The live main gateway on revision `63804ea1f2652338861e224fbbe0b391504514c9` received a form-completion request on

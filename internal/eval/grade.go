@@ -148,11 +148,15 @@ func Grade(
 			judgement.Verdict, judgement.Code = Fail, "private_judge_output"
 		}
 		trial.Judge = &judgement
+		if !roleBoundaryEligible(judgement.Call) {
+			trial.EvidenceEligible = false
+		}
 		if judgement.Code == "private_judge_output" {
 			trial.EvidenceEligible = false
 			trial.ExecutionVerdict, trial.ExecutionCode = Fail, judgement.Code
 		}
-		if requiredRubric(item.Case.Rubric) || judgement.Code == "private_judge_output" {
+		if requiredRubric(item.Case.Rubric) || judgement.Code == "private_judge_output" ||
+			!roleBoundaryEligible(judgement.Call) {
 			trial.Verdict = combineVerdicts(trial.Verdict, judgement.Verdict)
 		}
 		if trial.Verdict == Fail {
@@ -213,6 +217,14 @@ func readPrivateReportFile(root *os.Root, name string) ([]byte, error) {
 }
 
 func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Preset, workspace string) bool {
+	if !validTrialRoleBoundaries(trial) || trial.Judge != nil && !roleBoundaryEligible(trial.Judge.Call) {
+		return false
+	}
+	for index := range trial.DriverCalls {
+		if !roleBoundaryEligible(&trial.DriverCalls[index]) {
+			return false
+		}
+	}
 	if trial.Version != Version || trial.ID != summary.ID || trial.CaseID != item.Case.ID ||
 		trial.Repetition != summary.Repetition ||
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||

@@ -2538,6 +2538,49 @@ func TestBrowserActSchemaSimpleTransformPreservesActionKinds(t *testing.T) {
 	}
 }
 
+func TestBrowserTransferSchemaAfterConfiguredTransform(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source fakeBrowserToolSource
+		want   bool
+	}{
+		{name: "available", source: fakeBrowserToolSource{available: true}, want: true},
+		{name: "driver unavailable", source: fakeBrowserToolSource{available: true, downloadUnavailable: true}},
+		{name: "platform unsupported", source: fakeBrowserToolSource{available: true, transferUnavailable: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tool := NewBrowserActTool(browserToolTestConfig(), &test.source)
+			definitions, err := providercommon.TransformToolDefinitions([]providercommon.ToolDefinition{{
+				Type: "function",
+				Function: providercommon.ToolFunctionDefinition{
+					Name: tool.Name(), Description: tool.Description(), Parameters: tool.Parameters(),
+				},
+			}}, providercommon.ToolSchemaTransformSimple)
+			if err != nil || len(definitions) != 1 {
+				t.Fatalf("transformed tools = %#v, %v", definitions, err)
+			}
+			properties := definitions[0].Function.Parameters["properties"].(map[string]any)
+			action := properties["action"].(map[string]any)
+			fields := action["properties"].(map[string]any)
+			kinds := fields["kind"].(map[string]any)["enum"].([]any)
+			if got := slices.Contains(kinds, any("download")); got != test.want {
+				t.Fatalf("download advertised = %v, want %v; kinds=%#v", got, test.want, kinds)
+			}
+			for _, name := range []string{"ref", "artifact_ref"} {
+				field, ok := fields[name].(map[string]any)
+				wantField := name == "ref" || !test.source.transferUnavailable
+				if ok != wantField || (ok && field["type"] != "string") {
+					t.Fatalf("transformed transfer field %s = %#v", name, fields[name])
+				}
+			}
+			if !strings.Contains(definitions[0].Function.Description, "original file") ||
+				!strings.Contains(definitions[0].Function.Description, "artifact.ref") {
+				t.Fatal("provider projection lost original-file transfer guidance")
+			}
+		})
+	}
+}
+
 func TestBrowserActSchemaExplainsConditionalContextAuthority(t *testing.T) {
 	tool := NewBrowserActTool(browserToolTestConfig(), &fakeBrowserToolSource{available: true})
 	if description := tool.Description(); !strings.Contains(description, "For top-level navigate") ||

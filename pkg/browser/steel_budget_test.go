@@ -128,6 +128,28 @@ func TestSteelCostUsesExactUSDAndRejectsInvalidCurrency(t *testing.T) {
 	}
 }
 
+func TestSteelCostDistinguishesPendingFinalUsageWithoutRetries(t *testing.T) {
+	for _, status := range []int{http.StatusConflict, http.StatusUnauthorized, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"message":"Session cost is available after the session has been released."}`))
+			}))
+			defer server.Close()
+			client := &steelSDKRuntimeClient{client: steelapi.NewClientWithBaseURL(
+				"test", server.URL, steelapi.WithMaxRetries(2),
+			)}
+			_, err := client.SessionCost(t.Context(), "session_1")
+			if err == nil || errors.Is(err, errSteelCostPending) != (status == http.StatusConflict) || calls != 1 {
+				t.Fatalf("status=%d error=%v requests=%d", status, err, calls)
+			}
+		})
+	}
+}
+
 func TestSteelBudgetStopRetainsCleanupOwnershipAndRetriesRelease(t *testing.T) {
 	client := &fakeSteelRuntimeClient{releaseErrs: []error{ErrProviderUnavailable, nil}}
 	runtime := &steelPlaywrightRuntime{client: client, sessionID: "session_1", baselineCaptured: true}
@@ -141,20 +163,57 @@ func TestSteelBudgetStopRetainsCleanupOwnershipAndRetriesRelease(t *testing.T) {
 
 type budgetMonitorTestClient struct {
 	*fakeSteelRuntimeClient
-	costCalls int
-	costError error
-	cost      float64
-	released  chan struct{}
+	costCalls  int
+	costError  error
+	costErrors []error
+	cost       float64
+	released   chan struct{}
 }
 
 func (client *budgetMonitorTestClient) SessionCost(context.Context, string) (float64, error) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	client.costCalls++
+	if client.costCalls <= len(client.costErrors) {
+		return client.cost, client.costErrors[client.costCalls-1]
+	}
 	if client.costCalls == 1 {
 		return client.cost, client.costError
 	}
 	return 0, nil
+}
+
+func TestSteelBudgetMonitorKeepsPendingSessionAndStopsOnLaterCostEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "threshold"},
+		{name: "unexpected_error", err: ErrProviderUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := &budgetMonitorTestClient{
+				fakeSteelRuntimeClient: &fakeSteelRuntimeClient{},
+				cost:                   0.25, costErrors: []error{errSteelCostPending, errSteelCostPending, tc.err},
+				released: make(chan struct{}, 1),
+			}
+			runtime := &steelPlaywrightRuntime{client: client, sessionID: "session_current", baselineCaptured: true}
+			runtime.startBudgetMonitor(0.25)
+			t.Cleanup(runtime.cancelBudget)
+			select {
+			case <-client.released:
+			case <-time.After(25 * time.Second):
+				t.Fatal("budget monitor did not stop on later threshold or unexpected error")
+			}
+			client.mu.Lock()
+			defer client.mu.Unlock()
+			if client.costCalls != 3 || len(client.releaseCalls) != 1 {
+				t.Fatalf("pending session was stopped early: cost calls=%d release calls=%d",
+					client.costCalls, len(client.releaseCalls))
+			}
+		})
+	}
 }
 
 func (client *budgetMonitorTestClient) ReleaseSession(ctx context.Context, sessionID string) error {

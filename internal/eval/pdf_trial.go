@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -19,19 +20,23 @@ var ErrPDFTrial = errors.New("eval: PDF trial evidence unavailable or invalid")
 // pdfTrial owns one fresh fixture and ephemeral facts. Native document state,
 // protected-input authorization, grants and delivery are not owned here.
 type pdfTrial struct {
-	item      LoadedCase
-	home      string
-	workspace string
-	sessionID string
-	agent     string
-	started   time.Time
-	task      string
-	source    []byte
-	scratch   *os.Root
-	parent    *os.Root
-	directory string
-	filter    *strings.Replacer
-	census    *pdfNativeCensus
+	item          LoadedCase
+	home          string
+	workspace     string
+	sessionID     string
+	agent         string
+	started       time.Time
+	task          string
+	source        []byte
+	scratch       *os.Root
+	parent        *os.Root
+	directory     string
+	filter        *strings.Replacer
+	census        *pdfNativeCensus
+	sourceInfo    os.FileInfo
+	directoryInfo os.FileInfo
+	parentInfo    os.FileInfo
+	workspaceInfo os.FileInfo
 }
 
 func preparePDFTrial(item LoadedCase, home, workspace, sessionID, agent string) (*pdfTrial, error) {
@@ -85,6 +90,11 @@ func preparePDFTrial(item LoadedCase, home, workspace, sessionID, agent string) 
 		return nil, ErrPDFTrial
 	}
 	defer func() { _ = root.Close() }()
+	trial.workspaceInfo, err = root.Stat(".")
+	if err != nil {
+		clear(source)
+		return nil, ErrPDFTrial
+	}
 	if err = root.Mkdir(".eval-trials", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		clear(source)
 		return nil, ErrPDFTrial
@@ -94,6 +104,7 @@ func preparePDFTrial(item LoadedCase, home, workspace, sessionID, agent string) 
 		clear(source)
 		return nil, ErrPDFTrial
 	}
+	trial.parentInfo = info
 	trial.parent, err = root.OpenRoot(".eval-trials")
 	if err != nil {
 		clear(source)
@@ -113,11 +124,19 @@ func preparePDFTrial(item LoadedCase, home, workspace, sessionID, agent string) 
 		clear(source)
 		return nil, ErrPDFTrial
 	}
+	trial.directoryInfo, err = trial.scratch.Stat(".")
+	if err != nil {
+		_ = trial.release(false)
+		return nil, ErrPDFTrial
+	}
 	file, err := trial.scratch.OpenFile("source.pdf", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		_, err = file.Write(source)
 		if err == nil {
 			err = file.Sync()
+		}
+		if err == nil {
+			trial.sourceInfo, err = file.Stat()
 		}
 		closeErr := file.Close()
 		if err == nil {
@@ -153,6 +172,10 @@ func (trial *pdfTrial) resolvedPDF() PDFCase {
 // caller must establish native terminal settlement, not infer it from timeout.
 // It removes only the owned source and empty directory, not arbitrary contents.
 func (trial *pdfTrial) release(settled bool) error {
+	var result error
+	if settled {
+		result = trial.removeOwnedSource()
+	}
 	if trial.census != nil {
 		trial.census.before.close()
 		trial.census = nil
@@ -160,20 +183,64 @@ func (trial *pdfTrial) release(settled bool) error {
 	clear(trial.source)
 	trial.source = nil
 	trial.item.Case.Driver.Facts = nil
-	var result error
-	if settled {
-		if err := trial.scratch.Remove("source.pdf"); err != nil && !errors.Is(err, os.ErrNotExist) {
-			result = ErrPDFTrial
-		}
-	}
 	if trial.scratch.Close() != nil {
 		result = ErrPDFTrial
 	}
-	if settled && trial.parent.Remove(trial.directory) != nil {
-		result = ErrPDFTrial
+	if settled && result == nil {
+		info, err := trial.parent.Lstat(trial.directory)
+		if err != nil || !os.SameFile(trial.directoryInfo, info) || trial.parent.Remove(trial.directory) != nil {
+			result = ErrPDFTrial
+		}
 	}
 	if trial.parent.Close() != nil {
 		result = ErrPDFTrial
 	}
 	return result
+}
+
+func (trial *pdfTrial) removeOwnedSource() error {
+	if trial.sourceInfo == nil || trial.directoryInfo == nil || trial.parentInfo == nil || trial.workspaceInfo == nil {
+		return ErrPDFTrial
+	}
+	workspaceInfo, err := os.Lstat(trial.workspace)
+	if err != nil || !workspaceInfo.IsDir() || workspaceInfo.Mode().Perm() != 0o700 ||
+		!os.SameFile(trial.workspaceInfo, workspaceInfo) {
+		return ErrPDFTrial
+	}
+	workspace, err := os.OpenRoot(trial.workspace)
+	if err != nil {
+		return ErrPDFTrial
+	}
+	defer func() { _ = workspace.Close() }()
+	parentInfo, err := workspace.Lstat(".eval-trials")
+	if err != nil || !parentInfo.IsDir() || parentInfo.Mode().Perm() != 0o700 ||
+		!os.SameFile(trial.parentInfo, parentInfo) {
+		return ErrPDFTrial
+	}
+	directoryInfo, err := trial.parent.Lstat(trial.directory)
+	if err != nil || !os.SameFile(trial.directoryInfo, directoryInfo) || !directoryInfo.IsDir() ||
+		directoryInfo.Mode().Perm() != 0o700 {
+		return ErrPDFTrial
+	}
+	info, err := trial.scratch.Lstat("source.pdf")
+	if err != nil || !os.SameFile(trial.sourceInfo, info) || !info.Mode().IsRegular() {
+		return ErrPDFTrial
+	}
+	directory, err := trial.scratch.Open(".")
+	if err != nil {
+		return ErrPDFTrial
+	}
+	entries, readErr := directory.ReadDir(2)
+	closeErr := directory.Close()
+	if readErr != nil && !errors.Is(readErr, io.EOF) || closeErr != nil ||
+		len(entries) != 1 || entries[0].Name() != "source.pdf" {
+		return ErrPDFTrial
+	}
+	source, err := readPDFNativeFile(trial.scratch, "source.pdf", maxPDFBytes)
+	defer clear(source)
+	if err != nil || digest(source) != trial.item.Case.Fixtures[0].SHA256 ||
+		trial.scratch.Remove("source.pdf") != nil {
+		return ErrPDFTrial
+	}
+	return nil
 }
