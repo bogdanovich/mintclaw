@@ -736,6 +736,33 @@ func (al *AgentLoop) drainDeferredInteractionIngress(
 	route interactions.Route,
 	inbound bus.InboundContext,
 ) error {
+	scope := newRuntimeSessionScope(workspace, route.SessionKey)
+	for before := al.pendingSteeringCountForScope(scope); before > 0; before = al.pendingSteeringCountForScope(scope) {
+		if al.hasNonterminalInteraction(workspace, route.SessionKey) {
+			return nil
+		}
+		if next := al.steering.nextInboundContext(scope); next != nil {
+			inbound = *next
+			route.Channel, route.ChatID = inbound.Channel, inbound.ChatID
+		}
+		if err := al.drainDeferredInteractionIngressBatch(ctx, workspace, route, inbound); err != nil {
+			return err
+		}
+		if al.pendingSteeringCountForScope(scope) >= before {
+			// Another owner may have claimed the session, or new ingress may
+			// have arrived. Its route retirement owns the next queue check.
+			return nil
+		}
+	}
+	return nil
+}
+
+func (al *AgentLoop) drainDeferredInteractionIngressBatch(
+	ctx context.Context,
+	workspace string,
+	route interactions.Route,
+	inbound bus.InboundContext,
+) error {
 	if al.hasNonterminalInteraction(workspace, route.SessionKey) {
 		return nil
 	}
@@ -745,6 +772,7 @@ func (al *AgentLoop) drainDeferredInteractionIngress(
 		Channel:    route.Channel,
 		ChatID:     route.ChatID,
 		Workspace:  workspace,
+		inbound:    steeringContextForSender(&inbound, inbound.SenderID),
 	}
 	steeringAggregate, err := al.drainSteeringForAggregate(ctx, target)
 	if err != nil {
@@ -864,17 +892,10 @@ func (al *AgentLoop) enqueueInteractionContinuationInboundForScope(
 	if err != nil {
 		return err
 	}
-	return al.enqueueSteeringMessageWithSender(
+	return al.enqueueInboundSteering(
 		scope,
 		agent.ID,
-		msg.Context.SenderID,
-		providers.Message{
-			Role:           "user",
-			Content:        msg.Content,
-			CreatedAt:      inboundReceivedAt(msg),
-			Media:          append([]string(nil), msg.Media...),
-			InboundSpoolID: msg.SpoolID,
-		},
+		msg,
 	)
 }
 

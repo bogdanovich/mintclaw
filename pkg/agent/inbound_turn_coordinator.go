@@ -13,7 +13,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/commands"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
-	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 type inboundTurnCoordinator struct {
@@ -251,18 +250,10 @@ func (c *inboundTurnCoordinator) admitPreparedInbound(
 			return nil
 		}
 	}
-	err := al.enqueueSteeringMessageWithSender(
+	err := al.enqueueInboundSteering(
 		target.runtimeSessionScope(),
 		target.Agent.ID,
-		msg.Context.SenderID,
-		providers.Message{
-			Role:                    "user",
-			Content:                 msg.Content,
-			CreatedAt:               inboundReceivedAt(msg),
-			Media:                   append([]string(nil), msg.Media...),
-			InboundSpoolID:          msg.SpoolID,
-			DocumentIntakeReference: msg.Context.DocumentIntake.Reference,
-		},
+		msg,
 	)
 	al.turns.routeAdmissionMu.Unlock()
 	return err
@@ -442,6 +433,7 @@ func (c *inboundTurnCoordinator) handlePendingStop(
 		Channel:    msg.Context.Channel,
 		ChatID:     msg.Context.ChatID,
 		Workspace:  claim.scope.workspace,
+		inbound:    steeringContextForSender(&msg.Context, msg.Context.SenderID),
 	}
 	if dispatchTarget != nil && dispatchTarget.Agent != nil {
 		target.AgentID = dispatchTarget.Agent.ID
