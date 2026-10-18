@@ -172,6 +172,12 @@ Include complete applicable filling of the motivating I-134 with synthetic data,
 transactions on an unrelated ordinary AcroForm, and actual Telegram reply/standalone ingress. An admission document,
 prompt-only change, or first-question smoke is not completion.
 
+The fresh 2026-10-18 qualification additionally left a retained-clarification defect open: four new explicit checkbox
+answers were accepted, but older input exhausted its 32-pass budget and the reply asked for resolved facts again.
+Before another official-form attempt, qualify generic no-progress handling, timely clarification and truthful
+accepted-versus-retained reporting on unrelated fixtures. Preserve limits and exhausted jobs; do not substitute a
+new job or a counter reset for recovery. This repair is distinct from the separately deferred XFA backend stage.
+
 ### Deferred Follow-Up: Editable Hybrid Derivatives
 
 **Status:** Deferred by the operator on 2026-10-10; not a PDFI4 completion gate.

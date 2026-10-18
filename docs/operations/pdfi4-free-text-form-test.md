@@ -144,6 +144,10 @@ values. Do not resend finish/approval blindly or create a second job merely beca
 `/retry_form` cannot recover an exhausted persisted extraction budget by waiting or resetting it. Retain the
 original task and obtain an explicit decision before substituting a separately labeled fresh qualification;
 do not describe that new test as recovery of old input. Native capacity state outranks a model's “temporary” wording.
+Also compare acceptance counts with the failure stage: a turn can accept the new clarification while older retained
+input is still capacity-blocked. Do not treat “could not apply” prose as authoritative or resend confirmed facts.
+The 2026-10-18 fresh I-134 run still exposed this incorrect reporting/repeated-question behavior; it is an open
+qualification finding, not an instruction to keep retrying the exhausted input.
 
 ## Large Public Form And Unsupported Output
 
