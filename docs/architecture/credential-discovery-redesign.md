@@ -3,6 +3,8 @@
 Status: D0–D3 delivered on 2026-10-18; the first owner-approved Facebook attempt
 found the Login but ended unknown. The reviewed continuation fix is merged;
 D4 still requires fresh authentication evidence.
+The owner subsequently requested a two-hour, automatically resumed phone wait;
+its [delivery plan](credential-approval-wait.md) precedes the next D4 attempt.
 This replaces the requirement to
 preconfigure each browser account's item UUID, allowed origins and site-specific
 success markers. The new path is reviewed, qualified and deployed; see the
