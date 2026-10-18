@@ -40,6 +40,7 @@ func credentialProviderFixture(
 	connectorMode bool,
 	expectedOutcome string,
 	cancelFirst bool,
+	beforeCleanup func() error,
 	capture func([]byte),
 ) (func() (browser.CredentialLoginResult, error), func(), func()) {
 	t.Helper()
@@ -161,6 +162,11 @@ func credentialProviderFixture(
 			case 3:
 				if !decode(&lastLogin) || lastLogin.Alias != "fixture-account" || lastLogin.Outcome != expectedOutcome {
 					failure = "provider did not receive the expected fixed alias outcome"
+				}
+				if beforeCleanup != nil {
+					if cleanupErr := beforeCleanup(); cleanupErr != nil {
+						failure = cleanupErr.Error()
+					}
 				}
 				name, arguments = "browser_observe", map[string]any{"browser_session_id": sessionID}
 				if expectedOutcome == "outcome_unknown" {

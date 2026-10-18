@@ -187,12 +187,17 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	}
 	t.Cleanup(func() { _ = credentials.Close(context.Background()) })
 	var retrieved atomic.Int32
-	credentials.consumeLogin = func(_ context.Context, binding vault.Binding, use func([]byte, []byte) error) error {
+	var expiryInterruptions atomic.Int32
+	credentials.consumeLogin = func(consumeCtx context.Context, binding vault.Binding, use func([]byte, []byte) error) error {
 		if binding.VaultID != "fixture-vault" || binding.ItemID != "fixture-item" {
 			return errors.New("unexpected private fixture binding")
 		}
 		retrieved.Add(1)
-		return use([]byte("gateway-private-account@example.org"), []byte("gateway-private-password-Q68"))
+		useErr := use([]byte("gateway-private-account@example.org"), []byte("gateway-private-password-Q68"))
+		if expiry && errors.Is(consumeCtx.Err(), context.Canceled) {
+			expiryInterruptions.Add(1)
+		}
+		return useErr
 	}
 	const apiToken = "gateway-private-api-token-U42"
 	var apiCalls atomic.Int32
@@ -328,6 +333,32 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	}
 	finalize := func() {}
 	cancelCurrent := func() {}
+	var beforeCleanup func() error
+	if expiry {
+		beforeCleanup = func() error {
+			// Observe cancellation inside the private consumer, before Login's
+			// deferred cancel or the provider's scripted close can mask a missing
+			// lease watcher. The independent driver timeout cannot satisfy this.
+			if retrieved.Load() == 0 || expiryInterruptions.Load() != retrieved.Load() {
+				return errors.New("lease expiry did not interrupt the private submission")
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				all, listErr := running.Browser.store.ListSessions(ctx)
+				retired := listErr == nil && len(all) == int(retrieved.Load())
+				for _, session := range all {
+					retired = retired && session.State.Terminal()
+				}
+				if retired {
+					return nil
+				}
+				if time.Now().After(deadline) {
+					return errors.New("lease expiry did not retire the browser before scripted cleanup")
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+		}
+	}
 	if providerMode {
 		perform, finalize, cancelCurrent = credentialProviderFixture(
 			t,
@@ -339,6 +370,7 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			connectorMode,
 			expectedOutcome,
 			canceled,
+			beforeCleanup,
 			func(data []byte) {
 				mu.Lock()
 				outputs = append(outputs, append([]byte(nil), data...))
