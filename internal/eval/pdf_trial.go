@@ -32,6 +32,7 @@ type pdfTrial struct {
 	parent        *os.Root
 	directory     string
 	filter        *strings.Replacer
+	scanFacts     map[string]string
 	census        *pdfNativeCensus
 	sourceInfo    os.FileInfo
 	directoryInfo os.FileInfo
@@ -183,6 +184,7 @@ func (trial *pdfTrial) release(settled bool) error {
 	clear(trial.source)
 	trial.source = nil
 	trial.item.Case.Driver.Facts = nil
+	trial.scanFacts = nil
 	if trial.scratch.Close() != nil {
 		result = ErrPDFTrial
 	}

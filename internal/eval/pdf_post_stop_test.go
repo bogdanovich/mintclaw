@@ -19,7 +19,11 @@ import (
 
 func postStopPDFControl(t *testing.T) (*pdfConversation, Trial) {
 	t.Helper()
-	prepared := newPDFTrialFixture(t)
+	return postStopPreparedPDFControl(t, newPDFTrialFixture(t))
+}
+
+func postStopPreparedPDFControl(t *testing.T, prepared *pdfTrial) (*pdfConversation, Trial) {
+	t.Helper()
 	corpus, err := LoadCorpus(prepared.item.Root)
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +275,7 @@ func TestPDFPostStopWritesOnlyFinalizedTrialToTheCanonicalReportName(t *testing.
 	}
 	result := RunReport{Trials: []TrialSummary{{ID: trial.ID, File: name}}}
 	if err = pending.finish(t.Context(), report, &result, cleanPDFLifecycle(), nil, nil,
-		&PrivateSurfaceObservation{Code: "observed"}); err != nil {
+		&PrivateSurfaceObservation{Code: "observed"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := readPrivateReportFile(report.root, name)

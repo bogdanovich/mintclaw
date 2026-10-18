@@ -161,7 +161,7 @@ func (report *privateReport) finish(result RunReport) error {
 			"\nOnly a complete run.json qualifies this summary as a finished report.\n"+
 				"Target usage: unknown; provider-internal role attempts: unknown.\n"+
 				transport+" "+
-				"This run does not qualify PDF, browser, or Telegram behavior.\n")
+				"Individual case results are not complete PDF/browser-suite or Telegram qualification.\n")
 	}
 	syncErr := file.Sync()
 	closeErr := file.Close()
