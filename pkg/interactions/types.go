@@ -16,8 +16,9 @@ import (
 type Kind string
 
 const (
-	KindQuestion Kind = "question"
-	KindApproval Kind = "approval"
+	KindQuestion     Kind = "question"
+	KindApproval     Kind = "approval"
+	KindExternalWait Kind = "external_wait"
 )
 
 type Status string
@@ -38,6 +39,8 @@ type Outcome string
 
 const (
 	OutcomeAnswered        Outcome = "answered"
+	OutcomeReady           Outcome = "ready"
+	OutcomeUnavailable     Outcome = "unavailable"
 	OutcomeTimedOut        Outcome = "timed_out"
 	OutcomeAllowed         Outcome = "allowed"
 	OutcomeDenied          Outcome = "denied"
@@ -145,6 +148,9 @@ type SuspensionRequest struct {
 	// and the relative Timeout-derived expiry.
 	Deadline        time.Time
 	ProtectedAnswer *ProtectedAnswerBinding
+	// ConditionRef is non-authorizing metadata resolved only by the originating
+	// registered tool. It must not contain a secret or a phone-link capability.
+	ConditionRef string
 }
 
 // ProtectedAnswerBinding routes one authorized answer to a trusted durable
@@ -314,6 +320,7 @@ type Record struct {
 	PromptSummary      string                  `json:"prompt_summary,omitempty"`
 	PromptLanguage     string                  `json:"prompt_language,omitempty"`
 	ApprovalAction     string                  `json:"approval_action,omitempty"`
+	ConditionRef       string                  `json:"condition_ref,omitempty"`
 	ProtectedAnswer    *ProtectedAnswerBinding `json:"protected_answer,omitempty"`
 	Answer             *Answer                 `json:"answer,omitempty"`
 	CreatedAt          int64                   `json:"created_at"`
@@ -370,6 +377,7 @@ type CreateRequest struct {
 	PromptSummary   string
 	PromptLanguage  string
 	ApprovalAction  string
+	ConditionRef    string
 	ProtectedAnswer *ProtectedAnswerBinding
 	OutcomeReceipts []taskresult.Receipt
 	ExpiresAt       time.Time
@@ -429,7 +437,7 @@ func validateQuestions(kind Kind, questions []Question) error {
 			MaxQuestions,
 		)
 	}
-	if kind == KindApproval && len(questions) != 0 {
+	if (kind == KindApproval || kind == KindExternalWait) && len(questions) != 0 {
 		return fmt.Errorf("%w: approval prompts are policy-owned", ErrInvalidInteraction)
 	}
 	seen := make(map[string]struct{}, len(questions))
@@ -560,8 +568,11 @@ func validateQuestions(kind Kind, questions []Question) error {
 // ValidateSuspensionRequest validates model- or policy-produced prompt data.
 // Trusted route and origin data are deliberately absent from this contract.
 func ValidateSuspensionRequest(request SuspensionRequest) error {
-	if request.Kind != KindQuestion && request.Kind != KindApproval {
+	if !validKind(request.Kind) {
 		return fmt.Errorf("%w: unsupported suspension kind %q", ErrInvalidInteraction, request.Kind)
+	}
+	if err := validateExternalWait(request.Kind, request.ConditionRef, nil); err != nil {
+		return err
 	}
 	if err := validateQuestions(request.Kind, request.Questions); err != nil {
 		return err

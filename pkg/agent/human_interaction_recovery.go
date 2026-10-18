@@ -97,6 +97,12 @@ func (al *AgentLoop) recoverHumanInteractionsAt(ctx context.Context, now time.Ti
 					recovered++
 				}
 			case interactions.StatusWaiting:
+				if record.Kind == interactions.KindExternalWait {
+					if al.recoverExternalWait(ctx, workspace, registry, record, now) {
+						recovered++
+					}
+					continue
+				}
 				al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsPrompt)
 			case interactions.StatusResuming, interactions.StatusClaimed:
 				if al.recoverClaimedInteractionAt(ctx, workspace, record, now) {

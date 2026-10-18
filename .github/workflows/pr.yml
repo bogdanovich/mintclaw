@@ -229,6 +229,11 @@ jobs:
           ./pkg/cron
           ./pkg/memory
 
+      - name: Run external wait continuation race regressions
+        run: >-
+          go test -count=1 -race -tags goolm,stdjson
+          -run '^TestExternalWait' ./pkg/agent ./pkg/tools
+
       - name: Run critical runtime race suites
         run: >-
           go test -count=1 -race -tags goolm,stdjson

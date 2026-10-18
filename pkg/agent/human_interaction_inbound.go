@@ -983,6 +983,9 @@ func parseInteractionAnswer(
 	content string,
 	messageID string,
 ) (interactions.Answer, error) {
+	if record.Kind == interactions.KindExternalWait {
+		return interactions.Answer{}, fmt.Errorf("external waits cannot accept chat answers")
+	}
 	content = strings.TrimSpace(content)
 	shortID, answerText, commandMatched, err := parseInteractionAnswerEnvelope(content)
 	if err != nil {
@@ -1529,12 +1532,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	if record.Kind == interactions.KindApproval || record.Kind == interactions.KindQuestion {
 		inbound.ReplyToMessageID = interactionResponseReplyTarget(record, inbound)
 	}
-	metadata := bus.OutboundMetadata{
-		InteractionKind:     string(record.Kind),
-		InteractionControls: bus.OutboundInteractionControlsRemove,
-		InteractionID:       record.ID,
-		InteractionShortID:  record.ShortID,
-	}
+	metadata := interactionFinalMetadata(record)
 	if (&humanInteractionRuntime{al: al}).localCodingInteraction(record) {
 		current, found := registry.Get(record.ID)
 		if !found {
@@ -1664,7 +1662,11 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	var taskErr error
 	// An interaction deadline is not the result of the whole continuation.
 	// Preserve genuine timeouts, but do not override a verified later success.
-	if record.Outcome == interactions.OutcomeTimedOut &&
+	if record.Kind == interactions.KindExternalWait && record.Outcome == interactions.OutcomeUnavailable {
+		taskErr = taskRegistry.Settle(
+			taskID, taskregistry.StatusFailed, projection, terminalDeliverable, taskregistry.DeliveryPending,
+		)
+	} else if record.Outcome == interactions.OutcomeTimedOut &&
 		(objectiveOutcome == nil || objectiveOutcome.Status != taskresult.OutcomeSucceeded) {
 		taskErr = taskRegistry.Settle(
 			taskID,
@@ -1689,12 +1691,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	default:
 		mode = toolshared.AsyncDeliveryUserOnly
 	}
-	metadata := bus.OutboundMetadata{
-		InteractionKind:     string(record.Kind),
-		InteractionControls: bus.OutboundInteractionControlsRemove,
-		InteractionID:       record.ID,
-		InteractionShortID:  record.ShortID,
-	}
+	metadata := interactionFinalMetadata(record)
 	if mode != toolshared.AsyncDeliveryParentOnly {
 		metadata = metadata.Merge(bus.OutboundMetadata{
 			MessageKind:  bus.OutboundMessageKindFinalReply,
@@ -1791,12 +1788,7 @@ func (al *AgentLoop) deliverInteractionControlsRemoved(
 	record interactions.Record,
 	inbound bus.InboundContext,
 ) error {
-	metadata := bus.OutboundMetadata{
-		InteractionKind:     string(record.Kind),
-		InteractionControls: bus.OutboundInteractionControlsRemove,
-		InteractionID:       record.ID,
-		InteractionShortID:  record.ShortID,
-	}
+	metadata := interactionFinalMetadata(record)
 	replyToMessageID := interactionResponseReplyTarget(record, inbound)
 	inbound.ReplyToMessageID = replyToMessageID
 	_, err := al.publishTransactionMessage(ctx, workspace, bus.OutboundMessage{

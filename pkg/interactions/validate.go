@@ -36,7 +36,7 @@ func validateStoredRecord(rec Record) error {
 		rec.CreatedAt <= 0 || rec.UpdatedAt < rec.CreatedAt || rec.ExpiresAt <= rec.CreatedAt {
 		return fmt.Errorf("invalid interaction record %q", rec.ID)
 	}
-	if rec.Kind != KindQuestion && rec.Kind != KindApproval {
+	if !validKind(rec.Kind) {
 		return fmt.Errorf("invalid interaction kind %q", rec.Kind)
 	}
 	switch rec.Status {
@@ -50,6 +50,9 @@ func validateStoredRecord(rec Record) error {
 		StatusFailed:
 	default:
 		return fmt.Errorf("invalid interaction status %q", rec.Status)
+	}
+	if err := validateExternalWait(rec.Kind, rec.ConditionRef, &rec.Origin); err != nil {
+		return err
 	}
 	if err := rec.Route.validate(); err != nil {
 		return err
@@ -134,6 +137,14 @@ func validateStoredAnswer(rec Record) error {
 			return fmt.Errorf("invalid stored answer media for interaction %q", rec.ID)
 		}
 	}
+	if rec.Kind == KindExternalWait {
+		if answer.MessageID != "" || answer.ResponseMessageID != "" || answer.Text != "" ||
+			len(answer.Values) != 0 || len(answer.Media) != 0 || answer.Superseded ||
+			answer.Choice != "" || answer.Protected != nil {
+			return fmt.Errorf("invalid external-wait resolution for interaction %q", rec.ID)
+		}
+		return nil
+	}
 	if answer.Superseded {
 		if !validSupersedingAnswer(rec, *answer, rec.Outcome) {
 			return fmt.Errorf("invalid superseding answer for interaction %q", rec.ID)
@@ -192,6 +203,9 @@ func validStoredOutcome(kind Kind, outcome Outcome) bool {
 	}
 	if kind == KindQuestion {
 		return outcome == OutcomeAnswered
+	}
+	if kind == KindExternalWait {
+		return outcome == OutcomeReady || outcome == OutcomeUnavailable
 	}
 	return outcome == OutcomeAllowed || outcome == OutcomeDenied
 }

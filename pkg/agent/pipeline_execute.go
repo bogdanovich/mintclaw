@@ -3172,6 +3172,28 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		return fallback(err.Error())
 	}
 
+	if result.Control.Suspension.Kind == interactions.KindExternalWait {
+		if result.Control.LiveHandoff != nil || r.ts.agent == nil || r.ts.agent.Tools == nil ||
+			!r.ts.agent.Tools.SupportsExternalWait(toolName) {
+			return fallback("external waits require a registered condition resolver and no live handoff")
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		cleanupCtx = toolExecutionContextForTurn(cleanupCtx, r.ts)
+		cleaned, cleanupErr := r.ts.agent.Tools.CleanupTurnWithResult(cleanupCtx)
+		cancel()
+		outcomeReceipts = mergeOutcomeReceipts(outcomeReceipts, cleaned.Receipts)
+		if r.exec != nil {
+			r.exec.receipts = mergeOutcomeReceipts(r.exec.receipts, cleaned.Receipts)
+		}
+		if cleanupErr != nil {
+			return fallback("cannot wait while turn resources remain unavailable for cleanup")
+		}
+		// Cleanup is bounded but can outlive a caller cancellation. Never create
+		// a new durable continuation for an execution that ended during cleanup.
+		if ctx.Err() != nil || r.ts.hardAbortRequested() {
+			return fallback("external wait was canceled before admission")
+		}
+	}
 	inbound := r.ts.opts.Dispatch.InboundContext
 	originInbound := interactionSuspensionExecutionContext(r.ts, inbound)
 	interactionSessionKey := strings.TrimSpace(r.ts.opts.InteractionSessionKey)
