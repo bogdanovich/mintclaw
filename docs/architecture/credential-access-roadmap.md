@@ -8,7 +8,8 @@ Keep secret values out of all model-provider requests, tool arguments and
 results, transcripts, local traces, logs, error messages, and browser artifacts.
 Secret names/slugs and fixed operation outcomes may be visible. The operator
 uses Android and a personal 1Password account, and has created a service
-account/token. No real token has been provisioned to this implementation.
+account/token. The operator has provisioned the token through the protected
+terminal setup path; its value was not supplied through chat or agent tools.
 
 The authoritative contract is the
 [trusted-runtime design](credential-trusted-runtime-design.md). It replaces the
@@ -152,7 +153,9 @@ qualification and physical-device acceptance are recorded separately below.
   confirms enrollment is durably activated. This retrieved no credentials and
   issued no account grant. The first subsequent real account request delivered
   its chat notice, the owner reported Android approval, and the private login
-  succeeded. Physical grant reuse and revocation remain acceptance steps.
+  succeeded. A second same-scope login reused the grant in the same gateway
+  lifetime. After the owner reported completing phone revocation, a later
+  same-scope request required fresh approval without a gateway restart.
   State-changing API calls retain the exact same-origin boundary.
 - TR4: the existing browser's private credential transaction is merged in
   [#1637](https://github.com/bogdanovich/mintclaw/pull/1637), including grant
@@ -188,7 +191,18 @@ qualification and physical-device acceptance are recorded separately below.
   [pilot sequence](credential-craigslist-pilot.md) records public form evidence,
   completed private setup and the first real Android-approved login on qualified
   runtime `694d716db119e14044faffbe4cd68fb1567cba25`. Its tool returned only the
-  alias and `logged_in`; same-scope grant reuse and revocation remain pending.
+  alias and `logged_in`; a second login confirmed same-scope grant reuse.
+  [#1724](https://github.com/bogdanovich/mintclaw/pull/1724) adds a native receipt
+  for confirmed private login without expanding the public result. A fresh
+  owner-requested login on deployed runtime
+  `5ce0ed6ef919db58820cf716499778a0974479d8` produced that verified receipt and
+  a succeeded objective, then closed the temporary browser.
+  The owner subsequently reported completing phone revocation; a retry at the
+  configured entry URL returned `approval_required` and delivered a fresh link
+  under the same actor/agent scope and gateway process. This completes the
+  selected account's notification, approval, login, grant-reuse and
+  closed-session revocation checks. Active-browser retirement remains
+  synthetically qualified, with no physical in-progress-task claim.
   The selected headless ephemeral browser is separate from the remote desktop
   and does not retain a website session after closure.
 - TR5: the [GitHub read connector](credential-github-read-connector.md) is the
@@ -199,12 +213,14 @@ qualification and physical-device acceptance are recorded separately below.
   merged in [#1673](https://github.com/bogdanovich/mintclaw/pull/1673) and included
   in the deployed binary. The connector remains disabled pending configuration
   and real-token acceptance.
-- TR5/TR6: real connector rollout and the personal-account pilot are incomplete.
+- TR5/TR6: the selected personal-account pilot is complete for the closed-session
+  revocation sequence above. Real connector rollout remains incomplete.
   Synthetic output qualification covers the explicitly inventoried routes and
   scenarios, not every possible provider or recovery path.
   Dedicated-vault read-only scope is operator-confirmed; protected token entry,
   exact site outcome metadata and the first real Android-approved login are
-  recorded. Physical grant reuse and revocation remain. These observations do
+  recorded, along with actual same-scope grant reuse and a fresh approval
+  requirement after the reported phone revocation. These observations do
   not expand the synthetic inventory's provider/recovery limits. Passing
   component tests or one successful login do not prove the complete feature or
   absence of secrets from every possible output.
