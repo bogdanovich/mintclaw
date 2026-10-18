@@ -48,7 +48,10 @@ func ordinaryQuestionFixture(
 		content = "private-question-canary"
 	}
 	intent, err := outbox.NewMessageIntent(domain.workspace, outbox.Identity{
-		SourceID: "ordinary-prompt", Channel: route.Channel, ChatID: route.ChatID, SessionKey: route.SessionKey,
+		SourceID:   "ordinary-prompt-" + request.ID,
+		Channel:    route.Channel,
+		ChatID:     route.ChatID,
+		SessionKey: route.SessionKey,
 	}, bus.OutboundMessage{
 		AgentID: domain.agent, SessionKey: route.SessionKey, Content: content,
 		Metadata: bus.OutboundMetadata{
