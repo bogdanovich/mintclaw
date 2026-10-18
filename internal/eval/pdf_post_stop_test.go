@@ -303,6 +303,7 @@ func TestPDFPostStopCohortWritesRequireThePreviouslyObservedNativeHash(t *testin
 		PDF: &PDFTrialEvidence{Settlement: &PDFSettlementEvidence{OperationID: settled.operation.OperationID}},
 	}
 	domain.concludeNativeCensus(t.Context(), &trial)
+	domain.outputSnapshot = settled.snapshot
 	pending := pdfRunFinalization{}
 	pending.retain(domain, trial)
 	defer pending.close()

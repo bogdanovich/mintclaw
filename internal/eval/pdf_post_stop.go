@@ -20,6 +20,7 @@ type pendingPDFTrial struct {
 	jobID          string
 	jobOwner       document.FormJobOwner
 	expectedWrites map[string]string
+	outputSnapshot pdfOutputSnapshot
 }
 
 type pdfCohortScope struct {
@@ -51,6 +52,7 @@ func (pending *pdfRunFinalization) canRetain(prepared *pdfTrial) bool {
 func (pending *pdfRunFinalization) retain(domain *pdfConversation, trial Trial) {
 	entry := pendingPDFTrial{
 		prepared: domain.prepared, owner: domain.censusOwner, jobID: domain.jobID, jobOwner: domain.owner,
+		outputSnapshot: domain.outputSnapshot,
 	}
 	if domain.approvalRecord != nil {
 		if owner, err := pdfWriteOwner(entry.prepared.workspace, *domain.approvalRecord); err == nil {
@@ -58,7 +60,9 @@ func (pending *pdfRunFinalization) retain(domain *pdfConversation, trial Trial) 
 		}
 	}
 	if trial.ExecutionVerdict == Pass && trial.PDF != nil && trial.PDF.Settlement != nil &&
-		len(domain.censusWrites) == 1 && domain.censusWrites[trial.PDF.Settlement.OperationID] != "" {
+		len(domain.censusWrites) == 1 && validDigest(entry.outputSnapshot.operationSHA256) &&
+		entry.outputSnapshot.operationID == trial.PDF.Settlement.OperationID &&
+		domain.censusWrites[trial.PDF.Settlement.OperationID] == entry.outputSnapshot.operationSHA256 {
 		entry.expectedWrites = maps.Clone(domain.censusWrites)
 	}
 	if pending.trials == nil {
@@ -255,7 +259,7 @@ func (entry pendingPDFTrial) conclude(
 		census.SourceUnchanged != nil && *census.SourceUnchanged {
 		proof.Code = "native_post_stop_observed"
 		var err error
-		settled, err = entry.logicalSettlement(trial)
+		settled, err = entry.logicalSettlement(trial, inventory)
 		proof.LogicalSettled = settled && err == nil
 		if errors.Is(err, ErrPrivateEvidence) {
 			proof.Code = "private_native_evidence"
@@ -308,14 +312,15 @@ func (entry pendingPDFTrial) conclude(
 	trial.Verdict, trial.Code = verdict, code
 }
 
-func (entry pendingPDFTrial) logicalSettlement(trial *Trial) (bool, error) {
+func (entry pendingPDFTrial) logicalSettlement(trial *Trial, inventory *pdfNativeInventory) (bool, error) {
 	if entry.jobID != "" {
 		job, err := entry.prepared.observeExistingJob(entry.jobID, entry.jobOwner)
 		if err != nil || job.SourceDigest != trial.PDF.SourceSHA256 {
 			return false, err
 		}
 		if job.State == document.FormJobCompleted && trial.PDF.Settlement != nil {
-			return job.OperationID == trial.PDF.Settlement.OperationID &&
+			return entry.outputSnapshot.matches(inventory, trial.PDF.Settlement) &&
+				job.OperationID == trial.PDF.Settlement.OperationID &&
 				job.ArtifactDigest == trial.PDF.Settlement.ArtifactSHA256, nil
 		}
 		if trial.PDF.Cancellation == nil || job.State != document.FormJobCanceled ||

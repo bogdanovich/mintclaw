@@ -118,27 +118,32 @@ func (trial *pdfTrial) observePromptDelivery(record interactions.Record, prompt 
 }
 
 func (trial *pdfTrial) observeOutbox(id string) (outbox.Intent, error) {
+	intent, _, err := trial.observeOutboxSnapshot(id)
+	return intent, err
+}
+
+func (trial *pdfTrial) observeOutboxSnapshot(id string) (outbox.Intent, string, error) {
 	if !validID(id) {
-		return outbox.Intent{}, ErrPDFTrial
+		return outbox.Intent{}, "", ErrPDFTrial
 	}
 	root, err := os.OpenRoot(trial.workspace)
 	if err != nil {
-		return outbox.Intent{}, ErrPDFTrial
+		return outbox.Intent{}, "", ErrPDFTrial
 	}
 	defer func() { _ = root.Close() }()
 	data, err := readPDFNativeFile(root, "state/outbox/"+id+".json", outbox.MaxInspectionBytes)
 	if err != nil {
-		return outbox.Intent{}, err
+		return outbox.Intent{}, "", err
 	}
 	defer clear(data)
 	if err = trial.scanNativeSurface(data); err != nil {
-		return outbox.Intent{}, err
+		return outbox.Intent{}, "", err
 	}
 	intent, err := outbox.InspectIntent(data, id)
 	if err != nil {
-		return outbox.Intent{}, ErrPDFTrial
+		return outbox.Intent{}, "", ErrPDFTrial
 	}
-	return intent, nil
+	return intent, digest(data), nil
 }
 
 func (trial *pdfTrial) observeProtectedJob(
