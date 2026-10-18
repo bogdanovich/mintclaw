@@ -19,6 +19,8 @@ PDFI2 is complete; its implementation, deployment, and live evidence are recorde
 PDFI4 is admitted under its [free-text intake implementation goal](pdf-agentic-intake-pdfi4-goal.md).
 Implementation is merged and deployed; [qualification is in progress](pdf-agentic-intake-pdfi4-qualification.md).
 Complete official-large-form and actual Telegram gates remain outstanding; PDFI4 is not complete.
+The fresh I-134 test additionally established a conditional/calculated XFA capability boundary; the operator
+deferred that backend work to its [separate roadmap](pdf-conditional-calculated-fields-roadmap.md).
 PDFI5 remains conditional on a second accepted non-PDF protected-input consumer.
 
 ## Operator outcome
@@ -179,6 +181,19 @@ including I-134 with synthetic data. Preserve source immutability and permission
 without executing it, report lost signatures/usage rights truthfully, and verify both accepted values and still-editable
 deferred fields with independent structural/visible oracles. Never specialize production behavior to one agency or form.
 Until that backend exists, explain the limitation rather than silently returning a flattened partial form.
+
+### Deferred Follow-Up: Conditional And Calculated Form Semantics
+
+**Status:** Deferred by the operator on 2026-10-18; implementation not started.
+
+The fresh I-134 source has applicable fields whose XFA scripts change writability or calculate totals. Current
+hybrid support deliberately does not execute those scripts. Complete intake and a verified static subset are
+therefore not proof of complete applicable filling. Preserve the original oracle and keep that qualification open.
+
+The [separate backend roadmap](pdf-conditional-calculated-fields-roadmap.md) orders feasibility/admission,
+conditional branches, calculations and full public-form requalification. It reuses the document worker, protected
+ledger, approval, writer and outbox; no form-specific production rules or general script engine are admitted here.
+This capability is separate from editable hybrid derivatives and from PDFI5's conditional substrate extraction.
 
 ### PDFI5: Conditional protected-input extraction
 

@@ -179,15 +179,41 @@ Two failures must not be hidden:
    the limit temporary and asked a misleading status/address clarification; that wording is not authoritative
    native state and is not a successful large-form UX result.
 
-The choice between a separately identified fresh current-code I-134 qualification and forward recovery of that
-exhausted original job remains with the operator. The original job has not been reset, canceled, replaced or
-misrepresented as recovered; the delayed-advice fix does not bypass its capacity or unaccounted-input gates.
+On 2026-10-18 the operator chose a separately identified fresh current-code I-134 qualification. The original job
+has not been reset, canceled, replaced or misrepresented as recovered; the delayed-advice fix does not bypass its
+capacity or unaccounted-input gates.
 
 Earlier evidence-stage failures left accepted data and input intact. Subsequent real requests succeeded, but the
 specific transient cause was not established. Private source/evidence probes do not substitute for actual runtime
 or channel qualification. Do not report a guessed worker, timeout or ownership cause as proven.
 
 ## Remaining Mandatory Gates
+
+### Fresh I-134 And Separately Deferred Backend Boundary
+
+The fresh job `form_job_2e2aa653dd135ecc6e793e2d42f19f0a` used the same pinned official source, new synthetic
+facts and actual runtime `694d716db`. Native progress reached revision 32, ledger 31, with 16 confirmed fields,
+15 intentional blanks and one retained clarification. Independent readback matched 13 predeclared text values and
+two controls, with no mismatched expected values or unexpected positive assignments. This is progress, not a
+full-form pass. The accepted facts and pending counters survived a subsequent actual external gateway restart.
+
+Trace `trace-turn-94c67d8bd8a11339202c3b0b` additionally exposed a coherent-selection defect: after browsing
+several bounded views, a source-valid eight-field selection was rejected by latest-view-only proposal validation.
+The focused fix is tracked in [PR #1720](https://github.com/bogdanovich/mintclaw/pull/1720); this checkpoint does
+not assert that its review, deployment or same-job postdeployment continuation has finished.
+
+Before sending the remaining financial facts, source-only inspection found that three original full-output targets
+are read-only: employment type, employer name and the asset total. The source XFA scripts enable the first two
+after an employment choice and compute the third from six amounts. Independent source flag inspection confirmed
+this is not merely an inventory error. The current hybrid writer deliberately does not execute those scripts.
+The original full-output oracle stays unchanged and no full artifact has been produced in this fresh test.
+
+The operator explicitly chose to finish current intake fixes and defer this generic backend capability to the
+[conditional/calculated follow-up](pdf-conditional-calculated-fields-roadmap.md). This does not qualify I-134,
+waive its original full-output oracle, admit script execution or complete PDFI4. The unrelated ordinary-form and
+actual Telegram acceptance remain distinct.
+
+### Open Qualification And Exit
 
 - Complete applicable filling of the pinned official I-134 with synthetic data, followed by separate approval,
   one verified print-ready artifact, all-ten-page independent text/control/layout QA and terminal cleanup.
