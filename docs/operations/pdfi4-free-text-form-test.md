@@ -159,6 +159,8 @@ manual Telegram scenario after the repair is deployed:
 1. Attach the generic fixture with: “Заполни тестовую форму. Я заёмщик.
    Объясни документ и сгруппируй нужные сведения. Ничего не подписывай,
    не создавай итоговый PDF и никуда не подавай.” Wait for active intake.
+   Expect one useful introduction, not a repeated description in a later
+   collection response. A separate protected question is not a duplicate.
 2. Send: “Я заёмщик Casey Mint. Контакт на случай чрезвычайной ситуации —
    Robin Mint. Телефон 202-555-0147; пока не указываю, чей он.” Both names
    must be accepted, but the telephone owner must not be guessed.
@@ -167,6 +169,11 @@ manual Telegram scenario after the repair is deployed:
    Previously accepted facts must survive; only genuinely unresolved details
    may be asked again. A real conflict must not disappear just because that
    field also has a previously confirmed value.
+   Do not repeat the number or either name in this clarification: native
+   readback must show both names, the borrower-only telephone and the new city.
+   The contact telephone must have no user assignment, including no invented
+   intentional blank. If a field remains unresolved, the reply must say so
+   rather than claim it was accepted.
 4. If older text remains pending, the response must distinguish the new
    accepted decisions from that retained input. It must not say the new answer
    failed wholesale. Do not resend accepted facts.
@@ -184,6 +191,11 @@ ingress; this actual Telegram scenario is still an operator acceptance step.
 For operator verification, `received_input_state=accounted` means the newly
 received message has been accounted, not that the whole form is finished.
 `accepted_count` and `acknowledged_count` describe this continuation;
+neither proves which particular field changed. `accepted_fields` identifies
+actual new native acceptances with value-free descriptors (at most eight;
+`accepted_fields_truncated` explicitly reports a longer result). Check these
+against native state before treating a field-specific prose acknowledgement
+as proof. An accounted receipt or replay is not a new field acceptance.
 `progress.pending_inputs` still fences review/output. `retained_finding_count`
 includes native older findings even when advisory questions about already
 confirmed/preserved fields are omitted from `findings`/`finding_fields`.

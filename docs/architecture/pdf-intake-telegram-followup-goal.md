@@ -1,5 +1,9 @@
 # PDF intake Telegram follow-up
 
+The [dated repair checkpoint](pdf-intake-telegram-followup-checkpoint.md)
+records merged code, deployment and bounded real gateway/model qualification.
+Actual Telegram requalification remains an explicit operator follow-up.
+
 ## Incident and scope
 
 The first real Telegram run after the bounded clarification repair is negative
