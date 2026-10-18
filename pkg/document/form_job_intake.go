@@ -304,7 +304,7 @@ func (store *FormJobStore) ReadFormIntakeInput(
 		if index < 0 || source.Intake.Inputs[index].State == formIntakeInputStaged {
 			return false, ErrFormJobConflict
 		}
-		result = formIntakeInput(record.Public, source.Intake, source.Intake.Inputs[index])
+		result = store.formIntakeInput(record.Public, source.Intake, source.Intake.Inputs[index])
 		return false, nil
 	})
 	if err != nil {
@@ -412,7 +412,7 @@ func (store *FormJobStore) ReserveFormIntakePass(
 			snapshot.Records[record.Public.JobID] = record
 		}
 		result = FormIntakePass{
-			Input: formIntakeInput(record.Public, source.Intake, *input), Fields: fields,
+			Input: store.formIntakeInput(record.Public, source.Intake, *input), Fields: fields,
 			ID: reservation.ID, Revision: reservation.Revision,
 			CandidateIDs: slices.Clone(reservation.CandidateIDs), Reused: reused,
 		}
@@ -516,7 +516,11 @@ func formIntakeAdmission(
 	}
 }
 
-func formIntakeInput(record FormJobRecord, mode *formIntakeStoredMode, input formIntakeStoredInput) FormIntakeInput {
+func (store *FormJobStore) formIntakeInput(
+	record FormJobRecord,
+	mode *formIntakeStoredMode,
+	input formIntakeStoredInput,
+) FormIntakeInput {
 	var dialogIntent FormIntakeDialogIntent
 	var completedWindows [][]string
 	for _, pass := range input.Reservations {
@@ -530,15 +534,38 @@ func formIntakeInput(record FormJobRecord, mode *formIntakeStoredMode, input for
 			break
 		}
 	}
+	findings := formIntakeCurrentModeFindings(mode, input)
+	var supersededAdvisoryIDs []string
+	for _, finding := range findings {
+		if finding.Code != "field_ambiguous" && finding.Code != "field_confirmation_required" {
+			continue
+		}
+		var lastAdviceRevision int64
+		for _, pass := range input.Reservations {
+			if pass.Outcome != nil &&
+				slices.ContainsFunc(pass.Outcome.Findings, func(prior FormFieldMappingBlocker) bool {
+					return prior.FieldID == finding.FieldID
+				}) {
+				lastAdviceRevision = max(lastAdviceRevision, pass.Outcome.AppliedRevision)
+			}
+		}
+		field, found := formIntakeConfirmedUserField(record, finding.FieldID)
+		if found && lastAdviceRevision > 0 && store.formIntakeEventObservedAdmission(
+			mode, formIntakeInputIndex(mode, input.ID), field, lastAdviceRevision,
+		) {
+			supersededAdvisoryIDs = append(supersededAdvisoryIDs, finding.FieldID)
+		}
+	}
 	return FormIntakeInput{
 		JobID: record.JobID, ModeID: mode.ID, Reference: formIntakeReceiptPrefix + record.JobID + "." + input.ID,
 		Revision: record.Revision, AdmittedRevision: input.Origin.ExpectedRevision,
 		DialogIntent: dialogIntent,
 		Passes:       len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
 		Intent: input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
-		Accounted:        formIntakeAccountedLiterals(input),
-		Findings:         formIntakeCurrentModeFindings(mode, input),
-		CompletedWindows: completedWindows,
+		Accounted:             formIntakeAccountedLiterals(input),
+		Findings:              findings,
+		CompletedWindows:      completedWindows,
+		SupersededAdvisoryIDs: supersededAdvisoryIDs,
 	}
 }
 

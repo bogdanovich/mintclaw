@@ -27,7 +27,7 @@ func (store *FormJobStore) acknowledgeAccountedFormIntakeGuidance(
 			continue
 		}
 		field, found := formIntakeConfirmedUserField(record, id)
-		if !found || !store.formIntakeEventObservedAdmission(mode, index, field) {
+		if !found || !store.formIntakeEventObservedAdmission(mode, index, field, 0) {
 			continue
 		}
 		acknowledged = append(acknowledged, id)
@@ -50,11 +50,12 @@ func formIntakeConfirmedUserField(record FormJobRecord, id string) (FormJobField
 }
 
 func (store *FormJobStore) formIntakeEventObservedAdmission(
-	mode *formIntakeStoredMode, index int, field FormJobFieldState,
+	mode *formIntakeStoredMode, index int, field FormJobFieldState, afterRevision int64,
 ) bool {
 	for _, input := range mode.Inputs {
 		for _, pass := range input.Reservations {
 			if pass.Outcome == nil || pass.ReceiptCount <= index ||
+				afterRevision > 0 && pass.Outcome.AppliedRevision <= afterRevision ||
 				!slices.Contains(pass.Outcome.AcceptedIDs, field.FieldID) {
 				continue
 			}

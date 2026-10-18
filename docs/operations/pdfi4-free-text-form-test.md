@@ -178,6 +178,9 @@ received message has been accounted, not that the whole form is finished.
 includes native older findings even when advisory questions about already
 confirmed/preserved fields are omitted from `findings`/`finding_fields`.
 That presentation filtering never deletes native findings or pending text.
+It applies only to older advisory findings backed by a strictly later,
+still-current native decision for that same field. Existing confirmation or
+an unrelated later update is not enough to hide a genuine new ambiguity.
 
 ## Large Public Form And Unsupported Output
 

@@ -418,7 +418,8 @@ func (tool *DocumentTool) continueFormIntake(
 		}
 		for _, finding := range current.Findings {
 			intake.RetainedFindingCount++
-			if !documentFormIntakeActionableFinding(summary, finding) {
+			if pending != reference && slices.Contains(current.SupersededAdvisoryIDs, finding.FieldID) &&
+				!documentFormIntakeActionableFinding(summary, finding) {
 				continue
 			}
 			if len(intake.Findings) < document.MaxFormIntakeCandidates {

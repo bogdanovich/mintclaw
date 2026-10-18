@@ -19,6 +19,9 @@ Repair the general intake mechanism, without document-specific rules:
 3. Do not ask again about confirmed facts merely because older interpretation
    advice remains recorded. Preserve genuine conflicting/invalid facts and all
    native accounting and output fences.
+   Confirmation alone is insufficient: suppress only older advice superseded
+   by a strictly later, still-current native user decision for that same field.
+   New ambiguity and unrelated later decisions must remain visible.
 
 ## Invariants and exclusions
 

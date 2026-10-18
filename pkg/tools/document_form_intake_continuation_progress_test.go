@@ -214,3 +214,46 @@ func TestDocumentFormIntakeQuestionFilteringKeepsNativeBlockersAndUnconfirmedVal
 		}
 	}
 }
+
+func TestDocumentFormIntakeNewAmbiguityAboutConfirmedFieldStillAsksForClarification(t *testing.T) {
+	model := &intakeWorkflowTestInterpreter{}
+	tool, ctx, schema, jobID, _ := intakeWorkflowFixture(t, model)
+	model.interpret = func(view document.FormIntakeInterpretationView) (document.FormIntakeInterpretation, error) {
+		result := document.FormIntakeInterpretation{Intent: document.FormIntakeIntentFacts}
+		index := 0
+		if view.Pass.Input.Text == "Mintford" {
+			index = 12
+		}
+		if slices.Contains(view.Pass.CandidateIDs, schema.Fields[index].ID) {
+			if view.Pass.Input.Text == "Which person does this describe?" {
+				result.Findings = []document.FormFieldMappingBlocker{{
+					FieldID: schema.Fields[0].ID, Code: "field_ambiguous",
+				}}
+			} else {
+				result.Proposals = []document.FormIntakeProposal{{
+					FieldID:  schema.Fields[index].ID,
+					Literals: []document.FormIntakeLiteral{{Text: view.Pass.Input.Text, Occurrence: 1}},
+				}}
+			}
+		}
+		return result, nil
+	}
+	progress, err := tool.FindProtectedFormIntake(ctx)
+	if err != nil || progress == nil {
+		t.Fatal("intake unavailable")
+	}
+	guard := bus.InboundDocumentIntakeGuard{JobID: jobID, ModeID: progress.ModeID}
+	for index, text := range []string{"Casey Mint", "Which person does this describe?", "Mintford"} {
+		ref, admitErr := tool.AdmitProtectedFormIntake(ctx, guard, fmt.Sprintf("genuine-ambiguity-%d", index), text)
+		if admitErr != nil {
+			t.Fatal(admitErr)
+		}
+		turn := toolshared.WithToolExecutionIdentity(ctx, "workspace", fmt.Sprintf("ambiguity-turn-%d", index))
+		result := tool.Execute(turn, map[string]any{"action": "form", "form_action": "continue", "answer_ref": ref})
+		got := decodeWorkflowResult(t, result.ForLLM)
+		if result.IsError || got.Intake == nil || index > 0 &&
+			(len(got.Intake.Findings) != 1 || got.Intake.Findings[0].FieldID != schema.Fields[0].ID) {
+			t.Fatal("pre-existing confirmation or an unrelated later decision hid genuine new ambiguity")
+		}
+	}
+}
