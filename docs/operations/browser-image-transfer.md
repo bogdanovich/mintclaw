@@ -97,3 +97,9 @@ do not supply completion receipts. If the producer omits receipts, the existing
 model-only finalization repair supplies a bounded list of unclaimed runtime IDs
 without repeating browser actions. The runtime still rejects unexpected effects
 and unverified postconditions; receipt accounting is not publication authority.
+
+With `agent live --trace-evidence-agent browser`, canonical trace publication
+can follow the visible final response. The CLI waits up to 30 seconds for this
+passive evidence, also subject to its overall command context. Missing evidence
+does not prove that browser effects did not occur: inspect the exact owner state
+and independent fixture receipt before considering another action.
