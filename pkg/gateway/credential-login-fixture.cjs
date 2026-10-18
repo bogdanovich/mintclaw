@@ -101,8 +101,26 @@ async function phone() {
     await page.getByRole('status').filter({ hasText: 'Approved until' }).waitFor();
     stage = 'login-result';
     assert.equal((await fixture('/_fixture/result')).outcome, config.outcome || 'logged_in');
-    stage = 'reuse';
-    assert.equal((await fixture('/_fixture/reuse')).outcome, config.outcome || 'logged_in');
+    if (config.restart) {
+      stage = 'restart';
+      const restarted = await fixture('/_fixture/restart');
+      assert.deepEqual(restarted, { passkey_retained: true, grant_denied: true, old_lease_denied: true, no_retrieval: true });
+      stage = 'restart-request';
+      const fresh = await fixture('/_fixture/login');
+      assert.notEqual(fresh.link, pending.link);
+      stage = 'restart-approve';
+      await page.goto(fresh.link);
+      await page.getByRole('button', { name: 'Approve with passkey' }).waitFor();
+      assert.equal(await page.locator('#accounts').innerText(), 'fixture-account');
+      assert.equal(await page.locator('#duration').innerText(), '20 hours');
+      await page.getByRole('button', { name: 'Approve with passkey' }).click();
+      await page.getByRole('status').filter({ hasText: 'Approved until' }).waitFor();
+      stage = 'restart-result';
+      assert.equal((await fixture('/_fixture/result')).outcome, config.outcome || 'logged_in');
+    } else {
+      stage = 'reuse';
+      assert.equal((await fixture('/_fixture/reuse')).outcome, config.outcome || 'logged_in');
+    }
     stage = 'revoke';
     if (config.inflight) assert.equal((await fixture('/_fixture/inflight')).started, true);
     await page.getByRole('button', { name: 'Revoke access' }).click();

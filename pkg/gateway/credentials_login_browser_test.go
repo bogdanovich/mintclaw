@@ -63,7 +63,20 @@ func TestCredentialGitHubOutputFixture(t *testing.T) {
 	}
 }
 
+func TestCredentialRestartOutputFixture(t *testing.T) {
+	for _, kind := range []string{"openai_compat", "codex"} {
+		t.Run(kind, func(t *testing.T) {
+			testCredentialBrowserFixtureScenario(t, kind, "logged_in", true)
+		})
+	}
+}
+
 func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expectedOutcome string) {
+	t.Helper()
+	testCredentialBrowserFixtureScenario(t, providerKind, expectedOutcome, false)
+}
+
+func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOutcome string, restart bool) {
 	t.Helper()
 	connectorMode := strings.HasPrefix(providerKind, "github:")
 	providerKind = strings.TrimPrefix(providerKind, "github:")
@@ -312,11 +325,19 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 	defer finalize()
 	results := make(chan browser.CredentialLoginResult, 1)
 	var failure atomic.Value
+	var runtimeMu sync.RWMutex
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/_fixture/restart" {
+			runtimeMu.RLock()
+			defer runtimeMu.RUnlock()
+		}
 		respond := func(value any) { _ = json.NewEncoder(writer).Encode(value) }
 		switch request.URL.Path {
 		case "/_fixture/login":
+			before := retrieved.Load()
 			go func() {
+				runtimeMu.RLock()
+				defer runtimeMu.RUnlock()
 				result, performErr := perform()
 				if performErr != nil {
 					failure.Store(performErr.Error())
@@ -326,7 +347,7 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 			}()
 			select {
 			case notice := <-messageBus.OutboundChan():
-				if retrieved.Load() != 0 {
+				if retrieved.Load() != before {
 					http.Error(writer, "fixture unavailable", http.StatusServiceUnavailable)
 					return
 				}
@@ -344,6 +365,35 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 			case <-ctx.Done():
 				http.Error(writer, "fixture unavailable", http.StatusServiceUnavailable)
 			}
+		case "/_fixture/restart":
+			if !restart {
+				http.NotFound(writer, request)
+				return
+			}
+			runtimeMu.Lock()
+			defer runtimeMu.Unlock()
+			scope, _, scopeErr := credentials.controller.LoginRequest(ctx,
+				cfg.Credentials.Accounts[0].Principals[0], "fixture-account", origin)
+			lease, leaseErr := credentials.controller.ActiveLogin(ctx, scope)
+			if scopeErr != nil || leaseErr != nil || retrieved.Load() != 1 || credentials.Close(ctx) != nil {
+				http.Error(writer, "fixture restart unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			replacement, setupErr := setupCredentialRuntime(cfg, "synthetic-operator-token", routes,
+				credentialNotificationPublisher(messageBus))
+			if setupErr != nil {
+				http.Error(writer, "fixture restart unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			replacement.consumeLogin = credentials.consumeLogin
+			credentials, running.Credentials = replacement, replacement
+			_, grantErr := replacement.controller.ActiveLogin(ctx, scope)
+			respond(map[string]bool{
+				"passkey_retained": routes.handler.(*credentialHTTPHandler).enrollment == nil,
+				"grant_denied":     grantErr != nil,
+				"old_lease_denied": lease.Check(ctx, scope) != nil,
+				"no_retrieval":     retrieved.Load() == 1,
+			})
 		case "/_fixture/reuse":
 			// The existing browser limit admits one live session. Close the
 			// first, then prove the same signed grant authorizes a new session.
@@ -451,6 +501,7 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 	input, err := json.Marshal(map[string]string{
 		"backend": server.URL, "invite": string(invite), "outcome": expectedOutcome,
 		"inflight": map[bool]string{true: "true", false: ""}[connectorMode],
+		"restart":  map[bool]string{true: "true", false: ""}[restart],
 	})
 	if err != nil {
 		t.Fatal("synthetic phone configuration unavailable")
@@ -464,7 +515,10 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 		cancel()
 		// A fixed stage is enough to locate the failure; never dump child output.
 		stage := "unknown"
-		for _, candidate := range []string{"start", "enroll", "login-request", "approve", "login-result", "reuse", "revoke"} {
+		for _, candidate := range []string{
+			"start", "enroll", "login-request", "approve", "login-result", "reuse", "revoke",
+			"restart", "restart-request", "restart-approve", "restart-result",
+		} {
 			if childOutput.String() == "credential gateway fixture failed at "+candidate+"\n" {
 				stage = candidate
 			}
