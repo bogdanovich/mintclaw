@@ -62,9 +62,10 @@ func TestPrepareProfileCopiesOnlyPinnedInputsAndNativeCredentials(t *testing.T) 
 		t.Fatal(err)
 	}
 	result, err := PrepareProfile(t.Context(), fixture.preset, fixture.home, parent)
-	if err != nil || result.Outcome != "prepared" || result.RuntimeRun || result.WorkspaceFileCount != 3 ||
-		!validDigest(result.PublicConfigSHA256) || !pathWithin(parent, result.Home) ||
-		fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 || config.GetHome() != fixture.home {
+	if err != nil || result.Outcome != "prepared" || result.RuntimeRun || result.PDFJournalPrepared ||
+		result.WorkspaceFileCount != 3 || !validDigest(result.PublicConfigSHA256) || !pathWithin(parent, result.Home) ||
+		fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 ||
+		config.GetHome() != fixture.home {
 		t.Fatal("preparation did not remain isolated/offline", err, result)
 	}
 	loaded, err := config.NewRepository(result.ConfigPath).ReadDurable()
@@ -95,6 +96,7 @@ func TestPrepareProfileCopiesOnlyPinnedInputsAndNativeCredentials(t *testing.T) 
 	}
 	for _, path := range []string{
 		"workspace/USER.md", "workspace/memory", "workspace/sessions", ".mintclaw.pid", "old-private-state.json",
+		"state", ownedGatewayTempDirectory,
 	} {
 		if _, statErr := os.Lstat(filepath.Join(result.Home, path)); !errors.Is(statErr, os.ErrNotExist) {
 			t.Fatal("unlisted state copied", path, statErr)

@@ -22,6 +22,12 @@ it is not an answer and must never be sent literally. `{{fixture}}` is one runne
 
 ## Native Evidence Preparation
 
+For owned runs, use `eval prepare` to create the empty native write-journal hierarchy before launch. Fresh-target
+admission accepts only that exact empty private hierarchy for PDF, not prior native records or locks. The native
+gateway initializes its outbox; the census still reads both real stores and never creates a missing root.
+The child receives a new private `HOME/eval-tmp` as its temporary-directory environment, keeping default document
+scratch within the later raw-file observation. These are isolation prerequisites, not positive PDF check results.
+
 The integration foundation prepares a new private fixture directory per trial, rechecks pinned source bytes, and
 resolves public generation markers to fresh ephemeral values. It never resumes an existing directory. Local release
 retains a potentially active remote source; terminal cleanup removes only the owned source and empty directory,
