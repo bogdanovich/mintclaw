@@ -4,7 +4,8 @@ This boundary adds opt-in, first-party computer commands to the existing node
 runtime and authenticated connection. It does not enable desktop control in the
 normal companion configuration, install a driver, select an ambient desktop, or
 register public computer tools. A local host must be explicitly injected with
-`WithComputerHost`; native host configuration and gateway tools are later gates.
+`WithComputerHost`; the native configuration path below provides that host only
+for enabled operator profiles. Public gateway tools remain a later gate.
 
 ## Authority and lifecycle
 
@@ -62,9 +63,105 @@ after same-session/worker/window handoff-resume, protected replay, full-turn
 ownership, node policy, schema isolation and generic-tool exclusion. These are
 fixture-backed boundary tests, not native desktop qualification.
 
-Before enabling a real target, integrate its native incarnation guard, pinned
-capture worker, bounded image transfer and explicit configuration. Then qualify
+The native implementation below integrates the incarnation guard, pinned
+capture worker, bounded image transfer and explicit configuration. Qualify
 the actual companion process on Linux and macOS with disposable native windows,
 including capture, handoff, fresh same-target resume, loss and release without
 closing the application. macOS needs the actual companion app's OS grants.
 Public clicking, typing and scrolling remain a separate capability program.
+
+## Native host configuration
+
+The companion now constructs the attached-window host only when an explicit
+`computer_profiles` entry is enabled. Absent/disabled profiles do not probe a
+desktop, start a capture worker or advertise computer commands. No browser or
+shell permission implies computer authority.
+
+Merge a profile like this into the existing companion configuration, preserving
+its gateway endpoint, TLS identity, state directory and other command policy:
+
+```json
+{
+  "computer_profiles": {
+    "selected-window": {
+      "enabled": true,
+      "executable": "/private/pinned/cua-driver",
+      "sha256": "fd922e708099aae311873a6667beb48eaabb8c15c3abec744492db8a96b544ee",
+      "pid": 12345,
+      "window_id": 6789,
+      "environment": {
+        "DISPLAY": ":1",
+        "XAUTHORITY": "/run/user/1000/gdm/Xauthority",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"
+      },
+      "allowed_actors": ["telegram:owner"],
+      "allowed_agents": ["browser"],
+      "allowed_runtimes": ["gateway"],
+      "lease_seconds": 300,
+      "observation_seconds": 15
+    }
+  }
+}
+```
+
+Replace the native IDs with the operator-selected live window's coordinates;
+they are not model arguments. On macOS use the pinned macOS checksum from the
+native qualification document and omit the Linux `environment` object. Launch
+the actual companion app with its own Accessibility/Screen Recording grants.
+The profile revision is derived from the alias and complete normalized policy,
+including owner/runtime constraints, driver, GUI selection and time limits.
+
+Extend the existing node policy/approval with all eight `computer.*.v1` commands
+listed above; control transitions require a `write` risk ceiling. That risk
+classification concerns automation ownership, not input to the application.
+Profile actor, agent and runtime allowlists remain an additional exact-match
+local gate. Both gateway and coding principals must be explicitly admitted when
+both are needed.
+
+Each open performs fresh native admission. Handoff retains that admission and
+its worker; resume never reconnects a replacement under the old binding. Native
+loss during human control, capture/worker failure, expiry and connection loss
+revoke the original authority. Disconnect fences old calls before cleanup, even
+when cleanup cannot finish in its caller's budget. An uncertain release cleanup
+is retained as unknown in the invocation ledger, not reexecuted on replay.
+
+Images are PNG-only, kept in a bounded private in-memory cache, transferred over
+the existing authenticated binary channel and discarded on commit, expiry, new
+observation, control transition or disconnect. Every chunk checks the original
+owner, native scope, worker, policy and control generation. No generic file
+commands or arbitrary companion-local paths are introduced.
+
+## Real companion smoke
+
+`scripts/computer-companion-native-smoke.sh` launches only disposable native
+fixtures and a private authenticated WSS gateway, using the actual companion
+`run` process and normal config/runtime/transfer code. It never enables a
+production profile, installs drivers or grants OS permissions.
+
+```sh
+bash scripts/computer-companion-native-smoke.sh \
+  --driver /absolute/pinned/cua-driver \
+  --node /absolute/mintclaw-node
+```
+
+Linux requires the explicit selected X11 GUI environment. On macOS also pass
+`--app /absolute/MintClaw-Companion.app`; the app's executable must match `--node`.
+`--test-binary` permits a cross-built integration test executable. Optional
+`--capture-dir` retains only owned fixture PNGs in an existing private directory
+for visual QA; by default none are retained.
+
+The smoke verifies native pixels and transferred digest/dimensions, a visible
+fixture change during human control followed by different fresh resumed pixels,
+unchanged session/worker/native-window binding, release without closing either
+window, native target destruction while the fixture process/guard window remain
+alive, companion exit preserving remaining windows, and protected on-disk
+observation receipts. The fixture's nonce-correlated own-state responses prove
+window lifetime independently of a driver's success report.
+
+The October 17 Linux GNOME X11 real-companion runs pass these cases. The macOS
+app's own preflight confirms the correct bundle/GUI identity but reports both OS
+grants missing; positive macOS qualification is still pending. Development
+ad-hoc signatures do not establish permission persistence across rebuilds.
+Public gateway computer tools and their live-resource interaction integration
+remain a separate gate; enabling this native node host does not register them.

@@ -55,23 +55,24 @@ type ServiceHelperClientConfig struct {
 }
 
 type Config struct {
-	GatewayURL             string                          `json:"gateway_url"`
-	StateDir               string                          `json:"state_dir,omitempty"`
-	AllowLoopbackPlaintext bool                            `json:"allow_loopback_plaintext,omitempty"`
-	TLS                    TLSConfig                       `json:"tls,omitempty"`
-	Reconnect              ReconnectConfig                 `json:"reconnect,omitempty"`
-	Policy                 nodes.LocalCommandPolicy        `json:"policy,omitempty"`
-	SystemExec             *SystemExecPolicy               `json:"system_exec,omitempty"`
-	JobProfiles            JobProfiles                     `json:"node_job_profiles,omitempty"`
-	OwnerShell             *OwnerShellConfig               `json:"owner_shell,omitempty"`
-	FilePolicies           FilePolicies                    `json:"node_file_policies,omitempty"`
-	FileHelper             *FileHelperClientConfig         `json:"file_helper,omitempty"`
-	ServicePolicies        ServicePolicies                 `json:"node_service_policies,omitempty"`
-	ServiceHelper          *ServiceHelperClientConfig      `json:"service_helper,omitempty"`
-	BrowserProfiles        map[string]BrowserProfilePolicy `json:"browser_profiles,omitempty"`
-	CodingScopes           map[string]CodingScopePolicy    `json:"coding_scopes,omitempty"`
-	UpdateSources          UpdateSources                   `json:"node_update_sources,omitempty"`
-	UpdatePolicies         UpdatePolicies                  `json:"node_update_policies,omitempty"`
+	GatewayURL             string                           `json:"gateway_url"`
+	StateDir               string                           `json:"state_dir,omitempty"`
+	AllowLoopbackPlaintext bool                             `json:"allow_loopback_plaintext,omitempty"`
+	TLS                    TLSConfig                        `json:"tls,omitempty"`
+	Reconnect              ReconnectConfig                  `json:"reconnect,omitempty"`
+	Policy                 nodes.LocalCommandPolicy         `json:"policy,omitempty"`
+	SystemExec             *SystemExecPolicy                `json:"system_exec,omitempty"`
+	JobProfiles            JobProfiles                      `json:"node_job_profiles,omitempty"`
+	OwnerShell             *OwnerShellConfig                `json:"owner_shell,omitempty"`
+	FilePolicies           FilePolicies                     `json:"node_file_policies,omitempty"`
+	FileHelper             *FileHelperClientConfig          `json:"file_helper,omitempty"`
+	ServicePolicies        ServicePolicies                  `json:"node_service_policies,omitempty"`
+	ServiceHelper          *ServiceHelperClientConfig       `json:"service_helper,omitempty"`
+	BrowserProfiles        map[string]BrowserProfilePolicy  `json:"browser_profiles,omitempty"`
+	ComputerProfiles       map[string]ComputerProfilePolicy `json:"computer_profiles,omitempty"`
+	CodingScopes           map[string]CodingScopePolicy     `json:"coding_scopes,omitempty"`
+	UpdateSources          UpdateSources                    `json:"node_update_sources,omitempty"`
+	UpdatePolicies         UpdatePolicies                   `json:"node_update_policies,omitempty"`
 
 	minReconnectDelay time.Duration
 	maxReconnectDelay time.Duration
@@ -265,6 +266,10 @@ func (cfg Config) Normalize(baseDir string) (Config, error) {
 	}
 	if _, err = browserProfileDescriptors(cfg.BrowserProfiles); err != nil {
 		return Config{}, fmt.Errorf("validate browser capability descriptors: %w", err)
+	}
+	cfg.ComputerProfiles, err = NormalizeComputerProfiles(cfg.ComputerProfiles, baseDir)
+	if err != nil {
+		return Config{}, fmt.Errorf("validate computer profiles: %w", err)
 	}
 	cfg.CodingScopes, err = normalizeCodingScopes(cfg.CodingScopes, baseDir)
 	if err != nil {

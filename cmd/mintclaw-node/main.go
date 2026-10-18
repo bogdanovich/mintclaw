@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/browserhost"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/computerhost"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/update/control"
 )
 
@@ -161,6 +162,21 @@ func run(args []string) error {
 			}
 		}()
 	}
+	var computerHost *computerhost.Host
+	if companion.HasEnabledComputerProfile(cfg.ComputerProfiles) {
+		computerHost, err = computerhost.New(identity.ID, cfg.ComputerProfiles)
+		if err != nil {
+			return fmt.Errorf("configure companion computer host: %w", err)
+		}
+		runtimeOptions = append(runtimeOptions, companion.WithComputerHost(computerHost))
+		defer func() {
+			shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancelShutdown()
+			if computerHost.Shutdown(shutdownContext) != nil {
+				slog.Error("companion computer cleanup failed")
+			}
+		}()
+	}
 	if cfg.SystemExec != nil {
 		runtimeOptions = append(runtimeOptions, companion.WithSystemExec(*cfg.SystemExec))
 	}
@@ -182,6 +198,9 @@ func run(args []string) error {
 	fileCapabilities := make([]companion.FileTransferCapability, 0, 2)
 	if browserHost != nil && len(browserHost.TransferPolicyRevisions()) > 0 {
 		fileCapabilities = append(fileCapabilities, browserHost)
+	}
+	if computerHost != nil {
+		fileCapabilities = append(fileCapabilities, computerHost)
 	}
 	if companion.HasEnabledFilePolicy(cfg.FilePolicies) || jobRuntime != nil {
 		transferLedger, transferLedgerErr := companion.NewFileTransferLedger(
