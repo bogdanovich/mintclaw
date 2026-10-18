@@ -4,7 +4,7 @@ set -eu
 
 usage() {
 	cat >&2 <<'EOF'
-usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|image-transfer|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff> --json-output <path> [options]
+usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|image-transfer|image-transfer-freeform|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff> --json-output <path> [options]
 
 Options:
   --gateway-host <ssh-host>  Run the live client on the gateway over SSH.
@@ -106,7 +106,7 @@ if [ "${#profile}" -gt 64 ]; then
 	exit 2
 fi
 case "$suite" in
-core|image-transfer|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff) ;;
+core|image-transfer|image-transfer-freeform|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff) ;;
 *)
 	echo "unsupported browser smoke suite" >&2
 	exit 2
@@ -319,6 +319,12 @@ ephemeral-cleanup)
 	stage_two_checks='cookie_removed, local_storage_removed, cache_removed, service_worker_removed'
 	stage_two_workflow="Open the verification session with the same target and profile and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check, call browser_observe until it shows cookie=false, local_storage=false, cache=false, and service_worker=false, and close this session."
 	;;
+image-transfer-freeform)
+	stage_one=image-transfer-freeform
+	stage_one_checks='initial_blank, image_observed, original_artifact_retained, upload_selected, upload_received, source_page_preserved'
+	stage_one_workflow="Open one session and observe about:blank. Navigate to ${fixture_origin}/browser-smoke/image-transfer and observe it. Copy the original photograph shown as Original transfer photo into the form labelled Upload original photo, then submit it using Send test upload. Use the original image file, not a screenshot. Do not click the source photograph or the unrelated button. Make a fresh browser_observe after obtaining the original, after selecting the file, and after submission. Verify respectively that the source URL and title are unchanged, that the form shows UPLOAD_SELECTED_1 before submission, and that submission shows UPLOAD_RECEIVED_ORIGINAL. I authorize this single submission to this owned fixture without another confirmation. Use the live target capabilities and tool schemas to choose how to accomplish the task. Use only first-party browser tools, not browser_execute, raw MCP, shell commands, or direct HTTP tools. Keep the same session throughout and close it exactly once."
+	stage_two=""
+	;;
 image-transfer)
 	stage_one=image-transfer
 	stage_one_checks='initial_blank, image_observed, download_not_dispatched, same_session_preserved, original_artifact_retained, upload_selected, upload_received, source_page_preserved'
@@ -424,9 +430,9 @@ make_stage_prompt() {
 	stage_checks=$3
 	objective_shape='exactly one result objective'
 	external_objective=''
-	if [ "$suite" = image-transfer ]; then
+	if [ "$suite" = image-transfer ] || [ "$suite" = image-transfer-freeform ]; then
 		objective_shape='exactly two objectives: one external_action objective and one result objective'
-		external_objective='Set the external_action item to exactly: Capture the original image, attach it, and submit one upload to the owned image-transfer fixture. Set kind=external_action and omit acceptance for this item. Require actual runtime receipts for every completed externally classified download, upload, and submit action; do not treat these effects as an unclaimed result-only workflow.'
+		external_objective='Set the external_action item to exactly: Capture the original image, attach it, and submit one upload to the owned image-transfer fixture. Set kind=external_action and omit acceptance for this item. Require actual runtime receipts for every completed externally classified action; do not treat these effects as an unclaimed result-only workflow.'
 	fi
 	cat <<EOF
 Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
@@ -555,7 +561,7 @@ if [ "$suite" = semantic-observation ]; then
 	"$python_command" "$helper" semantic-probe --origin "$fixture_origin" \
 		--output "$smoke_root/semantic-oracle.json"
 fi
-if [ "$suite" = image-transfer ]; then
+if [ "$suite" = image-transfer ] || [ "$suite" = image-transfer-freeform ]; then
 	"$python_command" "$helper" image-probe --origin "$fixture_origin" \
 		--output "$smoke_root/image-oracle.json"
 fi
@@ -574,7 +580,7 @@ fi
 if [ "$suite" = semantic-observation ]; then
 	set -- "$@" --semantic-oracle "$smoke_root/semantic-oracle.json"
 fi
-if [ "$suite" = image-transfer ]; then
+if [ "$suite" = image-transfer ] || [ "$suite" = image-transfer-freeform ]; then
 	set -- "$@" --image-oracle "$smoke_root/image-oracle.json"
 fi
 set -- "$@" \
