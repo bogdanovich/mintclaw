@@ -155,8 +155,9 @@ production traffic, Linux behavior or provider delivery.
 | 1,000 × 16 KiB | compact | 604,000 | 38.79–39.69 | 38.57–44.70 | 3.09–3.09 |
 
 Compact receipts reduced retained logical bytes by 66.7% for 1 KiB payloads
-and 96.5% for 16 KiB payloads. Warm recovery improved by roughly 16–27% in the
-1 KiB cohorts and 69% in the 16 KiB cohort. These are synthetic comparisons,
+and 96.5% for 16 KiB payloads. Comparing the three-repetition means, warm recovery
+improved by 18–24% in the 1 KiB cohorts and 69% in the 16 KiB cohort. These are
+synthetic comparisons,
 not operational latency guarantees. At 10,000 identities, compact recovery still
 averaged 432–445 ms and allocated about 31 MiB per scan. Recovery still walks
 and decodes every identity: payload retirement reduces per-record costs but
