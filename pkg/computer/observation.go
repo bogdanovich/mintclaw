@@ -63,20 +63,35 @@ type Observation struct {
 }
 
 func (observation Observation) Validate(session Session, now time.Time) error {
+	if err := validateObservationMetadata(
+		observation.ID, observation.Binding, observation.Geometry,
+		observation.CapturedAt, observation.ExpiresAt, session, now,
+	); err != nil {
+		return err
+	}
+	return observation.validatePayload()
+}
+
+func validateObservationMetadata(
+	id string, binding Binding, geometry Geometry, capturedAt, expiresAt time.Time, session Session, now time.Time,
+) error {
 	if err := session.AgentAuthority(now); err != nil {
 		return err
 	}
-	if observation.Binding != session.Binding {
+	if binding != session.Binding {
 		return ErrStale
 	}
-	if !validIdentifier(observation.ID) || observation.Geometry.Validate() != nil ||
-		observation.CapturedAt.IsZero() || observation.CapturedAt.After(now) ||
-		!observation.ExpiresAt.After(observation.CapturedAt) || observation.ExpiresAt.After(session.ExpiresAt) {
+	if !validIdentifier(id) || geometry.Validate() != nil || capturedAt.IsZero() || capturedAt.After(now) ||
+		!expiresAt.After(capturedAt) || expiresAt.After(session.ExpiresAt) {
 		return ErrInvalid
 	}
-	if !now.Before(observation.ExpiresAt) {
+	if !now.Before(expiresAt) {
 		return ErrExpired
 	}
+	return nil
+}
+
+func (observation Observation) validatePayload() error {
 	if len(observation.Screenshot) > MaxCaptureBytes || len(observation.AccessibilityText) > MaxAccessibilityBytes ||
 		!utf8.ValidString(observation.AccessibilityText) ||
 		len(observation.Screenshot) == 0 && observation.AccessibilityText == "" {
