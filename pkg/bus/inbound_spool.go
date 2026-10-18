@@ -362,37 +362,50 @@ func (s *InboundSpool) renameRecord(from, to string) error {
 	return nil
 }
 
-// The caller supplies the directory, so anchor newly-created components at
-// its nearest existing parent rather than assuming a particular instance path.
+// Create and confirm one component before creating the next. After a failed
+// attempt, at most the last existing component's parent entry can be uncertain;
+// reconfirm that entry before using the component as the next durable anchor.
 func createInboundSpoolDirectory(dir string) error {
+	return createInboundSpoolDirectoryWithOps(dir, fileutil.MkdirAllDurable, fileutil.SyncDirectory)
+}
+
+func createInboundSpoolDirectoryWithOps(
+	dir string,
+	mkdirDurable func(string, string, os.FileMode) error,
+	syncDirectory func(string) error,
+) error {
 	target, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
-	parent := filepath.Dir(target)
+	current := target
+	var missing []string
 	for {
-		info, statErr := os.Stat(parent)
+		info, statErr := os.Stat(current)
 		if statErr == nil {
 			if !info.IsDir() {
-				return errors.New("inbound spool parent is not a directory")
+				return errors.New("inbound spool ancestor is not a directory")
 			}
 			break
 		}
 		if !errors.Is(statErr, os.ErrNotExist) {
 			return statErr
 		}
-		next := filepath.Dir(parent)
-		if next == parent {
+		missing = append(missing, current)
+		parent := filepath.Dir(current)
+		if parent == current {
 			return statErr
 		}
-		parent = next
+		current = parent
 	}
-	relative, err := filepath.Rel(parent, target)
-	if err != nil {
-		return err
+	if err = syncDirectory(filepath.Dir(current)); err != nil {
+		return fmt.Errorf("confirm inbound spool ancestor: %w", err)
 	}
-	if relative == "." {
-		return fileutil.SyncDirectory(target)
+	for index := len(missing) - 1; index >= 0; index-- {
+		component := missing[index]
+		if err = mkdirDurable(filepath.Dir(component), filepath.Base(component), 0o700); err != nil {
+			return err
+		}
 	}
-	return fileutil.MkdirAllDurable(parent, relative, 0o700)
+	return syncDirectory(target)
 }

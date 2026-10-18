@@ -59,8 +59,11 @@ rename, then sync the containing directory. Claim, retry and failure renames als
 confirm directory metadata before reporting success. Acknowledgement removes both
 possible entry names and confirms the directory, including on an absent-name
 retry after an earlier sync failure. Newly created directory components are
-anchored at the nearest existing parent and created through the durable-directory
-helper.
+confirmed one at a time through the durable-directory helper before creating
+their descendants. A retry reconfirms the nearest existing component's parent
+entry before trusting it as an anchor, including when the target already exists
+after a failed creation. Existing ancestors supplied by the caller remain the
+outer durability boundary.
 
 A reported sync failure can follow a committed rename or unlink. It does not
 prove the old path still exists. Recovery retains the same message identity;
