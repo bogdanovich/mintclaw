@@ -96,7 +96,7 @@ func TestFinalizedPDFNoWriteJudgesOnlyAfterIndependentEvidence(t *testing.T) {
 			case "source-digest":
 				trial.PDF.SourceSHA256 = strings.Repeat("0", 64)
 			}
-			assessFinalizedPDFNoWrite(t.Context(), judge, item.Case, &trial, lifecycle, surfaces)
+			assessFinalizedPDF(t.Context(), judge, item.Case, &trial, prepared.workspace, lifecycle, surfaces, nil)
 			if mode == "complete" {
 				if trial.Verdict != Pass || !trial.EvidenceEligible || provider.calls != 1 ||
 					postStopCheck(trial, "privacy") != Pass || postStopCheck(trial, "pdf-no-write") != Pass ||
@@ -114,7 +114,7 @@ func TestFinalizedPDFNoWriteJudgesOnlyAfterIndependentEvidence(t *testing.T) {
 func TestFinalizedPDFNoWritePreservesHardFailureAndJudgeBoundaryFailure(t *testing.T) {
 	for _, mode := range []string{"hard-check", "private-output", "opaque-output", "canceled"} {
 		t.Run(mode, func(t *testing.T) {
-			trial, item, _, surfaces := finalizedNoWriteFixture(t)
+			trial, item, prepared, surfaces := finalizedNoWriteFixture(t)
 			provider := &roleTestProvider{mediated: true, response: &providers.LLMResponse{
 				Content: adaptiveJudgePass, FinishReason: "stop",
 			}}
@@ -135,7 +135,7 @@ func TestFinalizedPDFNoWritePreservesHardFailureAndJudgeBoundaryFailure(t *testi
 			case "canceled":
 				cancel()
 			}
-			assessFinalizedPDFNoWrite(ctx, judge, item.Case, &trial, cleanPDFLifecycle(), surfaces)
+			assessFinalizedPDF(ctx, judge, item.Case, &trial, prepared.workspace, cleanPDFLifecycle(), surfaces, nil)
 			if trial.Verdict == Pass || trial.Judge == nil || !consistentComparisonVerdict(trial) ||
 				mode == "hard-check" && (trial.Verdict != Fail || trial.Judge.Verdict != Pass) ||
 				mode == "private-output" && trial.Verdict != Fail ||
@@ -225,7 +225,7 @@ func TestPDFAllNativeCleanupPrecedesJudgingAndKeepsCaseHandlesSeparate(t *testin
 func TestGradeFinalizedPDFNoWriteWithoutSourceFixtureOrTargetWork(t *testing.T) {
 	fixture, _, _, calls := gradeFixture(t, false)
 	trial, item, prepared, surfaces := finalizedNoWriteFixture(t)
-	assessFinalizedPDFNoWrite(t.Context(), nil, item.Case, &trial, cleanPDFLifecycle(), surfaces)
+	assessFinalizedPDF(t.Context(), nil, item.Case, &trial, prepared.workspace, cleanPDFLifecycle(), surfaces, nil)
 	if !trial.EvidenceEligible || trial.Verdict != Inconclusive {
 		t.Fatal("unjudged finalized source is not eligible", trial.Code)
 	}
