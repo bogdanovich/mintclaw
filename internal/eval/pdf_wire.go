@@ -10,7 +10,10 @@ import (
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 )
 
-const maxPDFWireMessages = 16
+const (
+	maxPDFWireMessages = 16
+	maxPDFWireVariants = 16
+)
 
 var errPDFWire = errors.New("eval: PDF wire observation unavailable")
 
@@ -19,14 +22,14 @@ type pdfWirePart struct{ kind, contentType, path string }
 type pdfWireMessage struct {
 	session, agent, sessionKey, delivery string
 	parts                                []pdfWirePart
-	workspaceMatched, conflict           bool
+	workspaceMatched                     bool
 }
 
 // Only the sole client reader writes this bounded value-free projection. The
 // conversation owner may inspect it only after Client.Close has joined readers.
 type pdfWireObservation struct {
 	workspace string
-	messages  map[string]pdfWireMessage
+	messages  map[string][]pdfWireMessage
 	code      string
 }
 
@@ -87,23 +90,25 @@ func (wire *pdfWireObservation) observe(message protocol.MintClawMessage) error 
 		projected.contentType = mediaType
 		candidate.parts = append(candidate.parts, projected)
 	}
-	if previous, found := wire.messages[event.MessageID]; found {
-		if previous.session != candidate.session || previous.agent != candidate.agent ||
-			previous.sessionKey != candidate.sessionKey || previous.delivery != candidate.delivery ||
-			previous.workspaceMatched != candidate.workspaceMatched || !slices.Equal(previous.parts, candidate.parts) {
-			previous.conflict = true
-			wire.messages[event.MessageID] = previous
-		}
-	} else {
-		if len(wire.messages) >= maxPDFWireMessages {
-			wire.code = "wire_media_limit"
-			return errPDFWire
-		}
-		if wire.messages == nil {
-			wire.messages = make(map[string]pdfWireMessage)
-		}
-		wire.messages[event.MessageID] = candidate
+	previous := wire.messages[event.MessageID]
+	if slices.ContainsFunc(previous, func(value pdfWireMessage) bool {
+		return value.session == candidate.session && value.agent == candidate.agent &&
+			value.sessionKey == candidate.sessionKey && value.delivery == candidate.delivery &&
+			value.workspaceMatched == candidate.workspaceMatched && slices.Equal(value.parts, candidate.parts)
+	}) {
+		wire.code = ""
+		return nil
 	}
+	if len(previous) >= maxPDFWireVariants || len(previous) == 0 && len(wire.messages) >= maxPDFWireMessages {
+		wire.code = "wire_media_limit"
+		return errPDFWire
+	}
+	if wire.messages == nil {
+		wire.messages = make(map[string][]pdfWireMessage)
+	}
+	// A conflicting repeat cannot erase an earlier artifact or route. Count
+	// distinct logical IDs below, but inspect every retained variant of each ID.
+	wire.messages[event.MessageID] = append(previous, candidate)
 	wire.code = ""
 	return nil
 }
@@ -128,24 +133,27 @@ func (domain *pdfConversation) concludeWire(trial *Trial, complete bool) {
 		return
 	}
 	path := "/mintclaw/media/" + url.PathEscape(strings.TrimPrefix(settled.ArtifactRef, "media://"))
-	for _, candidate := range wire.messages {
-		if candidate.session != trial.SessionID || candidate.agent != trial.AgentID ||
-			candidate.sessionKey != trial.SessionKey {
-			continue
-		}
-		for _, part := range candidate.parts {
-			if part.path == path {
-				evidence.MatchingMessages++
-				break
+	for _, variants := range wire.messages {
+		if slices.ContainsFunc(variants, func(candidate pdfWireMessage) bool {
+			if candidate.session != trial.SessionID || candidate.agent != trial.AgentID ||
+				candidate.sessionKey != trial.SessionKey {
+				return false
 			}
+			return slices.ContainsFunc(candidate.parts, func(part pdfWirePart) bool { return part.path == path })
+		}) {
+			evidence.MatchingMessages++
 		}
 	}
-	candidate, found := wire.messages[settled.PlatformMessageIDs[0]]
+	variants, found := wire.messages[settled.PlatformMessageIDs[0]]
+	var candidate pdfWireMessage
+	if found {
+		candidate = variants[0]
+	}
 	code := ""
 	switch {
 	case evidence.MatchingMessages > 1:
 		code = "multiple_wire_deliveries"
-	case found && candidate.conflict:
+	case len(variants) > 1:
 		code = "wire_media_conflict"
 	case found && candidate.session != "" && candidate.session != trial.SessionID ||
 		found && candidate.agent != "" && candidate.agent != trial.AgentID ||

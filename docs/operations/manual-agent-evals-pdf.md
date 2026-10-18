@@ -189,7 +189,9 @@ adapter examines the projection, including a message admitted beside a final rep
 path to `pdf.settlement`. Its `native_bound_client_media_v1` scope covers only that client connection through local
 closure. A matching artifact in two different logical message IDs fails; an identical repeated message ID is one
 logical observation. Conflicting metadata for the bound message or a witnessed binding mismatch is a hard failure.
-Limits are 16 unique media messages and 16 attachments per message, with bounded identity/URL/type fields. Malformed,
+Limits are 16 unique media messages, 16 distinct metadata variants per ID and 16 attachments per variant, with bounded
+identity/URL/type fields. Identical retries do not consume the variant budget. All retained variants contribute to
+duplicate detection; conflicting repeats cannot hide an already observed delivery. Malformed,
 missing, unbound, limited or incomplete evidence remains unavailable; a known duplicate still fails despite a limit.
 
 The receipt exports only scope, completion, counts, code and a native-bound message ID. It never follows a URL from

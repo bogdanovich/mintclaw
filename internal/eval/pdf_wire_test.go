@@ -180,6 +180,80 @@ func TestPDFWireBoundsCannotHideAnObservedDuplicate(t *testing.T) {
 	}
 }
 
+func TestPDFWireConflictingUnboundIDCannotHideAnotherDelivery(t *testing.T) {
+	for _, mode := range []string{"artifact", "route"} {
+		for _, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
+			t.Run(fmt.Sprintf("%s/%v", mode, order), func(t *testing.T) {
+				domain, trial, message := pdfWireControl(t)
+				part := message.Payload["attachments"].([]any)[0].(map[string]any)
+				path := part["url"].(string)
+				for _, variant := range order {
+					message.Payload[protocol.PayloadKeyMessageID] = trial.PDF.Settlement.PlatformMessageIDs[0]
+					message.SessionID, part["url"] = trial.SessionID, path
+					if variant != 0 {
+						message.Payload[protocol.PayloadKeyMessageID] = "conflicting-unbound-id"
+					}
+					if variant == 1 {
+						if mode == "artifact" {
+							part["url"] = "/mintclaw/media/another-artifact"
+						} else {
+							message.SessionID = "foreign-session"
+						}
+					}
+					if err := domain.wire.observe(message); err != nil {
+						t.Fatal("bounded variant observation failed", err)
+					}
+				}
+				domain.concludeWire(&trial, true)
+				if trial.PDF.Wire.Code != "multiple_wire_deliveries" || trial.PDF.Wire.MatchingMessages != 2 ||
+					trial.PDF.Wire.ObservedMessages != 2 || trial.Verdict != Fail || trial.ExecutionVerdict != Fail ||
+					trial.EvidenceEligible {
+					t.Fatal("conflicting variant concealed an observed delivery", trial.PDF.Wire)
+				}
+			})
+		}
+	}
+}
+
+func TestPDFWireVariantBoundsPreserveKnownDuplicateAndDeduplicateRetries(t *testing.T) {
+	for _, duplicate := range []bool{false, true} {
+		domain, trial, message := pdfWireControl(t)
+		if err := domain.wire.observe(message); err != nil {
+			t.Fatal(err)
+		}
+		part := message.Payload["attachments"].([]any)[0].(map[string]any)
+		path := part["url"].(string)
+		message.Payload[protocol.PayloadKeyMessageID] = "bounded-conflicting-id"
+		for index := range maxPDFWireVariants + 1 {
+			part["url"] = fmt.Sprintf("/mintclaw/media/another-artifact-%d", index)
+			if duplicate && index == 0 {
+				part["url"] = path
+			}
+			err := domain.wire.observe(message)
+			if (index == maxPDFWireVariants) != errors.Is(err, errPDFWire) {
+				t.Fatal("conflicting variants were not bounded", err)
+			}
+			if index < maxPDFWireVariants {
+				if err := domain.wire.observe(message); err != nil {
+					t.Fatal("identical retry consumed the variant budget", err)
+				}
+			}
+		}
+		if len(domain.wire.messages["bounded-conflicting-id"]) != maxPDFWireVariants {
+			t.Fatal("variant retention exceeded its bound")
+		}
+		domain.concludeWire(&trial, false)
+		want := "wire_media_limit"
+		if duplicate {
+			want = "multiple_wire_deliveries"
+		}
+		if trial.PDF.Wire.Code != want || trial.PDF.Wire.Complete || trial.PDF.Wire.ObservedMessages != 2 ||
+			duplicate && trial.Verdict != Fail {
+			t.Fatal("variant limit erased a known duplicate or granted complete coverage", trial.PDF.Wire)
+		}
+	}
+}
+
 func TestPDFWireMalformedMetadataDoesNotBecomeAConfirmedLeakOrDelivery(t *testing.T) {
 	for _, mode := range []string{"array", "identity", "type", "mime", "url", "count", "message-type"} {
 		t.Run(mode, func(t *testing.T) {
