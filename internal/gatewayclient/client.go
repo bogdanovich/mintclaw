@@ -49,20 +49,26 @@ type Options struct {
 	// heartbeats. It must not retain the bytes or mutate caller-owned state.
 	// Returning an error closes the connection without replay or raw diagnostics.
 	InspectFrame func([]byte) error
+	// ObserveMessage runs in the sole reader after inspection/decoding, before
+	// queueing or discarding a heartbeat. It must be bounded and must not mutate
+	// or retain the message. Observer-owned projections may be read after Close
+	// has joined the reader. An error refuses the frame without replay.
+	ObserveMessage func(protocol.MintClawMessage) error
 }
 
 type Client struct {
-	connection   *websocket.Conn
-	ctx          context.Context
-	cancel       context.CancelFunc
-	stopCancel   func() bool
-	events       chan protocol.MintClawMessage
-	workers      sync.WaitGroup
-	closeOnce    sync.Once
-	writes       chan struct{}
-	errorMu      sync.Mutex
-	failure      error
-	inspectFrame func([]byte) error
+	connection     *websocket.Conn
+	ctx            context.Context
+	cancel         context.CancelFunc
+	stopCancel     func() bool
+	events         chan protocol.MintClawMessage
+	workers        sync.WaitGroup
+	closeOnce      sync.Once
+	writes         chan struct{}
+	errorMu        sync.Mutex
+	failure        error
+	inspectFrame   func([]byte) error
+	observeMessage func(protocol.MintClawMessage) error
 }
 
 func ChannelSettings(cfg *config.Config) (*config.MintClawSettings, error) {
@@ -146,9 +152,10 @@ func Connect(ctx context.Context, cfg *config.Config, sessionID string, options 
 	child, cancel := context.WithCancel(ctx)
 	client := &Client{
 		connection: connection, ctx: child, cancel: cancel,
-		events:       make(chan protocol.MintClawMessage, options.QueueCapacity),
-		writes:       make(chan struct{}, 1),
-		inspectFrame: options.InspectFrame,
+		events:         make(chan protocol.MintClawMessage, options.QueueCapacity),
+		writes:         make(chan struct{}, 1),
+		inspectFrame:   options.InspectFrame,
+		observeMessage: options.ObserveMessage,
 	}
 	client.stopCancel = context.AfterFunc(child, func() { _ = connection.Close() })
 	client.workers.Add(2)
@@ -265,18 +272,26 @@ func (client *Client) readLoop() {
 
 func (client *Client) readMessage(message *protocol.MintClawMessage) error {
 	if client.inspectFrame == nil {
-		return client.connection.ReadJSON(message)
+		if err := client.connection.ReadJSON(message); err != nil {
+			return err
+		}
+	} else {
+		_, data, err := client.connection.ReadMessage()
+		if err != nil {
+			return err
+		}
+		defer clear(data)
+		if err = client.inspectFrame(data); err != nil {
+			return &frameInspectionError{cause: err}
+		}
+		if json.Unmarshal(data, message) != nil {
+			return ErrFrameInspection
+		}
 	}
-	_, data, err := client.connection.ReadMessage()
-	if err != nil {
-		return err
-	}
-	defer clear(data)
-	if err = client.inspectFrame(data); err != nil {
-		return &frameInspectionError{cause: err}
-	}
-	if json.Unmarshal(data, message) != nil {
-		return ErrFrameInspection
+	if client.observeMessage != nil {
+		if err := client.observeMessage(*message); err != nil {
+			return &frameInspectionError{cause: err}
+		}
 	}
 	return nil
 }

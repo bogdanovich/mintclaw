@@ -204,14 +204,14 @@ func TestSteeringQueueSeparatesIdenticalSessionsAcrossWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	firstBatch := queue.dequeueScopeForContinuationBatch(first)
+	firstBatch := queue.dequeueScopeForContinuationBatch(first, nil)
 	if len(firstBatch.entries) != 1 || firstBatch.entries[0].msg.Content != "first" {
 		t.Fatalf("first batch = %#v", firstBatch)
 	}
 	if got := queue.lenScope(second); got != 1 {
 		t.Fatalf("second queue depth = %d, want 1", got)
 	}
-	secondBatch := queue.dequeueScopeForContinuationBatch(second)
+	secondBatch := queue.dequeueScopeForContinuationBatch(second, nil)
 	if len(secondBatch.entries) != 1 || secondBatch.entries[0].msg.Content != "second" {
 		t.Fatalf("second batch = %#v", secondBatch)
 	}

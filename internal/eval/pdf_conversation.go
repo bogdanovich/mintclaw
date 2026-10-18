@@ -36,6 +36,8 @@ type pdfConversation struct {
 	censusOwner           *document.Authority
 	ordinary              *questionConversation
 	protectedCancel       *pdfCancellationObservation
+	wire                  *pdfWireObservation
+	censusWrites          map[string]string
 }
 
 func (domain *pdfConversation) initialTask() string { return domain.prepared.task }
@@ -109,6 +111,9 @@ func (domain *pdfConversation) observe(ctx context.Context, prompt Event) error 
 					return ordinaryErr
 				}
 				domain.ordinary = ordinary
+				if owner, ownerErr := pdfWriteOwner(domain.prepared.workspace, ordinary.waiting); ownerErr == nil {
+					domain.censusOwner = &owner
+				}
 				return nil
 			}
 			if errors.Is(publicErr, ErrPrivateEvidence) {

@@ -119,6 +119,9 @@ partial scope to bypass required missing-data checks.
 Use fresh jobs as necessary; do not corrupt the baseline transaction while trying every negative scenario.
 
 1. Supply an unqualified name when both people are candidates. Expect a role clarification, not copying to both.
+   Also test two distinct people with the same name and one telephone whose owner is initially unspecified.
+   Clarify which person owns it without repeating the number; accepted names must not be requested again,
+   and the other person's telephone must remain unfilled unless explicitly supplied or intentionally blanked.
 2. Mix a fact with “что означает это поле?”. The explanation request must not be written wholesale into a field.
 3. Give an invalid date or contradictory phone. Only targeted clarification/correction may resolve it; other
    accepted facts must survive unchanged.
@@ -138,6 +141,9 @@ Use fresh jobs as necessary; do not corrupt the baseline transaction while tryin
 
 After a failure, preserve the source/job/interaction/operation/trace identifiers and exact error code, not protected
 values. Do not resend finish/approval blindly or create a second job merely because a response timed out.
+`/retry_form` cannot recover an exhausted persisted extraction budget by waiting or resetting it. Retain the
+original task and obtain an explicit decision before substituting a separately labeled fresh qualification;
+do not describe that new test as recovery of old input. Native capacity state outranks a model's “temporary” wording.
 
 ## Large Public Form And Unsupported Output
 

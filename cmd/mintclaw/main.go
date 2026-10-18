@@ -35,6 +35,7 @@ import (
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/model"
 	nodescmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/nodes"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/onboard"
+	outboxcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/outbox"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/skills"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/status"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/version"
@@ -96,7 +97,7 @@ func machineJSONRequested(args []string) bool {
 	for _, arg := range args {
 		switch arg {
 		case "doctor", "diagnostics", "document", "nodes", "agent", "code", "resume", "review", "threads",
-			"skills", "eval":
+			"skills", "eval", "outbox":
 			hasJSONCommand = true
 		case "--json":
 			hasJSON = true
@@ -135,7 +136,7 @@ func systemSkillBundleRequired(args []string) bool {
 			break
 		}
 	}
-	if len(positionals) >= 1 && positionals[0] == "eval" {
+	if len(positionals) >= 1 && (positionals[0] == "eval" || positionals[0] == "outbox") {
 		return false
 	}
 	return len(positionals) != 2 || positionals[0] != "document" || positionals[1] != "_worker"
@@ -191,6 +192,7 @@ mintclaw --no-color status`,
 		skills.NewSkillsCommand(),
 		model.NewModelCommand(),
 		nodescmd.NewNodesCommand(),
+		outboxcmd.NewOutboxCommand(),
 		updater.NewUpdateCommand("mintclaw"),
 		version.NewVersionCommand(),
 	)

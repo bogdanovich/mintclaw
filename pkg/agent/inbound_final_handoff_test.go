@@ -20,13 +20,13 @@ type finalHandoffAckBus struct {
 	once    sync.Once
 }
 
-func (b *finalHandoffAckBus) AckInbound(ctx context.Context, msg bus.InboundMessage) error {
+func (b *finalHandoffAckBus) AckInbound(ctx context.Context, msg bus.InboundMessage) (bus.InboundAckReceipt, error) {
 	if msg.SpoolID == b.rootID {
 		b.once.Do(func() { close(b.entered) })
 		select {
 		case <-b.release:
 		case <-ctx.Done():
-			return ctx.Err()
+			return bus.InboundAckReceipt{}, ctx.Err()
 		}
 	}
 	return b.finalResponseAdmissionTestBus.AckInbound(ctx, msg)

@@ -42,16 +42,16 @@ archives the execution ledgers and records the deployed state.
 | --- | --- | --- |
 | Turn execution and tool outcomes | `pkg/agent`, generation-owned runtime and finalization | [Runtime host](agentloop-runtime.md); [reliability roadmap](reliability-code-health-20261017-roadmap.md) R5/R7 |
 | Inbound persistence and canonical history | `pkg/bus/inbound_spool.go`, `pkg/session`, Seahorse reconciliation | [Durable ingress](durable-ingress.md); [session system](session-system.md); [reconciliation](seahorse-reconciliation.md) |
-| Outbound delivery and domain settlement | `pkg/outbox`, `pkg/agent/outbound_transaction.go`, `outbound_recovery.go` | [Durable delivery](durable-outbound-delivery.md); [retention decision](outbox-retention-decision-20261017.md) |
+| Outbound delivery and domain settlement | `pkg/outbox`, `pkg/agent/outbound_transaction.go`, `outbound_recovery.go` | [Durable delivery](durable-outbound-delivery.md); [retention decision](outbox-retention-decision-20261017.md); [offline capacity/retirement](../operations/outbox-retention-20261018.md) |
 | Tool discovery and transport classification | `pkg/mcp`; tool adapters consume its outcomes | Reliability R2/R5; preserve uncertain-call no-replay behavior |
 | Web UI chat and credential requests | `web/frontend/src/features/chat/controller.ts`, `src/api`, shared model form | Reliability R3/R8/R12; asynchronous request/socket ownership and secret preservation |
 | Behavioral quality evidence | Existing manual eval runner and independent domain witnesses | [Agent evals roadmap](agent-evals-roadmap.md), especially its Next Mandatory Work; harness tests do not qualify live domains |
 | Production lifecycle and data cutovers | Existing deployment procedures and explicit owner inventories | [Operations index](../operations/README.md); keep deployment and rollback evidence separate from merged code |
 
 Use the [architecture index](README.md) to find domain-specific contracts and
-exit records. The October reliability roadmap is the active code-health work
-index; completed programs below retain their original provenance. An active eval
-program or conditional refactor is not a reopened historical completion claim.
+exit records. The October reliability roadmap records the latest assessment,
+delivery ledger and implemented/deferred decisions. Completed programs retain their provenance;
+the active eval program and conditional refactors keep their independent scope.
 
 ## Bounded compatibility
 
@@ -105,7 +105,8 @@ recorded in the archived
 [Code Health Maintenance V2 Roadmap](archive/code-health-maintenance-v2-roadmap.md).
 
 The owner admitted the [October 2026 Reliability And Code Health Roadmap](reliability-code-health-20261017-roadmap.md)
-on 2026-10-17 after a fresh repository assessment. It tracks current outbox,
-MCP, frontend, and qualification findings without reopening completed programs.
+on 2026-10-17 after a fresh repository assessment. Its admitted outbox, MCP,
+frontend, measured storage and dependency work is merged. Evaluation qualification
+stays with the existing active owner; historical completion records remain intact.
 Conditional refactors still require their stated evidence rather than a file-size
 or abstraction target.

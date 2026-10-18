@@ -13,7 +13,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/commands"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
-	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 type inboundTurnCoordinator struct {
@@ -251,18 +250,10 @@ func (c *inboundTurnCoordinator) admitPreparedInbound(
 			return nil
 		}
 	}
-	err := al.enqueueSteeringMessageWithSender(
+	err := al.enqueueInboundSteering(
 		target.runtimeSessionScope(),
 		target.Agent.ID,
-		msg.Context.SenderID,
-		providers.Message{
-			Role:                    "user",
-			Content:                 msg.Content,
-			CreatedAt:               inboundReceivedAt(msg),
-			Media:                   append([]string(nil), msg.Media...),
-			InboundSpoolID:          msg.SpoolID,
-			DocumentIntakeReference: msg.Context.DocumentIntake.Reference,
-		},
+		msg,
 	)
 	al.turns.routeAdmissionMu.Unlock()
 	return err
@@ -303,9 +294,24 @@ func (al *AgentLoop) settleInboundAdmission(
 ) error {
 	admission = transactionAdmission(ctx, admission)
 	if admission.permitsInboundAck() {
-		if err := al.turns.inbound.ack(ctx, msg); err != nil {
+		receipt, err := al.turns.inbound.ackReceipt(ctx, msg)
+		if err != nil {
 			al.turns.inbound.release(context.Background(), msg, err)
 			return err
+		}
+		publication := admission.publication
+		if publication.coordinator != nil && publication.deliveryID != "" &&
+			publication.admission.Intent.RetentionClass != "" && !publication.admission.Intent.PayloadRetired {
+			if _, sealErr := publication.coordinator.SealNativeFinalMessage(
+				publication.deliveryID,
+				receipt,
+			); sealErr != nil {
+				// The source was already durably acknowledged. Its full payload
+				// remains; never release or replay that source to retry cleanup.
+				logger.WarnCF("agent", "Native final payload source seal was not confirmed", map[string]any{
+					"delivery_id": publication.deliveryID,
+				})
+			}
 		}
 		return nil
 	}
@@ -442,6 +448,7 @@ func (c *inboundTurnCoordinator) handlePendingStop(
 		Channel:    msg.Context.Channel,
 		ChatID:     msg.Context.ChatID,
 		Workspace:  claim.scope.workspace,
+		inbound:    steeringContextForSender(&msg.Context, msg.Context.SenderID),
 	}
 	if dispatchTarget != nil && dispatchTarget.Agent != nil {
 		target.AgentID = dispatchTarget.Agent.ID

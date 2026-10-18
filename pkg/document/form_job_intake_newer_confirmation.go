@@ -20,13 +20,8 @@ func consumeOlderFormIntakeGuidance(
 			continue
 		}
 		for _, finding := range findings {
-			field := slices.IndexFunc(record.Fields, func(field FormJobFieldState) bool {
-				return field.FieldID == finding.FieldID && field.Source == FormValueSourceUser &&
-					field.Validation == FormValueValidationValid && field.Confidence != FormValueConfidenceLow &&
-					(field.State == FormValueConfirmed || field.State == FormValueBlanked ||
-						field.State == FormValueNotApplicable)
-			})
-			if (finding.Code != "field_ambiguous" && finding.Code != "field_confirmation_required") || field < 0 ||
+			_, found := formIntakeConfirmedUserField(record, finding.FieldID)
+			if (finding.Code != "field_ambiguous" && finding.Code != "field_confirmation_required") || !found ||
 				!slices.Contains(currentValueIDs, finding.FieldID) {
 				continue
 			}
