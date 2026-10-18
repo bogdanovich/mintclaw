@@ -136,6 +136,9 @@ qualification and physical-device acceptance are recorded separately below.
   UUIDs or retrieving password fields. Website matching does not expand runtime
   origins; site flow and actor scope stay in local configuration. Personal item
   identifiers and site-specific behavior do not belong in production Go code.
+  This CLI update is merged and installed, including the localhost enrollment
+  repair. The CLI installation preserved the running gateway and owner key;
+  real-vault discovery still awaits protected service-token provisioning.
 - TR3: gateway-owned enrollment/approval/revocation is merged in
   [#1631](https://github.com/bogdanovich/mintclaw/pull/1631). Synthetic signed and
   virtual-authenticator tests cover the component. The alias operation queues
@@ -164,12 +167,19 @@ qualification and physical-device acceptance are recorded separately below.
   history, Seahorse state, browser state, logs, traces and both support-bundle
   modes through the production OpenAI-compatible and Codex OAuth/Responses
   adapters, including MFA handoff and uncertain-submission outcomes. The merged
-  phone-fix deployment passed all nine combined browser, provider and GitHub
-  fixture scenarios with the race detector. These use local scripted peers and
-  virtual passkeys, with no personal credentials or website traffic. The
-  inventory retains its explicit cancellation/expiry/restart and recovery
-  qualification limits; unqualified fallback providers must be excluded from
-  the pilot.
+  phone-fix deployment passed the initial nine combined browser, provider and
+  GitHub fixture scenarios. Merged
+  [#1700](https://github.com/bogdanovich/mintclaw/pull/1700) adds credential-runtime
+  recreation for both qualified adapters;
+  [#1704](https://github.com/bogdanovich/mintclaw/pull/1704) adds actual Codex turn
+  cancellation and signed-grant expiry during submission. All thirteen cases
+  passed with the race detector at the reviewed test head. Expiry must cancel
+  the private consumer and retire the browser before provider-scripted cleanup;
+  isolated negative controls fail when either mechanism is disabled. These use
+  local scripted peers and virtual passkeys, with no personal credentials or
+  website traffic. OS process-crash recovery, private MFA continuation and
+  other provider protocols retain explicit qualification limits; unqualified
+  fallback providers must be excluded from the pilot.
 - TR6 pilot selection: the operator selected Craigslist. The
   [pilot sequence](credential-craigslist-pilot.md) records public form evidence,
   private setup and the remaining Android/account acceptance checks.
@@ -181,9 +191,11 @@ qualification and physical-device acceptance are recorded separately below.
   merged in [#1673](https://github.com/bogdanovich/mintclaw/pull/1673) and included
   in the deployed binary. The connector remains disabled pending configuration
   and real-token acceptance.
-- TR5/TR6: connector rollout, full serialized-output qualification and
-  personal-account pilot are incomplete. At the latest protected-setup check,
-  no service-account token was provisioned. Read-only dedicated-vault scope,
+- TR5/TR6: real connector rollout and the personal-account pilot are incomplete.
+  Synthetic output qualification covers the explicitly inventoried routes and
+  scenarios, not every possible provider or recovery path.
+  At the latest protected-setup check, no service-account token was provisioned.
+  Read-only dedicated-vault scope,
   protected token entry, exact site outcome metadata, real phone approval,
   login, grant reuse and revocation remain. Verified phone setup alone does not
   establish any of those outcomes. Passing component tests do not prove the
