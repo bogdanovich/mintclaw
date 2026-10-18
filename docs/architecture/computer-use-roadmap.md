@@ -316,6 +316,10 @@ proposed thresholds, not measured results. Record successful-run cost, total cos
 including failures, wall-clock time, action count, token/image usage, and p50/p95
 latency. CU-1 sets resource limits that preserve gateway headroom on the 8 GB host.
 
+The [v1 evaluation pack](computer-evaluation-pack.md) freezes the initial 20 task
+intents and independent completion conditions. Its executable fixtures, approved
+budgets and actual model runs are still pending; no task score is claimed.
+
 Use [OSWorld](https://github.com/xlang-ai/OSWorld) for additional evaluation ideas,
 not as a substitute for companion lifecycle and policy tests or as evidence that
 published model benchmark scores predict our production success rate.
