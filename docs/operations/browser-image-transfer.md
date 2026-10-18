@@ -107,12 +107,30 @@ and oversized results do not receive a standalone success projection. Human
 presentation remains separate from these machine-readable records.
 
 To report overall success, `browser_act` operations classified as `unknown` or
-`external_commit` must all be accounted for by the matching external-action
-objective, including download and upload, not just the final Submit. Failed or not-dispatched actions
+`external_commit` must all be accounted for, including download and upload,
+not just the final Submit. An original-file acquisition can remain a `result`
+objective: return its exact committed references in a `kind=artifact` output.
+The runtime associates an unclaimed unknown-effect download receipt with that
+exact output reference. Explicit external-action receipt claims take priority;
+each receipt is accounted for only once. This does not change the download's
+effect, approval policy, or execution authority. Prose mentioning a file,
+mismatched references, uploads, clicks, and external commits cannot use this
+association. Other receipts still require matching external-action objectives.
+Failed or not-dispatched actions
 do not supply completion receipts. If the producer omits receipts, the existing
 model-only finalization repair supplies a bounded list of unclaimed runtime IDs
 without repeating browser actions. The runtime still rejects unexpected effects
 and unverified postconditions; receipt accounting is not publication authority.
+
+For a file-only acceptance, use the same owned image fixture but request only
+the original photograph as a file artifact, with no upload or submission.
+Declare it as a `result` with artifact output, not an external change. Verify
+the retained original bytes and MIME against the fixture, the exact download
+receipt association, a successful complete natural-language answer, confirmed
+closure and immediate profile reuse. No site-specific rule or acquisition
+action hint is needed. Run this on gateway/managed and companion/managed,
+alongside the transfer probe above, to cover both output-only acquisition and
+an explicitly declared external workflow.
 
 With `agent live --trace-evidence-agent browser`, canonical trace publication
 can follow the visible final response. The CLI waits up to 30 seconds for this

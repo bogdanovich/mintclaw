@@ -2877,7 +2877,7 @@ func attachBrowserExternalActionAudit(
 		(invocation.Effect != browser.EffectExternalCommit && invocation.Effect != browser.EffectUnknown) {
 		return
 	}
-	result.WithWriteAudit(toolshared.WriteAuditEntry{
+	audit := toolshared.WriteAuditEntry{
 		Kind: "external_action", Target: preparation.Action.CurrentOrigin,
 		Action: string(preparation.Action.Action.Kind), Tool: toolName,
 		Summary: "browser external action completed",
@@ -2885,7 +2885,16 @@ func attachBrowserExternalActionAudit(
 			"invocation_id": invocation.ID, "browser_session_id": invocation.SessionID,
 			"effect": string(invocation.Effect), "element_role": preparation.Action.ElementRole,
 		},
-	})
+	}
+	// Carry the exact committed output, not an input file or a model-provided
+	// reference. Completion accounting can then associate acquisition with a
+	// result without changing the action's conservative effect or approval.
+	if artifact := invocation.Download; preparation.Action.Action.Kind == browser.ActionDownload &&
+		artifact != nil && artifact.Kind == "download" && !artifact.Truncated && artifact.Ref != "" &&
+		artifact.SessionID == invocation.SessionID {
+		audit.Metadata["artifact_ref"] = artifact.Ref
+	}
+	result.WithWriteAudit(audit)
 }
 
 func browserPostActionStateError(invocation browser.Invocation, quarantined bool) *toolshared.ToolResult {
