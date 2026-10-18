@@ -16,8 +16,9 @@ rollback of its routing evidence.
 PDFI2 is complete; its implementation, deployment, and live evidence are recorded in the
 [PDFI2 exit report](pdf-agentic-intake-pdfi2-exit.md). PDFI3 is complete for its admitted bounded scope; its
 [exit report](pdf-agentic-intake-pdfi3-exit.md) records implementation, qualification, fixes, and channel limits.
-PDFI4 is admitted under its [free-text intake implementation goal](pdf-agentic-intake-pdfi4-goal.md);
-implementation and large-form/channel qualification remain outstanding.
+PDFI4 is admitted under its [free-text intake implementation goal](pdf-agentic-intake-pdfi4-goal.md).
+Implementation is merged and deployed; [qualification is in progress](pdf-agentic-intake-pdfi4-qualification.md).
+Complete official-large-form and actual Telegram gates remain outstanding; PDFI4 is not complete.
 PDFI5 remains conditional on a second accepted non-PDF protected-input consumer.
 
 ## Operator outcome
@@ -139,7 +140,8 @@ Completion gate:
 
 ### PDFI4: Coherent sections and large-form qualification
 
-**Status:** Admitted; implementation and qualification outstanding. The
+**Status:** Implementation merged and deployed; qualification in progress, not complete. See the
+[dated qualification checkpoint](pdf-agentic-intake-pdfi4-qualification.md). The
 [PDFI4 implementation goal](pdf-agentic-intake-pdfi4-goal.md) fixes the operator contract, protected extraction boundary,
 PR sequence, acceptance evidence, and completion gates.
 
