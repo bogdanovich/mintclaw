@@ -67,6 +67,10 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    These isolation prerequisites do not grant positive checks or complete the post-settlement work.
    The bounded client-media witness binds actual requestless messages to native settlement, and owned raw-frame
    inspection includes earlier trials' retained facts. Neither grants future delivery uniqueness or full privacy.
+   Owned PDF finalization now retains bounded native baselines through shutdown and raw scan, publishes canonical
+   trial reports afterward, checks scoped no-write evidence and removes only verified settled source fixtures.
+   Full private-surface/temporary-resource coverage, positive delivery qualification and PDF judge/regrade eligibility
+   still require completion; deterministic post-stop controls are not live PDF qualification.
    Preserve earlier failures and unknowns.
 3. E4: integrate native browser admission, fixture execution, approval/artifact/context correlation and owned
    cleanup; qualify all six cases, including adaptive and denied-action evidence. Browser cases still skip today.

@@ -35,6 +35,7 @@ type ownedGatewayControl struct {
 	LateValue         string `json:"late_value,omitempty"`
 	CrossTrialValue   string `json:"cross_trial_value,omitempty"`
 	UncorrelatedMedia bool   `json:"uncorrelated_media,omitempty"`
+	LateSourceChange  bool   `json:"late_source_change,omitempty"`
 }
 
 // The test binary accepts the same literal gateway command as the product.
@@ -214,6 +215,29 @@ func runOwnedGatewayTestChild() int {
 	defer cancel()
 	if server.Shutdown(ctx) != nil {
 		return 8
+	}
+	if control.LateSourceChange {
+		entries, readErr := os.ReadDir(filepath.Join(home, "reports"))
+		if readErr != nil || len(entries) != 1 {
+			return 8
+		}
+		files, readErr := os.ReadDir(filepath.Join(home, "reports", entries[0].Name()))
+		pending := false
+		for _, file := range files {
+			if strings.HasPrefix(file.Name(), "trial-") {
+				return 8
+			}
+			pending = pending || strings.HasPrefix(file.Name(), "pending-trial-")
+		}
+		if readErr != nil || !pending {
+			return 8
+		}
+		sessionMu.Lock()
+		source := filepath.Join(cfg.WorkspacePath(), ".eval-trials", firstSession, "source.pdf")
+		sessionMu.Unlock()
+		if os.WriteFile(source, []byte("%PDF-1.7\nlate-owned-source-change\n"), 0o600) != nil {
+			return 8
+		}
 	}
 	if control.LateValue != "" {
 		data, err := json.Marshal(map[string]string{"value": control.LateValue})
