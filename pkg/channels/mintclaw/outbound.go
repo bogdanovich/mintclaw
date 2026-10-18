@@ -49,6 +49,9 @@ func (c *MintClawChannel) sendText(ctx context.Context, msg bus.OutboundMessage)
 		}
 	case metadata.IsFinalReply():
 		payload[PayloadKeyKind] = MessageKindFinalReply
+		if metadata.IsFinal() {
+			setTurnUsagePayload(payload, metadata.UsageInputTokens, metadata.UsageOutputTokens)
+		}
 	}
 	setOutboundControlPayload(payload, metadata)
 	setOutboundResultPayload(payload, msg)
