@@ -557,14 +557,19 @@ func newPlaywrightHostFactory(
 	networkMode := host.ProfileConfig.NetworkMode
 	if networkMode != config.BrowserNetworkExactOrigins &&
 		networkMode != config.BrowserNetworkPublicWeb &&
-		networkMode != config.BrowserNetworkAnyHTTP {
+		networkMode != config.BrowserNetworkAnyHTTP && networkMode != config.BrowserNetworkLoopbackFixture {
 		return nil, ErrDenied
 	}
-	if networkMode == config.BrowserNetworkExactOrigins &&
+	if networkMode == config.BrowserNetworkLoopbackFixture &&
+		(host.Driver != config.BrowserDriverPlaywrightLibrary ||
+			config.ValidateLoopbackFixtureBrowserProfile(host.ProfileConfig) != nil) {
+		return nil, ErrDenied
+	}
+	if (networkMode == config.BrowserNetworkExactOrigins || networkMode == config.BrowserNetworkLoopbackFixture) &&
 		len(host.ProfileConfig.AllowedOrigins) == 0 {
 		return nil, ErrDenied
 	}
-	if networkMode != config.BrowserNetworkExactOrigins &&
+	if networkMode != config.BrowserNetworkExactOrigins && networkMode != config.BrowserNetworkLoopbackFixture &&
 		len(host.ProfileConfig.AllowedOrigins) != 0 {
 		return nil, ErrDenied
 	}
@@ -835,6 +840,10 @@ func playwrightServerWithNetworkPolicy(
 	profile config.BrowserProfileConfig,
 	proxyURL string,
 ) (config.MCPServerConfig, error) {
+	if profile.NetworkMode == config.BrowserNetworkLoopbackFixture &&
+		config.ValidateLoopbackFixtureBrowserProfile(profile) != nil {
+		return config.MCPServerConfig{}, ErrDenied
+	}
 	server = cloneMCPServerConfig(server)
 	if err := validatePlaywrightManagedPolicy(server); err != nil {
 		return config.MCPServerConfig{}, err
@@ -844,13 +853,14 @@ func playwrightServerWithNetworkPolicy(
 	}
 	origins := make([]string, 0, len(profile.AllowedOrigins))
 	for _, rawOrigin := range profile.AllowedOrigins {
-		origin, err := config.NormalizeBrowserOrigin(rawOrigin)
+		origin, err := config.NormalizeBrowserNetworkOrigin(profile.NetworkMode, rawOrigin)
 		if err != nil {
 			return config.MCPServerConfig{}, fmt.Errorf("normalize browser driver origin: %w", err)
 		}
 		origins = append(origins, origin)
 	}
-	if profile.NetworkMode == config.BrowserNetworkExactOrigins && len(origins) == 0 {
+	if (profile.NetworkMode == config.BrowserNetworkExactOrigins ||
+		profile.NetworkMode == config.BrowserNetworkLoopbackFixture) && len(origins) == 0 {
 		return config.MCPServerConfig{}, errors.New("browser driver requires allowed origins")
 	}
 	if (profile.NetworkMode == config.BrowserNetworkPublicWeb ||
@@ -887,7 +897,8 @@ func playwrightServerWithNetworkPolicy(
 		"--proxy-server", proxyURL,
 		"--proxy-bypass", "<-loopback>",
 	)
-	if profile.NetworkMode == config.BrowserNetworkExactOrigins {
+	if profile.NetworkMode == config.BrowserNetworkExactOrigins ||
+		profile.NetworkMode == config.BrowserNetworkLoopbackFixture {
 		server.Args = append(server.Args, "--allowed-origins", allowedOrigins)
 	}
 	return server, nil

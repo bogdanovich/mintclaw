@@ -81,7 +81,10 @@ func newBrowserNetworkPolicy(
 ) (*browserNetworkPolicy, error) {
 	mode := profile.NetworkMode
 	if mode != config.BrowserNetworkExactOrigins && mode != config.BrowserNetworkPublicWeb &&
-		mode != config.BrowserNetworkAnyHTTP {
+		mode != config.BrowserNetworkAnyHTTP && mode != config.BrowserNetworkLoopbackFixture {
+		return nil, ErrDenied
+	}
+	if mode == config.BrowserNetworkLoopbackFixture && config.ValidateLoopbackFixtureBrowserProfile(profile) != nil {
 		return nil, ErrDenied
 	}
 	if lookupIP == nil {
@@ -93,13 +96,14 @@ func newBrowserNetworkPolicy(
 	}
 	allowed := make(map[string]struct{}, len(profile.AllowedOrigins))
 	for _, rawOrigin := range profile.AllowedOrigins {
-		origin, err := config.NormalizeBrowserOrigin(rawOrigin)
+		origin, err := config.NormalizeBrowserNetworkOrigin(mode, rawOrigin)
 		if err != nil {
 			return nil, ErrDenied
 		}
 		allowed[origin] = struct{}{}
 	}
-	if mode == config.BrowserNetworkExactOrigins && len(allowed) == 0 {
+	if (mode == config.BrowserNetworkExactOrigins || mode == config.BrowserNetworkLoopbackFixture) &&
+		len(allowed) == 0 {
 		return nil, ErrDenied
 	}
 	if (mode == config.BrowserNetworkPublicWeb || mode == config.BrowserNetworkAnyHTTP) &&
@@ -374,7 +378,7 @@ func (policy *browserNetworkPolicy) destination(
 	if err != nil {
 		return nil, ErrDenied
 	}
-	if policy.mode == config.BrowserNetworkExactOrigins {
+	if policy.mode == config.BrowserNetworkExactOrigins || policy.mode == config.BrowserNetworkLoopbackFixture {
 		if _, ok := policy.allowedOrigins[origin]; !ok {
 			return nil, ErrDenied
 		}
@@ -382,6 +386,11 @@ func (policy *browserNetworkPolicy) destination(
 	parsed, err := url.Parse(origin)
 	if err != nil || parsed.Hostname() == "" {
 		return nil, ErrDenied
+	}
+	if policy.mode == config.BrowserNetworkLoopbackFixture {
+		// Canonical literal address and exact port were checked above. Never
+		// resolve DNS or repurpose the grant for a different local service.
+		return []string{parsed.Host}, nil
 	}
 	port := parsed.Port()
 	if port == "" {
@@ -415,10 +424,10 @@ func (policy *browserNetworkPolicy) destination(
 }
 
 func (policy *browserNetworkPolicy) normalizeOrigin(raw string) (string, error) {
-	if policy != nil && policy.mode == config.BrowserNetworkAnyHTTP {
-		return config.NormalizeBrowserHTTPOrigin(raw)
+	if policy == nil {
+		return "", ErrDenied
 	}
-	return config.NormalizeBrowserOrigin(raw)
+	return config.NormalizeBrowserNetworkOrigin(policy.mode, raw)
 }
 
 func (policy *browserNetworkPolicy) normalizeAuthorityOrigin(scheme, authority string) (string, error) {

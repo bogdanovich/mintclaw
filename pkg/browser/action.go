@@ -1946,7 +1946,7 @@ func (broker *Broker) originAllowed(session Session, origin string) bool {
 		return err == nil && normalized == origin
 	}
 	for _, allowed := range profile.AllowedOrigins {
-		normalized, err := config.NormalizeBrowserOrigin(allowed)
+		normalized, err := config.NormalizeBrowserNetworkOrigin(profile.NetworkMode, allowed)
 		if err == nil && normalized == origin {
 			return true
 		}
@@ -1969,19 +1969,23 @@ func (broker *Broker) originNetworkAllowed(ctx context.Context, session Session,
 	if profile.Mode == config.BrowserProfileAttachedUser {
 		return broker.originAllowed(session, origin)
 	}
-	if profile.NetworkMode == config.BrowserNetworkExactOrigins && !broker.originAllowed(session, origin) {
+	if (profile.NetworkMode == config.BrowserNetworkExactOrigins ||
+		profile.NetworkMode == config.BrowserNetworkLoopbackFixture) && !broker.originAllowed(session, origin) {
 		return false
 	}
 	anyHTTP := profile.NetworkMode == config.BrowserNetworkAnyHTTP
-	normalized, err := config.NormalizeBrowserOrigin(origin)
-	if anyHTTP {
-		normalized, err = config.NormalizeBrowserHTTPOrigin(origin)
-	}
+	normalized, err := config.NormalizeBrowserNetworkOrigin(profile.NetworkMode, origin)
 	if err != nil || normalized != origin {
 		return false
 	}
 	parsed, err := url.Parse(normalized)
-	if err != nil || parsed.Hostname() == "" || broker.lookupIP == nil {
+	if err != nil || parsed.Hostname() == "" {
+		return false
+	}
+	if profile.NetworkMode == config.BrowserNetworkLoopbackFixture {
+		return true // Exact canonical loopback authority; DNS is not part of this mode.
+	}
+	if broker.lookupIP == nil {
 		return false
 	}
 	host := parsed.Hostname()
