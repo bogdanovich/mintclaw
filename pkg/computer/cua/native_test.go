@@ -11,17 +11,19 @@ import (
 	"strconv"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/computer"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 )
 
 type fixtureEvent struct {
-	Kind    string   `json:"kind"`
-	PID     uint32   `json:"pid"`
-	Windows []uint64 `json:"windows"`
-	Values  []string `json:"values"`
-	Counts  []int    `json:"counts"`
+	Kind      string   `json:"kind"`
+	InspectID string   `json:"inspect_id"`
+	PID       uint32   `json:"pid"`
+	Windows   []uint64 `json:"windows"`
+	Values    []string `json:"values"`
+	Counts    []int    `json:"counts"`
 }
 
 // TestNativeQualification is opt-in and creates only the supplied disposable
@@ -54,6 +56,11 @@ func TestNativeQualification(t *testing.T) {
 			command.Env = append(command.Env, key+"="+value)
 		}
 	}
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stdin.Close() })
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -315,6 +322,38 @@ func TestNativeQualification(t *testing.T) {
 			waitEvent(t, func(e fixtureEvent) bool {
 				return len(e.Values) == 2 && e.Values[0] == sample && e.Values[1] == "GUARD_UNCHANGED"
 			})
+			if runtime.GOOS != "linux" {
+				return // The fixture-side caret setup below currently qualifies GTK only.
+			}
+			const prefix, suffix = "Начало|", "|конец"
+			for index, value := range []string{"ASCII", "Привет", "世界", "café", "e\u0301", "👩‍💻", "مرحبا"} {
+				t.Run(strconv.Itoa(index), func(t *testing.T) {
+					inspectID := "unicode-setup-" + strconv.Itoa(index)
+					if setupErr := json.NewEncoder(stdin).Encode(map[string]any{
+						"inspect_id": inspectID,
+						"prepare_text": map[string]any{
+							"value": prefix + suffix, "caret": utf8.RuneCountInString(prefix),
+						},
+					}); setupErr != nil {
+						t.Fatal("could not prepare owned fixture text")
+					}
+					waitEvent(t, func(e fixtureEvent) bool {
+						return e.Kind == "prepared_text" && e.InspectID == inspectID &&
+							len(e.Values) == 2 && e.Values[0] == prefix+suffix && e.Values[1] == "GUARD_UNCHANGED"
+					})
+					field, _ := tokens(t)
+					if _, typeErr := writer.call(ctx, "type_text", map[string]any{
+						"pid": ready.PID, "window_id": ready.Windows[0], "element_token": field,
+						"text": value, "delivery_mode": "background",
+					}); typeErr != nil {
+						t.Fatal("fixture Unicode middle insertion:", typeErr)
+					}
+					waitEvent(t, func(e fixtureEvent) bool {
+						return len(e.Values) == 2 && e.Values[0] == prefix+value+suffix &&
+							e.Values[1] == "GUARD_UNCHANGED"
+					})
+				})
+			}
 		})
 		t.Run("UnicodeReplacement", func(t *testing.T) {
 			// Distinct from insertion and initial fixture values: a queued snapshot

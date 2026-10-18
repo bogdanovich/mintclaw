@@ -1,0 +1,89 @@
+name: Private Computer Driver
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/computer-driver.yml'
+      - 'scripts/internal/computer-driver/**'
+      - 'scripts/computer-native-qualification.sh'
+      - 'scripts/internal/computer-native-qualification/fixture_linux.py'
+      - 'pkg/computer/cua/native_test.go'
+  workflow_dispatch: { }
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-computer-driver-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-utf8:
+    name: Pinned Linux Unicode driver
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CUA_TELEMETRY: '0'
+      DO_NOT_TRACK: '1'
+    steps:
+      - name: Checkout exact MintClaw candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify private artifact admission tests
+        run: python3 -m unittest discover -s scripts/internal/computer-driver -p 'test_*.py' -v
+
+      - name: Checkout exact unmodified upstream source
+        uses: actions/checkout@v7
+        with:
+          repository: trycua/cua
+          ref: 0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc
+          path: .private-cua-source
+          persist-credentials: false
+
+      - name: Install ephemeral runner build and fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang pkg-config libdbus-1-dev \
+            libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev \
+            python3-gi gir1.2-gtk-3.0 libatk-adaptor at-spi2-core dbus-x11 xvfb xauth
+
+      - name: Install upstream-pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Apply exact patch, unit-test and build private artifact
+        run: |
+          bash scripts/internal/computer-driver/build-linux.sh \
+            --source "$GITHUB_WORKSPACE/.private-cua-source" \
+            --output "$RUNNER_TEMP/mintclaw-utf8-driver"
+
+      - name: Set up Go from repository version
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Compile disposable native qualification test
+        run: go test -c -tags goolm,stdjson -o "$RUNNER_TEMP/cua-native.test" ./pkg/computer/cua
+
+      - name: Verify actual Unicode insertion and preserved surrounding text
+        env:
+          MINTCLAW_COMPUTER_NATIVE_TEST_BINARY: ${{ runner.temp }}/cua-native.test
+        run: |
+          xvfb-run -a --server-args='-screen 0 1280x800x24 -nolisten tcp' \
+            dbus-run-session -- bash scripts/computer-native-qualification.sh \
+              --driver "$RUNNER_TEMP/mintclaw-utf8-driver/cua-driver" \
+              --driver-manifest "$RUNNER_TEMP/mintclaw-utf8-driver/manifest.json" \
+              --case UnicodeInsertion
+
+      - name: Preserve exact private build artifact and provenance
+        uses: actions/upload-artifact@v7
+        with:
+          name: computer-driver-linux-utf8-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/mintclaw-utf8-driver/
+          if-no-files-found: error
+          retention-days: 3

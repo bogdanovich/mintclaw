@@ -114,10 +114,28 @@ def read_inspections():
             request = json.loads(line)
             inspect_id = request.get("inspect_id")
             if isinstance(inspect_id, str) and 0 < len(inspect_id) <= 128:
+                prepared = request.get("prepare_text")
+                if isinstance(prepared, dict):
+                    value = prepared.get("value")
+                    caret = prepared.get("caret")
+                    if (isinstance(value, str) and len(value.encode("utf-8")) <= 4096
+                            and type(caret) is int and 0 <= caret <= len(value)):
+                        GLib.idle_add(prepare_owned_text, inspect_id, value, caret)
+                    continue
                 GLib.idle_add(inspect_owned_windows, inspect_id, request.get("close_target") is True,
                               request.get("advance_visual") is True)
         except (ValueError, AttributeError):
             pass
+
+
+def prepare_owned_text(inspect_id, value, caret):
+    entries[0].set_text(value)
+    entries[0].select_region(caret, caret)
+    entries[0].set_position(caret)
+    print(json.dumps({"kind": "prepared_text", "inspect_id": inspect_id,
+                      "values": [e.get_text() for e in entries], "counts": counts},
+                     ensure_ascii=False), flush=True)
+    return False
 
 
 threading.Thread(target=read_inspections, daemon=True).start()
