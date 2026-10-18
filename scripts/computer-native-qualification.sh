@@ -4,15 +4,17 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: computer-native-qualification.sh --driver /absolute/pinned/cua-driver [--case all|ObservationLifecycle|ScopeProjection|UnicodeInsertion|UnicodeReplacement|ButtonClick|ScopeDenial]'
+  echo 'Usage: computer-native-qualification.sh --driver /absolute/pinned/cua-driver [--driver-manifest /absolute/private/manifest.json] [--case all|ObservationLifecycle|ScopeProjection|UnicodeInsertion|UnicodeReplacement|ButtonClick|ScopeDenial]'
   echo 'Optional: MINTCLAW_COMPUTER_NATIVE_TEST_BINARY=/absolute/prebuilt/cua.test'
 }
 
 driver_path=''
+driver_manifest=''
 qualification_case=all
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --driver) [[ $# -ge 2 ]] || { usage; exit 2; }; driver_path=$2; shift 2 ;;
+    --driver-manifest) [[ $# -ge 2 ]] || { usage; exit 2; }; driver_manifest=$2; shift 2 ;;
     --case) [[ $# -ge 2 ]] || { usage; exit 2; }; qualification_case=$2; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) usage; exit 2 ;;
@@ -31,10 +33,17 @@ esac
   echo 'Supply an absolute, regular, executable pinned driver path.' >&2
   exit 2
 }
+repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 case "$(uname -s)/$(uname -m)" in
   Linux/x86_64)
     driver_sha256=fd922e708099aae311873a6667beb48eaabb8c15c3abec744492db8a96b544ee
+    if [[ -n "$driver_manifest" ]]; then
+      [[ "$driver_manifest" == /* ]] || { usage; exit 2; }
+      driver_sha256=$(python3 "$repository_root/scripts/internal/computer-driver/artifact.py" verify \
+        --manifest "$driver_manifest" --binary "$driver_path" \
+        --patch "$repository_root/scripts/internal/computer-driver/atspi-utf8-length.patch")
+    fi
     driver_actual=$(sha256sum "$driver_path" | cut -d ' ' -f 1)
     [[ -n "${DISPLAY:-}" && -n "${XAUTHORITY:-}" ]] || {
       echo 'Select the intended X11 GUI session explicitly with DISPLAY and XAUTHORITY.' >&2
@@ -42,13 +51,13 @@ case "$(uname -s)/$(uname -m)" in
     }
     /usr/bin/python3 -c 'import gi; gi.require_version("Gtk", "3.0"); gi.require_version("GdkX11", "3.0"); from gi.repository import Gtk, GdkX11' ;;
   Darwin/arm64|Darwin/x86_64)
+    [[ -z "$driver_manifest" ]] || { echo 'The patched artifact is Linux-only.' >&2; exit 2; }
     driver_sha256=56bc881744bfb956d44386e6f6ccb2f6fc7f5cef47be25cc056e08265cdf4c7d
     driver_actual=$(shasum -a 256 "$driver_path" | cut -d ' ' -f 1) ;;
   *) echo 'Pinned qualification supports Linux x86_64 X11 and macOS only.' >&2; exit 2 ;;
 esac
 [[ "$driver_actual" == "$driver_sha256" ]] || { echo 'Pinned driver checksum mismatch.' >&2; exit 2; }
 
-repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 qualification_dir=$(mktemp -d "${TMPDIR:-/tmp}/mintclaw-native-smoke.XXXXXX")
 cleanup() {
   # This exact path was newly created by mktemp, never supplied by the caller.
@@ -79,6 +88,7 @@ fi
 }
 
 printf 'Pinned Cua Driver 0.34.1; native qualification case: %s\n' "$qualification_case"
+[[ -z "$driver_manifest" ]] || echo 'Selected private mintclaw-atspi-utf8-v1 artifact; no production grant.'
 if [[ "$qualification_case" != all ]]; then
   echo 'This selected-case run does not qualify omitted capabilities.'
 fi

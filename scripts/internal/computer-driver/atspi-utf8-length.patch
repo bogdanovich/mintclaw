@@ -1,0 +1,31 @@
+--- a/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs
+@@ -2781,0 +2782,5 @@
++}
++
++// AT-SPI InsertText carries a UTF-8 byte length; caret offsets remain characters.
++fn editable_text_byte_len(text: &str) -> Result<i32> {
++    i32::try_from(text.len()).map_err(|_| anyhow!("AT-SPI text exceeds i32 byte length"))
+@@ -2797 +2802 @@
+-    let len = text.chars().count() as i32;
++    let len = editable_text_byte_len(text)?;
+@@ -5253 +5258 @@
+-        let len = value.chars().count() as i32;
++        let len = editable_text_byte_len(value)?;
+@@ -7355,0 +7361,14 @@
++    }
++}
++
++#[cfg(test)]
++mod mintclaw_utf8_length_tests {
++    use super::editable_text_byte_len;
++
++    #[test]
++    fn editable_text_length_is_utf8_bytes_not_character_offsets() {
++        for sample in ["", "ASCII", "Привет", "世界", "café", "e\u{301}", "😀", "مرحبا"] {
++            assert_eq!(editable_text_byte_len(sample).unwrap() as usize, sample.len());
++        }
++        assert_eq!(editable_text_byte_len("世界").unwrap(), 6);
++        assert_eq!(editable_text_byte_len("😀").unwrap(), 4);
+@@ -7357,0 +7377 @@
++

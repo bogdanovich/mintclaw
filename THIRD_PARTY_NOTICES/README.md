@@ -11,3 +11,12 @@ MintClaw includes the following components in its portable PDF runtime:
 Each listed file is an unmodified copy of the corresponding upstream license
 text. Release archives, native packages, and container images distribute this
 directory with the MintClaw binaries.
+
+## Optional private computer driver
+
+`cua-driver.txt` preserves the MIT license of Cua AI, Inc. from
+`trycua/cua` revision `0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc`, covering
+the downstream AT-SPI source patch and optional private build path. The driver
+is not bundled with, installed by or enabled in normal MintClaw releases.
+Its private build artifact separately carries the upstream license and the
+driver workspace's own third-party notices.
