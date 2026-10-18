@@ -146,8 +146,9 @@ original task and obtain an explicit decision before substituting a separately l
 do not describe that new test as recovery of old input. Native capacity state outranks a model's “temporary” wording.
 Also compare acceptance counts with the failure stage: a turn can accept the new clarification while older retained
 input is still capacity-blocked. Do not treat “could not apply” prose as authoritative or resend confirmed facts.
-The 2026-10-18 fresh I-134 run still exposed this incorrect reporting/repeated-question behavior; it is an open
-qualification finding, not an instruction to keep retrying the exhausted input.
+The 2026-10-18 fresh I-134 run exposed this incorrect reporting/repeated-question behavior. The later
+[bounded repair checkpoint](../architecture/pdf-intake-clarification-checkpoint.md) records the generic fix and
+automatic qualification, not recovery of that exhausted input or completion of I-134.
 
 ### Bounded clarification repair check
 
@@ -155,10 +156,14 @@ The [clarification repair goal](../architecture/pdf-intake-clarification-goal.md
 does not qualify I-134/XFA. On a **new unrelated synthetic form**, use this short
 manual Telegram scenario after the repair is deployed:
 
-1. Attach the generic fixture and ask to fill it with synthetic data only.
-2. Send several facts in one ordinary paragraph. Leave one requested role
-   ambiguous, or include a value that violates a documented field constraint.
-3. Answer the specific clarification in ordinary text, adding one more fact.
+1. Attach the generic fixture with: “Заполни тестовую форму. Я заёмщик.
+   Объясни документ и сгруппируй нужные сведения. Ничего не подписывай,
+   не создавай итоговый PDF и никуда не подавай.” Wait for active intake.
+2. Send: “Я заёмщик Casey Mint. Контакт на случай чрезвычайной ситуации —
+   Robin Mint. Телефон 202-555-0147; пока не указываю, чей он.” Both names
+   must be accepted, but the telephone owner must not be guessed.
+3. Send: “Предыдущий телефон принадлежит только заёмщику. Телефон контактного
+   лица пока не указан. Ещё одно сведение: город заёмщика Mintford.”
    Previously accepted facts must survive; only genuinely unresolved details
    may be asked again. A real conflict must not disappear just because that
    field also has a previously confirmed value.
@@ -171,6 +176,11 @@ manual Telegram scenario after the repair is deployed:
 6. At `capacity_exceeded`, stop blind retries and retain the job for diagnosis.
    No replacement task, limit reset or claim of completed output is implied.
 
+For this short check, finish with `/stop` rather than requesting a PDF. Expect
+acknowledged cancellation and no document delivery. Keep the reply/trace IDs
+for verification. The automatic checkpoint uses authenticated headless gateway
+ingress; this actual Telegram scenario is still an operator acceptance step.
+
 For operator verification, `received_input_state=accounted` means the newly
 received message has been accounted, not that the whole form is finished.
 `accepted_count` and `acknowledged_count` describe this continuation;
@@ -181,6 +191,9 @@ That presentation filtering never deletes native findings or pending text.
 It applies only to older advisory findings backed by a strictly later,
 still-current native decision for that same field. Existing confirmation or
 an unrelated later update is not enough to hide a genuine new ambiguity.
+The same chronology rule applies when `/retry_form` selects the old receipt:
+receipt selection must not make superseded advice into a missing-field
+question again. It still cannot extend an exhausted extraction budget.
 
 ## Large Public Form And Unsupported Output
 

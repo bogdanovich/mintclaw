@@ -250,8 +250,8 @@ This is **not successful pending-input recovery**. The earlier 859-byte input we
 32-pass ceiling and still retains four ambiguity findings, even though the new clarification was accepted and
 consumed. The public result reports `reservation/capacity_exceeded`. The ordinary reply incorrectly says the
 clarification was not applied and again offers alternative statuses despite the accepted citizenship and negative
-controls. These are unresolved retained-input/progress UX findings, separate from both cross-window selection and
-XFA support. The continuation stopped at pending-input failure, so it does not qualify a live post-fix cross-window
+controls. At that source these were unresolved retained-input/progress UX findings, separate from cross-window
+selection and XFA support. The continuation stopped at pending-input failure, so it does not qualify a live post-fix cross-window
 collect action. Do not reset its counters, repeat accepted facts or label another fresh job as recovery.
 
 Three distinct already-accepted private sentinels had zero hits across canonical metadata/history, 35 derived
@@ -259,10 +259,33 @@ messages, one summary, 26 tool parts, six matching untruncated traces, public/en
 bounded from this job's creation. This is a case-specific scan, not a provider-retention guarantee. The historical
 I-134 job remained unchanged at revision 47, ledger 45. Both incomplete jobs remain protected, not terminally erased.
 
+### Bounded Generic Clarification Repair
+
+The [repair checkpoint](pdf-intake-clarification-checkpoint.md) records #1730 and #1736 merged after exact-head
+CI, substantive review and authorized owner rocket approval, then deployed as
+`95c58f41b18e258e404933283491574c14c6029f` with verified backups and actual running-inode/VCS proof.
+Generic 13-field and 193-field regressions cover completed-window skipping, retained failure alongside new
+acceptance, advisory chronology, actual conflicts, explicit retry, restart, fixed bounds and owner/privacy checks.
+
+A fresh unrelated medium-form job preserved two accepted names across the actual deployment/restart. A later
+message resolved the borrower's retained telephone without repeating its number and added a city: independent
+native readback verified all four values, no wrong-person assignment and no repeated question for those values.
+The remaining emergency-contact telephone ambiguity and its original text stayed retained; review/output were not
+claimed complete. The final-source continuation reports two new acceptances and `received_input_state=accounted`.
+The ordinary reply asks only the still-missing contact telephone. It does not report new acceptance as failed,
+although it does not explicitly state the accepted count.
+
+The new synthetic job was canceled normally, with terminal key/source/event/intake erasure, no PDF delivery and
+unchanged source. Three actually accepted private sentinels had zero hits in the bounded ordinary-history,
+derived-context, retained-trace, public-record and journal scans before and after cancellation. Both historical
+I-134 encrypted records remained unchanged at revisions/ledgers 47/45 and 36/35. This headless gateway proof
+qualifies only the narrow repair, not exhausted historical recovery, actual Telegram, full I-134 or PDFI4.
+
 ### Open Qualification And Exit
 
-- Repair and qualify retained-clarification/no-progress behavior and truthful reporting of already accepted fields.
-  Keep the fixed limits and original jobs; any exhausted-input recovery requiring new authority needs explicit admission.
+- The generic clarification/progress repair has the bounded automatic evidence above. Confirm its actual Telegram
+  behavior using the [short operator check](../operations/pdfi4-free-text-form-test.md#bounded-clarification-repair-check).
+  Keep fixed limits and original jobs; exhausted-input recovery requiring new authority still needs explicit admission.
 - Complete applicable filling of the pinned official I-134 with synthetic data, followed by separate approval,
   one verified print-ready artifact, all-ten-page independent text/control/layout QA and terminal cleanup.
   Its Linux hybrid backend is admitted; editable hybrid output remains explicitly deferred.
