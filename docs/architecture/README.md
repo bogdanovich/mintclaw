@@ -127,6 +127,15 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   browser milestones for current-specialist hardening, first-party tools,
   artifacts, human handoff, companion placement, profiles, providers, and
   computer fallback.
+- [Cross-Platform Computer-Use Roadmap](computer-use-roadmap.md): merged read-only
+  milestone, remaining bounded-input and interactive-task gates, and separately
+  authorized Linux/macOS production pilot.
+- [Computer Native Qualification](computer-use-native-qualification.md): pinned
+  drivers, exact native-window guards, measured fixture results and platform limits.
+- [Computer Companion Boundary](computer-companion-boundary.md): opt-in native
+  hosts, authenticated command/transfer ownership and actual-app smoke tests.
+- [Read-Only Computer Gateway Tools](computer-gateway-tools.md): independent grants,
+  protected model observations and same-resource handoff/resume/release.
 - [Credential Access Roadmap](credential-access-roadmap.md): scoped 1Password
   access, Android passkey approval, 20-hour revocable grants, integrated browser
   login and connectors, and model/log/trace privacy under a trusted runtime.
