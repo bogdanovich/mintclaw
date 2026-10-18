@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type resumeInteractionCommand struct {
@@ -181,6 +182,20 @@ func (service interactionService) resumeOwned(
 		}
 		ensureSessionMetadata(agent.Sessions, continuationSessionKey, continuationScope)
 	}
+	if record.Kind == interactions.KindExternalWait && record.Outcome == interactions.OutcomeReady &&
+		runtime.externalWaitState(ctx, record) != toolshared.ExternalWaitReady {
+		history, readErr := agent.Sessions.ReadTurnHistory(ctx, continuationSessionKey)
+		if readErr != nil {
+			return readErr
+		}
+		if !externalWaitHasFinalResult(history, record) {
+			var err error
+			record, err = registry.InvalidateExternalWait(record.ID, record.Revision)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	approvalAllowed := record.Kind == interactions.KindApproval &&
 		record.Outcome == interactions.OutcomeAllowed
 	if !approvalAllowed {
@@ -274,6 +289,18 @@ func (service interactionService) resumeOwned(
 		return service.failUnavailableLiveHandoff(
 			ctx, registry, interactionWorkspace, agent, resuming, err,
 		)
+	}
+	if resuming.Kind == interactions.KindExternalWait && resuming.Outcome != interactions.OutcomeReady {
+		content := "The external approval is unavailable. The paused operation was not retried. Request it again if still needed."
+		if resuming.Outcome == interactions.OutcomeTimedOut {
+			content = "The external approval window expired. The paused operation was not retried. Request it again if still needed."
+		}
+		runtime.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
+		_, finalizeErr := service.finalizeResumedInteraction(
+			ctx, registry, interactionWorkspace, resuming, inbound, content,
+			externalWaitTerminalDeliverable(resuming, content), nil, interactionBoundaryPrecomputedFinal,
+		)
+		return finalizeErr
 	}
 	if resuming.Outcome == interactions.OutcomeTimedOut && len(lifecycleReceipts) > 0 {
 		content := interactions.PromptText(

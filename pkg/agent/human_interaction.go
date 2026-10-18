@@ -359,6 +359,7 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 				[]interactions.ObjectiveChecklistItem(nil),
 				request.Origin.ObjectiveChecklist...),
 		},
+		ConditionRef:    request.Prompt.ConditionRef,
 		Questions:       request.Prompt.Questions,
 		PromptSummary:   request.Prompt.PromptSummary,
 		PromptLanguage:  request.Prompt.PromptLanguage,
@@ -690,6 +691,9 @@ func interactionHasFinalDelivery(record interactions.Record, deliveryID string) 
 
 func renderInteractionPrompt(record interactions.Record) string {
 	var builder strings.Builder
+	if record.Kind == interactions.KindExternalWait {
+		return strings.TrimSpace(record.PromptSummary) + "\n\n`/stop`"
+	}
 	if record.Kind == interactions.KindApproval {
 		builder.WriteString("`")
 		builder.WriteString(strings.TrimSpace(record.Origin.ToolName))

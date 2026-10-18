@@ -118,6 +118,12 @@ func (context interactionContinuationPromptContext) typedChoiceGuidance() string
 
 func (context interactionContinuationPromptContext) outcomeGuidance() string {
 	switch {
+	case context.Kind == interactions.KindExternalWait && context.Outcome == interactions.OutcomeReady:
+		return `- The originating trusted tool confirmed the external condition. This is readiness, not proof that the
+  requested action ran or succeeded. Continue the suspended request now; do not ask for another chat confirmation.
+- Turn-scoped resources were closed before waiting. Open fresh resources and observe their current state before
+  acting. Never replay stale resource IDs, element references, or the original paused tool call automatically.
+- Reapply the normal authorization and destination checks. An unknown previous write outcome must not be retried.`
 	case context.Kind == interactions.KindQuestion && context.Outcome == interactions.OutcomeAnswered:
 		return `- Treat the answer as the user's latest authoritative guidance. It may continue, redirect, or end the
   suspended request. Do not ask for the same choice again or revive superseded steps.

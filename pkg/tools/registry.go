@@ -370,6 +370,37 @@ func (r *ToolRegistry) ValidateObjectiveRecoveryArguments(name, kind string, arg
 	return validateToolArgs(parameters, canonical)
 }
 
+// ResolveExternalWait checks a condition only through its originating tool.
+// Missing tools and invalid states fail closed without exposing domain errors.
+func (r *ToolRegistry) ResolveExternalWait(
+	ctx context.Context, name, reference string,
+) toolshared.ExternalWaitState {
+	tool, ok := r.GetRegistered(name)
+	if !ok || tool == nil {
+		return toolshared.ExternalWaitUnavailable
+	}
+	resolver, ok := tool.(toolshared.ExternalWaitResolver)
+	if !ok {
+		return toolshared.ExternalWaitUnavailable
+	}
+	switch state := resolver.ResolveExternalWait(ctx, reference); state {
+	case toolshared.ExternalWaitPending, toolshared.ExternalWaitReady:
+		return state
+	default:
+		return toolshared.ExternalWaitUnavailable
+	}
+}
+
+// SupportsExternalWait reports whether a registered tool owns condition resolution.
+func (r *ToolRegistry) SupportsExternalWait(name string) bool {
+	tool, ok := r.GetRegistered(name)
+	if !ok || tool == nil {
+		return false
+	}
+	_, ok = tool.(toolshared.ExternalWaitResolver)
+	return ok
+}
+
 // SupportsLiveResourceHandoff reports whether the registered tool can
 // durably rebind and validate its handoff after process restart.
 func (r *ToolRegistry) SupportsLiveResourceHandoff(name string) bool {

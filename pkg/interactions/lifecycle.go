@@ -521,6 +521,9 @@ func (r *Registry) claim(
 		id,
 		expectedRevision,
 		func(rec *Record, now int64) (EventType, string, *bool, error) {
+			if rec.Kind == KindExternalWait {
+				return "", "", nil, fmt.Errorf("%w: external waits cannot accept chat answers", ErrInvalidInteraction)
+			}
 			if rec.Status != StatusWaiting {
 				return "", "", nil, fmt.Errorf("%w: status %s", ErrAnswerTooLate, rec.Status)
 			}
@@ -743,8 +746,11 @@ func (r *Registry) update(
 }
 
 func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
-	if req.Kind != KindQuestion && req.Kind != KindApproval {
+	if !validKind(req.Kind) {
 		return Record{}, fmt.Errorf("%w: unsupported kind %q", ErrInvalidInteraction, req.Kind)
+	}
+	if err := validateExternalWait(req.Kind, req.ConditionRef, &req.Origin); err != nil {
+		return Record{}, err
 	}
 	if err := req.Route.validate(); err != nil {
 		return Record{}, err
@@ -795,6 +801,7 @@ func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
 		ID:              id,
 		ShortID:         shortID(id),
 		Kind:            req.Kind,
+		ConditionRef:    req.ConditionRef,
 		Status:          StatusCreated,
 		Revision:        1,
 		Route:           normalizeRoute(req.Route),

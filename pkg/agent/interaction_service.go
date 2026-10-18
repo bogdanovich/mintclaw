@@ -268,6 +268,14 @@ func (service interactionService) Answer(
 			"This session is waiting for an answer from the authorized user.",
 		)
 	}
+	if record.Kind == interactions.KindExternalWait {
+		return service.notice(
+			ctx,
+			command,
+			result,
+			"This task is waiting for approval in the external service. Chat replies cannot approve it. Use /stop to cancel.",
+		)
+	}
 	projectedChoice := bus.InboundInteractionChoice(
 		strings.TrimSpace(string(command.Message.Context.Interaction.Choice)),
 	)
