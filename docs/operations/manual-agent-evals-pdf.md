@@ -118,6 +118,12 @@ opaque binaries and unscannable escaped content leave coverage unavailable. Know
 files still fail. Source PDFs and independently retained, native-settled output PDFs are exempted from fact matching
 by exact SHA-256, since those are intended document contents; credential literals remain forbidden there.
 
+Raw `.jsonl`, `.ndjson` and the native `logs/gateway.log` are inspected as strict JSON records, one value per line,
+including duplicate keys and decoded strings. A file is bounded to 8,192 lines and 64 KiB per line under the shared
+token budget. Malformed/trailing/opaque content and exhausted bounds remain unavailable; a later observed leak
+still fails after an earlier uncertain record. This does not relax model-context admission, exempt built-in skill
+text or decode SQLite. Other raw escaped formats retain their existing conservative behavior.
+
 The value-free `private_surfaces` receipt contains only scope, counts and an observation code. A known leak is a
 run-level hard failure; unavailable coverage prevents a passing run. Regrading refuses known-leak sources and
 preserves unavailable coverage without rescanning or target work. Comparison retains both run verdicts separately
