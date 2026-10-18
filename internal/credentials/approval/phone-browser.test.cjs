@@ -114,6 +114,7 @@ let stage = "fixture-input";
       if (new URL(response.url()).pathname === `${pagePath}api/approve/finish` && response.ok()) grantID = (await response.json()).grant_id;
     });
     stage = "approval-passkey";
+    if (config.idle === "true") await fixture("/_fixture/idle");
     await page.getByRole("button", {name: "Approve with passkey"}).click();
     await page.getByRole("status").filter({hasText: "Approved until"}).waitFor();
     assert.match(grantID, /^[a-f0-9]{64}$/);

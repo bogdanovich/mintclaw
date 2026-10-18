@@ -70,6 +70,9 @@
   element("action").addEventListener("click", async () => {
     busy(true); status("Waiting for your passkey…");
     try {
+      // The page may have stayed open longer than the short challenge lifetime.
+      // Refresh an unattempted challenge without extending the approval link.
+      if (mode === "request") await begin();
       const registration = mode === "enroll";
       const publicKey = options(ceremony.options.publicKey, registration);
       const credential = registration ? await navigator.credentials.create({publicKey, signal: lifetime.signal}) :

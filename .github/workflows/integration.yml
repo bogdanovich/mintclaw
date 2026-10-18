@@ -69,6 +69,14 @@ jobs:
           go test -count=1 -race -timeout 6m -tags goolm,stdjson
           -run '^TestCredential(AliasBrowserAndPhone|DiscoveredBrowserAndPhone|DiscoveredProviderOutput|ProviderOutput|ProviderOutcome|CodexOutput|GitHubOutput|RestartOutput|LifetimeOutput)Fixture$' ./pkg/gateway
 
+      - name: Qualify delayed phone approval and fresh credential continuation
+        if: inputs.credentials
+        run: >-
+          env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
+          MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE=1
+          go test -count=1 -race -timeout 6m -tags goolm,stdjson
+          -run '^TestCredentialDelayedProviderOutputFixture$' ./pkg/gateway
+
       - name: Install pinned document runtime
         if: inputs.documents
         run: |

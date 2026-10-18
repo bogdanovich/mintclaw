@@ -34,7 +34,10 @@ import (
 // Opt-in real Chromium + virtual WebAuthn + production gateway/browser tools.
 // This qualifies synthetic flow integration, never a physical phone or account.
 func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
-	testCredentialAliasBrowserAndPhoneFixture(t, "", "logged_in")
+	t.Run("login", func(t *testing.T) { testCredentialAliasBrowserAndPhoneFixture(t, "", "logged_in") })
+	t.Run("notification-failure", func(t *testing.T) {
+		testCredentialBrowserFixtureScenario(t, "", "logged_in", "notification_failure")
+	})
 }
 
 func TestCredentialDiscoveredBrowserAndPhoneFixture(t *testing.T) {
@@ -46,6 +49,12 @@ func TestCredentialDiscoveredBrowserAndPhoneFixture(t *testing.T) {
 func TestCredentialDiscoveredProviderOutputFixture(t *testing.T) {
 	for _, kind := range []string{"openai_compat", "codex"} {
 		t.Run(kind, func(t *testing.T) { testCredentialBrowserFixtureScenario(t, kind, "logged_in", "discovery") })
+	}
+}
+
+func TestCredentialDelayedProviderOutputFixture(t *testing.T) {
+	for _, kind := range []string{"openai_compat", "codex"} {
+		t.Run(kind, func(t *testing.T) { testCredentialBrowserFixtureScenario(t, kind, "logged_in", "discovery_wait") })
 	}
 }
 
@@ -103,8 +112,10 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOutcome, mode string) {
 	t.Helper()
 	restart, canceled, expiry := mode == "restart", mode == "cancel", mode == "expiry"
-	discovery := mode == "discovery"
-	if mode != "" && !restart && !canceled && !expiry && !discovery {
+	durableApproval := mode == "discovery_wait"
+	discovery := mode == "discovery" || durableApproval
+	failedNotifications := mode == "notification_failure"
+	if mode != "" && !restart && !canceled && !expiry && !discovery && !failedNotifications {
 		t.Fatal("unknown credential fixture scenario")
 	}
 	connectorMode := strings.HasPrefix(providerKind, "github:")
@@ -113,7 +124,11 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	if os.Getenv("MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE") != "1" {
 		t.Skip("synthetic Chromium qualification only")
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Second)
+	timeout := 100 * time.Second
+	if durableApproval {
+		timeout = 180 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
 	defer cancel()
 	server := httptest.NewUnstartedServer(nil)
 	t.Cleanup(server.Close)
@@ -482,8 +497,10 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			}
 		}
 	}
+	notifications := messageBus.OutboundChan()
+	var waiting <-chan struct{}
 	if providerMode {
-		perform, finalize, cancelCurrent = credentialProviderFixture(
+		harness := credentialProviderFixture(
 			t,
 			ctx,
 			cfg,
@@ -493,6 +510,7 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			connectorMode,
 			expectedOutcome,
 			canceled,
+			durableApproval,
 			beforeCleanup,
 			func(data []byte) {
 				mu.Lock()
@@ -500,6 +518,8 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 				mu.Unlock()
 			},
 		)
+		perform, finalize, cancelCurrent = harness.perform, harness.finalize, harness.cancel
+		notifications, waiting = harness.notifications, harness.waiting
 	}
 	defer finalize()
 	results := make(chan browser.CredentialLoginResult, 1)
@@ -519,7 +539,17 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			go func() {
 				runtimeMu.RLock()
 				defer runtimeMu.RUnlock()
-				result, performErr := perform()
+				var performErr error
+				if failedNotifications {
+					performErr = credentialFixtureRejectNotifications(ctx, credentials, cfg, origin)
+				}
+				if performErr == nil && !durableApproval && !connectorMode {
+					performErr = awaitCredentialFixturePhoneGrant(ctx, credentials, cfg, origin)
+				}
+				var result browser.CredentialLoginResult
+				if performErr == nil {
+					result, performErr = perform()
+				}
 				if performErr != nil {
 					failure.Store(performErr.Error())
 					result = browser.CredentialLoginResult{Outcome: "fixture_failed"}
@@ -527,7 +557,15 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 				results <- result
 			}()
 			select {
-			case notice := <-messageBus.OutboundChan():
+			case notice := <-notifications:
+				if waiting != nil {
+					select {
+					case <-waiting:
+					case <-ctx.Done():
+						http.Error(writer, "fixture wait unavailable", http.StatusServiceUnavailable)
+						return
+					}
+				}
 				if retrieved.Load() != before {
 					http.Error(writer, "fixture unavailable", http.StatusServiceUnavailable)
 					return
@@ -655,6 +693,9 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 				if discovery && expectedOutcome == "logged_in" {
 					expectedSessions /= 2
 				}
+				if durableApproval {
+					expectedSessions++
+				} // Closed before the phone wait; no values consumed.
 				retired = listErr == nil && len(all) == expectedSessions
 				for _, session := range all {
 					retired = retired && session.State.Terminal()

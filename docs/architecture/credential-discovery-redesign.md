@@ -134,3 +134,14 @@ The [previous roadmap](credential-access-roadmap.md) records the delivered
 fixed-binding implementation. Its [output qualification](credential-output-qualification.md)
 and [personal pilot](credential-craigslist-pilot.md) remain historical evidence;
 they do not automatically qualify the new discovery, generic forms or TOTP.
+
+## Two-hour approval follow-up
+
+The owner selected a two-hour pending link on 2026-10-18. The implementation
+reuses [external waits](external-waits.md) and the existing recovery loop: close
+idle resources, preserve native cleanup evidence, wait durably, then resume with
+fresh website discovery and controls. The 20-hour grant begins at verified
+approval; five-minute passkey/setup ceremonies remain short. See the
+[approval roadmap and composition](credential-approval-wait.md). Native/provider
+qualification, reviewed deployment and the fresh owner Facebook pilot remain
+delivery gates; source changes alone do not certify a logged-in real account.

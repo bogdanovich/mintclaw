@@ -40,13 +40,16 @@ func credentialProviderFixture(
 	connectorMode bool,
 	expectedOutcome string,
 	cancelFirst bool,
+	durableApproval bool,
 	beforeCleanup func() error,
 	capture func([]byte),
-) (func() (browser.CredentialLoginResult, error), func(), func()) {
+) credentialProviderHarness {
 	t.Helper()
 	var mu sync.Mutex
 	calls := 0
 	step := 0
+	deferredRequests := 0
+	pausedSessionID := ""
 	var activeCancel context.CancelFunc
 	sessionID := ""
 	lastLogin := browser.CredentialLoginResult{}
@@ -108,6 +111,18 @@ func credentialProviderFixture(
 		mu.Lock()
 		defer mu.Unlock()
 		phase := step
+		var condition struct {
+			Outcome string `json:"outcome"`
+		}
+		if durableApproval && json.Unmarshal([]byte(toolContent), &condition) == nil && condition.Outcome == "ready" {
+			if deferredRequests != 0 || phase != 4 {
+				failure = "provider received unexpected readiness"
+			}
+			pausedSessionID = websiteScript.sessionID
+			websiteScript = &credentialWebsiteProviderScript{retiredSessionID: pausedSessionID}
+			deferredRequests++
+			phase, step = 0, 0
+		}
 		step++
 		calls++
 		decode := func(target any) bool {
@@ -316,6 +331,14 @@ func credentialProviderFixture(
 	var closeOnce sync.Once
 	closeLoop := func() { closeOnce.Do(loop.Close) }
 	t.Cleanup(closeLoop)
+	var delivery *credentialWaitDelivery
+	var waiting chan struct{}
+	notifications := messageBus.OutboundChan()
+	if durableApproval {
+		delivery = installCredentialWaitDelivery(t, loop, messageBus)
+		notifications = delivery.notifications
+		waiting = make(chan struct{})
+	}
 	turns := 0
 	previousHistoryMessages := 0
 	perform := func() (browser.CredentialLoginResult, error) {
@@ -337,6 +360,28 @@ func credentialProviderFixture(
 			prompt,
 			"fixture-provider-session-"+string(rune('a'+turns)), "telegram", "fixture-owner-chat",
 			agent.DirectTurnOptions{SuppressBackgroundCompaction: true})
+		if durableApproval && runErr == nil && response == "" {
+			record, waitErr := credentialFixtureSuspendedWait(loop, running)
+			if waitErr != nil {
+				return browser.CredentialLoginResult{}, waitErr
+			}
+			if turns != 1 {
+				return browser.CredentialLoginResult{}, errors.New("approved fixture requested approval twice")
+			}
+			mu.Lock()
+			pendingCalls := calls
+			mu.Unlock()
+			cancelTurn() // The old execution's context is not the continuation owner.
+			close(waiting)
+			response, runErr = resumeCredentialFixtureWait(ctx, loop, record, func() error {
+				mu.Lock()
+				defer mu.Unlock()
+				if calls != pendingCalls {
+					return errors.New("provider polled while phone approval was pending")
+				}
+				return nil
+			})
+		}
 		mu.Lock()
 		result, fixedFailure := lastLogin, failure
 		activeCancel = nil
@@ -378,10 +423,20 @@ func credentialProviderFixture(
 	finalize := func() {
 		finalizeOnce.Do(func() {
 			closeLoop()
-			qualifyCredentialTraceExports(t, cfg, capture)
+			expectedTurns := 2
+			if durableApproval {
+				expectedTurns++
+			}
+			qualifyCredentialTraceExports(t, cfg, capture, expectedTurns)
 			mu.Lock()
 			defer mu.Unlock()
 			expectedCalls := 2 * stepsPerTurn
+			if durableApproval {
+				expectedCalls += 4
+				if deferredRequests != 1 || pausedSessionID == "" || delivery.phoneRequests.Load() != 1 {
+					t.Error("delayed phone approval composition was not exercised exactly once")
+				}
+			}
 			if cancelFirst {
 				expectedCalls = 3 + stepsPerTurn
 			}
@@ -390,13 +445,16 @@ func credentialProviderFixture(
 			}
 		})
 	}
-	return perform, finalize, func() {
-		mu.Lock()
-		cancel := activeCancel
-		mu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
+	return credentialProviderHarness{
+		perform: perform, finalize: finalize, notifications: notifications, waiting: waiting,
+		cancel: func() {
+			mu.Lock()
+			cancel := activeCancel
+			mu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
+		},
 	}
 }
 
@@ -413,10 +471,11 @@ func (transport credentialCodexFixtureTransport) RoundTrip(request *http.Request
 	return http.DefaultTransport.RoundTrip(local)
 }
 
-func qualifyCredentialTraceExports(t *testing.T, cfg *config.Config, capture func([]byte)) {
+func qualifyCredentialTraceExports(t *testing.T, cfg *config.Config, capture func([]byte), expectedTurns int) {
 	t.Helper()
 	root := diagnostictrace.ResolveStoreRoot(cfg.Diagnostics.TraceCapture.StateDir, cfg.WorkspacePath())
 	count := 0
+	turnStarts := 0
 	parent := filepath.Join(cfg.WorkspacePath(), "state", "credential-fixture-bundles")
 	if os.MkdirAll(parent, 0o700) != nil {
 		t.Error("credential export qualification directory unavailable")
@@ -435,6 +494,11 @@ func qualifyCredentialTraceExports(t *testing.T, cfg *config.Config, capture fun
 			return errors.New("generated credential trace is invalid")
 		}
 		capture(data)
+		for _, record := range trace.Records {
+			if record.Kind == diagnostictrace.RecordTurnStart {
+				turnStarts++
+			}
+		}
 		query, queryErr := diagnostics.Query(diagnostics.QueryOptions{
 			Stores:   []diagnostics.StoreSpec{{ID: "credential-fixture", Kind: "personal", Root: root}},
 			Selector: diagnostics.Selector{TraceIDs: []string{trace.TraceID}},
@@ -459,7 +523,10 @@ func qualifyCredentialTraceExports(t *testing.T, cfg *config.Config, capture fun
 		count++
 		return nil
 	})
-	if walkErr != nil || count != 2 {
+	// A durable wait adds a new model turn and late lifecycle/delivery trace
+	// fragments. Validate, export and scan every fragment; require exactly the
+	// expected actual model turn starts rather than treating file count as turns.
+	if walkErr != nil || turnStarts != expectedTurns || count < expectedTurns || (expectedTurns == 2 && count != 2) {
 		stage := "count"
 		if walkErr != nil {
 			switch walkErr.Error() {
@@ -473,6 +540,12 @@ func qualifyCredentialTraceExports(t *testing.T, cfg *config.Config, capture fun
 				stage = "filesystem"
 			}
 		}
-		t.Errorf("provider trace/export qualification failed at %s after %d traces", stage, count)
+		t.Errorf(
+			"provider trace/export qualification failed at %s after %d traces / %d turn starts (want %d)",
+			stage,
+			count,
+			turnStarts,
+			expectedTurns,
+		)
 	}
 }

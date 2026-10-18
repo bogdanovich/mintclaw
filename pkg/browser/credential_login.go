@@ -32,10 +32,18 @@ type CredentialLoginRequest struct {
 }
 
 type CredentialLoginResult struct {
-	Alias        string                `json:"alias"`
-	Outcome      string                `json:"outcome"`
-	CredentialID string                `json:"credential_id,omitempty"`
-	Candidates   []CredentialCandidate `json:"candidates,omitempty"`
+	Alias        string                  `json:"alias"`
+	Outcome      string                  `json:"outcome"`
+	CredentialID string                  `json:"credential_id,omitempty"`
+	Candidates   []CredentialCandidate   `json:"candidates,omitempty"`
+	ApprovalWait *CredentialApprovalWait `json:"-"`
+}
+
+// CredentialApprovalWait is trusted runtime control metadata. It contains
+// neither a phone locator nor permission to retrieve any credential value.
+type CredentialApprovalWait struct {
+	Reference string
+	Deadline  time.Time
 }
 
 // CredentialCandidate projects overview metadata only; never login values.

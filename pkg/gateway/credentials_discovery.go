@@ -64,9 +64,12 @@ func (source *gatewayBrowserToolSource) loginDiscoveredCredential(ctx context.Co
 	if !slices.ContainsFunc(candidates, func(candidate vault.Candidate) bool { return candidate.ItemID == itemID }) {
 		return browser.CredentialLoginResult{Alias: scope.Account, Outcome: "not_found"}
 	}
-	lease, err := runtime.requestCredentialLease(ctx, scope)
+	lease, waiting, err := runtime.credentialLeaseOrApproval(ctx, scope)
 	if errors.Is(err, errCredentialApprovalRequired) {
-		return browser.CredentialLoginResult{Alias: scope.Account, CredentialID: itemID, Outcome: "approval_required"}
+		return browser.CredentialLoginResult{
+			Alias: scope.Account, CredentialID: itemID, Outcome: "approval_required",
+			ApprovalWait: &browser.CredentialApprovalWait{Reference: waiting.Reference, Deadline: waiting.Deadline},
+		}
 	}
 	if err != nil {
 		return denied
