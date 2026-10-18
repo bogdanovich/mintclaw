@@ -120,6 +120,11 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		Before: observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter),
 	}
 	roles := prepareConversationRoles(target, cases)
+	for _, role := range []*ModelRole{roles.user, roles.judge} {
+		if role != nil {
+			role.retained = &retainedFacts
+		}
+	}
 	if roles.user != nil {
 		defer roles.user.Close()
 	}
@@ -273,10 +278,7 @@ func runAdmittedTrial(
 	options := gatewayclient.Options{InspectFrame: func(data []byte) error {
 		// The previous client's Close joins its inspector before the serial run
 		// adds new facts. Late frames must also respect earlier trial canaries.
-		if runOptions.StartTarget {
-			return inspectNativeJSON(data, retainedFacts.values, roles.filter)
-		}
-		return inspectNativeJSON(data, item.Case.Driver.Facts, roles.filter)
+		return inspectNativeJSON(data, retainedFacts.values, roles.filter)
 	}}
 	if item.Case.PDF != nil {
 		prepared, prepareErr := preparePDFTrial(item, target.preset.IsolationRoot,
@@ -290,7 +292,7 @@ func runAdmittedTrial(
 		}, wire: &pdfWireObservation{workspace: target.preset.ExpectedWorkspace}}
 		options.ObserveMessage = domain.wire.observe
 		prepared.filter = roles.filter
-		if runOptions.StartTarget && !retainedFacts.add(prepared.item.Case.Driver.Facts) {
+		if !retainedFacts.add(prepared.item.Case.Driver.Facts) {
 			_ = prepared.release(true)
 			trial.Verdict, trial.Code = Inconclusive, "private_fact_retention_limit"
 			return trial

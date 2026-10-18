@@ -78,6 +78,9 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    The bounded native SQLite witness combines current schema/value decoding with original contiguous raw JSON-
    escape matching, never row-only promotion or original-store mutation. Its explicit encoding/overflow limits do
    not establish whole-runtime/all-role privacy or complete E3 qualification.
+   Typed LLM-user/judge argument and response guards cover reasoning/discarded tool fields and the run's retained
+   earlier-trial facts, with explicit bounded receipts before hashing/projection. Unknowns and leaks survive
+   regrade/comparison; this is not raw transport/provider-internal coverage or PDF judge/regrade admission.
    The bounded client-media witness binds actual requestless messages to native settlement, and owned raw-frame
    inspection includes earlier trials' retained facts. Neither grants future delivery uniqueness or full privacy.
    Owned PDF finalization now retains bounded native baselines through shutdown and raw scan, publishes canonical
