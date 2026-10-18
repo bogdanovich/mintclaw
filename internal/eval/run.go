@@ -236,7 +236,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	browserCtx, browserCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	browserErr := pendingBrowser.finish(browserCtx, target, writer, &result, retainedFacts.values, filter,
 		func(item Case, trial *Trial) {
-			assessFinalizedBrowserRead(suiteCtx, roles.judge, item, trial, preset.ExpectedWorkspace,
+			assessFinalizedBrowser(suiteCtx, roles.judge, item, trial, preset.ExpectedWorkspace,
 				lifecycle, privateSurfaces, result.BrowserFixtures)
 			if trial.Judge != nil && trial.Judge.Call != nil {
 				roleCalls = append(roleCalls, *trial.Judge.Call)
@@ -341,6 +341,8 @@ func runAdmittedTrial(
 			return trial
 		}
 		browser = newBrowserConversation(item.Case, fixture, target, sessionID)
+		browser.questions.facts = retainedFacts.values
+		options.ObserveMessage = browser.wire.observe
 	}
 	if item.Case.PDF != nil {
 		prepared, prepareErr := preparePDFTrial(item, target.preset.IsolationRoot,
@@ -351,7 +353,7 @@ func runAdmittedTrial(
 		}
 		domain = &pdfConversation{prepared: prepared, artifacts: &pdfArtifactCollector{
 			config: target.config, python: runOptions.PDFOraclePython, retain: report.retainPDFArtifact,
-		}, wire: &pdfWireObservation{workspace: target.preset.ExpectedWorkspace}}
+		}, wire: &mediaWireObservation{workspace: target.preset.ExpectedWorkspace}}
 		options.ObserveMessage = domain.wire.observe
 		prepared.filter = roles.filter
 		if !retainedFacts.add(prepared.item.Case.Driver.Facts) {
@@ -392,7 +394,11 @@ func runAdmittedTrial(
 	if browser != nil {
 		trial = runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, browser)
+		browser.collectArtifact(caseCtx, &trial, report, client.Failure() == nil)
 		pendingBrowser.retain(item.Case, trial, browser.fixture)
+		pending := pendingBrowser.trials[trial.ID]
+		pending.conversation = browser
+		pendingBrowser.trials[trial.ID] = pending
 		return trial
 	}
 	if domain != nil {

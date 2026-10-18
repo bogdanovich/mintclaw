@@ -175,3 +175,49 @@ func TestDownloadMediaCancellationDoesNotReturnPartialBytesOrRetry(t *testing.T)
 		t.Fatal("cancellation returned partial evidence or replayed a request", err)
 	}
 }
+
+func TestDownloadMediaObservedScansOriginalBodyBeforeMetadataRejection(t *testing.T) {
+	for _, mode := range []string{"type", "hash", "overflow", "observer-refusal"} {
+		t.Run(mode, func(t *testing.T) {
+			original := []byte("private-original-control")
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "application/pdf")
+				if mode == "type" {
+					w.Header().Set("Content-Type", "text/plain")
+				}
+				_, _ = w.Write(original)
+			}))
+			defer server.Close()
+			expected := mediaControl(original)
+			if mode == "hash" {
+				expected.SHA256 = strings.Repeat("a", 64)
+			}
+			if mode == "overflow" {
+				expected.Size--
+			}
+			refused := errors.New("bounded observer refused")
+			var observed []byte
+			actual, err := DownloadMediaObserved(t.Context(), testConfig(t, server.URL), "media://id", expected,
+				func(raw []byte) error {
+					if !bytes.Equal(raw, original) {
+						t.Error("original bounded bytes did not reach observer")
+					}
+					observed = raw // Test-only witness that rejected bytes are cleared after the callback.
+					if mode == "observer-refusal" {
+						return refused
+					}
+					return nil
+				})
+			want := ErrMediaMismatch
+			if mode == "observer-refusal" {
+				want = refused
+			}
+			if !errors.Is(err, want) || actual != nil || len(observed) == 0 || calls.Load() != 1 ||
+				!bytes.Equal(observed, make([]byte, len(observed))) {
+				t.Fatal("rejected bytes bypassed the observer, survived, or were replayed", err)
+			}
+		})
+	}
+}

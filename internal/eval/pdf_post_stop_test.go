@@ -30,7 +30,7 @@ func postStopPreparedPDFControl(t *testing.T, prepared *pdfTrial) (*pdfConversat
 	if err := prepared.beginNativeCensus(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	domain := &pdfConversation{prepared: prepared, wire: &pdfWireObservation{workspace: prepared.workspace}}
+	domain := &pdfConversation{prepared: prepared, wire: &mediaWireObservation{workspace: prepared.workspace}}
 	question := &questionConversation{
 		home: prepared.home, workspace: prepared.workspace, sessionID: prepared.sessionID,
 		agent: prepared.agent, started: prepared.started,

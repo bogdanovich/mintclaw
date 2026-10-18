@@ -15,7 +15,7 @@ import (
 func pdfWireControl(t *testing.T) (*pdfConversation, Trial, protocol.MintClawMessage) {
 	t.Helper()
 	domain, settled := settledPDFControl(t)
-	domain.wire = &pdfWireObservation{workspace: domain.prepared.workspace}
+	domain.wire = &mediaWireObservation{workspace: domain.prepared.workspace}
 	trial := Trial{
 		SessionID: domain.prepared.sessionID, AgentID: domain.prepared.agent, SessionKey: domain.owner.RouteSessionKey,
 		Verdict: Inconclusive, ExecutionVerdict: Pass,

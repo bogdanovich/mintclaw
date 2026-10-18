@@ -133,12 +133,14 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    owned profiles. The read post-stop assessment now binds raw native owner/action/policy records and final outbox
    replies, requires native shutdown, complete scoped privacy and empty owned temporary roots, and admits separate
    judging/offline regrade only after those witnesses. One Linux read trial and judge-only regrade now passed on #1754.
-   Artifact and the
-   other four scenarios remain gated. Submit/followup retain private-input gates; ambiguity/denial retain
+   Artifact now has a bounded native prompt/HMAC-bound allow-once, authenticated actual CSV collection, exact
+   post-stop approval/transfer/wire join and separate judge/offline-regrade path; its live qualification is still
+   pending. The other four scenarios remain gated. Submit/followup retain private-input gates; ambiguity/denial retain
    native-action evidence gates. No local fixture pass qualifies native browser behavior.
    Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a
    read-only native transfer inspection API rather than constructing/reconciling a store. This receipt does not
-   admit a judge, approve an action or validate actual wire/artifact bytes; those existing requirements remain.
+   admit a judge, approve an action or validate actual wire/artifact bytes; the full artifact contract requires
+   all of those independent witnesses. Deterministic controls are not a live artifact result.
 4. Exit: extend the exercised general repeats/regrade/comparison to qualified domain evidence, available all-call
    usage and remaining negative controls; record platform/transport/oracle limits and merge the exit record. Do not
    turn unavailable

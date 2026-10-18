@@ -4304,6 +4304,25 @@ func TestBrowserApprovalSummaryNamesDownloadAction(t *testing.T) {
 	}
 }
 
+func TestBrowserActionApprovalArgumentsPreservesNativeBinding(t *testing.T) {
+	action := browser.PreparedAction{
+		ID: "prepared_1", ActionHash: strings.Repeat("a", 64), PolicyRevision: strings.Repeat("b", 64),
+		ExpiresAt: time.Now().Add(time.Minute).UnixNano(), CurrentOrigin: "https://example.com",
+		Effect: browser.EffectUnknown, ElementRole: "link", ElementName: "Export report",
+		Action: browser.Action{Kind: browser.ActionDownload},
+	}
+	preparation := browser.Preparation{Action: action, Approval: browser.ApprovalBinding{
+		PreparedActionID: action.ID, ActionHash: action.ActionHash,
+		PolicyRevision: action.PolicyRevision, ExpiresAt: action.ExpiresAt,
+	}}
+	payload := BrowserActionApprovalArguments(preparation)
+	if len(payload) != 5 || payload["prepared_action_id"] != action.ID || payload["action_hash"] != action.ActionHash ||
+		payload["policy_revision"] != action.PolicyRevision || payload["expires_at"] != action.ExpiresAt ||
+		payload["preview"] != browserApprovalSummary(browser.Preparation{Action: action}) {
+		t.Fatal("native approval argument projection changed")
+	}
+}
+
 func TestBrowserApprovalSummaryEscapesPageControlledElementName(t *testing.T) {
 	summary := browserApprovalSummary(browser.Preparation{Action: browser.PreparedAction{
 		CurrentOrigin: "https://example.com", Effect: browser.EffectExternalCommit,

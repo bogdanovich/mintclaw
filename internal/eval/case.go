@@ -133,7 +133,9 @@ func (c Case) Validate() error {
 	}
 	for _, step := range c.Driver.Steps {
 		if step.Action.Kind == "confirm" || step.Action.Kind == "allow_once" {
-			if c.PDF == nil || c.PDF.Output != "required" ||
+			pdfOutput := c.PDF != nil && c.PDF.Output == "required"
+			browserDownload := c.Browser != nil && c.Browser.Scenario == "artifact" && step.Action.Kind == "allow_once"
+			if !pdfOutput && !browserDownload ||
 				step.Action.Kind == "confirm" && step.WaitFor.Kind != "final" ||
 				step.Action.Kind == "allow_once" && step.WaitFor.Kind != "approval" {
 				return ErrInvalidCase

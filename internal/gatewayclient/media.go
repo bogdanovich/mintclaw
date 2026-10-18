@@ -33,6 +33,14 @@ type MediaEvidence struct {
 // DownloadMedia never accepts a wire URL, follows a redirect, uses a proxy, or
 // retries a request. The caller owns private retention and clearing the bytes.
 func DownloadMedia(ctx context.Context, cfg *config.Config, ref string, expected MediaEvidence) ([]byte, error) {
+	return DownloadMediaObserved(ctx, cfg, ref, expected, nil)
+}
+
+// DownloadMediaObserved inspects the original bounded response body before
+// hashing, returning, or clearing it. The observer must not retain the slice.
+func DownloadMediaObserved(
+	ctx context.Context, cfg *config.Config, ref string, expected MediaEvidence, inspect func([]byte) error,
+) ([]byte, error) {
 	settings, err := ChannelSettings(cfg)
 	if err != nil {
 		return nil, ErrMediaUnavailable
@@ -75,15 +83,22 @@ func DownloadMedia(ctx context.Context, cfg *config.Config, ref string, expected
 	if response.StatusCode != http.StatusOK {
 		return nil, ErrMediaUnavailable
 	}
-	actualType, _, typeErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if typeErr != nil || actualType != contentType || response.Header.Get("Content-Encoding") != "" ||
-		response.ContentLength >= 0 && response.ContentLength != expected.Size {
-		return nil, ErrMediaMismatch
-	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, expected.Size+1))
+	if inspect != nil {
+		if inspectErr := inspect(data); inspectErr != nil {
+			clear(data)
+			return nil, inspectErr
+		}
+	}
 	if err != nil {
 		clear(data)
 		return nil, ErrMediaUnavailable
+	}
+	actualType, _, typeErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if typeErr != nil || actualType != contentType || response.Header.Get("Content-Encoding") != "" ||
+		response.ContentLength >= 0 && response.ContentLength != expected.Size {
+		clear(data)
+		return nil, ErrMediaMismatch
 	}
 	sum := sha256.Sum256(data)
 	if int64(len(data)) != expected.Size || hex.EncodeToString(sum[:]) != expected.SHA256 {

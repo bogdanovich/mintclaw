@@ -34,7 +34,7 @@ func TestProtectedPDFCancellationRequiresBothNativeTerminalRecords(t *testing.T)
 					t.Fatal(err)
 				}
 			}
-			domain := &pdfConversation{prepared: prepared, wire: &pdfWireObservation{workspace: prepared.workspace}}
+			domain := &pdfConversation{prepared: prepared, wire: &mediaWireObservation{workspace: prepared.workspace}}
 			transport := newFakeConversation()
 			var waiting interactions.Record
 			var jobs *document.FormJobStore

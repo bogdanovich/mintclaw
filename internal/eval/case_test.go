@@ -142,3 +142,26 @@ func TestDecodeManifestStrict(t *testing.T) {
 		})
 	}
 }
+
+func TestBrowserArtifactAllowOnceAdmissionIsNotGeneralApproval(t *testing.T) {
+	for _, mode := range []string{"artifact", "read", "followup", "confirm", "wrong-outcome", "general"} {
+		t.Run(mode, func(t *testing.T) {
+			item := browserCorpusCase(t, "artifact").Case
+			switch mode {
+			case "read", "followup":
+				item.Browser.Scenario = mode
+			case "confirm":
+				item.Driver.Steps[0].Action.Kind = "confirm"
+			case "wrong-outcome":
+				item.Driver.Steps[0].WaitFor.Kind = "final"
+			case "general":
+				item = testCase()
+				item.Driver.Steps[0] = Step{WaitFor: Expectation{Kind: "approval"}, Action: Action{Kind: "allow_once"}}
+			}
+			err := item.Validate()
+			if (err == nil) != (mode == "artifact") {
+				t.Fatal("approval case admission escaped its declared domain", mode, err)
+			}
+		})
+	}
+}
