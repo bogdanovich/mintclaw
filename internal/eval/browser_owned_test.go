@@ -181,6 +181,13 @@ func TestOwnedBrowserRunExecutesFreshFixturesButCannotPassFromHTTPOrProse(t *tes
 				if mode == "browser_wrong" && trial.Verdict != Fail {
 					t.Fatal("observed wrong reference was erased by native uncertainty")
 				}
+				if mode == "browser_wrong" {
+					for index, check := range item.Case.Checks {
+						if check.Kind == "browser_no_write" && trial.Checks[index].Verdict != Inconclusive {
+							t.Fatal("a wrong read was mislabeled as a forbidden write")
+						}
+					}
+				}
 				if mode == "browser_read" && (trial.Browser.Fixture.Read != Pass || trial.Browser.Fixture.Visits != 2) {
 					t.Fatal("actual local fixture access was not independently recorded")
 				}

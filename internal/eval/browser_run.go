@@ -117,7 +117,7 @@ func (run *browserRun) finish(
 			result := &trial.Checks[checkIndex]
 			switch check.Kind {
 			case "browser_state", "browser_no_write":
-				if err == nil && (oracle.Effects == Fail || oracle.Read == Fail) {
+				if err == nil && (oracle.Effects == Fail || check.Kind == "browser_state" && oracle.Read == Fail) {
 					*result = CheckResult{
 						ID:          check.ID,
 						Verdict:     Fail,
