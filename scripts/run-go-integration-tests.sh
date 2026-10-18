@@ -8,7 +8,7 @@ trap 'rm -rf "$test_root"' EXIT
 
 companion_binary="$test_root/mintclaw-node"
 coding_binary="$test_root/mintclaw"
-integration_tests='^('\
+companion_tests='^('\
 'TestCompanionProcessAuthenticatesAndInvokesOverWSS|'\
 'TestCompanionProcessTransfersFilesOverAuthenticatedWSS|'\
 'TestNodeInvocationVerticalSliceWithApprovalAndRealCompanion|'\
@@ -16,10 +16,6 @@ integration_tests='^('\
 'TestNodeFileTransferVerticalSliceWithApprovalAndDelivery|'\
 'TestNodeJobVerticalSliceWithRestartArtifactAndCancellation|'\
 'TestNodeServiceStatusModelToSystemdRealProcessVerticalSlice|'\
-'TestDocumentPDFTelegramVerticalSlice|'\
-'TestGatewayDocumentIntakeUsesProductionCompositionAndOrdinaryTransport|'\
-'TestCodingDocumentReadOnlyVerticalSlice|'\
-'TestCodingDocumentLocalWriteToolLinuxIntegration|'\
 'TestNativeMintClawWorkerStartsSteersResumesAndShutsDown|'\
 'TestNativeMintClawWorkerContextPrefixCorpus|'\
 'TestNativeMintClawWorkerProjectsAndAnswersDurableQuestion|'\
@@ -28,6 +24,23 @@ integration_tests='^('\
 '|TestNativeMintClawWorkerMutatesOwnedWorktreeAndRecoversAfterCrash|'\
 'TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice'\
 ')$'
+
+document_tests='^('\
+'TestDocumentPDFTelegramVerticalSlice|'\
+'TestGatewayDocumentIntakeUsesProductionCompositionAndOrdinaryTransport|'\
+'TestCodingDocumentReadOnlyVerticalSlice|'\
+'TestCodingDocumentLocalWriteToolLinuxIntegration'\
+')$'
+if (( $# > 1 )); then
+  echo 'usage: run-go-integration-tests.sh [all|companion|documents]' >&2
+  exit 2
+fi
+case "${1:-all}" in
+  all) integration_tests="${companion_tests}|${document_tests}" ;;
+  companion) integration_tests="$companion_tests" ;;
+  documents) integration_tests="$document_tests" ;;
+  *) echo 'usage: run-go-integration-tests.sh [all|companion|documents]' >&2; exit 2 ;;
+esac
 
 cd "$repository_root"
 go build -o "$companion_binary" ./cmd/mintclaw-node

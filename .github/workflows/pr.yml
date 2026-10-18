@@ -2,9 +2,53 @@ name: PR
 
 on:
   pull_request: { }
+  workflow_call: { }
+  workflow_dispatch: { }
+  schedule:
+    - cron: "17 10 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: Changes and documentation
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.select.outputs.backend }}
+      frontend: ${{ steps.select.outputs.frontend }}
+      pdfium: ${{ steps.select.outputs.pdfium }}
+      credentials: ${{ steps.select.outputs.credentials }}
+      documents: ${{ steps.select.outputs.documents }}
+      companion: ${{ steps.select.outputs.companion }}
+      docker: ${{ steps.select.outputs.docker }}
+      integration: ${{ steps.select.outputs.integration }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Test CI selection
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+
+      - name: Lint documentation layout
+        run: bash ./scripts/lint-docs.sh
+
+      - name: Select affected checks
+        id: select
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci/select_checks.py
+
   frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     name: Frontend
     runs-on: ubuntu-latest
     defaults:
@@ -46,14 +90,13 @@ jobs:
         run: pnpm build
 
   lint:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     name: Linter
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Lint documentation layout
-        run: bash ./scripts/lint-docs.sh
 
       - name: Setup Go
         uses: actions/setup-go@v7
@@ -79,6 +122,8 @@ jobs:
         run: golangci-lint run --concurrency=4 --build-tags=goolm,stdjson
 
   vuln_check:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     name: Security Check
     runs-on: ubuntu-latest
     env:
@@ -101,6 +146,8 @@ jobs:
         run: govulncheck -C . -format text ./...
 
   test:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     name: Tests
     runs-on: ubuntu-latest
     steps:
@@ -158,6 +205,8 @@ jobs:
             go run ./scripts/testtimings < /tmp/mintclaw-go-test.json | tee -a "$GITHUB_STEP_SUMMARY"
           fi
   race:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     name: Race
     runs-on: ubuntu-latest
     steps:
@@ -203,36 +252,18 @@ jobs:
           -run '^Test(Credential|PrivateCredential)' ./pkg/browser
 
   platform_compile:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     name: Compile ${{ matrix.name }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Darwin AMD64
-            goos: darwin
-            goarch: amd64
-          - name: Darwin ARM64
-            goos: darwin
-            goarch: arm64
-          - name: Windows AMD64
-            goos: windows
-            goarch: amd64
-          - name: Linux AMD64
-            goos: linux
-            goarch: amd64
-          - name: Linux ARMv7
-            goos: linux
-            goarch: arm
-            goarm: "7"
-          - name: Linux ARM64
-            goos: linux
-            goarch: arm64
-    env:
-      CGO_ENABLED: 0
-      GOOS: ${{ matrix.goos }}
-      GOARCH: ${{ matrix.goarch }}
-      GOARM: ${{ matrix.goarm }}
+          - name: Linux
+            targets: linux/amd64 linux/arm/7 linux/arm64
+          - name: Desktop
+            targets: darwin/amd64 darwin/arm64 windows/amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -242,10 +273,14 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Compile full Go test graph
-        run: go test -exec=true -run '^$' -tags goolm,stdjson ./...
+      - name: Compile full Go test graph for every target
+        env:
+          COMPILE_TARGETS: ${{ matrix.targets }}
+        run: bash scripts/ci/compile-platforms.sh
 
   macos_portability:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     name: macOS Portability
     runs-on: macos-latest
     steps:
@@ -337,6 +372,8 @@ jobs:
         run: bash scripts/test-context-cache-contracts.sh --unit-only
 
   pdfium_wasm_qualification:
+    needs: changes
+    if: needs.changes.outputs.pdfium == 'true'
     name: PDFium WASM (${{ matrix.name }})
     timeout-minutes: 15
     strategy:
@@ -419,83 +456,18 @@ jobs:
 
   integration:
     name: Integration Tests
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-
-      - name: Qualify private passkey approval and protected owner storage
-        run: bash ./scripts/qualify-credential-approval.sh
-
-      - name: Setup Node.js for the synthetic phone approval fixture
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-
-      - name: Install pinned phone approval browser fixture
-        run: |
-          npm ci --ignore-scripts --prefix runtime/browser/playwright-library
-          node runtime/browser/playwright-library/node_modules/playwright/cli.js install --with-deps chromium
-
-      - name: Qualify integrated private setup and browser passkey UI
-        run: bash ./scripts/qualify-credential-phone.sh
-
-      - name: Qualify direct private credential browser transactions
-        run: >-
-          env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
-          node --test runtime/browser/playwright-library/credential-login.test.cjs
-          runtime/browser/playwright-library/credential-protocol.test.cjs
-          runtime/browser/playwright-library/navigation-evidence.test.cjs
-
-      - name: Qualify integrated alias login and phone approval
-        run: >-
-          env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
-          MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE=1
-          go test -count=1 -race -timeout 4m -tags goolm,stdjson
-          -run '^TestCredential(AliasBrowserAndPhone|ProviderOutput|ProviderOutcome|CodexOutput|GitHubOutput)Fixture$' ./pkg/gateway
-
-      - name: Install pinned document runtime
-        run: |
-          snapshot=20261011T000000Z
-          sudo apt-get update --snapshot "$snapshot"
-          sudo apt-get install --yes --no-install-recommends --allow-downgrades --snapshot "$snapshot" \
-            bubblewrap=0.9.0-1ubuntu0.3 \
-            ghostscript=10.02.1~dfsg1-0ubuntu7.9 \
-            libgs-common=10.02.1~dfsg1-0ubuntu7.9 \
-            poppler-utils=24.02.0-1ubuntu9.10 \
-            libpoppler134=24.02.0-1ubuntu9.10 \
-            fonts-dejavu-core=2.37-8 \
-            fonts-liberation=1:2.1.5-3
-
-      - name: Enable Bubblewrap namespaces
-        run: |
-          if sysctl -n kernel.apparmor_restrict_unprivileged_userns | grep -qx 1; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          /usr/bin/bwrap --ro-bind / / --unshare-net -- /bin/true
-
-      - name: Run Linux document read process contract
-        shell: bash
-        run: |
-          set -o pipefail
-          go test -count=1 -v \
-            -run '^TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts$' \
-            ./pkg/document | tee "$RUNNER_TEMP/document-read-process.txt"
-          grep -Fq -- '--- PASS: TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts' \
-            "$RUNNER_TEMP/document-read-process.txt"
-
-      - name: Run real companion vertical tests
-        run: bash ./scripts/run-go-integration-tests.sh
-
-      - name: Run Docker-backed integration suites
-        run: bash ./scripts/run-integration-tests.sh
+    needs: changes
+    if: needs.changes.outputs.integration == 'true'
+    uses: ./.github/workflows/integration.yml
+    with:
+      credentials: ${{ needs.changes.outputs.credentials == 'true' }}
+      documents: ${{ needs.changes.outputs.documents == 'true' }}
+      companion: ${{ needs.changes.outputs.companion == 'true' }}
+      docker: ${{ needs.changes.outputs.docker == 'true' }}
 
   browser_windows:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     name: Windows AMD64
     runs-on: windows-latest
     steps:
