@@ -110,3 +110,8 @@ frontend, measured storage and dependency work is merged. Evaluation qualificati
 stays with the existing active owner; historical completion records remain intact.
 Conditional refactors still require their stated evidence rather than a file-size
 or abstraction target.
+
+The [October 18 second sweep](reliability-code-health-20261018-sweep.md) reviews the
+subsequent browser, credential, computer and evaluation changes. It records two
+reproduced correctness defects and a proposed follow-up order. Implementation
+selection remains pending; the completed first roadmap is not reopened.
