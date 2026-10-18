@@ -7,6 +7,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Code Health Architecture State](code-health.md): current ownership,
   compatibility boundaries, and guardrails after the completed simplification
   and code-health programs.
+- [October 2026 Reliability And Code Health Roadmap](reliability-code-health-20261017-roadmap.md): active,
+  evidence-backed outbox, MCP, frontend, qualification, and conditional simplification work.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Manual Agent Evals Design](agent-evals-design.md): proposed on-demand multi-turn task evaluation, isolated targets,
   independent artifact/state checks, LLM user simulation, and separate rubric judging; approved for implementation.
@@ -135,12 +137,26 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   in the existing application and private operator enrollment.
 - [Private Vault Setup and Runtime Consumer](credential-private-vault-setup.md): hidden operator
   token entry, owner-only storage, SDK startup and lazy scoped login consumption.
+- [Find Credential Items](credential-item-discovery.md): private website/name metadata search
+  and explicit selection of an immutable item reference for a configured alias.
 - [Runtime Credential Output Privacy](credential-runtime-output-privacy.md): dynamically registered
   credential values guarded in model-facing config filtering, diagnostic previews, and logger output.
 - [Runtime-Internal 1Password Adapter](credential-runtime-vault-adapter.md): relocated private
   exact-item adapter reused by the integrated runtime, preserving value and error projection.
 - [Private Browser Credential Login](credential-private-browser-login.md): scoped private form transactions,
   session-owned output guards, grant-driven retirement, and explicit rollout limits.
+- [Credential Browser Output Boundary](credential-browser-output-privacy.md): private cookie refresh,
+  authenticated snapshot/catalog projections, and artifact output admission.
+- [Integrated Alias Browser Login](credential-alias-browser-login.md): runtime-owned alias tool,
+  existing-channel phone notifications, signed-grant reuse and disabled-by-default rollout.
+- [Craigslist Credential Pilot](credential-craigslist-pilot.md): selected account, public form evidence,
+  private token/Android setup and remaining personal-account acceptance steps.
+- [Private GitHub Pull Request Reads](credential-github-read-connector.md): scoped read-only API
+  authentication using the same vault, phone approval and protected output path.
+- [Retired Credential Appliance](credential-appliance-retirement.md): removal of the unused daemon,
+  privileged launch/transport/browser stack and obsolete qualification; retained current boundaries.
+- [Integrated Credential Output Qualification](credential-output-qualification.md): actual provider-wire,
+  tool/history/context/browser/log/trace evidence and remaining rollout gates.
 - [Historical Isolated Credential Roadmap](credential-isolated-runtime-history.md): superseded
   deployment design and preserved component PR/qualification evidence.
 - [Historical Mac Credential VM Package](credential-mac-vm-package.md): retired candidate launcher

@@ -2005,6 +2005,9 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 		if browserInvocationClickNotDispatched(err) {
 			return browser.ErrClickNotDispatched
 		}
+		if browserInvocationDownloadNotDispatched(err) {
+			return browser.ErrDownloadNotDispatched
+		}
 		if browserInvocationDispatchDenied(err) {
 			return browser.ErrDenied
 		}
@@ -2025,6 +2028,9 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 			}
 			if browserInvocationClickNotDispatched(err) {
 				return browser.ErrClickNotDispatched
+			}
+			if browserInvocationDownloadNotDispatched(err) {
+				return browser.ErrDownloadNotDispatched
 			}
 			if browserInvocationDispatchDenied(err) {
 				return browser.ErrDenied
@@ -2154,6 +2160,10 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 					remote.Failure.Code == nodes.InvocationDispatchBrowserClickNotDispatched {
 					return browser.ErrClickNotDispatched
 				}
+				if remote.Failure != nil &&
+					remote.Failure.Code == nodes.InvocationDispatchBrowserDownloadNotDispatched {
+					return browser.ErrDownloadNotDispatched
+				}
 				return browser.ErrWorkerUnavailable
 			case nodes.InvocationUnknown:
 				if remote.Failure != nil &&
@@ -2220,6 +2230,11 @@ func browserInvocationNavigationFailed(err error) bool {
 func browserInvocationClickNotDispatched(err error) bool {
 	code, classified := nodes.InvocationDispatchErrorCode(err)
 	return classified && code == nodes.InvocationDispatchBrowserClickNotDispatched
+}
+
+func browserInvocationDownloadNotDispatched(err error) bool {
+	code, classified := nodes.InvocationDispatchErrorCode(err)
+	return classified && code == nodes.InvocationDispatchBrowserDownloadNotDispatched
 }
 
 func (worker *nodeBrowserWorker) validateAuthority(

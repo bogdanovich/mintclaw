@@ -315,19 +315,20 @@ func containsModelControl(value string) bool {
 }
 
 type CommandDescriptor struct {
-	Name             string                     `json:"name"`
-	InputSchema      json.RawMessage            `json:"input_schema"`
-	OutputSchema     json.RawMessage            `json:"output_schema"`
-	Risk             Risk                       `json:"risk"`
-	SupportsProgress bool                       `json:"supports_progress,omitempty"`
-	SupportsCancel   bool                       `json:"supports_cancel,omitempty"`
-	SupportsTerminal bool                       `json:"supports_terminal,omitempty"`
-	ModelContract    *CommandModelContract      `json:"model_contract,omitempty"`
-	FileProfiles     []FileProfileDescriptor    `json:"file_profiles,omitempty"`
-	ServiceProfiles  []ServiceProfileDescriptor `json:"service_profiles,omitempty"`
-	BrowserProfiles  []BrowserProfileDescriptor `json:"browser_profiles,omitempty"`
-	UpdateProfiles   []UpdateProfileDescriptor  `json:"update_profiles,omitempty"`
-	JobProfiles      []JobProfileDescriptor     `json:"job_profiles,omitempty"`
+	Name             string                      `json:"name"`
+	InputSchema      json.RawMessage             `json:"input_schema"`
+	OutputSchema     json.RawMessage             `json:"output_schema"`
+	Risk             Risk                        `json:"risk"`
+	SupportsProgress bool                        `json:"supports_progress,omitempty"`
+	SupportsCancel   bool                        `json:"supports_cancel,omitempty"`
+	SupportsTerminal bool                        `json:"supports_terminal,omitempty"`
+	ModelContract    *CommandModelContract       `json:"model_contract,omitempty"`
+	FileProfiles     []FileProfileDescriptor     `json:"file_profiles,omitempty"`
+	ServiceProfiles  []ServiceProfileDescriptor  `json:"service_profiles,omitempty"`
+	BrowserProfiles  []BrowserProfileDescriptor  `json:"browser_profiles,omitempty"`
+	ComputerProfiles []ComputerProfileDescriptor `json:"computer_profiles,omitempty"`
+	UpdateProfiles   []UpdateProfileDescriptor   `json:"update_profiles,omitempty"`
+	JobProfiles      []JobProfileDescriptor      `json:"job_profiles,omitempty"`
 }
 
 func (descriptor CommandDescriptor) Validate() error {
@@ -429,6 +430,9 @@ func (descriptor CommandDescriptor) Validate() error {
 		return err
 	}
 	if err := descriptor.validateBrowserProfiles(); err != nil {
+		return err
+	}
+	if err := descriptor.validateComputerProfiles(); err != nil {
 		return err
 	}
 	if err := descriptor.validateUpdateProfiles(); err != nil {
@@ -648,6 +652,9 @@ func (catalog CapabilityCatalog) Validate() error {
 	if len(catalog.Commands) > MaxCatalogCommands {
 		return fmt.Errorf("%w: catalog contains too many commands", ErrInvalidCapability)
 	}
+	if err := validateComputerCatalog(catalog.Commands); err != nil {
+		return err
+	}
 	seen := make(map[string]struct{}, len(catalog.Commands))
 	totalBytes := 0
 	var browserProfiles []BrowserProfileDescriptor
@@ -663,17 +670,19 @@ func (catalog CapabilityCatalog) Validate() error {
 		}
 		if len(descriptor.FileProfiles) > 0 || len(descriptor.ServiceProfiles) > 0 ||
 			len(descriptor.BrowserProfiles) > 0 || len(descriptor.UpdateProfiles) > 0 ||
-			len(descriptor.JobProfiles) > 0 {
+			len(descriptor.JobProfiles) > 0 || len(descriptor.ComputerProfiles) > 0 {
 			profiles, err := json.Marshal(struct {
-				File    []FileProfileDescriptor    `json:"file,omitempty"`
-				Service []ServiceProfileDescriptor `json:"service,omitempty"`
-				Browser []BrowserProfileDescriptor `json:"browser,omitempty"`
-				Update  []UpdateProfileDescriptor  `json:"update,omitempty"`
-				Job     []JobProfileDescriptor     `json:"job,omitempty"`
+				File     []FileProfileDescriptor     `json:"file,omitempty"`
+				Service  []ServiceProfileDescriptor  `json:"service,omitempty"`
+				Browser  []BrowserProfileDescriptor  `json:"browser,omitempty"`
+				Update   []UpdateProfileDescriptor   `json:"update,omitempty"`
+				Job      []JobProfileDescriptor      `json:"job,omitempty"`
+				Computer []ComputerProfileDescriptor `json:"computer,omitempty"`
 			}{
 				File: descriptor.FileProfiles, Service: descriptor.ServiceProfiles,
 				Browser: descriptor.BrowserProfiles, Update: descriptor.UpdateProfiles,
-				Job: descriptor.JobProfiles,
+				Job:      descriptor.JobProfiles,
+				Computer: descriptor.ComputerProfiles,
 			})
 			if err != nil {
 				return fmt.Errorf("%w: encode command profiles", ErrInvalidCapability)

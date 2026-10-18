@@ -107,31 +107,86 @@ behavior. Retain normal policy for subsequent authenticated actions.
 
 ## Current progress
 
+Acceptance status checked on 2026-10-18 UTC. Merged implementation, synthetic
+qualification and physical-device acceptance are recorded separately below.
+
 - TR0: the revised design/roadmap is merged in
   [#1619](https://github.com/bogdanovich/mintclaw/pull/1619). The same active
   goal retains all original requested outcomes.
 - TR1: unused Mac VM packaging is removed in
   [#1620](https://github.com/bogdanovich/mintclaw/pull/1620), and the private
   vault adapter is shared with the runtime in
-  [#1625](https://github.com/bogdanovich/mintclaw/pull/1625). Other unused
-  appliance commands/helpers and their obsolete qualification remain to retire.
+  [#1625](https://github.com/bogdanovich/mintclaw/pull/1625). The remaining unused
+  daemon, privileged launch/transport/browser stack and obsolete qualification
+  are removed in the [appliance retirement](credential-appliance-retirement.md).
+  Current policy, vault, approval, private setup and integrated browser tests
+  remain; historical documents preserve the earlier approach.
 - TR2: the dynamic model/log/trace output guard is merged in
   [#1623](https://github.com/bogdanovich/mintclaw/pull/1623). Private token entry,
-  storage, SDK startup and lazy scoped consumption are under review in
+  storage, SDK startup and lazy scoped consumption are merged in
   [#1643](https://github.com/bogdanovich/mintclaw/pull/1643). Alias-only tool
-  wiring and complete end-to-end output qualification remain incomplete.
+  wiring and generic notifications are implemented by the
+  [integrated alias operation](credential-alias-browser-login.md), merged in
+  [#1654](https://github.com/bogdanovich/mintclaw/pull/1654). Browser login remains
+  disabled in the pilot profile until the remaining acceptance gates pass.
+- TR2 setup: [private item discovery](credential-item-discovery.md) in
+  [#1679](https://github.com/bogdanovich/mintclaw/pull/1679) searches the dedicated
+  vault's Login overviews by website or item name. The operator chooses a
+  candidate and saves its exact reference for an existing alias, without copying
+  UUIDs or retrieving password fields. Website matching does not expand runtime
+  origins; site flow and actor scope stay in local configuration. Personal item
+  identifiers and site-specific behavior do not belong in production Go code.
 - TR3: gateway-owned enrollment/approval/revocation is merged in
   [#1631](https://github.com/bogdanovich/mintclaw/pull/1631). Synthetic signed and
-  virtual-authenticator tests cover the component; actual Android enrollment
-  and generic notifications remain required.
+  virtual-authenticator tests cover the component. The alias operation queues
+  generic approval links through the existing outbound chat channel.
+  [#1686](https://github.com/bogdanovich/mintclaw/pull/1686) fixes initial
+  notification-link navigation and adds grant-free setup verification. That
+  update is deployed through the existing HTTPS route. The operator completed
+  verification on a Pixel using Android Chrome and 1Password; server metadata
+  confirms enrollment is durably activated. This retrieved no credentials and
+  issued no account grant. Actual account-request notification, approval and
+  revocation remain acceptance steps. State-changing API calls retain the exact
+  same-origin boundary.
 - TR4: the existing browser's private credential transaction is merged in
   [#1637](https://github.com/bogdanovich/mintclaw/pull/1637), including grant
   checks around preparation/retrieval and authenticated session retirement.
-  User-facing tool wiring, site/placement admission, current-cookie refresh,
-  and all companion/artifact/persistence sinks remain rollout requirements.
-- TR5/TR6: the scoped connector, full serialized-output qualification and
-  personal-account pilot are incomplete. No real token, login, or physical
-  phone approval is claimed. Passing component tests do not prove the complete
-  feature or absence of secrets from every enabled output.
+  Authenticated cookie rotation, native control-value suppression and browser
+  catalog/diagnostic/artifact projections are described in the
+  [browser output boundary](credential-browser-output-privacy.md). The
+  [alias login operation](credential-alias-browser-login.md) joins these
+  components for synthetic qualification. The initial supported placement is
+  the gateway's local Playwright library with an ephemeral profile. Credential
+  use through companion, cloud and managed browser profiles remains denied.
+  The selected site's success evidence still requires private qualification.
+- TR6: synthetic [integrated output qualification](credential-output-qualification.md)
+  exercises two real agent turns, provider request serialization, canonical
+  history, Seahorse state, browser state, logs, traces and both support-bundle
+  modes through the production OpenAI-compatible and Codex OAuth/Responses
+  adapters, including MFA handoff and uncertain-submission outcomes. The merged
+  phone-fix deployment passed all nine combined browser, provider and GitHub
+  fixture scenarios with the race detector. These use local scripted peers and
+  virtual passkeys, with no personal credentials or website traffic. The
+  inventory retains its explicit cancellation/expiry/restart and recovery
+  qualification limits; unqualified fallback providers must be excluded from
+  the pilot.
+- TR6 pilot selection: the operator selected Craigslist. The
+  [pilot sequence](credential-craigslist-pilot.md) records public form evidence,
+  private setup and the remaining Android/account acceptance checks.
+- TR5: the [GitHub read connector](credential-github-read-connector.md) is the
+  initial read-only default while the operator chooses a preferred API. It
+  reuses phone approval for exact configured repositories and an API Credential
+  item. Synthetic actual-HTTP/provider/phone tests cover protected result
+  release, grant reuse and cancellation on revocation. The implementation is
+  merged in [#1673](https://github.com/bogdanovich/mintclaw/pull/1673) and included
+  in the deployed binary. The connector remains disabled pending configuration
+  and real-token acceptance.
+- TR5/TR6: connector rollout, full serialized-output qualification and
+  personal-account pilot are incomplete. At the latest protected-setup check,
+  no service-account token was provisioned. Read-only dedicated-vault scope,
+  protected token entry, exact site outcome metadata, real phone approval,
+  login, grant reuse and revocation remain. Verified phone setup alone does not
+  establish any of those outcomes. Passing component tests do not prove the
+  complete feature or absence of secrets from every enabled output.
 - Earlier PR and qualification records are preserved in the
   [historical roadmap](credential-isolated-runtime-history.md).

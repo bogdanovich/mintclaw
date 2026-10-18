@@ -294,6 +294,45 @@ func TestRuntimePreservesDownloadSuccessWhenArtifactIsUnavailable(t *testing.T) 
 	}
 }
 
+func TestRuntimeRecordsBrowserDownloadNotDispatchedWithoutReplay(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	host.profiles[0].DryRun = false
+	host.profiles[0].AllowApprovedActions = true
+	host.profiles[0].Actions = []string{"download", "navigate"}
+	host.downloadError = nodes.ErrBrowserHostDownloadNotDispatched
+	runtime := newBrowserRuntimeFixture(t, host)
+	input := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_download_preflight",
+		Action:             browser.Action{Kind: browser.ActionDownload, Ref: "semantic_ref_1"},
+		Effect:             "unknown", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Not a download",
+		WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+	}
+	var err error
+	input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, raw)
+	for range 2 {
+		_, invokeErr := runtime.Invoke(t.Context(), plan)
+		failure, ok := boundedInvocationFailure(invokeErr)
+		if !ok || failure.Code != nodes.InvocationDispatchBrowserDownloadNotDispatched {
+			t.Fatalf("download failure = %#v, %v", failure, invokeErr)
+		}
+	}
+	record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
+	if !found || record.State != nodes.InvocationFailed || len(host.downloadRequests) != 1 || host.closed != 0 {
+		t.Fatalf("download receipt = %#v; calls = %d, closes = %d", record, len(host.downloadRequests), host.closed)
+	}
+}
+
 func (host *fakeBrowserCommandHost) Close(
 	_ context.Context,
 	request nodes.BrowserHostStatusRequest,

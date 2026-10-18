@@ -84,6 +84,7 @@ const (
 	enroll ceremonyKind = iota + 1
 	approve
 	revoke
+	verify
 )
 
 type pendingCeremony struct {
@@ -93,7 +94,7 @@ type pendingCeremony struct {
 	request string
 	issued  time.Time
 	options []byte
-	// Private console issue time, retained independently of the browser data.
+	// Private operator issue time, retained independently of the browser data.
 	enrollmentIssued time.Time
 }
 

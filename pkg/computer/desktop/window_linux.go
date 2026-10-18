@@ -134,20 +134,20 @@ func (guard *x11Window) alive(ctx context.Context) bool {
 	if guard.closed || guard.lost.Load() || ctx.Err() != nil {
 		return false
 	}
-	poll := []unix.PollFd{{Fd: int32(guard.pidfd), Events: unix.POLLIN}}
-	if _, err := unix.Poll(poll, 0); err != nil || poll[0].Revents != 0 {
-		guard.lost.Store(true)
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if !pidfdAlive(checkCtx, guard.pidfd, unix.Poll) {
+		if ctx.Err() == nil {
+			guard.lost.Store(true)
+		}
 		return false
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	if caller, ok := ctx.Deadline(); ok && caller.Before(deadline) {
-		deadline = caller
-	}
+	deadline, _ := checkCtx.Deadline()
 	if err := guard.socket.SetDeadline(deadline); err != nil {
 		guard.lost.Store(true)
 		return false
 	}
-	stop := context.AfterFunc(ctx, func() { _ = guard.socket.SetDeadline(time.Now()) })
+	stop := context.AfterFunc(checkCtx, func() { _ = guard.socket.SetDeadline(time.Now()) })
 	defer func() { stop(); _ = guard.socket.SetDeadline(time.Time{}) }()
 	if reply, err := xproto.GetGeometry(guard.connection, xproto.Drawable(guard.window)).Reply(); err != nil ||
 		reply == nil || reply.Root != guard.root {
@@ -160,7 +160,7 @@ func (guard *x11Window) alive(ctx context.Context) bool {
 	ack := make(chan struct{})
 	select {
 	case guard.fences <- ack:
-	case <-ctx.Done():
+	case <-checkCtx.Done():
 		return false
 	case <-guard.eventDone:
 		guard.lost.Store(true)
@@ -168,7 +168,7 @@ func (guard *x11Window) alive(ctx context.Context) bool {
 	}
 	select {
 	case <-ack:
-	case <-ctx.Done():
+	case <-checkCtx.Done():
 		return false
 	case <-guard.eventDone:
 		guard.lost.Store(true)
@@ -177,7 +177,23 @@ func (guard *x11Window) alive(ctx context.Context) bool {
 	if guard.lost.Load() {
 		return false
 	}
-	return ctx.Err() == nil && !guard.lost.Load()
+	return checkCtx.Err() == nil && !guard.lost.Load()
+}
+
+// An interrupted syscall is not evidence of process exit. Retry against the
+// same retained handle within the caller's bounded liveness check. The poll
+// function is explicit so interruption and cancellation are deterministic tests.
+func pidfdAlive(ctx context.Context, fd int, poll func([]unix.PollFd, int) (int, error)) bool {
+	descriptors := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	for ctx.Err() == nil {
+		descriptors[0].Revents = 0
+		_, err := poll(descriptors, 0)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		return err == nil && descriptors[0].Revents == 0
+	}
+	return false
 }
 
 func (guard *x11Window) pumpEvents() {

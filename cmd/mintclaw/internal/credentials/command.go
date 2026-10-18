@@ -29,6 +29,8 @@ type commandDeps struct {
 	readGateway  func() *pid.PidFileData
 	openTerminal func() (io.WriteCloser, error)
 	readToken    func() ([]byte, error)
+	findLogins   func(context.Context, string, string, vault.DiscoveryQuery) ([]vault.Candidate, error)
+	updateConfig func(func(*config.Config) error) error
 }
 
 func NewCredentialsCommand() *cobra.Command {
@@ -37,11 +39,17 @@ func NewCredentialsCommand() *cobra.Command {
 		readGateway:  func() *pid.PidFileData { return pid.ReadPidFileWithCheck(internal.GetMintClawHome()) },
 		openTerminal: openPrivateTerminal,
 		readToken:    readPrivateToken,
+		findLogins:   findPrivateLogins,
+		updateConfig: func(mutate func(*config.Config) error) error {
+			_, err := internal.UpdateConfig(mutate)
+			return err
+		},
 	})
 }
 
 func newCredentialsCommand(deps commandDeps) *cobra.Command {
 	command := &cobra.Command{Use: "credentials", Short: "Set up private account access", Args: cobra.NoArgs}
+	command.AddCommand(newFindCommand(deps))
 	command.AddCommand(&cobra.Command{
 		Use: "init", Short: "Prepare the private approval state directory", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -71,8 +79,15 @@ func newCredentialsCommand(deps commandDeps) *cobra.Command {
 		Use: "token", Short: "Enter your 1Password service token privately", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := deps.loadConfig()
-			if err != nil || cfg == nil || !cfg.Credentials.Enabled || cfg.ValidateCredentials() != nil ||
-				deps.readToken == nil {
+			if err != nil || cfg == nil {
+				return errSetupUnavailable
+			}
+			if !cfg.Credentials.Enabled {
+				return errors.New(
+					"credential access is disabled in the selected profile; finish configuration and run credentials init first",
+				)
+			}
+			if cfg.ValidateCredentials() != nil || deps.readToken == nil {
 				return errSetupUnavailable
 			}
 			token, err := deps.readToken()
@@ -124,12 +139,16 @@ func requestEnrollment(ctx context.Context, cfg *config.Config, data *pid.PidFil
 		data.Port < 1 || data.Port > 65535 {
 		return nil, errSetupUnavailable
 	}
-	ip := net.ParseIP(data.Host)
+	host := data.Host
+	if strings.EqualFold(host, "localhost") {
+		host = "127.0.0.1"
+	}
+	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
 		return nil, errSetupUnavailable
 	}
 	endpoint := url.URL{
-		Scheme: "http", Host: net.JoinHostPort(data.Host, strconv.Itoa(data.Port)),
+		Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(data.Port)),
 		Path: "/credentials/operator/enrollment",
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader("{}"))

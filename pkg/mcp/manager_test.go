@@ -1599,10 +1599,12 @@ func newScriptedServerConnection(
 }
 
 type scriptedTransport struct {
-	sessionID      string
-	toolCallResult *sdkmcp.CallToolResult
-	toolCallErr    error
-	closeErr       error
+	sessionID             string
+	toolCallResult        *sdkmcp.CallToolResult
+	toolCallErr           error
+	toolCallRawResult     json.RawMessage
+	toolCallResponseError *jsonrpc.Error
+	closeErr              error
 
 	mu              sync.Mutex
 	toolCallCalls   int
@@ -1680,6 +1682,18 @@ func (t *scriptedTransport) Write(ctx context.Context, msg jsonrpc.Message) erro
 
 		if t.toolCallErr != nil {
 			return t.toolCallErr
+		}
+		if t.toolCallRawResult != nil || t.toolCallResponseError != nil {
+			response := &jsonrpc.Response{ID: req.ID, Result: t.toolCallRawResult}
+			if t.toolCallResponseError != nil {
+				response.Error = t.toolCallResponseError
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case t.incoming <- response:
+				return nil
+			}
 		}
 
 		payload, err := json.Marshal(t.toolCallResult)

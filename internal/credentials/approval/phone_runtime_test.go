@@ -109,3 +109,46 @@ func TestPhoneLoopbackProxyAdmissionIsExplicitAndOriginBound(t *testing.T) {
 		t.Fatal("private enrollment link escaped the mounted page")
 	}
 }
+
+func TestPhonePublicPageAllowsExternalNavigationOnly(t *testing.T) {
+	for _, pagePath := range []string{"/", "/credentials/"} {
+		fixture := newFixture(t)
+		fixture.controller.pagePath = pagePath
+		handler, err := NewPhoneHandler(fixture.controller)
+		if err != nil {
+			t.Fatal("phone handler unavailable")
+		}
+		for _, tc := range []struct {
+			name, site, mode, dest, path, origin, method string
+			allowed                                      bool
+		}{
+			{"external link", "cross-site", "navigate", "document", "", "", http.MethodGet, true},
+			{"sibling link", "same-site", "navigate", "document", "", "", http.MethodGet, true},
+			{"external fetch", "cross-site", "cors", "empty", "", "", http.MethodGet, false},
+			{"embedded page", "cross-site", "navigate", "iframe", "", "", http.MethodGet, false},
+			{"foreign origin", "cross-site", "navigate", "document", "", "https://other.example.org", http.MethodGet, false},
+			{"API navigation", "cross-site", "navigate", "document", "api/verify/begin", "", http.MethodGet, false},
+			{"script", "cross-site", "no-cors", "script", "app.js", "", http.MethodGet, false},
+			{"POST navigation", "cross-site", "navigate", "document", "api/verify/begin", "", http.MethodPost, false},
+			{"unknown site", "other", "navigate", "document", "", "", http.MethodGet, false},
+		} {
+			t.Run(pagePath+tc.name, func(t *testing.T) {
+				request := phoneRequestFor(pagePath+tc.path, []byte(`{}`))
+				request.Method = tc.method
+				request.Header.Set("Origin", tc.origin)
+				request.Header.Set("Sec-Fetch-Site", tc.site)
+				request.Header.Set("Sec-Fetch-Mode", tc.mode)
+				request.Header.Set("Sec-Fetch-Dest", tc.dest)
+				writer := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+				handler.ServeHTTP(writer, request)
+				if (writer.Code == http.StatusOK) != tc.allowed {
+					t.Fatal("public navigation or API origin boundary differs from policy", writer.Code)
+				}
+				if tc.allowed && (writer.Header().Get("Content-Type") != "text/html; charset=utf-8" ||
+					writer.Header().Get("Cache-Control") != "no-store") {
+					t.Fatal("public navigation exposed a response other than the uncached page")
+				}
+			})
+		}
+	}
+}

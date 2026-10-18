@@ -8,14 +8,13 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
 // Enrollment is a distinct handler capability. Trusted startup gives the
 // ordinary phone handler only Controller; it retains OwnerSetup here for a
-// separately authenticated private console path. Issue is unexported and is
-// reachable in production only through the root-authenticated console server.
+// separately authenticated private operator setup path. Issue releases an
+// expiring invite only to that trusted setup capability.
 type Enrollment struct {
 	mu       sync.Mutex
 	setup    *OwnerSetup
@@ -23,7 +22,6 @@ type Enrollment struct {
 	issued   time.Time
 	ceremony string
 	boundary phoneBoundary
-	serving  atomic.Bool
 	now      func() time.Time
 }
 
@@ -120,7 +118,7 @@ func (enrollment *Enrollment) finish(ctx context.Context, secret, id string, res
 	}
 	issued := enrollment.issued
 	enrollment.clear()
-	// Bound the registration to the console invite's original deadline as well
+	// Bound the registration to the operator invite's original deadline as well
 	// as the verifier ceremony. It cannot gain five extra minutes by starting late.
 	if ctx == nil || ctx.Err() != nil || !withinLifetime(enrollment.now(), issued) {
 		// Consume the already-selected ceremony even when finish was canceled,

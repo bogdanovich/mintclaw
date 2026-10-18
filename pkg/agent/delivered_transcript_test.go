@@ -291,10 +291,10 @@ func TestRecoveredDeliveredTranscriptProjectsAndSettlesAfterRestart(t *testing.T
 	t.Cleanup(func() { _ = second.Close() })
 	al.SetOutboundOutbox(second)
 	recovered, err := second.Recover()
-	if err != nil || len(recovered) != 1 || !recovered[0].Settle {
+	if err != nil || len(recovered.Admissions) != 1 || !recovered.Admissions[0].Settle {
 		t.Fatalf("Recover() = %#v, %v", recovered, err)
 	}
-	if err = al.SettleRecoveredOutboundAdmission(t.Context(), recovered[0]); err != nil {
+	if err = al.SettleRecoveredOutboundAdmission(t.Context(), recovered.Admissions[0]); err != nil {
 		t.Fatal(err)
 	}
 	history := agent.Sessions.GetHistory(projection.SessionKey)

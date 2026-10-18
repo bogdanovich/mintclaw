@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,12 @@ type credentialTestClient struct {
 	result                         credentialDriverResult
 	preparedFields                 CredentialFields
 	afterPrepare                   func()
+	protectOutputs                 func([]string) error
+}
+
+func (client *credentialTestClient) bindCredentialOutputs(protect func([]string) error) error {
+	client.protectOutputs = protect
+	return nil
 }
 
 func (client *credentialTestClient) prepareCredential(_ context.Context, fields CredentialFields) (string, error) {
@@ -256,6 +263,71 @@ func TestCredentialSessionCanObserveAfterSnapshotInvalidationAndChecksLiveOrigin
 				t.Fatal("replacement observation bypassed the live credential origin check")
 			}
 		})
+	}
+}
+
+func TestCredentialSessionDeniesDownloadBeforeActionPreparation(t *testing.T) {
+	broker, request, client, _, lease, _ := credentialBrokerFixture(t)
+	result := broker.LoginCredential(t.Context(), request, lease,
+		func(_ context.Context, use func([]byte, []byte) error) error {
+			return use([]byte("download-account-fixture"), []byte("download-password-fixture"))
+		})
+	if result.Outcome != "logged_in" {
+		t.Fatal("credential download fixture login failed")
+	}
+	client.callResults["browser_snapshot"] = playwrightTextResult(
+		"### Page\n- Page URL: https://example.com/home\n" +
+			"- Page Title: Fixture\n### Snapshot\n```yaml\n- link \"Export\" [ref=e1]\n```",
+	)
+	observation, err := broker.ObserveContext(t.Context(), ObserveRequest{
+		Owner: request.Owner, SessionID: request.SessionID, TabID: request.TabID,
+	})
+	if err != nil {
+		t.Fatal("download fixture observation unavailable")
+	}
+	_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: request.Owner, RequestID: "request_credential_download", SessionID: request.SessionID,
+		TabID: request.TabID, SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionDownload, Ref: stableElementRef(observation.SnapshotID, "e1")},
+	})
+	if !errors.Is(err, ErrDenied) {
+		t.Fatal("credential session prepared an unqualified download artifact")
+	}
+}
+
+func TestCredentialDiagnosticsExposeCountsWithoutPathsOrMessageHashes(t *testing.T) {
+	broker, request, client, _, lease, _ := credentialBrokerFixture(t)
+	result := broker.LoginCredential(t.Context(), request, lease,
+		func(_ context.Context, use func([]byte, []byte) error) error {
+			return use([]byte("diagnostic-account-fixture"), []byte("diagnostic-password-fixture"))
+		})
+	if result.Outcome != "logged_in" {
+		t.Fatal("credential diagnostic fixture login failed")
+	}
+	payload, err := json.Marshal(map[string]any{
+		"categories": []DiagnosticCategorySummary{{
+			Category: DiagnosticConsoleErrors, Count: 1,
+			Entries: []DiagnosticEntry{{
+				Timestamp: 1, Severity: "error", Origin: "https://example.com",
+				Path: "/diagnostic-password-fixture", MessageHash: strings.Repeat("a", 64),
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatal("private diagnostic fixture unavailable")
+	}
+	client.callResults["browser_run_code_unsafe"] = playwrightTextResult(
+		"### Result\nMINTCLAW_DIAGNOSTICS_RESULT_V1|ok|" + url.QueryEscape(string(payload)),
+	)
+	summary, err := broker.Diagnostics(t.Context(), DiagnosticsRequest{
+		Owner: request.Owner, SessionID: request.SessionID, Categories: []DiagnosticCategory{DiagnosticConsoleErrors},
+	})
+	if err != nil || len(summary.Categories) != 1 || summary.Categories[0].Count != 1 ||
+		len(summary.Categories[0].Entries) != 0 || summary.Categories[0].OmittedCount != 1 || !summary.Truncated {
+		t.Fatal("credential diagnostic output retained entries or lost safe counts")
+	}
+	if ValidateDiagnosticSummary(summary, []DiagnosticCategory{DiagnosticConsoleErrors}) != nil {
+		t.Fatal("counts-only credential diagnostics broke the result contract")
 	}
 }
 

@@ -17,7 +17,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
-	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
@@ -411,7 +410,10 @@ func (*BrowserTargetsTool) Name() string { return "browser_targets" }
 func (*BrowserTargetsTool) Description() string {
 	return "List browser targets and identity profiles granted to this agent and actor without starting a browser. " +
 		"When the current user request does not explicitly name a target or identity profile, use default_target and " +
-		"that target's default_profile when present; never infer preference from array order or historical messages."
+		"that target's default_profile when present; never infer preference from array order or historical messages. " +
+		"For provider=steel, steel.use_proxy reports whether a new session starts with Steel's paid proxy; " +
+		"steel.proxy_on_block permits a new proxied session only after confirmed blocking. " +
+		"network_boundary and readiness.proxy describe network-policy enforcement, not Steel's paid proxy."
 }
 
 func (*BrowserTargetsTool) Parameters() map[string]any {
@@ -431,6 +433,8 @@ type browserTargetResult struct {
 
 type browserTargetView struct {
 	Target         string               `json:"target"`
+	Provider       string               `json:"provider"`
+	Steel          *browserSteelView    `json:"steel,omitempty"`
 	DefaultProfile string               `json:"default_profile,omitempty"`
 	Status         string               `json:"status"`
 	Reason         string               `json:"reason,omitempty"`
@@ -438,6 +442,11 @@ type browserTargetView struct {
 	Actions        []browser.ActionKind `json:"actions"`
 	Features       browserFeatureView   `json:"features"`
 	Limits         browserLimitsView    `json:"limits"`
+}
+
+type browserSteelView struct {
+	UseProxy     bool `json:"use_proxy"`
+	ProxyOnBlock bool `json:"proxy_on_block"`
 }
 
 type browserFeatureView struct {
@@ -535,6 +544,11 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 	views := make([]browserTargetView, 0, len(targetNames))
 	for _, name := range targetNames {
 		target := tool.runtime.config.Targets[name]
+		provider := target.EffectiveProvider()
+		var steel *browserSteelView
+		if provider == config.BrowserProviderSteel {
+			steel = &browserSteelView{UseProxy: target.Steel.UseProxy, ProxyOnBlock: target.Steel.ProxyOnBlock}
+		}
 		profileNames := make([]string, 0, len(target.Profiles))
 		for profileName, profile := range target.Profiles {
 			if profile.Enabled && browserProfileGranted(profile, agentID, actorID) {
@@ -569,6 +583,8 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			networkBoundary := "managed_request_proxy"
 			if attached {
 				networkBoundary = "selected_top_level_action_only"
+			} else if provider == config.BrowserProviderSteel {
+				networkBoundary = "remote_request_routes"
 			}
 			status, reason := "unavailable", "driver_unavailable"
 			readiness := browser.PassiveReadiness{
@@ -661,7 +677,7 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			func(profile browserProfileView) bool { return profile.HeadedView },
 		))
 		views = append(views, browserTargetView{
-			Target: name, DefaultProfile: defaultProfile,
+			Target: name, Provider: provider, Steel: steel, DefaultProfile: defaultProfile,
 			Status: targetStatus, Reason: targetReason, Profiles: profiles,
 			Actions: actions,
 			Features: browserFeatureView{
@@ -2398,6 +2414,10 @@ func (*BrowserActTool) Description() string {
 		"For non-click actions, omit effect; a redundant value is ignored because the broker derives the fixed effect. " +
 		"Classify from the user request and runtime objective checklist, not from the element role or HTTP method. " +
 		"A succeeded action confirms input dispatch, not the requested outcome; verify fresh page state before claiming completion. " +
+		"Use download on a fresh HTTP(S) image ref to retain its original file, or on an attachment link; " +
+		"copy the returned artifact.ref to action.artifact_ref for upload/file_chooser in the same session. " +
+		"Observe fresh destination state before uploading. Screenshots are not original image files. " +
+		"If download_not_dispatched is returned, keep the same session and observe fresh state; never replay that invocation. " +
 		"Use external_commit immediately before an important external state change such as publishing, submitting an order, " +
 		"sending, deleting, or replying; use navigation for ordinary page/tab/form-step transitions. " +
 		"For top-level navigate, copy the session, tab, snapshot, and snapshot generation from one fresh " +
@@ -2759,6 +2779,9 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 	if invocation.State == browser.InvocationFailed && invocation.SafeFailure == "click_not_dispatched" {
 		return browserClickNotDispatchedResult(invocation)
 	}
+	if invocation.State == browser.InvocationFailed && invocation.SafeFailure == "download_not_dispatched" {
+		return browserDownloadNotDispatchedResult(invocation)
+	}
 	result := browserActionResult{
 		InvocationID: invocation.ID, Effect: invocation.Effect,
 		State: invocation.State, Reason: invocation.SafeFailure,
@@ -2915,6 +2938,24 @@ func browserClickNotDispatchedResult(invocation browser.Invocation) *toolshared.
 		"state":              invocation.State,
 		"reason":             invocation.SafeFailure,
 		"failure_class":      browser.OutcomeFailureClickNotDispatched,
+	})
+	return toolshared.ErrorResult(string(encoded))
+}
+
+func browserDownloadNotDispatchedResult(invocation browser.Invocation) *toolshared.ToolResult {
+	encoded, _ := json.Marshal(map[string]any{
+		"status":              "failed",
+		"code":                "download_not_dispatched",
+		"message":             "No download request or page action was sent. The same browser session remains available. Observe fresh state and choose an HTTP(S) image or attachment link; do not replay this invocation.",
+		"action":              "observe_same_session_then_choose_supported_download_target",
+		"session_preserved":   true,
+		"download_dispatched": false,
+		"invocation_id":       invocation.ID,
+		"browser_session_id":  invocation.SessionID,
+		"effect":              invocation.Effect,
+		"state":               invocation.State,
+		"reason":              invocation.SafeFailure,
+		"failure_class":       browser.OutcomeFailureDownloadNotDispatched,
 	})
 	return toolshared.ErrorResult(string(encoded))
 }
@@ -3372,20 +3413,7 @@ func browserOwnerFromIdentity(actorID, agentID, sessionKey, executionID string) 
 }
 
 func browserCanonicalActorID(ctx context.Context) string {
-	inbound := toolshared.ToolInboundContext(ctx)
-	channel := strings.ToLower(strings.TrimSpace(inbound.Channel))
-	actorID := strings.TrimSpace(inbound.ActorID)
-	if actorID == "" {
-		actorID = strings.TrimSpace(inbound.SenderID)
-	}
-	if channel == "" || actorID == "" {
-		return ""
-	}
-	if platform, platformID, ok := identity.ParseCanonicalID(actorID); ok &&
-		strings.EqualFold(strings.TrimSpace(platform), channel) {
-		return identity.BuildCanonicalID(channel, platformID)
-	}
-	return identity.BuildCanonicalID(channel, actorID)
+	return toolshared.CanonicalInboundActorID(ctx)
 }
 
 func browserRequestID(ctx context.Context) (string, error) {

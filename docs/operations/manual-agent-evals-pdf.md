@@ -22,6 +22,12 @@ it is not an answer and must never be sent literally. `{{fixture}}` is one runne
 
 ## Native Evidence Preparation
 
+For owned runs, use `eval prepare` to create the empty native write-journal hierarchy before launch. Fresh-target
+admission accepts only that exact empty private hierarchy for PDF, not prior native records or locks. The native
+gateway initializes its outbox; the census still reads both real stores and never creates a missing root.
+The child receives a new private `HOME/eval-tmp` as its temporary-directory environment, keeping default document
+scratch within the later raw-file observation. These are isolation prerequisites, not positive PDF check results.
+
 The integration foundation prepares a new private fixture directory per trial, rechecks pinned source bytes, and
 resolves public generation markers to fresh ephemeral values. It never resumes an existing directory. Local release
 retains a potentially active remote source; terminal cleanup removes only the owned source and empty directory,
@@ -64,6 +70,29 @@ do not independently establish file type or artifact correctness. A complete bou
 `native_idle_unproven`; it grants no positive no-write, single-delivery, whole-runtime privacy or cleanup check.
 Those require separate native activity/settlement and independent artifact witnesses. This packet is not E3 exit
 or real-model PDF qualification.
+
+## Post-Stop Raw File Observation
+
+An owned `eval run --start-target` retains bounded, ephemeral copies of resolved PDF facts until its gateway has
+been stopped and the runner has inspected raw files under the admitted profile home. This includes files written
+only during shutdown, before any sanitization or deletion. Attach mode cannot claim this observation. The run-owned
+fact budget is 32 MiB; exceeding it refuses the next PDF attempt before sending its task.
+
+The scan is bounded to 30 seconds, 8,192 entries, 128 MiB total and 8 MiB per file. Root `.security` and `keys`
+directories are authorized credential/key stores and are excluded. Symlinks, special files, read failures, limits,
+opaque binaries and unscannable escaped content leave coverage unavailable. Known literal facts in unexpected binary
+files still fail. Source PDFs and independently retained, native-settled output PDFs are exempted from fact matching
+by exact SHA-256, since those are intended document contents; credential literals remain forbidden there.
+
+The value-free `private_surfaces` receipt contains only scope, counts and an observation code. A known leak is a
+run-level hard failure; unavailable coverage prevents a passing run. Regrading refuses known-leak sources and
+preserves unavailable coverage without rescanning or target work. Comparison retains both run verdicts separately
+from per-case trial counts. Older reports without this optional receipt do not acquire coverage retroactively.
+
+`owned_profile_files_v1` is a bounded file observation, not proof of native idle, no-write, delivery uniqueness,
+complete transport/encoded-data privacy or cleanup. Forced/unobserved shutdown remains independently non-passing.
+The final value-free run receipt and summary are written after observation. Required per-trial privacy checks
+remain inconclusive until the independent witnesses are complete; this does not qualify E3.
 
 ## Dialogue Admission
 

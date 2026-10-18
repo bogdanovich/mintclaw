@@ -65,7 +65,7 @@ func TestSettleImmediateDeliveryAcknowledgesFormRecovery(t *testing.T) {
 	if err != nil || !settled || !intent.RecoverySettled {
 		t.Fatalf("settled intent = %#v, callback=%t, err=%v", intent, settled, err)
 	}
-	if recovered, recoverErr := coordinator.Recover(); recoverErr != nil || len(recovered) != 0 {
+	if recovered, recoverErr := coordinator.Recover(); recoverErr != nil || len(recovered.Admissions) != 0 {
 		t.Fatalf("Recover() = %#v, %v", recovered, recoverErr)
 	}
 }

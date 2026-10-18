@@ -57,6 +57,14 @@ same cookie profile, exclusive lease, daily ledger, and cost thresholds; they
 consume two session reservations when both are used. A remembered successful
 domain still tries direct Steel first in a later task.
 
+`browser_targets` exposes `provider: "steel"` and an explicit `steel` object
+with `use_proxy` and `proxy_on_block`, including false values. For example,
+`{"use_proxy": false, "proxy_on_block": true}` means direct first, proxy only
+after confirmed blocking. Open the configured target/profile normally; these
+settings are not per-call toggles. The profile's `network_boundary` describes
+policy enforcement (`remote_request_routes` for Steel), and `readiness.proxy`
+reports policy readiness. Neither field indicates a paid Steel proxy.
+
 `use_proxy: true` selects always-on proxies instead. These two modes are mutually
 exclusive. `proxy_country` applies to whichever proxy mode is enabled. Without
 either mode, Steel uses its datacenter IP, not the local machine's home IP.

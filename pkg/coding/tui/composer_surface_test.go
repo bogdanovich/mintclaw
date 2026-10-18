@@ -262,6 +262,36 @@ func TestNormalTerminalSeparatesComposerAndFooter(t *testing.T) {
 	}
 }
 
+func TestPendingModelCommandKeepsIdleComposerTopGapAfterPickerCloses(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := newModel(
+		t.Context(),
+		&fakeController{Projector: projector},
+		modelOptions{adaptiveHeight: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(60, 8)
+	model.showStartupStatus = false
+	model.pendingSlashCommand = "model"
+
+	lines := strings.Split(ansi.Strip(model.View()), "\n")
+	composerIndex := slices.IndexFunc(lines, func(line string) bool {
+		return strings.Contains(line, "Ask MintClaw to do anything")
+	})
+	if composerIndex != 1 || lines[0] != "" || composerIndex+2 >= len(lines) ||
+		lines[composerIndex+1] != "" || lines[composerIndex+2] != "model command…" {
+		t.Fatalf("pending model command spacing = %q", model.View())
+	}
+	if len(lines) > model.height {
+		t.Fatalf("pending model command rendered %d rows at height %d: %q", len(lines), model.height, model.View())
+	}
+}
+
 func TestActiveCommandPanelOnlyAddsComposerTopGapWhenItFits(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {

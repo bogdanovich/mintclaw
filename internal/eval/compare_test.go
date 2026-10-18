@@ -83,6 +83,32 @@ func TestCompareRetainsAllVerdictsAndSamplingCountsWithoutQualityClaim(t *testin
 	}
 }
 
+func TestComparePreservesRunLevelPrivateSurfaceResults(t *testing.T) {
+	for _, code := range []string{"observed", "unavailable", "leak_observed", "invalid"} {
+		t.Run(code, func(t *testing.T) {
+			baseline, current := comparisonFixture(t, Pass), comparisonFixture(t, Pass)
+			current.PrivateSurfaces = &PrivateSurfaceObservation{
+				Scope: "owned_profile_files_v1", Code: code, LeakObserved: code == "leak_observed",
+			}
+			current.Verdict = current.PrivateSurfaces.verdict()
+			writeAdmissionJSON(t, filepath.Join(current.ReportDir, "run.json"), current)
+			result, err := Compare(baseline.ReportDir, current.ReportDir)
+			if code == "invalid" {
+				if !errors.Is(err, ErrCompare) {
+					t.Fatal("invalid file receipt was accepted", err)
+				}
+				return
+			}
+			if err != nil || result.BaselineVerdict != Pass || result.CurrentVerdict != current.Verdict ||
+				result.Cases[0].Current.Coverage[Pass] != 1 ||
+				!slices.Contains(result.EnvironmentUnknowns, "baseline_private_file_coverage") ||
+				slices.Contains(result.EnvironmentUnknowns, "current_private_file_coverage") != (code != "observed") {
+				t.Fatal("run-level privacy result was lost or counted as a trial", result, err)
+			}
+		})
+	}
+}
+
 func TestCompareReportsCaseChangesAndDoesNotAttributeEnvironmentDrift(t *testing.T) {
 	for _, change := range []string{"case_changed", "added_and_removed", "environment"} {
 		t.Run(change, func(t *testing.T) {

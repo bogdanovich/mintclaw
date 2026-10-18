@@ -18,7 +18,10 @@ import (
 )
 
 const (
-	liveEvidenceWait      = 5 * time.Second
+	// A direct user-only final can arrive before the parent turn and its trace
+	// have settled. Match the bounded delivery-settlement window, while the
+	// caller's overall context can still end this passive wait earlier.
+	liveEvidenceWait      = 30 * time.Second
 	liveEvidenceStartSkew = time.Second
 )
 

@@ -994,12 +994,12 @@ func TestGatewayOutboundRecoveryUsesGatewayWorkspaceBeforePublication(t *testing
 	}
 	t.Cleanup(func() { _ = recovered.Close() })
 	admissions, err := recovered.Recover()
-	if err != nil || len(admissions) != 1 {
+	if err != nil || len(admissions.Admissions) != 1 {
 		t.Fatalf("Recover() = %+v, %v", admissions, err)
 	}
 	msgBus := bus.NewMessageBus()
 	reconciler, err := startGatewayOutboundReconciler(
-		ctx, recovered, msgBus, admissions, runtime, workspace, nil,
+		ctx, recovered, msgBus, admissions.Admissions, runtime, workspace, nil,
 	)
 	if err != nil {
 		t.Fatalf("startGatewayOutboundReconciler() error = %v", err)
@@ -1057,13 +1057,13 @@ func TestGatewayOutboundRecoveryTerminalizesMissingScreenshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	admissions, err := second.Recover()
-	if err != nil || len(admissions) != 1 {
+	if err != nil || len(admissions.Admissions) != 1 {
 		t.Fatalf("Recover() = %+v, %v", admissions, err)
 	}
 	runtime := &nodeAdmissionRuntime{}
 	msgBus := bus.NewMessageBus()
 	reconciler, err := startGatewayOutboundReconciler(
-		t.Context(), second, msgBus, admissions, runtime, workspace, nil,
+		t.Context(), second, msgBus, admissions.Admissions, runtime, workspace, nil,
 	)
 	if err != nil {
 		t.Fatalf("startGatewayOutboundReconciler() error = %v", err)
@@ -1091,7 +1091,7 @@ func TestGatewayOutboundRecoveryTerminalizesMissingScreenshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recover() after prerequisite failure error = %v", err)
 	}
-	if len(recovered) != 0 {
+	if len(recovered.Admissions) != 0 {
 		t.Fatalf("Recover() after terminal prerequisite failure = %#v", recovered)
 	}
 }

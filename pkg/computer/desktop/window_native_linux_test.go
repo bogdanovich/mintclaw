@@ -67,8 +67,11 @@ func nativeX11Fixture(t *testing.T) (*xgb.Conn, xproto.Window, func() xproto.Win
 
 func createX11FixtureWindow(t *testing.T, connection *xgb.Conn, root, window xproto.Window) {
 	t.Helper()
+	// These raw protocol fixtures do not implement window-manager protocols.
+	// Keep the WM from managing/destroying them independently of the observer;
+	// real managed GTK capture is qualified separately by the Cua fixture.
 	if err := xproto.CreateWindowChecked(connection, 0, window, root, 80, 80, 240, 140, 0, xproto.WindowClassInputOutput, 0,
-		xproto.CwBackPixel, []uint32{0x445566}).
+		xproto.CwBackPixel|xproto.CwOverrideRedirect, []uint32{0x445566, 1}).
 		Check(); err != nil {
 		t.Fatal("could not create disposable native window", err)
 	}

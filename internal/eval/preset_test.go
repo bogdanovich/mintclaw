@@ -34,6 +34,20 @@ func TestPresetValidationIsOffline(t *testing.T) {
 		func(p *Preset) { p.ExpectedAgent = "Wrong Agent" }, func(p *Preset) { p.IsolationRoot = "/" },
 		func(p *Preset) { p.UserModel = "../provider" },
 		func(p *Preset) { p.Capabilities = []string{"conversation", "conversation"} },
+		func(p *Preset) { p.WorkspaceFiles = []WorkspaceFile{{Path: "sessions/old.json", SHA256: digest(nil)}} },
+		func(p *Preset) {
+			p.WorkspaceFiles = []WorkspaceFile{{Path: "skills/../AGENTS.md", SHA256: digest(nil)}}
+		},
+		func(p *Preset) { p.WorkspaceFiles = []WorkspaceFile{{Path: "AGENTS.md", SHA256: "bad"}} },
+		func(p *Preset) {
+			p.WorkspaceFiles = []WorkspaceFile{{Path: "AGENTS.md", SHA256: digest(nil)}, {Path: "AGENTS.md", SHA256: digest(nil)}}
+		},
+		func(p *Preset) {
+			p.WorkspaceFiles = []WorkspaceFile{{Path: "skills/a", SHA256: digest(nil)}, {Path: "skills/a/b", SHA256: digest(nil)}}
+		},
+		func(p *Preset) {
+			p.WorkspaceFiles = []WorkspaceFile{{Path: "skills/A.md", SHA256: digest(nil)}, {Path: "skills/a.md", SHA256: digest(nil)}}
+		},
 	} {
 		invalid := preset
 		mutate(&invalid)

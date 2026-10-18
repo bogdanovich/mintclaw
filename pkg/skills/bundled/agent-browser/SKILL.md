@@ -33,6 +33,14 @@ Never infer a target from array order. Treat reported `dry_run`, approval
 policy, and advertised features as authoritative. Do not bypass a missing
 feature with raw MCP or arbitrary page code.
 
+For a Steel target, `steel.use_proxy` in `browser_targets` says whether a new
+session starts with Steel's paid proxy. When false, open the configured session
+normally to start without that proxy. `steel.proxy_on_block` permits automatic
+escalation only after a confirmed anti-bot block. `network_boundary` and
+`readiness.proxy` describe network-policy enforcement; they do not indicate
+that Steel's paid proxy is enabled. These are configured policies, not
+per-call proxy toggles.
+
 Treat live-resource state from conversation history as unverified. In
 particular, an instruction to keep or leave the browser open after returning a
 result is a cleanup/lifecycle requirement; it is not evidence that a session or

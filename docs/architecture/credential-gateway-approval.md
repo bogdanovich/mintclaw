@@ -82,6 +82,25 @@ tool, captured terminal, or recorded session: a terminal descriptor does not
 prove its viewer is the operator. Open that private link on Android and create
 the approval passkey. No password is involved in enrolling the approval key.
 
+After creation, choose **Verify approval passkey** to complete durable setup.
+The same button is available by opening `/credentials/` without an enrollment
+fragment on another device. Verification uses the existing key and issues no
+account grant or vault read. A passkey saved in 1Password can be used from its
+synced Android app; keep the approval key in a personal vault outside the
+service account's dedicated credential vault. Android use through 1Password
+requires Android 14 or later and its Autofill/passkey provider to be enabled;
+see [1Password's Android setup](https://support.1password.com/android-autofill/).
+
+Complete this verification before restarting the gateway. Registration is
+initially stored as a tentative candidate; only an assertion from an accepted
+live owner persists activation. Restarting before that assertion deliberately
+requires a new private enrollment link. A consumed or expired enrollment link
+cannot be reused to check a synced key: open the plain page instead.
+
+Top-level navigation to the public page is allowed from notification/chat
+sites. Cross-site API calls, embedded pages, scripts and foreign Origin values
+remain denied; loading the page never grants access.
+
 The local operator enrollment endpoint requires authentication, a loopback
 peer, no browser Origin header, and an empty JSON object. Enrollment ceremonies
 also require the expiring invitation token and verified WebAuthn registration.
@@ -94,6 +113,7 @@ changing credential configuration requires a gateway restart and fresh grants.
 
 Synthetic tests cover actual HTTP mounting, private command output, durable
 passkey updates and restart denial, origin/port and loopback-proxy admission,
-and the phone UI's enrollment/20-hour approval/revocation on both root and
+and the phone UI's external-link navigation, enrollment, grant-free passkey
+verification and 20-hour approval/revocation on both root and
 gateway paths using a virtual authenticator. These tests do not substitute for
 actual Android enrollment or end-to-end password-output qualification.

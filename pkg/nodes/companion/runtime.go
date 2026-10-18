@@ -110,6 +110,7 @@ type runtimeOptions struct {
 	update          *updateCommandHandler
 	updateRecovery  UpdateCoordinator
 	browserHost     BrowserCommandHost
+	computerHost    ComputerCommandHost
 	jobs            *JobRuntime
 	workspaceRead   *workspaceReadRuntime
 	codingTasks     *CodingTaskHost
@@ -250,16 +251,17 @@ type invocationStore interface {
 // Runtime is the instance-scoped capability boundary. It owns no gateway
 // connection and can therefore be reused by a future multi-binding supervisor.
 type Runtime struct {
-	nodeID      nodes.ID
-	policy      nodes.LocalCommandPolicy
-	catalog     nodes.CapabilityCatalog
-	handlers    map[string]commandHandler
-	ledger      invocationStore
-	activeMu    sync.Mutex
-	active      map[string]*activeInvocation
-	terminals   *TerminalCoordinator
-	updates     UpdateCoordinator
-	browserHost BrowserCommandHost
+	nodeID       nodes.ID
+	policy       nodes.LocalCommandPolicy
+	catalog      nodes.CapabilityCatalog
+	handlers     map[string]commandHandler
+	ledger       invocationStore
+	activeMu     sync.Mutex
+	active       map[string]*activeInvocation
+	terminals    *TerminalCoordinator
+	updates      UpdateCoordinator
+	browserHost  BrowserCommandHost
+	computerHost ComputerCommandHost
 }
 
 func NewRuntime(
@@ -301,6 +303,13 @@ func NewRuntime(
 			return nil, fmt.Errorf("configure node browser runtime: %w", err)
 		}
 		handlers = append(handlers, browserHandlers...)
+	}
+	if settings.computerHost != nil {
+		computerHandlers, err := newComputerCommandHandlers(settings.computerHost)
+		if err != nil {
+			return nil, fmt.Errorf("configure node computer runtime: %w", err)
+		}
+		handlers = append(handlers, computerHandlers...)
 	}
 	if settings.update != nil {
 		handlers = append(handlers, settings.update)
@@ -367,6 +376,7 @@ func NewRuntime(
 			descriptor.ModelContract = modelContract
 			settings.workspaceRead.descriptors[descriptor.Name] = descriptor
 		} else if !nodes.IsServiceCommand(descriptor.Name) && !nodes.IsBrowserCommand(descriptor.Name) &&
+			!nodes.IsComputerCommand(descriptor.Name) &&
 			!nodes.IsJobCommand(descriptor.Name) && !nodes.IsCodingCommand(descriptor.Name) {
 			descriptor.ModelContract = effectiveModelContract(descriptor, policy)
 		}
@@ -389,14 +399,15 @@ func NewRuntime(
 		return nil, errors.New("node invocation ledger is required")
 	}
 	commandRuntime := &Runtime{
-		nodeID:      nodeID,
-		policy:      policy,
-		catalog:     catalog,
-		handlers:    byName,
-		ledger:      ledger,
-		active:      make(map[string]*activeInvocation),
-		updates:     settings.updateRecovery,
-		browserHost: settings.browserHost,
+		nodeID:       nodeID,
+		policy:       policy,
+		catalog:      catalog,
+		handlers:     byName,
+		ledger:       ledger,
+		active:       make(map[string]*activeInvocation),
+		updates:      settings.updateRecovery,
+		browserHost:  settings.browserHost,
+		computerHost: settings.computerHost,
 	}
 	if settings.shellExec != nil && settings.terminalBroker != nil &&
 		settings.shellExec.handler.contract != nil &&
@@ -646,7 +657,8 @@ func durableInvocationSuccess(
 	plan nodes.ExecutionPlan,
 	result json.RawMessage,
 ) (json.RawMessage, error) {
-	if plan.Command == nodes.BrowserCommandObserve || plan.Command == nodes.BrowserCommandDiagnostics {
+	if plan.Command == nodes.ComputerCommandObserve || plan.Command == nodes.BrowserCommandObserve ||
+		plan.Command == nodes.BrowserCommandDiagnostics {
 		// Observations and diagnostics are live page data. An accessibility
 		// snapshot can echo a protected fill, while even bounded diagnostics
 		// remain session-private. A fixed receipt keeps either result out of the
@@ -701,11 +713,21 @@ func (runtime *Runtime) completeInvalidOutput(
 	plan nodes.ExecutionPlan,
 	err error,
 ) error {
+	computerMutation := nodes.IsComputerCommand(plan.Command) && plan.Command != nodes.ComputerCommandTargets &&
+		plan.Command != nodes.ComputerCommandStatus && plan.Command != nodes.ComputerCommandObserve
+	if nodes.IsComputerCommand(plan.Command) {
+		// Schema diagnostics can contain a protected text value. Neither durable
+		// failure records nor ordinary errors may echo the rejected payload.
+		err = nodes.ErrInvalidInvocation
+	}
 	if plan.Command == "service.action.v1" || plan.Command == nodes.BrowserCommandAct ||
 		plan.Command == nodes.BrowserCommandExecute ||
 		plan.Command == nodes.BrowserCommandContexts ||
-		plan.Command == nodes.WorkspaceCommandWrite || plan.Command == nodes.WorkspaceCommandPatch {
+		plan.Command == nodes.WorkspaceCommandWrite || plan.Command == nodes.WorkspaceCommandPatch || computerMutation {
 		label := "service action"
+		if computerMutation {
+			label = "computer control transition"
+		}
 		switch plan.Command {
 		case nodes.BrowserCommandAct:
 			label = "browser action"

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"unicode"
@@ -145,17 +146,18 @@ const (
 )
 
 type operationResult struct {
-	id              uint64
-	kind            operationKind
-	request         command
-	status          codingworkspace.StatusResult
-	runtimeStatus   *frontend.RuntimeStatus
-	diff            codingworkspace.DiffResult
-	review          codingreview.Result
-	reviewID        string
-	reviewCommitted bool
-	projectErr      error
-	err             error
+	id                 uint64
+	kind               operationKind
+	request            command
+	status             codingworkspace.StatusResult
+	runtimeStatus      *frontend.RuntimeStatus
+	diff               codingworkspace.DiffResult
+	review             codingreview.Result
+	reviewID           string
+	reviewCommitted    bool
+	projectErr         error
+	turnErrorProjected bool
+	err                error
 }
 
 type reviewOperationEvent struct {
@@ -933,17 +935,60 @@ func (c *Controller) run(
 ) {
 	var err error
 	var projectErr error
+	var turnErrorProjected bool
 	if kind == operationTurn {
+		before, _ := c.projector.Snapshot(context.Background())
 		err = c.runtime.RunTurn(ctx, input, ready)
 		turnSteering.close()
 		projectErr = err
+		if err != nil {
+			after, _ := c.projector.Snapshot(context.Background())
+			turnErrorProjected = !hasMultipleErrorCauses(err) && newTurnErrorProjected(before, after)
+		}
 		if source, ok := c.runtime.(turnSettlementErrorSource); ok {
 			err = errors.Join(err, source.TurnSettlementError())
 		}
 	} else {
 		err = c.runtime.Compact(ctx)
 	}
-	c.results <- operationResult{kind: kind, projectErr: projectErr, err: err}
+	c.results <- operationResult{
+		kind: kind, projectErr: projectErr, turnErrorProjected: turnErrorProjected, err: err,
+	}
+}
+
+// Only a new/updated error belonging to the failed turn can replace the
+// controller's fallback notice. Retained errors from earlier turns cannot.
+func newTurnErrorProjected(before, after frontend.ThreadSnapshot) bool {
+	if after.LastTurn == nil || after.LastTurn.Outcome != frontend.TurnOutcomeFailed {
+		return false
+	}
+	for _, item := range after.Items {
+		if item.Kind != frontend.PresentationError || item.TurnID != after.LastTurn.TurnID {
+			continue
+		}
+		if !slices.ContainsFunc(before.Items, func(previous frontend.PresentationItem) bool {
+			return previous.ID == item.ID && previous.Revision >= item.Revision
+		}) {
+			return true
+		}
+	}
+	return false
+}
+
+// A runtime may join the displayed model failure with an independent local
+// persistence failure. Keep the fallback notice in that case.
+func hasMultipleErrorCauses(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		if len(causes) > 1 {
+			return true
+		}
+		return len(causes) == 1 && hasMultipleErrorCauses(causes[0])
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return hasMultipleErrorCauses(wrapped.Unwrap())
+	}
+	return false
 }
 
 func (c *Controller) runReview(
@@ -1060,7 +1105,9 @@ func (c *Controller) projectOperationError(result operationResult) {
 	}
 	switch result.kind {
 	case operationTurn:
-		c.projector.Error("", "controller:turn-error", "coding turn failed")
+		if !result.turnErrorProjected {
+			c.projector.Error("", "controller:turn-error", "coding turn failed")
+		}
 	case operationReview:
 		c.projector.Error("", "controller:review-error", "coding review failed")
 	default:

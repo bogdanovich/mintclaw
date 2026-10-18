@@ -3,33 +3,38 @@ package nodes
 import "errors"
 
 const (
-	InvocationDispatchCommandDenied             = "COMMAND_DENIED"
-	InvocationDispatchCommandUnavailable        = "COMMAND_UNAVAILABLE"
-	InvocationDispatchExecutionFailed           = "EXECUTION_FAILED"
-	InvocationDispatchFileNotFound              = "FILE_NOT_FOUND"
-	InvocationDispatchBrowserSessionNotFound    = "SESSION_NOT_FOUND"
-	InvocationDispatchBrowserNavigationFailed   = "NAVIGATION_FAILED"
-	InvocationDispatchBrowserClickNotDispatched = "CLICK_NOT_DISPATCHED"
-	InvocationDispatchBrowserCleanupRequired    = "CLEANUP_REQUIRED"
-	InvocationDispatchIdempotencyConflict       = "IDEMPOTENCY_CONFLICT"
-	InvocationDispatchInvalidPlan               = "INVALID_PLAN"
-	InvocationDispatchNodeBusy                  = "NODE_BUSY"
-	InvocationDispatchCanceled                  = "INVOCATION_CANCELED"
-	InvocationDispatchUnknown                   = "INVOCATION_UNKNOWN"
-	InvocationDispatchRejected                  = "DISPATCH_REJECTED"
-	InvocationDispatchCommandTimeout            = "COMMAND_TIMEOUT"
-	InvocationDispatchCodingScopeNotFound       = "SCOPE_NOT_FOUND"
-	InvocationDispatchCodingScopeStale          = "SCOPE_STALE"
-	InvocationDispatchCodingProfileDenied       = "PROFILE_DENIED"
-	InvocationDispatchCodingTaskNotFound        = "TASK_NOT_FOUND"
-	InvocationDispatchCodingScopeBusy           = "SCOPE_BUSY"
-	InvocationDispatchCodingTaskConflict        = "TASK_CONFLICT"
-	InvocationDispatchCodingTaskNotResumable    = "TASK_NOT_RESUMABLE"
-	InvocationDispatchCodingTaskNotRunning      = "TASK_NOT_RUNNING"
-	InvocationDispatchCodingHostUnavailable     = "HOST_UNAVAILABLE"
-	InvocationDispatchCodingCommandTimeout      = InvocationDispatchCommandTimeout
-	InvocationDispatchCodingOperationFailed     = "CODING_OPERATION_FAILED"
-	InvocationDispatchCodingOutputLimit         = "OUTPUT_LIMIT_TOO_SMALL"
+	InvocationDispatchCommandDenied                = "COMMAND_DENIED"
+	InvocationDispatchComputerStale                = "COMPUTER_STALE"
+	InvocationDispatchComputerBusy                 = "COMPUTER_BUSY"
+	InvocationDispatchComputerExpired              = "COMPUTER_EXPIRED"
+	InvocationDispatchComputerUnavailable          = "COMPUTER_UNAVAILABLE"
+	InvocationDispatchCommandUnavailable           = "COMMAND_UNAVAILABLE"
+	InvocationDispatchExecutionFailed              = "EXECUTION_FAILED"
+	InvocationDispatchFileNotFound                 = "FILE_NOT_FOUND"
+	InvocationDispatchBrowserSessionNotFound       = "SESSION_NOT_FOUND"
+	InvocationDispatchBrowserNavigationFailed      = "NAVIGATION_FAILED"
+	InvocationDispatchBrowserClickNotDispatched    = "CLICK_NOT_DISPATCHED"
+	InvocationDispatchBrowserDownloadNotDispatched = "DOWNLOAD_NOT_DISPATCHED"
+	InvocationDispatchBrowserCleanupRequired       = "CLEANUP_REQUIRED"
+	InvocationDispatchIdempotencyConflict          = "IDEMPOTENCY_CONFLICT"
+	InvocationDispatchInvalidPlan                  = "INVALID_PLAN"
+	InvocationDispatchNodeBusy                     = "NODE_BUSY"
+	InvocationDispatchCanceled                     = "INVOCATION_CANCELED"
+	InvocationDispatchUnknown                      = "INVOCATION_UNKNOWN"
+	InvocationDispatchRejected                     = "DISPATCH_REJECTED"
+	InvocationDispatchCommandTimeout               = "COMMAND_TIMEOUT"
+	InvocationDispatchCodingScopeNotFound          = "SCOPE_NOT_FOUND"
+	InvocationDispatchCodingScopeStale             = "SCOPE_STALE"
+	InvocationDispatchCodingProfileDenied          = "PROFILE_DENIED"
+	InvocationDispatchCodingTaskNotFound           = "TASK_NOT_FOUND"
+	InvocationDispatchCodingScopeBusy              = "SCOPE_BUSY"
+	InvocationDispatchCodingTaskConflict           = "TASK_CONFLICT"
+	InvocationDispatchCodingTaskNotResumable       = "TASK_NOT_RESUMABLE"
+	InvocationDispatchCodingTaskNotRunning         = "TASK_NOT_RUNNING"
+	InvocationDispatchCodingHostUnavailable        = "HOST_UNAVAILABLE"
+	InvocationDispatchCodingCommandTimeout         = InvocationDispatchCommandTimeout
+	InvocationDispatchCodingOperationFailed        = "CODING_OPERATION_FAILED"
+	InvocationDispatchCodingOutputLimit            = "OUTPUT_LIMIT_TOO_SMALL"
 )
 
 // InvocationDispatchError carries a bounded companion response classification
@@ -63,12 +68,17 @@ func InvocationDispatchErrorCode(err error) (string, bool) {
 func normalizeInvocationDispatchErrorCode(code string) string {
 	switch code {
 	case InvocationDispatchCommandDenied,
+		InvocationDispatchComputerStale,
+		InvocationDispatchComputerBusy,
+		InvocationDispatchComputerExpired,
+		InvocationDispatchComputerUnavailable,
 		InvocationDispatchCommandUnavailable,
 		InvocationDispatchExecutionFailed,
 		InvocationDispatchFileNotFound,
 		InvocationDispatchBrowserSessionNotFound,
 		InvocationDispatchBrowserNavigationFailed,
 		InvocationDispatchBrowserClickNotDispatched,
+		InvocationDispatchBrowserDownloadNotDispatched,
 		InvocationDispatchBrowserCleanupRequired,
 		InvocationDispatchIdempotencyConflict,
 		InvocationDispatchInvalidPlan,

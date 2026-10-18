@@ -8,7 +8,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/computer"
 )
@@ -86,5 +88,37 @@ func TestX11AuthorityIsExplicitBoundedAndPrivate(t *testing.T) {
 	}
 	if _, err := x11Cookie(link, "1"); !errors.Is(err, computer.ErrDenied) {
 		t.Fatal("authority symlink followed", err)
+	}
+}
+
+func TestX11AuthorityFIFOIsPromptlyRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "authority-fifo")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := x11Cookie(path, "1")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, computer.ErrDenied) {
+			t.Fatal("non-regular authority was not refused", err)
+		}
+	case <-time.After(time.Second):
+		// Unblock an old blocking reader so this regression fails promptly
+		// without leaking a goroutine or hanging the suite during cleanup.
+		fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+		if err != nil {
+			t.Fatal("could not unblock fixture FIFO", err)
+		}
+		defer func() { _ = syscall.Close(fd) }()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("fixture FIFO reader did not return after unblock")
+		}
+		t.Fatal("authority admission blocked on a FIFO with no writer")
 	}
 }
