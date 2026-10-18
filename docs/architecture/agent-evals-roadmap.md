@@ -8,6 +8,12 @@ implementation; an admission document alone is not a functioning eval engine.
 
 The roadmap builds a small manual quality harness, not a replacement runtime or an automatic self-improvement system.
 
+The [target usage v1 pilot](../operations/manual-agent-evals-target-usage-v1-pilot-20261018.md) on merged #1766 passed
+four new general trials. One regrade preserved one pass and three provider-unavailable judge errors; comparison
+retained every trial. Four correlated target finals had no wire usage blocks despite native outbox counters:
+the non-streaming channel projection needs a scoped repair. Original receipts remain unknown, not backfilled;
+returned-final observations are not all-call usage or completion of the frozen goal.
+
 The [first live pilot](../operations/manual-agent-evals-pilot-20261011.md) is preserved with its inconclusive
 interaction and failed 4/6 judge calibration. The subsequent
 [v2 judge calibration](../operations/manual-agent-evals-judge-v2-calibration-20261011.md) agreed on 6/6 unchanged

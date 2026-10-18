@@ -69,6 +69,13 @@ The tool description names the dedicated download action. The observed click doe
 download implementation failure or, without further exposure evidence, why the model chose that route.
 A link name alone does not qualify a deliverable download. No alternate-model attempt or task replay ran.
 
+Subsequent passive inspection of the retained native JSONL showed `browser_targets` call `call_2029771` explicitly
+returned `download` in its action list and `features.download: true`. Final call `call_883870` selected click/read,
+with no delivery field. All six persisted assistant call records named `gemini-3.5-flash-lite`; this is not backend
+attempt enumeration. Protected tool results were omitted from durable JSONL, and trace capture was disabled, so no
+retained provider-request schema proves every transmitted branch/field. Exposed capability is evidenced; the exact
+reason for the model's choice is not. No policy or historical assessment changed after that inspection.
+
 ## Privacy And Cleanup
 
 Raw-profile coverage stayed **unavailable**: 53 files, 387,549 bytes, one opaque file, 26 compiled public-system

@@ -311,6 +311,10 @@ are not token usage. Duplicate finals cannot double-count tokens. Offline grade 
 observation for its selected trials without target work. This is not all-call coverage: interrupted turns, missing
 provider usage and internal attempts remain unknown, and the top-level `usage` stays `unknown`.
 
+The [target usage v1 pilot](manual-agent-evals-target-usage-v1-pilot-20261018.md) passed four general trials but found
+no target usage blocks on the non-streaming wire. Native outbox counters demonstrated a channel projection gap;
+the original receipt stays unknown. Its one regrade retained three judge errors instead of retrying them away.
+
 `pass`, `fail`, `error`, `inconclusive`, and `skipped` are distinct. Any required unknown or unavailable case prevents
 a passing run. A hard failure remains a failure even if reporting also fails. A final response ends a turn, not
 the entire case. Driver stop, lost route identity, changed runtime, limits, timeout, or disconnection cannot pass.
