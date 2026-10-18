@@ -51,8 +51,8 @@ func NormalizePublicOrigin(raw string) (string, error) {
 }
 
 // NormalizeHTTPOrigin canonicalizes an HTTP or HTTPS origin without applying
-// address-scope policy. Callers must separately enforce an explicit any-HTTP
-// grant before using the result.
+// address-scope policy. Callers must separately enforce an explicit network
+// scope before using the result.
 func NormalizeHTTPOrigin(raw string) (string, error) {
 	return normalizeOrigin(raw, false)
 }

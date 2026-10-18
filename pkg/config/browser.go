@@ -35,6 +35,7 @@ const (
 	BrowserNetworkExactOrigins     = "exact_origins"
 	BrowserNetworkPublicWeb        = "public_web"
 	BrowserNetworkAnyHTTP          = "any_http"
+	BrowserNetworkLoopbackFixture  = "loopback_fixture"
 	BrowserCapabilityFullAccess    = browserpolicy.CapabilityFullAccess
 	BrowserCapabilityRestricted    = browserpolicy.CapabilityRestricted
 	BrowserApprovalNone            = browserpolicy.ApprovalNone
@@ -734,6 +735,14 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 		if !profile.Enabled {
 			continue
 		}
+		if profile.NetworkMode == BrowserNetworkLoopbackFixture &&
+			(placement != BrowserPlacementGateway || provider != BrowserProviderLocal ||
+				target.Driver != BrowserDriverPlaywrightLibrary || target.Fallback != (BrowserFallbackConfig{})) {
+			return fmt.Errorf(
+				"loopback fixture profile %q requires a local gateway library target without fallback",
+				profileName,
+			)
+		}
 		if err := validateBrowserProfileGrants(profileName, profile, cfg.Tools.Browser.Agents); err != nil {
 			return err
 		}
@@ -1018,7 +1027,7 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 		return fmt.Errorf("enabled browser profile %q requires network_mode", name)
 	}
 	if networkMode != BrowserNetworkExactOrigins && networkMode != BrowserNetworkPublicWeb &&
-		networkMode != BrowserNetworkAnyHTTP && networkMode != "" {
+		networkMode != BrowserNetworkAnyHTTP && networkMode != BrowserNetworkLoopbackFixture && networkMode != "" {
 		return fmt.Errorf("browser profile %q has unsupported network_mode %q", name, profile.NetworkMode)
 	}
 	if len(profile.AllowedOrigins) > BrowserMaxConfiguredOrigins {
@@ -1026,7 +1035,7 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 	}
 	seen := make(map[string]struct{}, len(profile.AllowedOrigins))
 	for _, rawOrigin := range profile.AllowedOrigins {
-		origin, err := NormalizeBrowserOrigin(rawOrigin)
+		origin, err := NormalizeBrowserNetworkOrigin(networkMode, rawOrigin)
 		if err != nil {
 			return fmt.Errorf("invalid browser profile %q origin: %w", name, err)
 		}
@@ -1055,6 +1064,11 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 		if (networkMode == BrowserNetworkPublicWeb || networkMode == BrowserNetworkAnyHTTP) &&
 			len(profile.AllowedOrigins) != 0 {
 			return fmt.Errorf("enabled %s browser profile %q must not set allowed_origins", networkMode, name)
+		}
+	}
+	if networkMode == BrowserNetworkLoopbackFixture {
+		if err := ValidateLoopbackFixtureBrowserProfile(profile); err != nil {
+			return fmt.Errorf("invalid loopback fixture profile %q: %w", name, err)
 		}
 	}
 	if err := validateBrowserAttachedProfile(name, profile); err != nil {

@@ -99,16 +99,35 @@ idempotent concurrent closure, late-action refusal and owned-port release. They 
 Oracle controls additionally cover every frozen scenario, wrong/duplicate effects, unknown/failed witnesses,
 missing/wrong reference and malformed/foreign/missing CSV, plus value-free projections and unqualified native checks.
 
+The separate native network controls exercise configuration and worker re-admission, exact literal proxy dials,
+DNS/other-port/CONNECT refusal, host mismatches and redirects:
+
+```sh
+go test -race -tags goolm,stdjson ./pkg/config ./pkg/browser -run 'Test.*LoopbackFixture' -count=1
+```
+
+`TestLoopbackFixtureRealLibraryTransportAndEphemeralCleanup` is opt-in through the existing real-library-driver
+environment. It checks actual rendered fixture access, denied foreign-port subresources/redirects and ephemeral
+runtime removal, without a model or broker approval. Native action acceptance is not its oracle: an overlapping
+denied background request can conservatively make the worker report a proxy denial even when the fixture was
+rendered. E4 still needs action-level qualification; transport evidence must not turn that denial into an eval pass.
+
 ## Remaining Admission
 
 The six first-release browser cases have typed contracts but still need native observations, approval binding,
 artifact collection/delivery correlation, raw privacy checks and owned cleanup. The pure read-only native browser state decoder
 merged in #1564 is a prerequisite; parsing state is not authority or page-freshness proof.
 
-The native browser network policy does not treat a loopback fixture as a public `exact_origins` target. Integration
-must explicitly admit an isolated configuration with deny-default restricted exact-origin/action approval, or
-add a scoped native prerequisite. Do not silently widen SSRF/network policy, enable privileged execute, copy a
-live browser profile, or treat this fixture's nonce as native approval.
+The native browser network policy does not treat a loopback fixture as a public `exact_origins` target. The
+separate opt-in `loopback_fixture` prerequisite admits one canonical HTTP origin on `127.0.0.1` or `[::1]` with
+an explicit unprivileged port, no DNS and no HTTPS/CONNECT. It requires a local gateway Playwright-library
+target, ephemeral restricted profile, deny-default policy, exact-origin non-deny rules, no hook, no privileged
+execute and no fallback. See [the policy contract](../architecture/browser-policy-modes.md#isolated-loopback-fixture-network).
+
+Integration still needs to bind and retain the owned listener before provisioning the profile, correlate native
+authority and establish native quiescence before releasing that listener. A network grant is not listener
+ownership or browser cleanup evidence. Do not silently widen SSRF/network policy, enable privileged execute,
+copy a live browser profile, or treat this fixture's nonce as native approval. `eval run` still skips browser cases.
 
 Real qualification must record the actual platform, browser driver and gateway/companion placement, plus retained
 independent state/artifact checks and cleanup results. These offline controls make none of those runtime claims.

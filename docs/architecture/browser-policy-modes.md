@@ -91,6 +91,33 @@ resolved accessibility identity. The companion derives the same value again
 at final dispatch, so declaring a button click as `read` cannot bypass an
 `external_commit` rule.
 
+## Isolated Loopback Fixture Network
+
+`network_mode: loopback_fixture` is a separate opt-in for an owned local test
+server, not an extension of public `exact_origins` or unrestricted `any_http`.
+It requires exactly one canonical HTTP origin: `127.0.0.1` or `[::1]`, with an
+explicit decimal port from 1024 through 65535. DNS names (including
+`localhost`), alternate numeric spellings, other addresses/ports, HTTPS and
+CONNECT are refused. Normal public-origin admission remains unchanged.
+
+Only a local gateway target using `playwright_library`, an ephemeral profile,
+no fallback, `restricted` capability, `policy` approval and a deny-default
+policy can select this mode. Hooks, privileged execution, attached profiles,
+cloud and companion targets are not admitted. Every non-deny policy rule must
+name exactly the configured origin; ordinary action, owner, grant, freshness
+and budget checks still apply. `dry_run` and `allow_approved_actions` retain
+their existing mutually exclusive meanings; this mode does not auto-approve
+anything.
+
+The broker and worker admission retain the same origin boundary. Driver
+configuration carries that origin and the mandatory native network proxy,
+which enforces it for actual traffic. The proxy dials the literal address and
+port without DNS, and the browser's implicit loopback proxy bypass is disabled.
+The network grant does not prove listener ownership: an eval runner must bind
+and retain its own fixture listener before admitting the target and must
+establish native quiescence before releasing it. This prerequisite does not
+integrate or qualify live browser evals.
+
 ## P0: full access and explicit confirmation
 
 P0 implements the profile enums, prepared-action binding, gateway and
