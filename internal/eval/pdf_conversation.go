@@ -38,6 +38,7 @@ type pdfConversation struct {
 	protectedCancel       *pdfCancellationObservation
 	wire                  *pdfWireObservation
 	censusWrites          map[string]string
+	outputSnapshot        pdfOutputSnapshot
 }
 
 func (domain *pdfConversation) initialTask() string { return domain.prepared.task }
@@ -194,6 +195,7 @@ func (domain *pdfConversation) conclude(ctx context.Context, trial *Trial) {
 			return
 		}
 		if settledErr == nil {
+			domain.outputSnapshot = settlement.snapshot
 			operation := settlement.operation
 			trial.PDF.Settlement = &PDFSettlementEvidence{
 				ApprovalInteractionID: settlement.approval.ID, ApprovalRequestID: domain.approvalRequestID,

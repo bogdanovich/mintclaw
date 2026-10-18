@@ -19,6 +19,32 @@ type pdfSettlement struct {
 	approval  interactions.Record
 	operation document.WriteOperationRecord
 	delivery  outbox.Intent
+	snapshot  pdfOutputSnapshot
+}
+
+// Fingerprint the same raw bytes admitted by the native decoders, not a
+// later read or re-serialization that could hide a changed terminal receipt.
+type pdfOutputSnapshot struct {
+	operationID, operationSHA256 string
+	deliveryID, deliverySHA256   string
+}
+
+func (snapshot pdfOutputSnapshot) matches(inventory *pdfNativeInventory, evidence *PDFSettlementEvidence) bool {
+	if inventory == nil || evidence == nil || !validID(snapshot.operationID) || !validID(snapshot.deliveryID) ||
+		!validDigest(snapshot.operationSHA256) || !validDigest(snapshot.deliverySHA256) ||
+		snapshot.operationID != evidence.OperationID || snapshot.deliveryID != evidence.OutboxDeliveryID {
+		return false
+	}
+	write, delivery := false, false
+	for _, file := range inventory.files {
+		if file.kind == "write" && file.id == snapshot.operationID {
+			write = digest(file.data) == snapshot.operationSHA256
+		}
+		if file.kind == "outbox" && file.id == snapshot.deliveryID {
+			delivery = digest(file.data) == snapshot.deliverySHA256
+		}
+	}
+	return write && delivery
 }
 
 func (domain *pdfConversation) observeSettlement() (pdfSettlement, error) {
@@ -53,7 +79,7 @@ func (domain *pdfConversation) observeSettlement() (pdfSettlement, error) {
 	if err != nil {
 		return pdfSettlement{}, err
 	}
-	operation, err := domain.prepared.observeWriteOperation(domain.operationID, owner)
+	operation, operationSHA256, err := domain.prepared.observeWriteOperation(domain.operationID, owner)
 	if err != nil {
 		return pdfSettlement{}, err
 	}
@@ -64,14 +90,20 @@ func (domain *pdfConversation) observeSettlement() (pdfSettlement, error) {
 		operation.UpdatedAt.After(time.Now()) {
 		return pdfSettlement{}, ErrPDFTrial
 	}
-	delivery, err := domain.prepared.observeOutbox(operation.OutboxDeliveryID)
+	delivery, deliverySHA256, err := domain.prepared.observeOutboxSnapshot(operation.OutboxDeliveryID)
 	if err != nil {
 		return pdfSettlement{}, err
 	}
 	if !domain.settledDeliveryMatches(job, operation, owner, delivery) {
 		return pdfSettlement{}, ErrPDFTrial
 	}
-	return pdfSettlement{job: job, approval: approval, operation: operation, delivery: delivery}, nil
+	return pdfSettlement{
+		job: job, approval: approval, operation: operation, delivery: delivery,
+		snapshot: pdfOutputSnapshot{
+			operationID: operation.OperationID, operationSHA256: operationSHA256,
+			deliveryID: delivery.ID, deliverySHA256: deliverySHA256,
+		},
+	}, nil
 }
 
 func (domain *pdfConversation) settledApprovalMatches(record interactions.Record, terminalAt int64) bool {
@@ -125,29 +157,29 @@ func pdfWriteOwner(workspace string, record interactions.Record) (document.Autho
 func (trial *pdfTrial) observeWriteOperation(
 	id string,
 	owner document.Authority,
-) (document.WriteOperationRecord, error) {
+) (document.WriteOperationRecord, string, error) {
 	if !validID(id) {
-		return document.WriteOperationRecord{}, ErrPDFTrial
+		return document.WriteOperationRecord{}, "", ErrPDFTrial
 	}
 	root, err := os.OpenRoot(trial.home)
 	if err != nil {
-		return document.WriteOperationRecord{}, ErrPDFTrial
+		return document.WriteOperationRecord{}, "", ErrPDFTrial
 	}
 	defer func() { _ = root.Close() }()
 	data, err := readPDFNativeFile(root, "state/document-writes/journal/"+id+".json",
 		document.DefaultMaxWriteJournalRecord)
 	if err != nil {
-		return document.WriteOperationRecord{}, err
+		return document.WriteOperationRecord{}, "", err
 	}
 	defer clear(data)
 	if err = trial.scanNativeSurface(data); err != nil {
-		return document.WriteOperationRecord{}, err
+		return document.WriteOperationRecord{}, "", err
 	}
 	record, err := document.InspectWriteOperationSnapshot(data, id, owner)
 	if err != nil || record.CreatedAt.Before(trial.started) {
-		return document.WriteOperationRecord{}, ErrPDFTrial
+		return document.WriteOperationRecord{}, "", ErrPDFTrial
 	}
-	return record, nil
+	return record, digest(data), nil
 }
 
 func (domain *pdfConversation) settledDeliveryMatches(

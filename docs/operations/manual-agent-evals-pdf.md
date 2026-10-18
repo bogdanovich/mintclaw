@@ -103,6 +103,13 @@ parent/directory/file identities, pinned source bytes and a directory containing
 replacement objects and incomplete scans are retained rather than recursively removed. The receipt reports only
 this owned fixture cleanup, not deletion of native history, protected state, outputs or all temporary resources.
 
+For a completed output job, logical settlement also requires the exact terminal write-journal and media-outbox
+bytes admitted during the original native settlement observation. Their bounded fingerprints stay in memory, not
+in model context. A later census or re-serialization cannot replace that original observation. Missing, changed or
+unobserved receipts keep `logical_settlement_unavailable` and retain the source, even when the job remains completed
+and operation/delivery counts are unchanged. This is a conservative stability check, not a new PDF output pass or
+regrade contract; even whitespace-only rewrites need new qualification rather than being silently trusted.
+
 `pdf.post_stop` alone never grants whole-runtime privacy, positive PDF delivery qualification or judge/regrade eligibility.
 Those independent witnesses and real-model qualification remain mandatory. These deterministic controls use native stores and
 an owned protocol child stub; they are not evidence of a live model/backend scenario passing.
