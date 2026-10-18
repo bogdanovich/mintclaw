@@ -99,6 +99,9 @@ type FormIntakeInput struct {
 	Context      FormIntakeContext                  `json:"-"`
 	Accounted    []FormIntakeAccountedLiteral       `json:"-"`
 	Findings     []FormFieldMappingBlocker          `json:"-"`
+	// CompletedWindows is derived from committed pass outcomes, not a claim
+	// that the remaining text is accounted. Failed reservations are excluded.
+	CompletedWindows [][]string `json:"-"`
 }
 
 type FormIntakePassRequest struct {

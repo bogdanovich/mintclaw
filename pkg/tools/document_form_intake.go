@@ -16,19 +16,21 @@ import (
 )
 
 type safeDocumentFormIntake struct {
-	Progress          document.FormIntakeProgress        `json:"progress"`
-	RequestRevision   int64                              `json:"request_revision,omitempty"`
-	Question          string                             `json:"question,omitempty"`
-	Summary           string                             `json:"form_summary,omitempty"`
-	Plan              string                             `json:"collection_plan,omitempty"`
-	AcceptedCount     int                                `json:"accepted_count"`
-	AcknowledgedCount int                                `json:"acknowledged_count"`
-	ScopedCount       int                                `json:"scoped_count,omitempty"`
-	Findings          []document.FormFieldMappingBlocker `json:"findings,omitempty"`
-	FindingFields     []safeDocumentFormField            `json:"finding_fields,omitempty"`
-	Intent            document.FormIntakeDialogIntent    `json:"intent,omitempty"`
-	FindingsTruncated bool                               `json:"findings_truncated,omitempty"`
-	Failure           *safeDocumentFormFailure           `json:"failure,omitempty"`
+	Progress             document.FormIntakeProgress        `json:"progress"`
+	RequestRevision      int64                              `json:"request_revision,omitempty"`
+	Question             string                             `json:"question,omitempty"`
+	Summary              string                             `json:"form_summary,omitempty"`
+	Plan                 string                             `json:"collection_plan,omitempty"`
+	AcceptedCount        int                                `json:"accepted_count"`
+	AcknowledgedCount    int                                `json:"acknowledged_count"`
+	ScopedCount          int                                `json:"scoped_count,omitempty"`
+	Findings             []document.FormFieldMappingBlocker `json:"findings,omitempty"`
+	FindingFields        []safeDocumentFormField            `json:"finding_fields,omitempty"`
+	Intent               document.FormIntakeDialogIntent    `json:"intent,omitempty"`
+	FindingsTruncated    bool                               `json:"findings_truncated,omitempty"`
+	Failure              *safeDocumentFormFailure           `json:"failure,omitempty"`
+	ReceivedInputState   string                             `json:"received_input_state,omitempty"`
+	RetainedFindingCount int                                `json:"retained_finding_count,omitempty"`
 }
 
 // ProtectedFormIntakeConfigured gates fresh-message admission on the explicit
@@ -349,6 +351,10 @@ func (tool *DocumentTool) continueFormIntake(
 	}
 	intake := safeDocumentFormIntake{
 		Progress: *progress, RequestRevision: input.AdmittedRevision, Intent: input.DialogIntent,
+		ReceivedInputState: "retained",
+	}
+	if input.Consumed {
+		intake.ReceivedInputState = "accounted"
 	}
 	references, err := tool.formJobs.FormIntakeReferences(ctx, input.JobID, input.ModeID, owner)
 	if err != nil {
@@ -386,6 +392,17 @@ func (tool *DocumentTool) continueFormIntake(
 		return documentFormToolError(document.ErrFormJobConflict)
 	}
 	intake.Progress = *progress
+	record, err := tool.formJobs.Get(ctx, input.JobID, owner)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	summary, err := tool.formJobs.FormMappingSummary(ctx, input.JobID, owner, schema)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	if summary.Revision != record.Revision {
+		return documentFormToolError(document.ErrFormJobConflict)
+	}
 	// A later input may settle earlier findings in this same atomic ledger.
 	// Project current native state, not the earlier intermediate pass results.
 	for _, pending := range references {
@@ -393,7 +410,17 @@ func (tool *DocumentTool) continueFormIntake(
 		if readErr != nil {
 			return documentFormToolError(readErr)
 		}
+		if pending == reference {
+			intake.ReceivedInputState = "retained"
+			if current.Consumed {
+				intake.ReceivedInputState = "accounted"
+			}
+		}
 		for _, finding := range current.Findings {
+			intake.RetainedFindingCount++
+			if !documentFormIntakeActionableFinding(summary, finding) {
+				continue
+			}
 			if len(intake.Findings) < document.MaxFormIntakeCandidates {
 				intake.Findings = append(intake.Findings, finding)
 			} else {
@@ -404,11 +431,20 @@ func (tool *DocumentTool) continueFormIntake(
 	if progress.PendingInputs == 0 {
 		intake.Failure = nil
 	}
-	record, err := tool.formJobs.Get(ctx, input.JobID, owner)
-	if err != nil {
-		return documentFormToolError(err)
-	}
 	return tool.formIntakeResult(ctx, owner, schema, record, "continue", intake)
+}
+
+// Presentation only: an old advisory cannot make a confirmed value missing.
+// Native input/findings, conflicts, budgets and the pending-output fence remain
+// untouched, including when unrelated unaccounted text prevents settlement.
+func documentFormIntakeActionableFinding(
+	summary document.FormJobMappingSummary,
+	finding document.FormFieldMappingBlocker,
+) bool {
+	if finding.Code != "field_ambiguous" && finding.Code != "field_confirmation_required" {
+		return true
+	}
+	return !slices.Contains(summary.ConfirmedFieldIDs, finding.FieldID)
 }
 
 // Never project err.Error(): private provider/native wrappers can contain input.
@@ -461,6 +497,16 @@ func (tool *DocumentTool) processFormIntakeInput(
 		if input.Consumed {
 			result.intent = input.DialogIntent
 			break
+		}
+		// Automatic continuation may revisit a known blocker with the new
+		// related input, but must not spend the old budget on unchanged empty
+		// windows. Explicit retries of this receipt still traverse all windows.
+		if reference != trigger && slices.ContainsFunc(input.CompletedWindows, func(completed []string) bool {
+			return slices.Equal(completed, ids)
+		}) && !slices.ContainsFunc(input.Findings, func(finding document.FormFieldMappingBlocker) bool {
+			return slices.Contains(ids, finding.FieldID)
+		}) {
+			continue
 		}
 		clarificationTrigger := ""
 		for _, finding := range input.Findings {
@@ -595,6 +641,10 @@ func (tool *DocumentTool) processFormIntakeInput(
 		return result, err
 	}
 	result.findings = input.Findings
+	if reference != trigger && !input.Consumed && input.Passes >= document.MaxFormIntakeExtractionPasses {
+		result.failureStage = "reservation"
+		return result, document.ErrFormJobCapacityExceeded
+	}
 	result.failureStage = ""
 	return result, nil
 }

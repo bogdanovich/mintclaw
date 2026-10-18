@@ -518,6 +518,12 @@ func formIntakeAdmission(
 
 func formIntakeInput(record FormJobRecord, mode *formIntakeStoredMode, input formIntakeStoredInput) FormIntakeInput {
 	var dialogIntent FormIntakeDialogIntent
+	var completedWindows [][]string
+	for _, pass := range input.Reservations {
+		if pass.Outcome != nil {
+			completedWindows = append(completedWindows, slices.Clone(pass.CandidateIDs))
+		}
+	}
 	for index := len(input.Reservations) - 1; index >= 0; index-- {
 		if outcome := input.Reservations[index].Outcome; outcome != nil {
 			dialogIntent = outcome.Intent
@@ -530,8 +536,9 @@ func formIntakeInput(record FormJobRecord, mode *formIntakeStoredMode, input for
 		DialogIntent: dialogIntent,
 		Passes:       len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
 		Intent: input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
-		Accounted: formIntakeAccountedLiterals(input),
-		Findings:  formIntakeCurrentModeFindings(mode, input),
+		Accounted:        formIntakeAccountedLiterals(input),
+		Findings:         formIntakeCurrentModeFindings(mode, input),
+		CompletedWindows: completedWindows,
 	}
 }
 

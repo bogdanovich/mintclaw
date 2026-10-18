@@ -149,6 +149,36 @@ input is still capacity-blocked. Do not treat “could not apply” prose as aut
 The 2026-10-18 fresh I-134 run still exposed this incorrect reporting/repeated-question behavior; it is an open
 qualification finding, not an instruction to keep retrying the exhausted input.
 
+### Bounded clarification repair check
+
+The [clarification repair goal](../architecture/pdf-intake-clarification-goal.md)
+does not qualify I-134/XFA. On a **new unrelated synthetic form**, use this short
+manual Telegram scenario after the repair is deployed:
+
+1. Attach the generic fixture and ask to fill it with synthetic data only.
+2. Send several facts in one ordinary paragraph. Leave one requested role
+   ambiguous, or include a value that violates a documented field constraint.
+3. Answer the specific clarification in ordinary text, adding one more fact.
+   Previously accepted facts must survive; only genuinely unresolved details
+   may be asked again. A real conflict must not disappear just because that
+   field also has a previously confirmed value.
+4. If older text remains pending, the response must distinguish the new
+   accepted decisions from that retained input. It must not say the new answer
+   failed wholesale. Do not resend accepted facts.
+5. A normal new message must not automatically revisit already completed
+   unrelated extraction windows. `/retry_form` deliberately retries its selected
+   retained receipt, using the same persisted budget; it is not a reset.
+6. At `capacity_exceeded`, stop blind retries and retain the job for diagnosis.
+   No replacement task, limit reset or claim of completed output is implied.
+
+For operator verification, `received_input_state=accounted` means the newly
+received message has been accounted, not that the whole form is finished.
+`accepted_count` and `acknowledged_count` describe this continuation;
+`progress.pending_inputs` still fences review/output. `retained_finding_count`
+includes native older findings even when advisory questions about already
+confirmed/preserved fields are omitted from `findings`/`finding_fields`.
+That presentation filtering never deletes native findings or pending text.
+
 ## Large Public Form And Unsupported Output
 
 The official I-134 is a separate required complete-applicable transaction, not a substitute for the unrelated form.

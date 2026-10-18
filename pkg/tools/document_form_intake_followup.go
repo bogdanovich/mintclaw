@@ -36,11 +36,21 @@ func documentFormIntakeFollowup(
 		return &toolshared.ToolOnlyFollowup{
 			ResponseOnly: true,
 			Instruction: "Explain the trusted processing failure and its stage without echoing private values or raw errors. " +
-				"The input was received and retained; processing failure is not evidence of missing operator information. " +
+				"Use received_input_state and accepted_count/acknowledged_count to describe this continuation: " +
+				"A retained-input failure does not undo newly accepted decisions. " +
+				"Never say no answers were applied when accepted_count is positive. " +
+				"accounted means the received message was processed; retained means some of its text still needs processing. " +
+				"A processing failure is not evidence of missing operator information. " +
 				"Never ask the user to resend already received facts, restart intake or provide the attachment again. " +
 				"Ask only a specific clarification justified by native intake findings, not by the unresolved-field list. " +
-				"With no finding, report that accepted fields are preserved and offer /retry_form to process retained " +
+				"Only findings/finding_fields identify actionable questions; retained_finding_count also includes old advice " +
+				"about already confirmed fields and must never be turned into questions. " +
+				"Never ask again for confirmed/provided/preserved facts. " +
+				"With no finding and a retryable failure, report that accepted fields are preserved " +
+				"and offer /retry_form to process retained " +
 				"input without sending another data message. " +
+				"For capacity_exceeded, do not offer a blind retry: explain that retained processing reached its limit " +
+				"and requires operator investigation; no counter reset or fresh job is authorized. " +
 				"For editable_output_unavailable, explain the limitation and offer complete filling or cancellation. " +
 				"Do not claim completion, approve output or invoke another tool. Wait for the user's next message.",
 		}, nil
@@ -53,6 +63,8 @@ func documentFormIntakeFollowup(
 			Instruction: "Render the trusted protected form progress in the user's language. For collect, present its form summary, grouped collection plan and question. Invite one free-text paragraph or several ordinary messages; never require /answer, labels, field IDs or one answer per field. Do not echo personal values. Never ask again for confirmed/provided/preserved facts. " +
 				"Pending inputs still block review and output: do not claim a review checkpoint or ask to finish. " +
 				"With pending input, ask only a clarification justified by native findings; otherwise offer /retry_form " +
+				"using received_input_state and accepted_count/acknowledged_count " +
+				"to distinguish accepted facts from retained text, " +
 				"without requesting received facts again. Do not claim complete filling, restart intake or request " +
 				"the attachment again. Wait for the user's next message.",
 		}, nil
