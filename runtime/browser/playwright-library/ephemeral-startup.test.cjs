@@ -30,6 +30,14 @@ const bootstrap = `
     return { newContext: () => context, close() {} };
   };
   chromium.launch = firefox.launch = launch;
+  if (mode === 'different-real-uid') {
+    const original = process.getuid;
+    process.getuid = () => original() + 1;
+  }
+  if (mode === 'different-effective-uid') {
+    const original = process.geteuid;
+    process.geteuid = () => original() + 1;
+  }
   if (mode === 'foreign-owner') {
     const original = fs.fstatSync;
     fs.fstatSync = fd => { const info = original(fd); info.uid++; return info; };
@@ -102,8 +110,16 @@ test('Linux ephemeral Chromium uses the anchored private cwd without moving pare
     assert.equal(result.executable, path.join(__dirname, 'synthetic-browser'));
   });
 
+test('Linux native owner contract follows effective UID rather than real UID',
+  { skip: process.platform !== 'linux' }, t => {
+    const result = probe(t, 'different-real-uid');
+    assert.equal(result.started, true);
+    assert.equal(result.private_cwd, true);
+    assert.equal(result.child_tmpdir, '.');
+  });
+
 for (const mode of ['public', 'symlink', 'parent-symlink', 'file', 'missing', 'relative', 'dot-alias',
-  'mismatched', 'foreign-owner', 'replaced-directory']) {
+  'mismatched', 'foreign-owner', 'different-effective-uid', 'replaced-directory']) {
   test('Linux private startup refuses ' + mode + ' before launching a browser',
     { skip: process.platform !== 'linux' }, t => {
       const result = probe(t, mode);

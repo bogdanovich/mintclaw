@@ -193,7 +193,7 @@ function enterPrivateEphemeralDirectory(options) {
       path.resolve(root) !== root || fs.realpathSync(root) !== root) throw invalid();
   const before = fs.lstatSync(root);
   const privateDirectory = info => info.isDirectory() && (info.mode & 0o777) === 0o700 &&
-    info.uid === process.getuid();
+    info.uid === process.geteuid();
   if (!privateDirectory(before)) throw invalid();
   const descriptor = fs.openSync(root, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
   try {
