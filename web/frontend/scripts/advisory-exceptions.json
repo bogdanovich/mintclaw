@@ -1,0 +1,29 @@
+[
+  {
+    "id": "GHSA-g7r4-m6w7-qqqr",
+    "module": "esbuild",
+    "version": "0.27.4",
+    "severity": "low",
+    "paths": [".>@tanstack/router-plugin>unplugin>esbuild"],
+    "expiresOn": "2026-11-17",
+    "reason": "The affected API is the Windows esbuild development server with servedir. MintClaw serves built assets through Go; its reviewed frontend commands do not start that API. Reassess all dependency paths and any Windows serve use before renewal."
+  },
+  {
+    "id": "GHSA-vfj7-8cjw-p6xm",
+    "module": "braces",
+    "version": "3.0.3",
+    "severity": "high",
+    "paths": [".>shadcn>fast-glob>micromatch>braces"],
+    "expiresOn": "2026-11-17",
+    "reason": "No upstream patch exists. This dependency processes developer/build glob patterns; the product imports shadcn CSS and does not expose this parser to chat or HTTP input. Reassess upstream and build-input boundaries before renewal."
+  },
+  {
+    "id": "GHSA-rj75-hqrm-r3gf",
+    "module": "postcss-selector-parser",
+    "version": "6.0.10",
+    "severity": "moderate",
+    "paths": [".>@tailwindcss/typography>postcss-selector-parser"],
+    "expiresOn": "2026-11-17",
+    "reason": "Tailwind typography pins this major. It parses repository CSS selectors during compilation; the product does not parse user selectors with it. A major override needs compatibility evidence. Reassess upstream and build-input boundaries before renewal."
+  }
+]

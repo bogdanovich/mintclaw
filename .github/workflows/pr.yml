@@ -30,6 +30,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check frontend advisories
+        run: pnpm audit:check
+
       - name: Check frontend formatting
         run: pnpm format
 
