@@ -1,6 +1,22 @@
 package document
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// Closed, value-free interpretation failures. They describe neither private
+// response content nor permission to retry or change the native ledger.
+var (
+	ErrFormIntakeInvalidContext  = errors.New("form intake interpretation context invalid")
+	ErrFormIntakeInvalidResponse = errors.New("form intake interpretation response invalid")
+	ErrFormIntakeModelMissing    = errors.New("form intake interpretation model unavailable")
+	ErrFormIntakeProviderAuth    = errors.New("form intake provider authentication failed")
+	ErrFormIntakeProviderBilling = errors.New("form intake provider billing failed")
+	ErrFormIntakeProviderRequest = errors.New("form intake provider request rejected")
+	ErrFormIntakeProviderLimited = errors.New("form intake provider rate limited")
+	ErrFormIntakeProviderTemp    = errors.New("form intake provider temporarily unavailable")
+)
 
 // These projections exist only within the protected, ephemeral interpretation
 // call. Dialog intent is advisory, never commit or approval authority.
