@@ -451,6 +451,41 @@ func TestMCPTool_Execute_ManagerError(t *testing.T) {
 	}
 }
 
+func TestMCPToolPreservesFatalTransportCauseWithoutPublishingIt(t *testing.T) {
+	eventBus := runtimeevents.NewBus()
+	t.Cleanup(func() { _ = eventBus.Close() })
+	_, eventsCh, err := eventBus.Channel().OfKind(runtimeevents.KindMCPToolCallEnd).
+		SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "mcp-malformed-response", Buffer: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.New("private-response-canary: invalid response framing")
+	manager := &MockMCPManager{callToolFunc: func(
+		context.Context, string, string, map[string]any,
+	) (*mcp.CallToolResult, error) {
+		return nil, &mintclawmcp.CallTransportError{Err: cause}
+	}}
+	tool := NewMCPTool(manager, "test", &mcp.Tool{Name: "echo"})
+	tool.SetEventPublisher(eventBus)
+	result := tool.Execute(t.Context(), nil)
+	var transportErr *mintclawmcp.CallTransportError
+	if result == nil || !result.IsError || !errors.As(result.Err, &transportErr) || !errors.Is(result.Err, cause) ||
+		result.Observation == nil ||
+		result.Observation.MCP == nil {
+		t.Fatalf("transport cause was lost: %#v", result)
+	}
+	ended := receiveMCPToolRuntimeEvent(t, eventsCh)
+	payload, ok := ended.Payload.(MCPToolCallPayload)
+	if !ok || payload.Outcome != mcpToolCallOutcomeFailed {
+		t.Fatalf("unexpected tool outcome: %#v", ended.Payload)
+	}
+	if strings.Contains(result.ForLLM, "private-response-canary") ||
+		strings.Contains(result.Observation.MCP.Error, "private-response-canary") ||
+		strings.Contains(payload.Error, "private-response-canary") {
+		t.Fatal("private transport cause entered model output, observation, or runtime events")
+	}
+}
+
 func TestMCPTool_Execute_UncertainOutcomeIsDistinctAndRedacted(t *testing.T) {
 	eventBus := runtimeevents.NewBus()
 	defer func() {

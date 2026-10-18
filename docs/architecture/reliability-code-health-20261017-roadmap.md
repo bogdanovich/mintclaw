@@ -125,6 +125,14 @@ Completion gates: ordinary tool failures, cancellation, timeouts, fatal framing,
 closed transports, long wrapped errors, and uncertain execution have distinct
 tests; reconnect never silently repeats an uncertain side effect.
 
+The implementation carries malformed-response classification through a typed
+MCP error with a fixed public message that preserves its underlying cause internally.
+Current-turn control and repeated-failure accounting consume that classification,
+not error summaries. SDK compatibility matching stays at the MCP boundary and
+excludes structured remote application errors and canceled/timed-out causes.
+Session-loss recovery keeps its existing uncertain outcome and never replays the
+call automatically.
+
 ## R6: Existing Behavioral Qualification
 
 Continue the existing [Manual Agent Evals Roadmap](agent-evals-roadmap.md) rather

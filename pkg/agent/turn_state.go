@@ -932,6 +932,7 @@ func (ts *turnState) recordToolExecution(
 	tool string,
 	success bool,
 	errorSummary string,
+	fatalMCPTransport bool,
 	skillNames []string,
 ) {
 	tool = strings.TrimSpace(tool)
@@ -944,10 +945,11 @@ func (ts *turnState) recordToolExecution(
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.toolExecutions = append(ts.toolExecutions, ToolExecutionRecord{
-		Name:         tool,
-		Success:      success,
-		ErrorSummary: strings.TrimSpace(errorSummary),
-		SkillNames:   append([]string(nil), skillNames...),
+		fatalMCPTransport: fatalMCPTransport,
+		Name:              tool,
+		Success:           success,
+		ErrorSummary:      strings.TrimSpace(errorSummary),
+		SkillNames:        append([]string(nil), skillNames...),
 	})
 }
 
@@ -986,10 +988,11 @@ func (ts *turnState) toolExecutionsSnapshot() []ToolExecutionRecord {
 	out := make([]ToolExecutionRecord, 0, len(ts.toolExecutions))
 	for _, exec := range ts.toolExecutions {
 		out = append(out, ToolExecutionRecord{
-			Name:         exec.Name,
-			Success:      exec.Success,
-			ErrorSummary: exec.ErrorSummary,
-			SkillNames:   append([]string(nil), exec.SkillNames...),
+			fatalMCPTransport: exec.fatalMCPTransport,
+			Name:              exec.Name,
+			Success:           exec.Success,
+			ErrorSummary:      exec.ErrorSummary,
+			SkillNames:        append([]string(nil), exec.SkillNames...),
 		})
 	}
 	return out
