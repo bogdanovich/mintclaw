@@ -228,7 +228,8 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 		"for every exact JSON value, including objects and arrays, or any result containing " +
 		"boolean, number, or null values. If acceptance exact_json=true, put valid complete final JSON only in " +
 		"that result; it becomes the entire response. Never mark supporting data exact_json. " +
-		"Use kind=artifact with stable artifact_refs. Satisfy each declared acceptance " +
+		"Use kind=artifact with stable artifact_refs. The runtime associates committed download receipts with " +
+		"matching artifact results automatically; keep result receipt_ids empty. Satisfy each declared acceptance " +
 		"output_kind, required_fields, and min_items exactly. Set " +
 		"truncated=true if any requested output is missing due to size; truncated output is not accepted as complete. " +
 		"For result items, omit receipt_ids or use an empty array. " +
@@ -252,8 +253,9 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 			"are not external-action receipts. When reporting succeeded, account for every successful browser_act " +
 			"invocation with effect " +
 			"external_commit or unknown, including unknown-effect download, upload, and file_chooser operations, " +
-			"not only the final Save or Submit. Each such receipt must appear exactly once across matching completed " +
-			"external_action items. Failed or not-dispatched invocations do not prove a completed effect. " +
+			"not only the final Save or Submit. A committed unknown-effect download returned in a kind=artifact result " +
+			"is already accounted for by that exact artifact reference. Every other such receipt must appear exactly " +
+			"once across matching completed external_action items. Failed or not-dispatched invocations do not prove a completed effect. " +
 			"For each external_action, copy one or more " +
 			"invocation_id values from successful browser_act results into receipt_ids. Do not claim an external action " +
 			"without its runtime receipt. If the commit ran but later verification cannot confirm the requested external " +
@@ -802,6 +804,7 @@ func validateObjectiveOutcomeWithPolicy(
 	if missingResult {
 		appendMissing(objectiveOutcomeResultRequired)
 	}
+	bindArtifactResultReceipts(outcome.CompletedItems, receipts, consumedReceipts)
 	unclaimedExternalReceipts := 0
 	unclaimedHandoffReceipts := 0
 	for receiptID, receipt := range receipts {
@@ -892,6 +895,45 @@ func validateObjectiveOutcomeWithPolicy(
 		outcome.UserSummary = objectivePresentation(reported.Result, outcome)
 	}
 	return outcome
+}
+
+// Artifact acquisition is an output, even when its browser mechanism had an
+// unknown effect. Bind only trusted proof of the exact committed download, after
+// explicit action claims have been validated. This does not authorize execution,
+// reinterpret other unknown effects, or hide unreturned/unrelated actions.
+func bindArtifactResultReceipts(
+	items []taskresult.Item,
+	receipts map[string]taskresult.Receipt,
+	consumed map[string]struct{},
+) {
+	var ids []string
+	for id, receipt := range receipts {
+		if receipt.Kind == taskresult.ObjectiveKindExternalAction && receipt.Tool == "browser_act" &&
+			receipt.Action == "download" && receipt.Metadata["effect"] == "unknown" &&
+			receipt.Metadata["artifact_ref"] != "" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for index := range items {
+		item := &items[index]
+		if item.Kind != taskresult.ObjectiveKindResult || item.Output == nil || item.Output.Kind != "artifact" {
+			continue
+		}
+		for _, id := range ids {
+			if _, claimed := consumed[id]; claimed {
+				continue
+			}
+			receipt := receipts[id]
+			for _, ref := range item.Output.ArtifactRefs {
+				if ref == receipt.Metadata["artifact_ref"] {
+					item.Receipts = append(item.Receipts, receipt)
+					consumed[id] = struct{}{}
+					break
+				}
+			}
+		}
+	}
 }
 
 func declaredExactJSONObjectiveOutput(outcome *taskresult.Outcome) (string, bool) {
