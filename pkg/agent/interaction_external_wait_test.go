@@ -21,13 +21,16 @@ import (
 )
 
 type externalWaitTestTool struct {
-	state          atomic.Value
-	executions     int
-	cleanups       int
-	executionID    string
-	cleanupErr     error
-	handoff        bool
-	invalidContext atomic.Bool
+	state           atomic.Value
+	executions      int
+	cleanups        int
+	executionID     string
+	sessionKey      string
+	routeSessionKey string
+	cleanupErr      error
+	cleanupHook     func()
+	handoff         bool
+	invalidContext  atomic.Bool
 }
 
 func (*externalWaitTestTool) Name() string               { return "external_test_wait" }
@@ -36,6 +39,8 @@ func (*externalWaitTestTool) Parameters() map[string]any { return map[string]any
 func (tool *externalWaitTestTool) Execute(ctx context.Context, _ map[string]any) *toolshared.ToolResult {
 	tool.executions++
 	tool.executionID = toolshared.ToolExecutionID(ctx)
+	tool.sessionKey = toolshared.ToolSessionKey(ctx)
+	tool.routeSessionKey = toolshared.ToolRouteSessionKey(ctx)
 	result := &toolshared.ToolResult{ForLLM: `{"outcome":"waiting"}`, Control: toolshared.ToolControl{
 		Suspension: &interactions.SuspensionRequest{
 			Kind: interactions.KindExternalWait, ConditionRef: "opaque_condition_reference", Timeout: 2 * time.Hour,
@@ -50,6 +55,9 @@ func (tool *externalWaitTestTool) Execute(ctx context.Context, _ map[string]any)
 
 func (tool *externalWaitTestTool) ResolveExternalWait(ctx context.Context, ref string) toolshared.ExternalWaitState {
 	if ref != "opaque_condition_reference" || toolshared.ToolExecutionID(ctx) != tool.executionID ||
+		toolshared.ToolSessionKey(
+			ctx,
+		) != tool.sessionKey || toolshared.ToolRouteSessionKey(ctx) != tool.routeSessionKey ||
 		toolshared.ToolInboundContext(ctx).SenderID != "user-1" {
 		tool.invalidContext.Store(true)
 		return toolshared.ExternalWaitUnavailable
@@ -59,6 +67,9 @@ func (tool *externalWaitTestTool) ResolveExternalWait(ctx context.Context, ref s
 
 func (tool *externalWaitTestTool) CleanupTurnWithResult(ctx context.Context) (tools.TurnCleanupResult, error) {
 	tool.cleanups++
+	if tool.cleanupHook != nil {
+		tool.cleanupHook()
+	}
 	if toolshared.ToolExecutionID(ctx) != tool.executionID {
 		return tools.TurnCleanupResult{}, errors.New("wrong cleanup owner")
 	}
@@ -405,5 +416,30 @@ func TestExternalWaitDelegatedTaskRetainsOwnerAcrossDelayAndReload(t *testing.T)
 				t.Fatalf("delegate continuation=%+v executions=%d", after, tool.executions)
 			}
 		})
+	}
+}
+
+func TestExternalWaitCancellationDuringCleanupDoesNotCreateInteraction(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	tool := &externalWaitTestTool{cleanupHook: cancel}
+	tool.state.Store(toolshared.ExternalWaitPending)
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{
+			ToolCalls: []providers.ToolCall{
+				{ID: "call-cancel-during-cleanup", Name: tool.Name(), Arguments: map[string]any{}},
+			},
+		},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	agent.Tools.Register(tool)
+	spec := makeTestTurnSpec("session-cancel-during-cleanup")
+	spec.Dispatch.InboundContext = &bus.InboundContext{Channel: "cli", ChatID: "test-chat", SenderID: "user-1"}
+	_, status, _ := runAgentLoopWithStatusForTest(ctx, al, agent, spec)
+	records := al.interactionRegistryForWorkspace(agent.Workspace).ListNonterminal()
+	if status == TurnEndStatusSuspended || len(records) != 0 {
+		t.Fatalf("canceled cleanup created a resumable interaction: status=%s records=%d", status, len(records))
 	}
 }

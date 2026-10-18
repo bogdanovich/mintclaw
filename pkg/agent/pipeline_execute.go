@@ -3188,6 +3188,11 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		if cleanupErr != nil {
 			return fallback("cannot wait while turn resources remain unavailable for cleanup")
 		}
+		// Cleanup is bounded but can outlive a caller cancellation. Never create
+		// a new durable continuation for an execution that ended during cleanup.
+		if ctx.Err() != nil || r.ts.hardAbortRequested() {
+			return fallback("external wait was canceled before admission")
+		}
 	}
 	inbound := r.ts.opts.Dispatch.InboundContext
 	originInbound := interactionSuspensionExecutionContext(r.ts, inbound)

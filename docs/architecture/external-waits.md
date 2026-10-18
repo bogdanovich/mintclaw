@@ -12,11 +12,13 @@ an authorization token, phone-link capability or secret value. Runtime-owned
 route, execution and inbound identity accompany the persisted record. Only the
 originating registered tool's `ExternalWaitResolver` evaluates readiness using
 that identity; model visibility expiry does not remove its lifecycle resolver.
-Ordinary chat answers cannot resolve this kind. `/stop` uses normal cancellation.
+The resolver receives the executing child session for delegated work while the
+parent route remains separate for delivery. Ordinary chat answers cannot resolve
+this kind. `/stop` uses normal cancellation.
 
 Before suspension, the runtime closes turn resources and preserves native
 cleanup receipts. External waits cannot carry a live resource handoff. A failed
-cleanup prevents suspension. Questions and approval handoffs keep their existing
+cleanup or cancellation during cleanup prevents suspension. Questions and approval handoffs keep their existing
 resource behavior.
 
 The existing recovery tick checks waiting conditions. Pending conditions leave

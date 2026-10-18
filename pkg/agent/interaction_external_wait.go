@@ -20,11 +20,15 @@ func (al *AgentLoop) externalWaitState(ctx context.Context, record interactions.
 	if !ok || agent == nil || agent.Tools == nil {
 		return toolshared.ExternalWaitUnavailable
 	}
-	toolCtx, cancel, err := interactionOriginToolContext(ctx, agent, record)
+	capabilities, _ := al.runtimeCapabilitySnapshot()
+	toolCtx, cancel, err := interactionOriginToolContext(ctx, agent, record, capabilities)
 	if err != nil {
 		return toolshared.ExternalWaitUnavailable
 	}
 	defer cancel()
+	// The executing child session owns the tool condition; the independently
+	// restored route still identifies the parent conversation for delivery.
+	toolCtx = toolshared.WithToolSessionContext(toolCtx, agent.ID, interactionContinuationSessionKey(record), nil)
 	return agent.Tools.ResolveExternalWait(toolCtx, record.Origin.ToolName, record.ConditionRef)
 }
 
