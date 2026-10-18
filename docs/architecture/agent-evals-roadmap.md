@@ -14,6 +14,11 @@ retained every trial. Four correlated target finals had no wire usage blocks des
 the non-streaming channel projection needs a scoped repair. Original receipts remain unknown, not backfilled;
 returned-final observations are not all-call usage or completion of the frozen goal.
 
+The [target usage v2 pilot](../operations/manual-agent-evals-target-usage-v2-pilot-20261018.md) on merged #1772
+then passed one new Linux context trial, one judge-only regrade and comparison. Both actual wire finals retained
+usage (4,770 input / 27 output); old reports were not backfilled. This qualifies returned-final collection only,
+not full all-call coverage, domain completion or the remaining frozen-goal work.
+
 The [first live pilot](../operations/manual-agent-evals-pilot-20261011.md) is preserved with its inconclusive
 interaction and failed 4/6 judge calibration. The subsequent
 [v2 judge calibration](../operations/manual-agent-evals-judge-v2-calibration-20261011.md) agreed on 6/6 unchanged
