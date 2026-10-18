@@ -111,11 +111,57 @@ advertisement. The adapter now explicitly disables that vendor behavior. After
 the screen reader was stopped, live before/after checks confirmed unchanged
 `ScreenReaderEnabled`, `IsEnabled`, and the GNOME screen-reader setting.
 
-The current Mac qualification launch was attributed by TCC to
+The October 10 Mac qualification launch was attributed by TCC to
 `sshd-keygen-wrapper`, despite a Herdr process ancestor. The worker reported
 Accessibility and Screen Recording as denied. Adding Herdr alone did not grant
 this launch chain permission; a stable companion-owned, user-approved process
 identity is a prerequisite for meaningful Mac qualification.
+
+## Mac companion app launch
+
+Package the actual companion executable in a new app bundle to give its native
+permission checks a companion-owned process identity. Existing CLI and service
+invocations are unchanged. The packager neither installs nor launches the app,
+replaces an existing app, changes a service, or changes permissions.
+
+```sh
+go build -o build/mintclaw-node ./cmd/mintclaw-node
+bash scripts/build-macos-companion.sh \
+  --binary "$PWD/build/mintclaw-node" \
+  --config /absolute/operator-config.json \
+  --output '/absolute/new/MintClaw Companion.app' \
+  --sign-identity 'Your configured code signing identity'
+```
+
+For private development without a certificate, use `--development-ad-hoc`
+instead of `--sign-identity`. Ad-hoc grants must be rechecked after rebuilding;
+they are not a stable signing identity across updates. The bundle contains only
+an absolute reference to the external node configuration, not a credential copy.
+
+Launch the app through Finder or `open`. A launch without arguments runs the
+existing companion using the referenced configuration. Do not run a second
+companion against an already-owned configuration or state directory. For a
+permission-only check without starting a gateway connection:
+
+```sh
+readiness_dir=$(mktemp -d)
+open -n -W --stdout "$readiness_dir/report.json" \
+  '/absolute/new/MintClaw Companion.app' --args desktop-readiness
+```
+
+`desktop-readiness` checks the process's main bundle, current GUI session,
+Accessibility and Screen Recording without prompting, capturing, enumerating
+windows, or changing OS settings. A missing grant produces `ready: false` with
+specific blocker codes. Grant permissions to the actual MintClaw Companion app
+in System Settings, then relaunch and check again. Executing its embedded binary
+over SSH is not the supported GUI launch path. Readiness grants no MintClaw
+authority and does not prove that a desktop is unlocked or a window is admitted.
+
+On October 17, a native app launch on macOS 26.6.2 reported the companion bundle
+identity and an active GUI session. TCC attributed its permission checks to
+`io.github.bogdanovich.mintclaw.companion`, rather than the SSH wrapper. Both
+permissions remained denied; capture and input qualification still require the
+corresponding grants.
 
 ## Integration gates
 
