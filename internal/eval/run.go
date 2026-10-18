@@ -208,12 +208,12 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			}
 		})
 	finalCancel()
+	result.RoleUsage = []RoleUsage{summarizeRoleCalls("user", roleCalls), summarizeRoleCalls("judge", roleCalls)}
 	if err != nil {
 		result.Verdict = combineVerdicts(result.Verdict, Error)
 		result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 		return result, ErrReport
 	}
-	result.RoleUsage = []RoleUsage{summarizeRoleCalls("user", roleCalls), summarizeRoleCalls("judge", roleCalls)}
 	result.Coverage = map[Verdict]int{}
 	result.Verdict = combineVerdicts(result.TargetLifecycle.verdict(), result.PrivateSurfaces.verdict())
 	for _, summary := range result.Trials {
