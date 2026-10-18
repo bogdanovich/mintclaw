@@ -285,8 +285,11 @@ func TestAuthorityBrokerTerminalUnixRoundTripRealPTY(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	waitForAuthorityBrokerTerminalAck(t, terminal, 1)
-	waitForAuthorityBrokerTerminalOutput(t, terminal, "echo-off-ready")
+	readyCtx, cancelReady := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelReady()
+	if err := observeTerminalReadiness(readyCtx, terminal.Receive, 1, "echo-off-ready"); err != nil {
+		t.Fatal(err)
+	}
 	if err := terminal.Send(
 		t.Context(),
 		terminalInputControl(2, "input-2", "printf 'broker-terminal-marker\\n'\n"),
