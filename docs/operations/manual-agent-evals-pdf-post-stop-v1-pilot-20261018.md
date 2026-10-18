@@ -71,6 +71,11 @@ and code `unavailable`. This is neither a known leak nor proof of privacy. It co
 privacy verdict and source-fixture removal. A read-only inventory confirmed a SQLite session store among binary
 surfaces; the other opaque causes were not individually established by this pilot.
 
+A subsequent read-only, value-free diagnostic of the retained files classified the seven opaque surfaces as five
+built-in skill text files, one JSON record stream and one SQLite database. It made no model/tool calls and did not
+rescan or replace the original qualification receipt. Format-specific scanner work must not treat the skills or
+database as safe merely because their origins are known.
+
 Before deleting any credential copy, a separate bounded operational inspector scanned 58 raw files / 353,394
 bytes, including captured CLI stdout/stderr outside the profile, and 33 seed files / 139,352 bytes. Both scans
 completed within their declared bounds and found no exact credential-file literals outside authorized credential

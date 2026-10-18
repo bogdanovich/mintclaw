@@ -183,7 +183,13 @@ func observePrivateSurfaces(
 				result.OpaqueFiles++
 			} else {
 				scan.uncertain = false
-				if scan.text(string(data), 0) {
+				var matched bool
+				if privateJSONLinesFile(fileName) {
+					matched = scan.jsonLines(data)
+				} else {
+					matched = scan.text(string(data), 0)
+				}
+				if matched {
 					if scan.uncertain {
 						result.OpaqueFiles++
 					} else {

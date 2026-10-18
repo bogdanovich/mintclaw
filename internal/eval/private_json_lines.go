@@ -1,0 +1,58 @@
+package eval
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"path"
+)
+
+const maxPrivateJSONRecords = 8192
+
+// Native logs and histories contain one JSON value per line, not one value per
+// file. Keep this format-specific admission out of the model-context scanner.
+func (scan *privateContentScan) jsonLines(data []byte) bool {
+	if scan.filter != nil && scan.filter.Replace(string(data)) != string(data) ||
+		containsRetainedLiteral(data, scan.facts) {
+		return true
+	}
+	uncertain, records := false, 0
+	for line := range bytes.SplitSeq(bytes.TrimSuffix(data, []byte{'\n'}), []byte{'\n'}) {
+		records++
+		if records > maxPrivateJSONRecords || scan.tokens <= 0 {
+			scan.uncertain = true
+			return true
+		}
+		// Empty lines also consume budget; a newline-only file is not free work.
+		scan.tokens--
+		if len(line) > MaxInputBytes {
+			uncertain = true
+			continue
+		}
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		scan.uncertain = false
+		decoder := json.NewDecoder(bytes.NewReader(line))
+		matched, valid := scan.value(decoder, 0)
+		if matched && !scan.uncertain {
+			return true
+		}
+		if matched || !valid || scan.uncertain {
+			uncertain = true
+			continue
+		}
+		if _, err := decoder.Token(); err != io.EOF {
+			uncertain = true
+		}
+	}
+	scan.uncertain = uncertain
+	return uncertain
+}
+
+func privateJSONLinesFile(name string) bool {
+	// Extensions select a strict parser, never an exemption from raw scanning.
+	extension := path.Ext(name)
+	return extension == ".jsonl" || extension == ".ndjson" || name == "logs/gateway.log"
+}
