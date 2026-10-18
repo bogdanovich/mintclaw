@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,23 @@ func TestLoopbackFixtureRealLibraryTransportAndEphemeralCleanup(t *testing.T) {
 
 func TestRealBrowserLoopbackFixtureLongPrivateRuntime(t *testing.T) {
 	runLoopbackFixtureRealLibrary(t, true)
+}
+
+func TestRealBrowserLoopbackFixtureKeepsUserStateInsideEphemeralLease(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("private browser user directories are qualified on Linux and macOS")
+	}
+	ambient, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", ambient)
+	for _, name := range []string{"CACHE", "CONFIG", "DATA", "STATE"} {
+		t.Setenv("XDG_"+name+"_HOME", filepath.Join(ambient, "xdg-"+strings.ToLower(name)))
+	}
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(ambient, "xdg-runtime"))
+	runLoopbackFixtureRealLibrary(t, false)
+	assertDirectoryEmpty(t, ambient)
 }
 
 func runLoopbackFixtureRealLibrary(t *testing.T, longRuntime bool) {

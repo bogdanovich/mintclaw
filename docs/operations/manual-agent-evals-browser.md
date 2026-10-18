@@ -22,6 +22,13 @@ its fresh reference code across the scripted read/follow-up. Fixture read/no-eff
 trial remained inconclusive because mandatory native authority, privacy and cleanup evidence was unavailable.
 This does not qualify the browser suite or replace either earlier result.
 
+Read-only follow-up inspection identified fontconfig/dconf/Chrome crash-report caches outside the browser session
+lease in the v3 profile. The Unix local-library driver now gives only its isolated browser child a lease-bound
+`HOME` and XDG cache/config/data/state/runtime roots; Node and Playwright keep their existing environment and browser
+installation lookup. Existing native close/recovery owns removal, including failures; the harness does not whitelist
+binary caches or delete them to promote an old report. Managed/remote/unmarked drivers and Windows behavior are
+unchanged. This is scoped runtime containment, not an OS sandbox or complete privacy/cleanup qualification.
+
 ## Corpus Contracts
 
 ```sh

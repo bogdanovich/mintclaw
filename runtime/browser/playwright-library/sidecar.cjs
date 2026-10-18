@@ -183,10 +183,9 @@ function boundedError(error) {
     .slice(0, MAX_ERROR_BYTES).replace(/[\r\n]+/g, ' ');
 }
 
-function enterPrivateEphemeralDirectory(options) {
-  if (process.platform !== 'linux' || !['chromium', 'chrome', 'msedge'].includes(options.browser) ||
-      !options.isolated || options.remoteRuntime || options.userDataDir ||
-      !process.env.PWTEST_SOCKETS_DIR) return false;
+function ephemeralBrowserEnvironment(options) {
+  if (!['linux', 'darwin'].includes(process.platform) || !options.isolated ||
+      options.remoteRuntime || options.userDataDir || !process.env.PWTEST_SOCKETS_DIR) return undefined;
   const root = process.env.TMPDIR;
   const invalid = () => new Error('private ephemeral runtime directory is unavailable');
   if (!root || !path.isAbsolute(root) || root !== process.env.PWTEST_SOCKETS_DIR ||
@@ -196,16 +195,24 @@ function enterPrivateEphemeralDirectory(options) {
     info.uid === process.geteuid();
   if (!privateDirectory(before)) throw invalid();
   const descriptor = fs.openSync(root, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+  const shortSockets = process.platform === 'linux' && ['chromium', 'chrome', 'msedge'].includes(options.browser);
   try {
     const opened = fs.fstatSync(descriptor);
     const same = info => privateDirectory(info) && info.dev === before.dev && info.ino === before.ino;
     if (!same(opened)) throw invalid();
-    process.chdir(`/proc/self/fd/${descriptor}`);
-    if (!same(fs.statSync('.')) || !same(fs.lstatSync(root))) throw invalid();
+    if (shortSockets) process.chdir(`/proc/self/fd/${descriptor}`);
+    if ((shortSockets && !same(fs.statSync('.'))) || !same(fs.lstatSync(root))) throw invalid();
   } finally {
     fs.closeSync(descriptor);
   }
-  return true;
+  // Only the browser child gets a private home. Node/Playwright keep their
+  // configured installation/cache lookup and never adopt a different HOME.
+  const environment = { ...process.env, HOME: root, XDG_RUNTIME_DIR: root };
+  for (const kind of ['CACHE', 'CONFIG', 'DATA', 'STATE']) {
+    environment['XDG_' + kind + '_HOME'] = path.join(root, '.' + kind.toLowerCase());
+  }
+  if (shortSockets) Object.assign(environment, { TMPDIR: '.', TMP: '.', TEMP: '.' });
+  return environment;
 }
 
 function textResult(text, isError = false) {
@@ -379,11 +386,8 @@ class Driver {
     if (!browserType) throw new Error('unsupported browser');
     const launch = { headless: this.options.headless };
     if (this.options.executablePath) launch.executablePath = path.resolve(this.options.executablePath);
-    if (enterPrivateEphemeralDirectory(this.options)) {
-      // Chromium needs a short socket spelling; all bytes still live in the
-      // existing private cwd. Playwright's own scratch keeps its absolute root.
-      launch.env = { ...process.env, TMPDIR: '.', TMP: '.', TEMP: '.' };
-    }
+    const environment = ephemeralBrowserEnvironment(this.options);
+    if (environment) launch.env = environment;
     if (this.options.browser === 'chrome' || this.options.browser === 'msedge') {
       launch.channel = this.options.browser;
     }
