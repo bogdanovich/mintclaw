@@ -283,6 +283,15 @@ qualifies only the narrow repair, not exhausted historical recovery, actual Tele
 
 ### Open Qualification And Exit
 
+The first actual Telegram clarification check on 2026-10-18 is **negative**, not a channel pass.
+On deployed source `24243825c82cc916ef3a15c83d3fcb50654633b2`,
+`trace-turn-a2ada6dc42077ff463370329`, sequence 9, accepted only the new city. Both names were preserved,
+but both telephone fields remained unresolved despite ordinary prose saying the borrower's telephone was accepted.
+`trace-turn-506b2bdfcdd9db3ff49e2df2` separately delivered an introduction via `message` and repeated it in
+the collection response. These are semantic interpretation/reporting and presentation findings, not evidence of
+transport duplication. The [bounded Telegram follow-up goal](pdf-intake-telegram-followup-goal.md) preserves that
+job as read-only evidence and requires new native-value qualification; the earlier headless pass does not waive it.
+
 - The generic clarification/progress repair has the bounded automatic evidence above. Confirm its actual Telegram
   behavior using the [short operator check](../operations/pdfi4-free-text-form-test.md#bounded-clarification-repair-check).
   Keep fixed limits and original jobs; exhausted-input recovery requiring new authority still needs explicit admission.

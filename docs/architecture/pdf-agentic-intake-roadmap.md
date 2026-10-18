@@ -180,6 +180,9 @@ New acceptance is distinguished from retained failure, and completed unrelated e
 automatically repeated. Exact native chronology, not confirmation alone, gates omission of superseded advice.
 Limits and both historical jobs remain unchanged; a new test is not exhausted-input recovery. Actual Telegram,
 full I-134/PDFI4 and the separately deferred XFA backend stage remain open.
+The first actual Telegram check exposed an unresolved role-only clarification and a false field-specific
+acceptance claim, plus a repeated introduction. The [bounded follow-up](pdf-intake-telegram-followup-goal.md)
+tracks these negative findings without treating the prior automatic checkpoint as a channel pass.
 
 ### Deferred Follow-Up: Editable Hybrid Derivatives
 

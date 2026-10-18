@@ -7,6 +7,12 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
+const documentIntakeAcceptanceInstruction = " Only accepted_fields identifies fields newly accepted in this continuation. " +
+	"Use its labels when acknowledging particular fields; accepted_count never identifies a field by itself. " +
+	"Never describe an unresolved field as accepted because another field changed. " +
+	"acknowledged_count is prior evidence accounting, not proof of a new value or change. " +
+	"When accepted_fields_truncated is true, use a count for the remainder without guessing its fields. "
+
 // This extends the existing tool-only boundary, not collection state. The
 // ordinary model plans value-free questions; native intake owns all values.
 func documentFormIntakeFollowup(
@@ -35,7 +41,8 @@ func documentFormIntakeFollowup(
 	if intake := projection.Intake; intake != nil && intake.Failure != nil {
 		return &toolshared.ToolOnlyFollowup{
 			ResponseOnly: true,
-			Instruction: "Explain the trusted processing failure and its stage without echoing private values or raw errors. " +
+			Instruction: documentIntakeAcceptanceInstruction +
+				"Explain the trusted processing failure and its stage without echoing private values or raw errors. " +
 				"Use received_input_state and accepted_count/acknowledged_count to describe this continuation: " +
 				"A retained-input failure does not undo newly accepted decisions. " +
 				"Never say no answers were applied when accepted_count is positive. " +
@@ -60,7 +67,12 @@ func documentFormIntakeFollowup(
 			intake.Progress.PendingInputs > 0) {
 		return &toolshared.ToolOnlyFollowup{
 			ResponseOnly: true,
-			Instruction: "Render the trusted protected form progress in the user's language. For collect, present its form summary, grouped collection plan and question. Invite one free-text paragraph or several ordinary messages; never require /answer, labels, field IDs or one answer per field. Do not echo personal values. Never ask again for confirmed/provided/preserved facts. " +
+			Instruction: documentIntakeAcceptanceInstruction +
+				"Render the trusted protected form progress in the user's language. " +
+				"For collect, present its form summary, grouped collection plan and question. " +
+				"Do not repeat a summary or grouped plan already delivered earlier in this turn through message. " +
+				"If the introduction was already delivered, give only the next protected question and how to answer it. " +
+				"Invite one free-text paragraph or several ordinary messages; never require /answer, labels, field IDs or one answer per field. Do not echo personal values. Never ask again for confirmed/provided/preserved facts. " +
 				"Pending inputs still block review and output: do not claim a review checkpoint or ask to finish. " +
 				"With pending input, ask only a clarification justified by native findings; otherwise offer /retry_form " +
 				"using received_input_state and accepted_count/acknowledged_count " +

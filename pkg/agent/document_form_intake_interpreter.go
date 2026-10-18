@@ -104,6 +104,12 @@ const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance
 	`Intent is advisory and cannot approve or commit output. Mixed instructions must not become a PDF field value. ` +
 	`Related inputs may clarify the intended person or meaning, but proposed literals must come from utterance, ` +
 	`not from related inputs or document evidence. Do not copy another person's details. ` +
+	`admission_order is the immutable native message order, not the current field revision. ` +
+	`The utterance being reprocessed can be older than related inputs. A later clarification can explicitly ` +
+	`identify the person/field for a value whose owner was unspecified in the earlier utterance, without ` +
+	`repeating that value. Use that later clarification to interpret the earlier utterance's own literal. ` +
+	`An earlier statement that the owner was not yet specified does not contradict a later explicit role clarification. ` +
+	`Chronology alone never proves a role or authorizes a correction; ambiguous or conflicting roles require a finding. ` +
 	`Exception: resolves can identify exact rejected fragments in an offered earlier input when this current ` +
 	`positive proposal explicitly clarifies or corrects that same field's earlier invalid/conflicting answer. ` +
 	`Each related_input_context entry corresponds to the related_inputs text at the same array position. ` +
@@ -156,6 +162,9 @@ type documentIntakeFieldWire struct {
 
 func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byte, error) {
 	pass := view.Pass
+	if pass.Input.AdmissionOrder < 0 || pass.Input.AdmissionOrder > document.MaxFormIntakeReceipts {
+		return nil, errDocumentIntakeInterpretationUnavailable
+	}
 	if pass.Input.Consumed || pass.Input.Text == "" || !utf8.ValidString(pass.Input.Text) ||
 		len(pass.Input.Text) > document.MaxFormIntakeInputBytes || len(pass.Fields) == 0 ||
 		len(pass.Fields) > document.MaxFormIntakeCandidates || len(pass.Fields) != len(pass.CandidateIDs) ||
@@ -185,23 +194,30 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 	}
 	related := make([]string, 0, len(view.RelatedInputs))
 	type relatedContext struct {
-		Reference string                             `json:"reference"`
-		Findings  []document.FormFieldMappingBlocker `json:"findings,omitempty"`
+		Reference      string                             `json:"reference"`
+		AdmissionOrder int                                `json:"admission_order,omitempty"`
+		Findings       []document.FormFieldMappingBlocker `json:"findings,omitempty"`
 	}
 	relatedContexts := make([]relatedContext, 0, len(view.RelatedInputs))
 	relatedBytes := 0
 	seenRelated := make(map[string]bool, len(view.RelatedInputs))
+	seenOrders := make(map[int]bool, len(view.RelatedInputs))
 	for _, input := range view.RelatedInputs {
 		relatedBytes += len(input.Text)
 		if input.Consumed || input.Text == "" || !utf8.ValidString(input.Text) ||
+			input.AdmissionOrder < 0 || input.AdmissionOrder > document.MaxFormIntakeReceipts ||
+			((pass.Input.AdmissionOrder == 0) != (input.AdmissionOrder == 0)) ||
+			(input.AdmissionOrder > 0 && (input.AdmissionOrder == pass.Input.AdmissionOrder ||
+				seenOrders[input.AdmissionOrder])) ||
 			input.Reference == "" || input.Reference == pass.Input.Reference || seenRelated[input.Reference] ||
 			pass.Input.JobID == "" || pass.Input.ModeID == "" || input.JobID != pass.Input.JobID ||
 			input.ModeID != pass.Input.ModeID || relatedBytes > document.MaxFormIntakeInputBytes {
 			return nil, errDocumentIntakeInterpretationUnavailable
 		}
 		seenRelated[input.Reference] = true
+		seenOrders[input.AdmissionOrder] = true
 		related = append(related, input.Text)
-		entry := relatedContext{Reference: input.Reference}
+		entry := relatedContext{Reference: input.Reference, AdmissionOrder: input.AdmissionOrder}
 		for _, finding := range input.Findings {
 			if slices.Contains(pass.CandidateIDs, finding.FieldID) &&
 				(finding.Code == "field_invalid" || finding.Code == "field_conflicting") {
@@ -277,6 +293,7 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 	payload, err := json.Marshal(struct {
 		Version        string                    `json:"schema_version"`
 		Utterance      string                    `json:"utterance"`
+		AdmissionOrder int                       `json:"admission_order,omitempty"`
 		RoleContext    string                    `json:"role_context,omitempty"`
 		Question       string                    `json:"question_context,omitempty"`
 		Fields         []documentIntakeFieldWire `json:"fields"`
@@ -288,9 +305,19 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 		OutputMode     document.FormOutputMode   `json:"output_mode,omitempty"`
 		OutputScope    document.FormOutputScope  `json:"output_scope,omitempty"`
 	}{
-		"mintclaw.document_intake_interpretation.v1", pass.Input.Text, pass.Input.Context.RoleContext,
-		pass.Input.Context.Question, fields, accounted, evidence, related, relatedContexts, view.RelatedInputsPartial,
-		view.OutputMode, view.OutputScope,
+		"mintclaw.document_intake_interpretation.v1",
+		pass.Input.Text,
+		pass.Input.AdmissionOrder,
+		pass.Input.Context.RoleContext,
+		pass.Input.Context.Question,
+		fields,
+		accounted,
+		evidence,
+		related,
+		relatedContexts,
+		view.RelatedInputsPartial,
+		view.OutputMode,
+		view.OutputScope,
 	})
 	if err != nil || len(payload) > maxDocumentIntakeWireBytes {
 		clear(payload)

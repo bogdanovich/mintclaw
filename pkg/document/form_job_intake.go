@@ -557,11 +557,18 @@ func (store *FormJobStore) formIntakeInput(
 		}
 	}
 	return FormIntakeInput{
-		JobID: record.JobID, ModeID: mode.ID, Reference: formIntakeReceiptPrefix + record.JobID + "." + input.ID,
-		Revision: record.Revision, AdmittedRevision: input.Origin.ExpectedRevision,
-		DialogIntent: dialogIntent,
-		Passes:       len(input.Reservations), Consumed: input.State == formIntakeInputConsumed,
-		Intent: input.Intent, Text: input.Text, Context: cloneFormIntakeContext(input.Origin.Context),
+		AdmissionOrder:        formIntakeInputIndex(mode, input.ID) + 1,
+		JobID:                 record.JobID,
+		ModeID:                mode.ID,
+		Reference:             formIntakeReceiptPrefix + record.JobID + "." + input.ID,
+		Revision:              record.Revision,
+		AdmittedRevision:      input.Origin.ExpectedRevision,
+		DialogIntent:          dialogIntent,
+		Passes:                len(input.Reservations),
+		Consumed:              input.State == formIntakeInputConsumed,
+		Intent:                input.Intent,
+		Text:                  input.Text,
+		Context:               cloneFormIntakeContext(input.Origin.Context),
 		Accounted:             formIntakeAccountedLiterals(input),
 		Findings:              findings,
 		CompletedWindows:      completedWindows,
