@@ -39,6 +39,11 @@ The [v4 pilot](manual-agent-evals-browser-read-v4-pilot-20261018.md) on merged #
 judge-only regrade with native action/delivery, scoped raw privacy and cleanup evidence. Earlier inconclusive
 reports remain unchanged. This qualifies one Linux local-owned read path, not the other five browser cases or E4.
 
+The [artifact v1 pilot](manual-agent-evals-browser-artifact-v1-pilot-20261018.md) on merged #1761 was inconclusive:
+the model prepared a click rather than the narrowly admitted deliverable download. The runner refused approval,
+the fixture saw no download or mutation, and no judge ran. The attempt remains unchanged; positive artifact
+qualification requires a separately identified experiment after investigating tool exposure and action choice.
+
 ## Corpus Contracts
 
 ```sh
@@ -264,6 +269,10 @@ Offline `grade` admits all selected receipts and actual retained CSV files befor
 aliased or non-private files are refused. Verified bytes are retained in the new private grade report. No gateway,
 browser, original native state or tool execution is required. These deterministic controls do not qualify a live
 artifact run, macOS browser execution, companion delivery or completion of E4.
+
+The first actual artifact attempt is recorded in the
+[v1 pilot](manual-agent-evals-browser-artifact-v1-pilot-20261018.md), including its refused click, missing artifact,
+unavailable raw-profile privacy and cleanup limits. It is not a pass and was not regraded or retried.
 
 ## Offline Controls
 

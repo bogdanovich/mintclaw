@@ -71,6 +71,11 @@ complete scoped raw-profile coverage and an independent judge. One judge-only re
 preserved v3's inconclusive result. This qualifies the read path only. The other five browser cases, adaptive work,
 remaining PDF cases, effective loaded inputs and available all-call usage remain mandatory.
 
+The [browser artifact v1 pilot](../operations/manual-agent-evals-browser-artifact-v1-pilot-20261018.md) on merged
+#1761 retained one inconclusive attempt: the model prepared a click instead of a native deliverable download,
+so the runner refused the grant. The fixture recorded zero downloads and mutations; no judge ran. The task was
+not retried and policy was not widened. The complete artifact assessment code is not positive live qualification.
+
 ## Milestones
 
 | Stage | Outcome | Dependency | Status |
@@ -79,7 +84,7 @@ remaining PDF cases, effective loaded inputs and available all-call usage remain
 | E1 | Run bounded scripted multi-turn cases and produce honest reports | E0 | Contracts/client/runtime admission merged; both required general scripted cases passed on Linux after #1598, with recorded platform/cleanup limits |
 | E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation/adaptive runner/grade merged (#1531, #1541); judge v2 live calibration passed 6/6; adaptive live qualification pending |
 | E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Fixtures/oracle, preparation, approval contracts, dialogue, write intent, native write observation, metadata settlement and artifact collection merged (#1544, #1546, #1547, #1550, #1552, #1553, #1557, #1558); uniqueness/privacy/cleanup and live qualification pending |
-| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | One Linux owned read trial/regrade passed after #1754; other five cases, adaptive private input, protected action, artifact/context binding and domain qualification pending |
+| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | One Linux owned read trial/regrade passed after #1754; artifact assessment merged in #1761, first live attempt inconclusive; other five cases, adaptive private input, protected action and domain qualification pending |
 | E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Repeats/all-trial regrade/comparison (#1588), owned gateway (#1639), file observations (#1648) and explicit allowlisted seed provisioning (#1665) merged; Linux general repeats/regrade/error comparison exercised; per-trial/effective-input witnesses and domain qualification pending |
 
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
@@ -135,7 +140,9 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    judging/offline regrade only after those witnesses. One Linux read trial and judge-only regrade now passed on #1754.
    Artifact now has a bounded native prompt/HMAC-bound allow-once, authenticated actual CSV collection, exact
    post-stop approval/transfer/wire join and separate judge/offline-regrade path; its live qualification is still
-   pending. The other four scenarios remain gated. Submit/followup retain private-input gates; ambiguity/denial retain
+   pending. Its first live attempt refused a click that did not match the scoped download grant; investigate actual
+   tool exposure/action choice before any new experiment. The other four scenarios remain gated. Submit/followup
+   retain private-input gates; ambiguity/denial retain
    native-action evidence gates. No local fixture pass qualifies native browser behavior.
    Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a
    read-only native transfer inspection API rather than constructing/reconciling a store. This receipt does not
