@@ -9,8 +9,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   and code-health programs.
 - [October 2026 Reliability And Code Health Roadmap](reliability-code-health-20261017-roadmap.md): completed
   outbox, MCP, frontend, measured storage and dependency work, with explicit remaining limits.
-- [October 18 Code Health Second Sweep](reliability-code-health-20261018-sweep.md): reproduced computer cleanup
-  and fixed-alias login defects, bounded refactoring candidates, and proposed follow-up priorities.
+- [October 18 Code Health Second Sweep](reliability-code-health-20261018-sweep.md): merged computer cleanup
+  and fixed-alias login fixes, merged regression evidence, and conditional follow-up priorities.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Manual Agent Evals Design](agent-evals-design.md): proposed on-demand multi-turn task evaluation, isolated targets,
   independent artifact/state checks, LLM user simulation, and separate rubric judging; approved for implementation.
