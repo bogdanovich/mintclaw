@@ -9,6 +9,17 @@ The existing `playwright_mcp` driver remains a supported rollback path. Both
 drivers use the same Go worker, broker, profile lease, network proxy, durable
 receipts, approval policy, artifact boundary, and cleanup state machine.
 
+For a native local ephemeral Chromium session on Linux, the sidecar enters the
+existing private session directory through a checked directory descriptor. It
+gives Chrome relative `TMPDIR`, `TMP` and `TEMP` values (`.`), avoiding long
+process-singleton Unix socket names. Node/Playwright scratch keeps the absolute
+native lease root. No external temp alias or new recovery directory is created;
+normal process-tree stop and ephemeral lease recovery/removal remain responsible
+for these files. The directory must retain its native identity, owner and `0700`
+permissions. Managed/remote/non-Chromium sessions and non-Linux launch behavior
+are unchanged. Chromium's [POSIX temp-directory implementation](https://chromium.googlesource.com/chromium/src/%2B/master/base/files/file_util_posix.cc)
+uses `TMPDIR`; this adjustment does not change network or approval authority.
+
 ## Observation Semantics
 
 The library driver uses Playwright's public `ariaSnapshotJSON({mode: "ai"})`

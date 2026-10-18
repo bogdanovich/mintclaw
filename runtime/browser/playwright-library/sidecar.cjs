@@ -6,6 +6,7 @@
 // tools to an agent.
 
 const readline = require('node:readline');
+const fs = require('node:fs');
 const path = require('node:path');
 const dns = require('node:dns').promises;
 const net = require('node:net');
@@ -182,6 +183,31 @@ function boundedError(error) {
     .slice(0, MAX_ERROR_BYTES).replace(/[\r\n]+/g, ' ');
 }
 
+function enterPrivateEphemeralDirectory(options) {
+  if (process.platform !== 'linux' || !['chromium', 'chrome', 'msedge'].includes(options.browser) ||
+      !options.isolated || options.remoteRuntime || options.userDataDir ||
+      !process.env.PWTEST_SOCKETS_DIR) return false;
+  const root = process.env.TMPDIR;
+  const invalid = () => new Error('private ephemeral runtime directory is unavailable');
+  if (!root || !path.isAbsolute(root) || root !== process.env.PWTEST_SOCKETS_DIR ||
+      path.resolve(root) !== root || fs.realpathSync(root) !== root) throw invalid();
+  const before = fs.lstatSync(root);
+  const privateDirectory = info => info.isDirectory() && (info.mode & 0o777) === 0o700 &&
+    info.uid === process.getuid();
+  if (!privateDirectory(before)) throw invalid();
+  const descriptor = fs.openSync(root, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+  try {
+    const opened = fs.fstatSync(descriptor);
+    const same = info => privateDirectory(info) && info.dev === before.dev && info.ino === before.ino;
+    if (!same(opened)) throw invalid();
+    process.chdir(`/proc/self/fd/${descriptor}`);
+    if (!same(fs.statSync('.')) || !same(fs.lstatSync(root))) throw invalid();
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return true;
+}
+
 function textResult(text, isError = false) {
   return { is_error: isError, content: [{ type: 'text', text: String(text) }] };
 }
@@ -352,7 +378,12 @@ class Driver {
       (this.options.browser === 'chrome' || this.options.browser === 'msedge' ? chromium : null);
     if (!browserType) throw new Error('unsupported browser');
     const launch = { headless: this.options.headless };
-    if (this.options.executablePath) launch.executablePath = this.options.executablePath;
+    if (this.options.executablePath) launch.executablePath = path.resolve(this.options.executablePath);
+    if (enterPrivateEphemeralDirectory(this.options)) {
+      // Chromium needs a short socket spelling; all bytes still live in the
+      // existing private cwd. Playwright's own scratch keeps its absolute root.
+      launch.env = { ...process.env, TMPDIR: '.', TMP: '.', TEMP: '.' };
+    }
     if (this.options.browser === 'chrome' || this.options.browser === 'msedge') {
       launch.channel = this.options.browser;
     }

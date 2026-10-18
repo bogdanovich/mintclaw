@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,15 @@ import (
 )
 
 func TestLoopbackFixtureRealLibraryTransportAndEphemeralCleanup(t *testing.T) {
+	runLoopbackFixtureRealLibrary(t, false)
+}
+
+func TestRealBrowserLoopbackFixtureLongPrivateRuntime(t *testing.T) {
+	runLoopbackFixtureRealLibrary(t, true)
+}
+
+func runLoopbackFixtureRealLibrary(t *testing.T, longRuntime bool) {
+	t.Helper()
 	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER") != "1" ||
 		os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_MODE") != config.BrowserDriverPlaywrightLibrary {
 		t.Skip("set the real Playwright library driver environment to run this fixture")
@@ -43,6 +53,13 @@ func TestLoopbackFixtureRealLibraryTransportAndEphemeralCleanup(t *testing.T) {
 	}))
 	t.Cleanup(fixture.Close)
 	root, runtimeConfig := ephemeralPlaywrightConfig(t, false)
+	if longRuntime {
+		padding := strings.Repeat("p", max(1, 150-len(runtimeConfig.EphemeralRoot)))
+		runtimeConfig.EphemeralRoot = filepath.Join(runtimeConfig.EphemeralRoot, padding)
+		if err := os.Mkdir(runtimeConfig.EphemeralRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	configureRealPlaywrightLibraryDriver(t, root)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := fixtureNetworkProfile(fixture.URL)
