@@ -1,6 +1,6 @@
 # Outbox Capacity And Payload Retirement
 
-Status: operator implementation and local synthetic qualification prepared for R4 of the
+Status: operator implementation merged in #1708, following #1703, for R4 of the
 [code-health roadmap](../architecture/reliability-code-health-20261017-roadmap.md).
 No production inventory, deployment or cleanup has been performed. The
 [retention decision](../architecture/outbox-retention-decision-20261017.md)
