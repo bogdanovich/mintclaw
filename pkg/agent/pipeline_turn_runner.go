@@ -196,6 +196,16 @@ func (p *Pipeline) runPreparedTurnLoop(
 		if repairIteration {
 			exec.objectiveRepairActive = false
 		}
+		if callErr != nil && repairIteration && exec.verifiedPresentationRepair != nil &&
+			isRecoverableModelExitError(callErr) {
+			// Only optional presentation failed. The existing typed marker excludes
+			// cancellation, policy/configuration, persistence, and projection errors.
+			llmOutcome = LLMCallOutcome{
+				Control: turnStepFinalize, FinalContent: exec.verifiedPresentationRepair.original.content,
+				FinalContentProtected: exec.verifiedPresentationRepair.original.protected,
+			}
+			callErr = nil
+		}
 		if callErr != nil {
 			turnStatus = TurnEndStatusError
 			if isRecoverableModelExitError(callErr) && continueAfterRecoverableExit("model error") {
@@ -229,6 +239,14 @@ func (p *Pipeline) runPreparedTurnLoop(
 		exec.terminal = llmOutcome.terminalCandidate(exec.terminal)
 		if repairIteration {
 			repairCandidate := llmOutcome.terminalCandidate(terminalContent{})
+			if exec.verifiedPresentationRepair != nil {
+				repairCandidate = exec.verifiedPresentationRepair.accept(
+					repairCandidate, exec.writeAudit, objectiveReceiptsForTurn(ts.opts.mode, exec.receipts),
+					ts.opts.ObjectiveChecklist,
+				)
+				exec.verifiedPresentationRepair = nil // Never constrain later user steering or tool-capable work.
+				exec.terminal = repairCandidate
+			}
 			if repaired := strings.TrimSpace(repairCandidate.content); repaired != "" {
 				repairedMessage := providers.Message{Role: "assistant", Content: repairCandidate.content}
 				exec.messages = append(exec.messages, repairedMessage)

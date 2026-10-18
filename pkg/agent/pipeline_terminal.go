@@ -206,6 +206,9 @@ func (p *Pipeline) scheduleObjectiveOutcomeRepair(
 		)
 		if repair {
 			exec.objectiveOutcomeRepairAttempted = true
+			exec.verifiedPresentationRepair = newVerifiedPresentationRepair(
+				terminal, exec.writeAudit, receipts, ts.opts.ObjectiveChecklist,
+			)
 		}
 	} else {
 		repair = false

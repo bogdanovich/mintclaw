@@ -38,6 +38,11 @@ func (p *Pipeline) repairSerializedToolProjection(
 	llm *LLMIterationState,
 	content string,
 ) (LLMCallOutcome, bool, error) {
+	if exec != nil && exec.objectiveRepairActive && exec.objectiveRepairToolKind == "" {
+		// Tool syntax in a model-only finalization is malformed presentation,
+		// not authority to restore tools or start another execution iteration.
+		return LLMCallOutcome{}, false, nil
+	}
 	toolName, projected := serializedToolProjectionName(content)
 	if !projected || ts == nil || ts.agent == nil || ts.agent.Tools == nil {
 		return LLMCallOutcome{}, false, nil
