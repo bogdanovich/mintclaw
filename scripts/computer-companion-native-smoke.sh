@@ -45,7 +45,8 @@ cleanup() {
   [[ -n "$qualification_dir" && -d "$qualification_dir" ]] && rm -rf -- "$qualification_dir"
 }
 trap cleanup EXIT
-case "$(uname -s)/$(uname -m)" in
+qualification_os=$(uname -s)
+case "$qualification_os/$(uname -m)" in
   Linux/x86_64)
     driver_sha256=fd922e708099aae311873a6667beb48eaabb8c15c3abec744492db8a96b544ee
     actual_sha256=$(sha256sum "$driver_path" | cut -d ' ' -f 1)
@@ -77,6 +78,46 @@ fi
 [[ $("$test_path" -test.list "^$test_name$") == "$test_name" ]] || {
   echo 'The supplied test executable lacks the selected native qualification suite.' >&2; exit 2;
 }
+if [[ "$qualification_os" == Darwin ]]; then
+  # The controller may belong to an old Background/audit session after a GUI
+  # logout/login. Launch the test in the current GUI, like the actual companion.
+  # This helper needs no TCC grant and never borrows one for the companion.
+  qualification_app="$qualification_dir/MintClaw Native Qualification.app"
+  mkdir -p "$qualification_app/Contents/MacOS"
+  cp "$repository_root/scripts/internal/computer-native-qualification/launcher_macos.plist" \
+    "$qualification_app/Contents/Info.plist"
+  /usr/bin/swiftc "$repository_root/scripts/internal/computer-native-qualification/launcher_macos.swift" \
+    -o "$qualification_app/Contents/MacOS/qualification-launcher"
+  /usr/bin/codesign --sign - "$qualification_app"
+  launch_status=0
+  /usr/bin/open -n -W --stdout "$qualification_dir/test.stdout" --stderr "$qualification_dir/test.stderr" \
+    --env "MINTCLAW_QUALIFICATION_EXECUTABLE=$test_path" \
+    --env "MINTCLAW_QUALIFICATION_EXIT_FILE=$qualification_dir/test.exit" \
+    --env "MINTCLAW_COMPUTER_NATIVE_DRIVER=$driver_path" \
+    --env "MINTCLAW_COMPUTER_NATIVE_SHA256=$driver_sha256" \
+    --env "MINTCLAW_COMPUTER_NATIVE_FIXTURE=$fixture_path" \
+    --env "MINTCLAW_COMPUTER_COMPANION_APP=$app_path" \
+    --env "MINTCLAW_COMPUTER_NATIVE_CAPTURE_DIR=$capture_dir" \
+    --env MINTCLAW_COMPUTER_NATIVE_LOSS_CASE=1 \
+    --env "MINTCLAW_NODE_TEST_BINARY=$node_path" \
+    "$qualification_app" --args -test.run="^$test_name$" -test.v -test.count=1 -test.timeout=3m \
+    || launch_status=$?
+  [[ ! -f "$qualification_dir/test.stdout" ]] || cat "$qualification_dir/test.stdout"
+  [[ ! -f "$qualification_dir/test.stderr" ]] || cat "$qualification_dir/test.stderr" >&2
+  if [[ "$launch_status" != 0 ]]; then
+    echo 'macOS refused the qualification launch; no passing test result is established.' >&2
+    exit "$launch_status"
+  fi
+  # open -W can return zero even when its application failed. Only the child's
+  # private numeric receipt establishes the actual suite result.
+  test_exit=''
+  [[ ! -f "$qualification_dir/test.exit" ]] || test_exit=$(< "$qualification_dir/test.exit")
+  if [[ ! "$test_exit" =~ ^(0|[1-9][0-9]{0,2})$ ]] || (( test_exit > 255 )); then
+    echo 'GUI qualification produced no valid test exit receipt; refusing to report a pass.' >&2
+    exit 1
+  fi
+  exit "$test_exit"
+fi
 env MINTCLAW_COMPUTER_NATIVE_DRIVER="$driver_path" \
   MINTCLAW_COMPUTER_NATIVE_SHA256="$driver_sha256" \
   MINTCLAW_COMPUTER_NATIVE_FIXTURE="$fixture_path" \

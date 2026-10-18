@@ -152,6 +152,16 @@ Linux requires the explicit selected X11 GUI environment. On macOS also pass
 `--capture-dir` retains only owned fixture PNGs in an existing private directory
 for visual QA; by default none are retained.
 
+On macOS the test and its disposable fixture are launched in the current GUI
+session, not an old background/audit session retained across logout and login.
+The temporary qualification app requests no permissions; the actual companion
+still needs its own grants. A known screen lock or unavailable current-user GUI
+refuses qualification before the fixture starts. This uses a session-dictionary
+hint (`CGSSessionScreenIsLocked`); absence of that hint does not establish native
+window admission. The unchanged native assertions remain required. The runner
+returns the test child's numeric exit status, not `open -W`'s launch-success
+status, so a launch or a refused preflight cannot become a passing smoke test.
+
 The smoke verifies native pixels and transferred digest/dimensions, a visible
 fixture change during human control followed by different fresh resumed pixels,
 unchanged session/worker/native-window binding, release without closing either
