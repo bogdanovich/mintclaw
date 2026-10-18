@@ -81,12 +81,6 @@ func documentFormIntakeFollowup(
 		}, nil
 	}
 	jobID := projection.Job.JobID
-	allowed := make(map[string]bool, len(projection.Mapping.CandidateFields))
-	for _, field := range projection.Mapping.CandidateFields {
-		if field.Blocker != "" {
-			allowed[field.FieldID] = true
-		}
-	}
 	planInstruction := ""
 	if initial {
 		planInstruction = " Include a concise form_summary explaining the attached document and a collection_plan grouping the meaningful information needed for the user's roles and applicable sections. Clarify intent first only if it materially changes that plan."
@@ -117,15 +111,11 @@ func documentFormIntakeFollowup(
 					return errors.New("form is not ready for review")
 				}
 			case "collect":
-				ids, err := documentFormIntakeCandidateIDs(arguments["candidate_field_ids"])
-				if err != nil {
+				if _, err := documentFormIntakeCandidateIDs(arguments["candidate_field_ids"]); err != nil {
 					return err
 				}
-				for _, id := range ids {
-					if !allowed[id] {
-						return errors.New("intake selected a resolved or unrelated field")
-					}
-				}
+				// A coherent group can span earlier bounded views. The actual
+				// collection call validates all IDs against current native state.
 				if initial &&
 					(stringDocumentArg(arguments, "form_summary") == "" || stringDocumentArg(arguments, "collection_plan") == "") {
 					return errors.New("initial intake requires a document summary and grouped needs")
