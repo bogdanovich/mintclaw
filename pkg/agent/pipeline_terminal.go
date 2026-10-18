@@ -197,6 +197,17 @@ func (p *Pipeline) scheduleObjectiveOutcomeRepair(
 	if repair && !exec.liveHandoffRecoveryAttempted {
 		repairToolKind = taskresult.ObjectiveKindLiveHandoff
 		exec.liveHandoffRecoveryAttempted = true
+	} else if presentation := newVerifiedPresentationRepair(
+		terminal, exec.writeAudit, receipts, ts.opts.ObjectiveChecklist,
+	); presentation != nil {
+		// Outcome correction and presentation have separate one-pass budgets.
+		// A corrected report may first establish success without an admitted answer.
+		repair = !exec.presentationRepairAttempted
+		if repair {
+			exec.presentationRepairAttempted = true
+			exec.verifiedPresentationRepair = presentation
+			instruction = presentation.instruction()
+		}
 	} else if !exec.objectiveOutcomeRepairAttempted {
 		instruction, repair = objectiveOutcomeRepairInstructionWithReceipts(
 			terminal.content,
@@ -206,9 +217,6 @@ func (p *Pipeline) scheduleObjectiveOutcomeRepair(
 		)
 		if repair {
 			exec.objectiveOutcomeRepairAttempted = true
-			exec.verifiedPresentationRepair = newVerifiedPresentationRepair(
-				terminal, exec.writeAudit, receipts, ts.opts.ObjectiveChecklist,
-			)
 		}
 	} else {
 		repair = false

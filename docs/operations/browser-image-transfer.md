@@ -134,8 +134,13 @@ an explicitly declared external workflow.
 
 Execution success and a complete user-facing answer are separate checks. When
 all objectives are verified but the producer's answer fails output-coverage
-validation, the existing finalization repair gets one tool-free opportunity to
-correct the answer, including the caller's language and response format. It must
+validation, presentation gets one tool-free opportunity to correct the answer,
+including the caller's language and response format. This budget is independent
+of the one correction for a missing or invalid internal outcome report: repairing
+that report must not consume the later presentation opportunity. The presentation
+model returns only natural-language text; the runtime attaches it to the frozen
+verified report after coverage validation, without asking the model to reproduce
+objective IDs, outputs, or receipt claims. It must
 retain the completed outputs and receipts; it cannot repeat downloads, reopen a
 closed session, or replay a commit. Valid answers and explicitly requested exact
 JSON do not incur this extra pass. If repair still fails, only the verified
