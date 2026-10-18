@@ -213,10 +213,38 @@ cover this boundary separately from window destruction and transport loss.
 After correction, the complete desktop suite passed 1,000 native repetitions
 alongside 100 race-enabled native repetitions, with all lifetime checks unchanged.
 
+## macOS window incarnation admission
+
+The macOS guard requires the companion's actual GUI launch identity and both
+native permission grants before admitting a window. It retains the exact selected
+`AXUIElementRef`, registers `AXUIElementDestroyed` before admission, and processes
+that observer on a dedicated native thread and run loop. It never rediscovers a
+replacement by title, position or list order. Native destruction or a failed
+identity check permanently invalidates the admission.
+
+The exact accessibility-element/CG-window mapping uses the non-public
+`_AXUIElementGetWindow` symbol. Missing mapping or destruction-notification support
+is explicitly unsupported; there is no approximate fallback. This compatibility
+dependency must be requalified on new macOS versions. A retained kernel `kqueue`
+process watch separately invalidates process exit and `exec`, with start-time and
+current-user checks around registration. Numeric PID liveness is not sufficient.
+
+Observer teardown releases only its own native references and handles. Callback
+registration uses one process-lifetime trampoline and reclaimable numeric tokens,
+not retained Go pointers or a new permanent trampoline for each session. Event
+drains are bounded; a stopped loop or notification flood invalidates admission.
+
+On October 17, macOS 26.6.2 native tests passed exact-symbol and AX-handle/timeout
+ABI checks, kernel process exit and same-PID `exec` detection, callback cleanup,
+and bounded run-loop tests. These tests neither capture nor enumerate personal
+windows. Native GUI-window destruction, capture and handoff/resume qualification
+remain separate integration gates requiring the actual app's grants; the
+permission-denied readiness result is not a capture pass.
+
 ## Integration gates
 
 - Qualify the Mac companion's real launch identity and permission lifecycle.
-- Qualify macOS window-incarnation admission and integrate native guards into
+- Qualify macOS GUI window-incarnation admission and integrate native guards into
   companion capture/session ownership.
 - Requalify Unicode insertion on a corrected pinned driver or another backend.
 - Add input contracts with fresh evidence, bounded actions, and independent
