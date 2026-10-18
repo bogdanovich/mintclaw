@@ -32,7 +32,7 @@ repository; these counts are context, not coverage or quality scores.
 | R5 | Medium | Carry typed MCP failure classifications | Admitted correctness work |
 | R6 | High | Finish behavioral evaluation qualification | Existing agent-evals program; reuse its owners and evidence |
 | R7 | Medium | Simplify tool execution around existing stages | Intentionally deferred; trigger not observed |
-| R8 | Medium | Expand frontend lifecycle regression coverage | Admitted, bounded to exercised lifecycle contracts |
+| R8 | Medium | Expand frontend lifecycle regression coverage | Implemented; CI/review pending |
 | R9 | Conditional | Decompose browser and coding integration files | Intentionally deferred; trigger not observed |
 | R10 | Conditional | Measure storage contention before redesign | Measurement admitted; replacement requires measured need |
 | R11 | Low | Improve current architecture navigation | Current-owner map added to code-health.md |
@@ -290,3 +290,30 @@ Merged correctness evidence: R2 [#1681](https://github.com/bogdanovich/mintclaw/
 (`5fef84bbebb2047d1ab3eb766ef06dcf5e1a3bc4`) passed exact-head CI, substantive
 review and owner merge approval. R1 #1685, R5 #1687, R8 #1691, R10 #1690 and
 R12 #1688 are published separately and remain subject to their own gates.
+
+## Frontend Delivery Evidence
+
+R3 merged in [PR #1682](https://github.com/bogdanovich/mintclaw/pull/1682)
+at `5fef84bbebb2047d1ab3eb766ef06dcf5e1a3bc4` after green CI, substantive
+review, and owner merge approval. Seven controlled-promise regressions first
+failed against the original implementation and now preserve the latest session
+selection, including teardown and stale failures.
+
+R8 adds controlled sockets and clocks to the existing Vitest suite: duplicate
+connection suppression, reconnect backoff/reset, gateway stop/error and teardown,
+stale socket events, failed sends without automatic replay, and initial history
+hydration. A new regression reproduced old hydration overwriting a reinitialized
+session; request identity now rejects stale success and failure without clearing
+a newer request. Credential request tests cover token placement, encoded flow
+identifiers, cookie credentials, expired-session redirects without mutation
+replay, and omitted versus explicit replacement model secrets. These are request
+and store contract tests, not browser/OAuth popup qualification.
+
+Failed sends also restore the preceding typing state, preserving an in-flight
+assistant response when a newer send fails synchronously. The added active-typing
+regression first failed against the original rollback.
+
+Local validation: 38 tests across six files, ESLint, Prettier, TypeScript and
+production build passed with supported Node 22.23.1 and the frozen lockfile.
+No new frontend dependency or state framework was introduced. CI and review
+remain required before this packet is complete.
