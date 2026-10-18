@@ -75,6 +75,9 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    A [synthetic SQLite probe](../operations/manual-agent-evals-sqlite-probe-20261018.md) retained a full encoded
    canary after native session clearing despite zero current message/FTS rows. Current-row-only SQL plus literal
    matching cannot replace raw privacy coverage; this negative control must survive the native witness work.
+   The bounded native SQLite witness combines current schema/value decoding with original contiguous raw JSON-
+   escape matching, never row-only promotion or original-store mutation. Its explicit encoding/overflow limits do
+   not establish whole-runtime/all-role privacy or complete E3 qualification.
    The bounded client-media witness binds actual requestless messages to native settlement, and owned raw-frame
    inspection includes earlier trials' retained facts. Neither grants future delivery uniqueness or full privacy.
    Owned PDF finalization now retains bounded native baselines through shutdown and raw scan, publishes canonical
