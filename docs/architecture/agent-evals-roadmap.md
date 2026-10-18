@@ -39,6 +39,12 @@ passed one ordinary cancellation/no-write trial, one judge-only regrade and comp
 post-stop/source-removal evidence and a separate judge were observed; the previous inconclusive reports remain
 unchanged. This is not protected/private-value/worker/output or complete PDF/browser-suite qualification.
 
+The [PDF output v1 pilot](../operations/manual-agent-evals-pdf-output-v1-pilot-20261018.md) on merged #1741 then
+preserved one inconclusive `pdf.loan.fill` attempt. A native ordinary-question continuation recorded HTTP 400 with
+a missing Gemini `thought_signature`; no filled artifact or final output assessment was reached. Scoped privacy
+also retained one opaque file. The target-defect triage and credential-copy cleanup are recorded separately from
+the remaining harness/domain qualification; no task was retried or prior result upgraded.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 
