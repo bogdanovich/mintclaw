@@ -11,7 +11,7 @@ import (
 func TestCredentialConfigurationRequiresDedicatedVaultAndPrivateStateLocation(t *testing.T) {
 	for _, kind := range []string{
 		"valid", "workspace", "agent-workspace", "different-vault", "different-owner", "missing-workspace",
-		"login-valid", "login-disabled-runtime", "login-no-host", "login-invalid-host", "discovery-valid",
+		"login-valid", "login-disabled-runtime", "login-no-host", "login-invalid-host", "discovery-valid", "discovery-multiple",
 	} {
 		t.Run(kind, func(t *testing.T) {
 			cfg := DefaultConfig()
@@ -34,10 +34,15 @@ func TestCredentialConfigurationRequiresDedicatedVaultAndPrivateStateLocation(t 
 				},
 			}
 			switch kind {
-			case "discovery-valid":
+			case "discovery-valid", "discovery-multiple":
 				cfg.Credentials.BrowserLoginEnabled, cfg.Credentials.HostID = true, "host"
 				account := &cfg.Credentials.Accounts[0]
 				account.DiscoverLogins, account.ItemID, account.Origins = true, "", nil
+				if kind == "discovery-multiple" {
+					other := *account
+					other.Alias = "second-discovery"
+					cfg.Credentials.Accounts = append(cfg.Credentials.Accounts, other)
+				}
 			case "login-valid", "login-disabled-runtime", "login-no-host", "login-invalid-host":
 				cfg.Credentials.BrowserLoginEnabled = true
 				cfg.Credentials.HostID = "gateway"

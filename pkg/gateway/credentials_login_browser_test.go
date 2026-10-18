@@ -37,6 +37,18 @@ func TestCredentialAliasBrowserAndPhoneFixture(t *testing.T) {
 	testCredentialAliasBrowserAndPhoneFixture(t, "", "logged_in")
 }
 
+func TestCredentialDiscoveredBrowserAndPhoneFixture(t *testing.T) {
+	for _, outcome := range []string{"logged_in", "handoff_required"} {
+		t.Run(outcome, func(t *testing.T) { testCredentialBrowserFixtureScenario(t, "", outcome, "discovery") })
+	}
+}
+
+func TestCredentialDiscoveredProviderOutputFixture(t *testing.T) {
+	for _, kind := range []string{"openai_compat", "codex"} {
+		t.Run(kind, func(t *testing.T) { testCredentialBrowserFixtureScenario(t, kind, "logged_in", "discovery") })
+	}
+}
+
 func TestCredentialProviderOutputFixture(t *testing.T) {
 	testCredentialAliasBrowserAndPhoneFixture(t, "openai_compat", "logged_in")
 }
@@ -91,7 +103,8 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOutcome, mode string) {
 	t.Helper()
 	restart, canceled, expiry := mode == "restart", mode == "cancel", mode == "expiry"
-	if mode != "" && !restart && !canceled && !expiry {
+	discovery := mode == "discovery"
+	if mode != "" && !restart && !canceled && !expiry && !discovery {
 		t.Fatal("unknown credential fixture scenario")
 	}
 	connectorMode := strings.HasPrefix(providerKind, "github:")
@@ -123,6 +136,9 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	target.Driver, target.DriverServer, target.DriverExecutable = config.BrowserDriverPlaywrightLibrary, "", "node"
 	target.DriverArguments = []string{script, "driver", expectedOutcome}
+	if discovery {
+		target.DriverArguments[2] = "discovery"
+	}
 	if canceled || expiry {
 		target.DriverArguments = append(target.DriverArguments,
 			"--fixture-submission-checkpoint=http://"+server.Listener.Addr().String())
@@ -144,7 +160,10 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 		},
 	}
 	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
-	const origin = "https://93.184.216.34"
+	origin := "https://93.184.216.34"
+	if discovery {
+		origin = "https://example.org"
+	}
 	cfg.Credentials = config.CredentialConfig{
 		Enabled: true, BrowserLoginEnabled: true, HostID: "gateway", OwnerID: "owner",
 		Origin: "https://approval.example.org", StateDirectory: t.TempDir(), TrustLoopbackTLSProxy: true,
@@ -164,6 +183,10 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 				HandoffURL: origin + "/challenge", HandoffMarkerID: "challenge",
 			},
 		}},
+	}
+	if discovery {
+		account := &cfg.Credentials.Accounts[0]
+		account.DiscoverLogins, account.ItemID, account.Origins, account.Login = true, "", nil, nil
 	}
 	if connectorMode {
 		cfg.Credentials.BrowserLoginEnabled = false
@@ -187,6 +210,8 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	}
 	t.Cleanup(func() { _ = credentials.Close(context.Background()) })
 	var retrieved atomic.Int32
+	var candidateCount atomic.Int32
+	candidateCount.Store(1)
 	var expiryInterruptions atomic.Int32
 	credentials.consumeLogin = func(consumeCtx context.Context, binding vault.Binding, use func([]byte, []byte) error) error {
 		if binding.VaultID != "fixture-vault" || binding.ItemID != "fixture-item" {
@@ -198,6 +223,45 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			expiryInterruptions.Add(1)
 		}
 		return useErr
+	}
+	if discovery {
+		credentials.findLogins = func(_ context.Context, vaultID string, query vault.DiscoveryQuery) ([]vault.Candidate, error) {
+			if vaultID != "fixture-vault" || query.Website != origin {
+				return nil, vault.ErrUnavailable
+			}
+			candidates := []vault.Candidate{{
+				Binding: vault.Binding{VaultID: vaultID, ItemID: "fixture-item"},
+				Name:    "Fixture personal Login", Domains: []string{"example.org"},
+			}}
+			if candidateCount.Load() == 0 {
+				return nil, nil
+			}
+			if candidateCount.Load() == 2 {
+				candidates = append(candidates, vault.Candidate{
+					Binding: vault.Binding{VaultID: vaultID, ItemID: "fixture-other"},
+					Name:    "Fixture work Login", Domains: []string{"example.org"},
+				})
+			}
+			return candidates, nil
+		}
+		credentials.consumeWebsiteLogin = func(useCtx context.Context, binding vault.Binding, website, step string,
+			use func([]byte, []byte) error,
+		) error {
+			if website != origin || binding.VaultID != "fixture-vault" || binding.ItemID != "fixture-item" {
+				return vault.ErrUnavailable
+			}
+			if step == "totp" {
+				if expectedOutcome == "handoff_required" {
+					return vault.ErrTOTPUnavailable
+				}
+				retrieved.Add(1)
+				return use(nil, []byte("19482673"))
+			}
+			if step != "credentials" {
+				return vault.ErrUnavailable // Verify must not retrieve any values.
+			}
+			return credentials.consumeLogin(useCtx, binding, use)
+		}
 	}
 	const apiToken = "gateway-private-api-token-U42"
 	var apiCalls atomic.Int32
@@ -322,8 +386,67 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			return browser.CredentialLoginResult{}, argsErr
 		}
 		var result browser.CredentialLoginResult
+		if discovery {
+			before := retrieved.Load()
+			candidateCount.Store(0)
+			if err := record(
+				login.Execute(ctx, credentialFixtureStepArguments(observation, "discover")),
+				&result,
+			); err != nil ||
+				result.Outcome != "not_found" || retrieved.Load() != before ||
+				len(messageBus.OutboundChan()) != 0 {
+				return result, errors.New("empty lookup read values or requested approval")
+			}
+			candidateCount.Store(2)
+			ambiguous := make(map[string]any, len(args))
+			for key, value := range args {
+				if key != "account_alias" {
+					ambiguous[key] = value
+				}
+			}
+			ambiguous["operation"] = "credentials"
+			if err := record(
+				login.Execute(ctx, ambiguous),
+				&result,
+			); err != nil || result.Outcome != "choice_required" ||
+				len(result.Candidates) != 2 || retrieved.Load() != before ||
+				len(messageBus.OutboundChan()) != 0 {
+				return result, errors.New("ambiguous lookup guessed a record, read values or requested approval")
+			}
+			candidateCount.Store(1)
+			lookup := credentialFixtureStepArguments(observation, "discover")
+			if err := record(login.Execute(ctx, lookup), &result); err != nil || result.Outcome != "found" ||
+				len(result.Candidates) != 1 || result.CredentialID != "fixture-item" {
+				return result, errors.New("website discovery did not return one safe Login reference")
+			}
+			delete(args, "account_alias")
+			args["operation"], args["credential_id"] = "credentials", result.CredentialID
+		}
 		if err := record(login.Execute(ctx, args), &result); err != nil {
 			return result, err
+		}
+		if discovery {
+			for _, step := range []string{"totp", "verify"} {
+				if result.Outcome != "submitted" {
+					return result, errors.New("generic step did not report its unconfirmed submission")
+				}
+				if err := record(
+					observe.Execute(ctx, map[string]any{"browser_session_id": session.ID}),
+					&observation,
+				); err != nil {
+					return result, err
+				}
+				args, err = credentialFixtureWebsiteArguments(observation, step)
+				if err != nil {
+					return result, err
+				}
+				if err = record(login.Execute(ctx, args), &result); err != nil {
+					return result, err
+				}
+				if result.Outcome == "handoff_required" {
+					break
+				}
+			}
 		}
 		if result.Outcome == "logged_in" &&
 			record(observe.Execute(ctx, map[string]any{"browser_session_id": session.ID}), nil) != nil {
@@ -528,12 +651,20 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
 				all, listErr := running.Browser.store.ListSessions(ctx)
-				retired = listErr == nil && len(all) == int(retrieved.Load())
+				expectedSessions := int(retrieved.Load())
+				if discovery && expectedOutcome == "logged_in" {
+					expectedSessions /= 2
+				}
+				retired = listErr == nil && len(all) == expectedSessions
 				for _, session := range all {
 					retired = retired && session.State.Terminal()
 				}
 				scope, _, scopeErr := credentials.controller.LoginRequest(ctx,
 					cfg.Credentials.Accounts[0].Principals[0], "fixture-account", origin)
+				if discovery {
+					scope, _, scopeErr = credentials.controller.DiscoveryRequest(ctx,
+						cfg.Credentials.Accounts[0].Principals[0], "fixture-account", origin)
+				}
 				_, grantErr := credentials.controller.ActiveLogin(ctx, scope)
 				retired = retired && scopeErr == nil && grantErr != nil
 				if expiry {
@@ -608,9 +739,10 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	defer clear(invite)
 	input, err := json.Marshal(map[string]string{
 		"backend": server.URL, "invite": string(invite), "outcome": expectedOutcome,
-		"inflight": map[bool]string{true: "true", false: ""}[connectorMode],
-		"restart":  map[bool]string{true: "true", false: ""}[restart],
-		"lifetime": mode,
+		"inflight":  map[bool]string{true: "true", false: ""}[connectorMode],
+		"restart":   map[bool]string{true: "true", false: ""}[restart],
+		"lifetime":  mode,
+		"discovery": map[bool]string{true: "true", false: ""}[discovery],
 	})
 	if err != nil {
 		t.Fatal("synthetic phone configuration unavailable")
@@ -639,6 +771,9 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 		t.Fatalf("synthetic gateway/browser/phone qualification failed at %s", stage)
 	}
 	expectedReads := int32(2)
+	if discovery && expectedOutcome == "logged_in" {
+		expectedReads = 4
+	}
 	if connectorMode {
 		expectedReads = 3
 	}
@@ -671,6 +806,7 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 		for _, value := range []string{
 			"gateway-private-account@example.org", "gateway-private-password-Q68", "gateway-private-cookie-K82",
 			"gateway-private-otp-R49",
+			"19482673",
 			apiToken,
 		} {
 			if bytes.Contains(output, []byte(value)) {
@@ -678,6 +814,31 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			}
 		}
 	}
+}
+
+func credentialFixtureStepArguments(observation browser.Observation, step string) map[string]any {
+	return map[string]any{
+		"operation": step, "browser_session_id": observation.SessionID, "tab_id": observation.TabID,
+		"snapshot_id": observation.SnapshotID, "snapshot_generation": int(observation.SnapshotGeneration),
+	}
+}
+
+func credentialFixtureWebsiteArguments(observation browser.Observation, step string) (map[string]any, error) {
+	args := credentialFixtureStepArguments(observation, step)
+	args["credential_id"] = "fixture-item"
+	labels := map[string]string{"otp_ref": "Verification code", "submit_ref": "Verify"}
+	if step == "verify" {
+		labels = map[string]string{"authenticated_ref": "Log out"}
+	}
+	for key, label := range labels {
+		pattern := regexp.MustCompile(`(?m)- (?:textbox|button) "` + label + `"[^\n]*\[ref=([^\]]+)\]`)
+		match := pattern.FindStringSubmatch(observation.Snapshot)
+		if len(match) != 2 {
+			return nil, errors.New("generic fixture current refs unavailable")
+		}
+		args[key] = match[1]
+	}
+	return args, nil
 }
 
 func credentialFixtureLoginArguments(observation browser.Observation) (map[string]any, error) {

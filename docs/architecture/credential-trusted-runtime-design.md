@@ -1,5 +1,12 @@
 # Trusted Runtime Credential Access
 
+The 2026-10-18 [website-discovery follow-up](credential-discovery-redesign.md)
+replaces fixed per-site browser bindings with a dedicated-vault Login scope,
+live website matching, generic forms and private TOTP. Its
+[browser operation contract](credential-website-login.md) supersedes the
+fixed browser-selection details below. The trust and output boundaries remain
+in force; fixed bindings remain available for explicit existing consumers.
+
 ## Decision and scope
 
 The operator approved this trust model on 2026-10-11: the model acts in good

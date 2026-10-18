@@ -19,17 +19,21 @@ import (
 )
 
 const (
-	providerTimeout  = 10 * time.Second
-	maxTokenBytes    = 32768
-	maxItemFields    = 64
-	maxUsernameBytes = 1024
-	maxPasswordBytes = 4096
+	// Initialization includes native SDK startup and account authentication.
+	// Real metadata-only qualification observed a roughly 24-second cold start.
+	InitializationTimeout = 45 * time.Second
+	providerTimeout       = 10 * time.Second
+	maxTokenBytes         = 32768
+	maxItemFields         = 64
+	maxUsernameBytes      = 1024
+	maxPasswordBytes      = 4096
 )
 
 var (
-	ErrUnavailable    = errors.New("private vault unavailable")
-	ErrInvalidLogin   = errors.New("private login item is invalid")
-	ErrConsumerFailed = errors.New("private credential consumer failed")
+	ErrUnavailable     = errors.New("private vault unavailable")
+	ErrInvalidLogin    = errors.New("private login item is invalid")
+	ErrConsumerFailed  = errors.New("private credential consumer failed")
+	ErrTOTPUnavailable = errors.New("stored one-time code unavailable")
 	// The SDK initializes a shared core without its own initialization lock.
 	sdkInitMu sync.Mutex
 )

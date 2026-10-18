@@ -36,7 +36,8 @@ func credentialNotificationPublisher(messageBus *bus.MessageBus) credentialNotif
 
 func (source *gatewayBrowserToolSource) CredentialLoginAvailable() bool {
 	return source != nil && source.services != nil && source.services.Credentials != nil &&
-		source.services.Credentials.loginEnabled && source.services.Credentials.consumeLogin != nil &&
+		source.services.Credentials.loginEnabled &&
+		(source.services.Credentials.consumeLogin != nil || source.services.Credentials.consumeWebsiteLogin != nil) &&
 		len(source.credentialProfiles) > 0
 }
 
@@ -95,6 +96,9 @@ func (source *gatewayBrowserToolSource) LoginCredential(ctx context.Context,
 	runtime := source.services.Credentials
 	principal := credentialbroker.Principal{
 		OwnerID: runtime.ownerID, ActorID: selection.Owner.ActorID, AgentID: agentID, HostID: runtime.hostID,
+	}
+	if selection.Fields.Step != "" {
+		return source.loginDiscoveredCredential(ctx, selection, session, principal)
 	}
 	scope, flow, err := runtime.controller.LoginRequest(ctx, principal, selection.Account, session.SnapshotOrigin)
 	if err != nil {

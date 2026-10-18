@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"time"
 
 	"github.com/bogdanovich/mintclaw/internal/credentials/approval"
 	"github.com/bogdanovich/mintclaw/internal/credentials/vault"
@@ -14,7 +13,7 @@ type credentialVaultFactory func(context.Context, []byte) (vault.Provider, error
 
 func newCredentialVault(directory string, create credentialVaultFactory) (vault.Provider, error) {
 	var provider vault.Provider
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), vault.InitializationTimeout)
 	defer cancel()
 	err := vault.UseServiceAccountToken(directory, func(token []byte) error {
 		// The SDK has no explicit client-destruction API and retains its own
@@ -78,6 +77,9 @@ func consumeCredentialLogin(ctx context.Context, request credentialbroker.Reques
 				return errCredentialsUnavailable
 			}
 			for _, value := range [][]byte{username, password} {
+				if len(value) == 0 {
+					continue
+				}
 				release, registerErr := secretvalues.Register(value)
 				if registerErr != nil {
 					return errCredentialsUnavailable

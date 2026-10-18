@@ -38,14 +38,14 @@ func FindLogins(ctx context.Context, token []byte, vaultID string, query Discove
 	if ctx == nil {
 		return nil, ErrUnavailable
 	}
-	ctx, cancel := context.WithTimeout(ctx, providerTimeout)
-	defer cancel()
-	provider, err := New(ctx, token)
+	initCtx, cancel := context.WithTimeout(ctx, InitializationTimeout)
+	provider, err := New(initCtx, token)
+	cancel()
 	if err != nil {
 		return nil, ErrUnavailable
 	}
 	defer runtime.KeepAlive(provider.client)
-	return findLogins(ctx, provider.client.Items(), vaultID, query)
+	return provider.FindLogins(ctx, vaultID, query)
 }
 
 // FindLogins reuses the private SDK client for live metadata-only lookup. It

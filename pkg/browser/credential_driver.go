@@ -21,14 +21,18 @@ var (
 // References come from the current browser snapshot; outcome evidence comes
 // from immutable operator account configuration.
 type CredentialFields struct {
-	Origin          string
-	UsernameRef     string
-	PasswordRef     string
-	SubmitRef       string
-	SuccessURL      string
-	SuccessMarkerID string
-	HandoffURL      string
-	HandoffMarkerID string
+	Step             string
+	WebsiteDomain    string
+	Origin           string
+	UsernameRef      string
+	PasswordRef      string
+	SubmitRef        string
+	SuccessURL       string
+	SuccessMarkerID  string
+	HandoffURL       string
+	HandoffMarkerID  string
+	OTPRef           string
+	AuthenticatedRef string
 }
 
 type privateCredentialDriver interface {
@@ -93,6 +97,8 @@ func (client *playwrightLibraryClient) prepareCredential(ctx context.Context, fi
 		"origin": fields.Origin, "username_ref": fields.UsernameRef, "password_ref": fields.PasswordRef,
 		"submit_ref": fields.SubmitRef, "success_url": fields.SuccessURL, "success_marker_id": fields.SuccessMarkerID,
 		"handoff_url": fields.HandoffURL, "handoff_marker_id": fields.HandoffMarkerID,
+		"step": fields.Step, "otp_ref": fields.OTPRef, "authenticated_ref": fields.AuthenticatedRef,
+		"website_domain": fields.WebsiteDomain,
 	})
 	text, ok := credentialDriverText(result, err)
 	if !ok {
@@ -132,7 +138,7 @@ func (client *playwrightLibraryClient) submitCredential(
 		return credentialDriverResult{}, errCredentialDriver
 	}
 	switch response.Code {
-	case "logged_in", "handoff_required", "denied", "failed", "outcome_unknown":
+	case "logged_in", "handoff_required", "denied", "failed", "outcome_unknown", "submitted", "unverified":
 	default:
 		return credentialDriverResult{}, errCredentialDriver
 	}
