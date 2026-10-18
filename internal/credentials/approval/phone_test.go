@@ -359,7 +359,7 @@ func TestReopenPreservesApprovalDeadlineAndPublicCopies(t *testing.T) {
 	if err != nil || repeat.ID != begin.ID || repeat.Options[0] == '!' || repeat.Scope.Accounts[0] != "facebook" {
 		t.Fatal("reopen lost immutable original ceremony")
 	}
-	fixture.controller.now = func() time.Time { return now.Add(PendingLifetime) }
+	fixture.controller.now = func() time.Time { return now.Add(RequestLifetime) }
 	if _, err = fixture.controller.BeginApproval(context.Background(), id); err == nil {
 		t.Fatal("reopen renewed approval request")
 	}

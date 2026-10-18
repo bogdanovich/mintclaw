@@ -20,6 +20,7 @@ import (
 const (
 	MaxPending       = 64
 	PendingLifetime  = 5 * time.Minute
+	RequestLifetime  = 2 * time.Hour
 	maxResponseBytes = 65536
 )
 
@@ -304,10 +305,13 @@ func (controller *Controller) BeginApproval(ctx context.Context, requestID strin
 	}
 	if request.ceremony != "" {
 		pending, exists := controller.ceremonies[request.ceremony]
-		if !exists || !controller.ceremonyLive(pending) {
-			return Ceremony{}, ErrDenied
+		if exists && controller.ceremonyLive(pending) {
+			return publicCeremony(request.ceremony, pending), nil
 		}
-		return publicCeremony(request.ceremony, pending), nil
+		// An unattempted request outlives a single passkey ceremony. Replace the
+		// expired challenge without renewing the original request's deadline.
+		delete(controller.ceremonies, request.ceremony)
+		request.ceremony = ""
 	}
 	ceremony, err := controller.begin(approve, request.scope, requestID)
 	if err == nil {
@@ -362,17 +366,7 @@ func (controller *Controller) Status(ctx context.Context, principal credentialbr
 		return intent.NotReady, ""
 	}
 	controller.prune()
-	request := controller.requests[id]
-	if !intent.ValidReference(id) || request == nil || request.scope.Principal != principal {
-		return intent.Denied, ""
-	}
-	if request.grant != "" && controller.grantActive(request.grant) {
-		return intent.GrantActive, request.grant
-	}
-	if request.attempted {
-		return intent.Denied, ""
-	}
-	return intent.ApprovalPending, ""
+	return controller.requestStatusLocked(principal, id)
 }
 
 func (controller *Controller) BeginRevocation(ctx context.Context, grantID string) (Ceremony, error) {
@@ -514,7 +508,7 @@ func (controller *Controller) ceremonyLive(ceremony pendingCeremony) bool {
 	}
 	if ceremony.kind == approve {
 		request := controller.requests[ceremony.request]
-		return request != nil && withinLifetime(controller.now(), request.issued)
+		return request != nil && withinRequestLifetime(controller.now(), request.issued)
 	}
 	return true
 }
@@ -544,7 +538,7 @@ func withinLifetime(now, issued time.Time) bool {
 func (controller *Controller) prune() {
 	now := controller.now()
 	for id, request := range controller.requests {
-		if !withinLifetime(now, request.issued) {
+		if !withinRequestLifetime(now, request.issued) {
 			delete(controller.ceremonies, request.ceremony)
 			delete(controller.requests, id)
 		}

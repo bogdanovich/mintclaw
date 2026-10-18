@@ -502,7 +502,7 @@ func TestChallengeExpirationCapacityAndPolicyABA(t *testing.T) {
 	) {
 		t.Fatal("pending request capacity was unbounded")
 	}
-	now = now.Add(PendingLifetime)
+	now = now.Add(RequestLifetime)
 	if _, err := fixture.controller.Request(
 		context.Background(),
 		testPrincipal,
@@ -695,7 +695,7 @@ func TestCancellationAndExpiryDuringPersistenceDoNotIssue(t *testing.T) {
 				t.Fatal("request failed")
 			}
 			if mode == "request-expired-during-save" {
-				now = now.Add(PendingLifetime - time.Second)
+				now = now.Add(RequestLifetime - time.Second)
 			}
 			ceremony, err := fixture.controller.BeginApproval(context.Background(), id)
 			if err != nil {

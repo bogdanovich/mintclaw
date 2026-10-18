@@ -9,6 +9,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/credentialbroker"
+	"github.com/bogdanovich/mintclaw/pkg/credentialbroker/intent"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -67,19 +68,8 @@ func (source *gatewayBrowserToolSource) LoginCredential(ctx context.Context,
 	if !source.CredentialLoginAvailable() || ctx == nil || ctx.Err() != nil || selection.Owner.Validate() != nil {
 		return denied
 	}
-	agentID := strings.TrimSpace(toolshared.ToolAgentID(ctx))
-	if runtime, ok := toolshared.RuntimeCapabilities(ctx); ok && runtime.Kind() == runtimecap.KindCoding {
-		principal, bound := runtime.Principal()
-		if !bound || principal.Validate() != nil {
-			return denied
-		}
-		agentID = principal.AgentID
-	}
-	if agentID == "" {
-		return denied
-	}
-	agentID = routing.NormalizeAgentID(agentID)
-	if browser.OpaqueAgentID(agentID) != selection.Owner.AgentID {
+	principal, ok := source.credentialPrincipal(ctx, selection.Owner)
+	if !ok {
 		return denied
 	}
 	session, err := withGatewayBrowserBroker(ctx, source,
@@ -94,9 +84,6 @@ func (source *gatewayBrowserToolSource) LoginCredential(ctx context.Context,
 		return denied
 	}
 	runtime := source.services.Credentials
-	principal := credentialbroker.Principal{
-		OwnerID: runtime.ownerID, ActorID: selection.Owner.ActorID, AgentID: agentID, HostID: runtime.hostID,
-	}
 	if selection.Fields.Step != "" {
 		return source.loginDiscoveredCredential(ctx, selection, session, principal)
 	}
@@ -104,8 +91,12 @@ func (source *gatewayBrowserToolSource) LoginCredential(ctx context.Context,
 	if err != nil {
 		return denied
 	}
-	if _, err = runtime.requestCredentialLease(ctx, scope); errors.Is(err, errCredentialApprovalRequired) {
-		return browser.CredentialLoginResult{Alias: scope.Account, Outcome: "approval_required"}
+	_, waiting, err := runtime.credentialLeaseOrApproval(ctx, scope)
+	if errors.Is(err, errCredentialApprovalRequired) {
+		return browser.CredentialLoginResult{
+			Alias: scope.Account, Outcome: "approval_required",
+			ApprovalWait: &browser.CredentialApprovalWait{Reference: waiting.Reference, Deadline: waiting.Deadline},
+		}
 	} else if err != nil {
 		return denied
 	}
@@ -128,4 +119,54 @@ func (source *gatewayBrowserToolSource) LoginCredential(ctx context.Context,
 		return denied
 	}
 	return result
+}
+
+func (source *gatewayBrowserToolSource) credentialPrincipal(
+	ctx context.Context,
+	owner browser.Owner,
+) (credentialbroker.Principal, bool) {
+	if !source.CredentialLoginAvailable() || ctx == nil || ctx.Err() != nil || owner.Validate() != nil {
+		return credentialbroker.Principal{}, false
+	}
+	agentID := strings.TrimSpace(toolshared.ToolAgentID(ctx))
+	if runtime, ok := toolshared.RuntimeCapabilities(ctx); ok && runtime.Kind() == runtimecap.KindCoding {
+		principal, bound := runtime.Principal()
+		if !bound || principal.Validate() != nil {
+			return credentialbroker.Principal{}, false
+		}
+		agentID = principal.AgentID
+	}
+	if agentID == "" {
+		return credentialbroker.Principal{}, false
+	}
+	agentID = routing.NormalizeAgentID(agentID)
+	if browser.OpaqueAgentID(agentID) != owner.AgentID {
+		return credentialbroker.Principal{}, false
+	}
+	runtime := source.services.Credentials
+	return credentialbroker.Principal{
+		OwnerID: runtime.ownerID,
+		ActorID: owner.ActorID,
+		AgentID: agentID,
+		HostID:  runtime.hostID,
+	}, true
+}
+
+func (source *gatewayBrowserToolSource) CredentialApprovalState(
+	ctx context.Context,
+	owner browser.Owner,
+	reference string,
+) toolshared.ExternalWaitState {
+	principal, ok := source.credentialPrincipal(ctx, owner)
+	if !ok {
+		return toolshared.ExternalWaitUnavailable
+	}
+	switch source.services.Credentials.controller.ResolveWait(ctx, principal, reference) {
+	case intent.ApprovalPending:
+		return toolshared.ExternalWaitPending
+	case intent.GrantActive:
+		return toolshared.ExternalWaitReady
+	default:
+		return toolshared.ExternalWaitUnavailable
+	}
 }

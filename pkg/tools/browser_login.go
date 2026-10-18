@@ -3,11 +3,13 @@ package tools
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/credentialbroker/intent"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
@@ -19,6 +21,12 @@ import (
 type BrowserCredentialToolSource interface {
 	CredentialLoginAvailable() bool
 	LoginCredential(context.Context, browser.CredentialLoginRequest) browser.CredentialLoginResult
+}
+
+// BrowserCredentialApprovalSource resolves a saved condition against the
+// original authenticated browser owner, without a live browser or vault reads.
+type BrowserCredentialApprovalSource interface {
+	CredentialApprovalState(context.Context, browser.Owner, string) toolshared.ExternalWaitState
 }
 
 type BrowserLoginTool struct{ runtime *browserToolRuntime }
@@ -44,7 +52,7 @@ func (*BrowserLoginTool) Description() string {
 		"If an unsupported challenge appears, hand off without guessing codes or repeating failed logins. " +
 		"Values stay inside the trusted runtime. Phone approval is required when no current vault grant exists. " +
 		"Never supply passwords or tokens. Do not replay an outcome_unknown submission. " +
-		"For approval_required, wait for phone approval before retrying."
+		"Phone approval suspends this task automatically; after approval open a fresh session and observe fresh fields."
 }
 
 func (*BrowserLoginTool) Parameters() map[string]any {
@@ -155,6 +163,24 @@ func (tool *BrowserLoginTool) Execute(ctx context.Context, args map[string]any) 
 		return denied()
 	}
 	output := tool.runtime.result(result)
+	if result.Outcome == "approval_required" && result.ApprovalWait != nil {
+		if _, ok := tool.runtime.source.(BrowserCredentialApprovalSource); !ok ||
+			!result.ApprovalWait.Deadline.After(time.Now()) {
+			return denied()
+		}
+		waiting := &interactions.SuspensionRequest{
+			Kind:          interactions.KindExternalWait,
+			ConditionRef:  result.ApprovalWait.Reference,
+			Timeout:       24 * time.Hour,
+			Deadline:      result.ApprovalWait.Deadline,
+			PromptSummary: "Waiting for phone approval. You can switch tasks; this request continues automatically after approval. The idle browser has been closed.",
+		}
+		if interactions.ValidateSuspensionRequest(*waiting) != nil {
+			return denied()
+		}
+		output.Control.Suspension = waiting
+	}
+
 	if result.Outcome == "logged_in" {
 		// Only the private consumer's confirmed outcome certifies the action.
 		// Keep the public result alias-only; normal runtime receipt recovery
@@ -168,4 +194,19 @@ func (tool *BrowserLoginTool) Execute(ctx context.Context, args map[string]any) 
 		})
 	}
 	return output
+}
+
+func (tool *BrowserLoginTool) ResolveExternalWait(ctx context.Context, reference string) toolshared.ExternalWaitState {
+	if !tool.ToolEnabledForAgent(toolshared.ToolAgentID(ctx)) {
+		return toolshared.ExternalWaitUnavailable
+	}
+	source, ok := tool.runtime.source.(BrowserCredentialApprovalSource)
+	if !ok {
+		return toolshared.ExternalWaitUnavailable
+	}
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		return toolshared.ExternalWaitUnavailable
+	}
+	return source.CredentialApprovalState(ctx, owner, reference)
 }
