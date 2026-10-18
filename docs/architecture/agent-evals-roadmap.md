@@ -72,6 +72,9 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    These isolation prerequisites do not grant positive checks or complete the post-settlement work.
    Exact compiled public-system-file witnesses can explain unchanged bundled text, not active loaded catalogs or
    SQLite and other opaque surfaces; known literal guards still run before that identity check.
+   A [synthetic SQLite probe](../operations/manual-agent-evals-sqlite-probe-20261018.md) retained a full encoded
+   canary after native session clearing despite zero current message/FTS rows. Current-row-only SQL plus literal
+   matching cannot replace raw privacy coverage; this negative control must survive the native witness work.
    The bounded client-media witness binds actual requestless messages to native settlement, and owned raw-frame
    inspection includes earlier trials' retained facts. Neither grants future delivery uniqueness or full privacy.
    Owned PDF finalization now retains bounded native baselines through shutdown and raw scan, publishes canonical
