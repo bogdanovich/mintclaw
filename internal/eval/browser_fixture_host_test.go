@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func fixtureHostGet(t *testing.T, host *browserFixtureHost, path string, status int) {
+func fixtureHostGet(t *testing.T, host *browserFixtureHost, path string, status int) []byte {
 	t.Helper()
 	transport := &http.Transport{DisableKeepAlives: true}
 	t.Cleanup(transport.CloseIdleConnections)
@@ -24,11 +24,12 @@ func fixtureHostGet(t *testing.T, host *browserFixtureHost, path string, status 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, 16384))
+	data, readErr := io.ReadAll(io.LimitReader(response.Body, 16385))
 	closeErr := response.Body.Close()
-	if response.StatusCode != status || readErr != nil || closeErr != nil {
+	if response.StatusCode != status || readErr != nil || closeErr != nil || len(data) > 16384 {
 		t.Fatal("fixture host response mismatch", response.StatusCode, readErr, closeErr)
 	}
+	return data
 }
 
 func TestBrowserFixtureHostKeepsOneOriginAndSeparatesSerialTrials(t *testing.T) {
@@ -247,29 +248,57 @@ func TestBrowserFixtureHostBoundsLifetimeAndJoinsConcurrentShutdown(t *testing.T
 }
 
 func TestBrowserFixtureHostServeFailureInvalidatesEvenSealedWitnesses(t *testing.T) {
-	host, err := newBrowserFixtureHost("127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = host.close() })
-	fixture, err := host.newTrial(uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.seal()
-	if err = host.listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-host.done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("unexpected server failure was not observed")
-	}
-	if !fixture.snapshot().failed || !errors.Is(host.close(), ErrBrowserFixture) {
-		t.Fatal("failed listener retained healthy fixture/cleanup evidence")
-	}
-	result, err := inspectBrowserFixture(browserOracleCase(t, "denied"), fixture, nil, nil)
-	if err != nil || result.Effects != Inconclusive {
-		t.Fatal("no activity on a failed host became passing evidence", err)
+	for _, scenario := range []string{"denied", "read", "artifact"} {
+		t.Run(scenario, func(t *testing.T) {
+			host, err := newBrowserFixtureHost("127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = host.close() })
+			fixture, err := host.newTrial(uuid.NewString())
+			if err != nil {
+				t.Fatal(err)
+			}
+			events := []Event{{ID: "event-1", Kind: "final", Content: "Reference: " + fixture.code}}
+			var artifact []byte
+			switch scenario {
+			case "read":
+				fixtureHostGet(t, host, fixture.path, http.StatusOK)
+			case "artifact":
+				artifact = fixtureHostGet(t, host, fixture.path+"report.csv", http.StatusOK)
+			}
+			fixture.seal()
+			item := browserOracleCase(t, scenario)
+			before, err := inspectBrowserFixture(item, fixture, events, artifact)
+			if err != nil || before.Effects != Pass || scenario == "read" && before.Read != Pass ||
+				scenario == "artifact" && before.Artifact != Pass {
+				t.Fatal("healthy witness control did not pass before listener failure", err)
+			}
+			if err = host.listener.Close(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-host.done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("unexpected server failure was not observed")
+			}
+			if !fixture.snapshot().failed || !errors.Is(host.close(), ErrBrowserFixture) {
+				t.Fatal("failed listener retained healthy fixture/cleanup evidence")
+			}
+			result, err := inspectBrowserFixture(item, fixture, events, artifact)
+			if err != nil || result.Effects != Inconclusive || result.Read == Pass || result.Artifact == Pass ||
+				result.ArtifactSHA256 != "" {
+				t.Fatal("failed host retained a passing predicate or artifact digest", err)
+			}
+			events[0].Content = "Wrong reference"
+			if scenario == "artifact" {
+				artifact = append(artifact, '\n')
+			}
+			wrong, err := inspectBrowserFixture(item, fixture, events, artifact)
+			if err != nil || scenario == "read" && wrong.Read != Fail ||
+				scenario == "artifact" && wrong.Artifact != Fail {
+				t.Fatal("host failure erased an observed mismatch", err)
+			}
+		})
 	}
 }

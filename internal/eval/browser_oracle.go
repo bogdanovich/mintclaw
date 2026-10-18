@@ -52,6 +52,7 @@ func inspectBrowserFixture(
 		}
 	}
 	state := fixture.snapshot()
+	settled := state.closed && !state.failed && !state.overflow
 	result := browserFixtureOracle{
 		Version: Version, Scope: "local_fixture_only", PageSHA256: digest(fixture.page),
 		CSVSourceSHA256: digest(fixture.file), Visits: state.visits, Downloads: state.downloads,
@@ -75,7 +76,7 @@ func inspectBrowserFixture(
 	// or the fixture fails. Absence of effects requires a closed, healthy witness.
 	if contradicted {
 		result.Effects, result.EffectsCode = Fail, "fixture_effect_mismatch"
-	} else if state.closed && !state.failed && !state.overflow {
+	} else if settled {
 		result.Effects, result.EffectsCode = Fail, "fixture_effect_missing"
 		if matched {
 			result.Effects, result.EffectsCode = Pass, "matched"
@@ -87,7 +88,10 @@ func inspectBrowserFixture(
 		if last.Kind == "final" && last.ID != "" && state.visits > 0 {
 			result.Read, result.ReadCode = Fail, "fixture_reference_mismatch"
 			if strings.Contains(last.Content, fixture.code) {
-				result.Read, result.ReadCode = Pass, "matched"
+				result.Read, result.ReadCode = Inconclusive, "fixture_unsettled"
+				if settled {
+					result.Read, result.ReadCode = Pass, "matched"
+				}
 			}
 		}
 	}
@@ -104,7 +108,10 @@ func inspectBrowserFixture(
 					digest(artifact) == result.CSVSourceSHA256 {
 					result.Artifact, result.ArtifactCode = Inconclusive, "fixture_download_missing"
 					if state.downloads > 0 {
-						result.Artifact, result.ArtifactCode = Pass, "matched"
+						result.ArtifactCode = "fixture_unsettled"
+						if settled {
+							result.Artifact, result.ArtifactCode = Pass, "matched"
+						}
 					}
 				}
 			}

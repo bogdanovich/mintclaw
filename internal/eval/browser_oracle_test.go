@@ -207,3 +207,40 @@ func TestBrowserFixtureOracleRequiresActualReadAndExactCSV(t *testing.T) {
 		t.Fatal("cross-trial CSV passed", err)
 	}
 }
+
+func TestBrowserFixtureOracleReadArtifactRequireSealedHealthyWitness(t *testing.T) {
+	for _, scenario := range []string{"read", "artifact"} {
+		for _, health := range []string{"healthy", "unsealed", "failed", "overflow"} {
+			t.Run(scenario+"/"+health, func(t *testing.T) {
+				fixture := newBrowserFixtureForTest(t)
+				browserOracleGet(t, fixture, "")
+				artifact := browserOracleGet(t, fixture, "report.csv")
+				if health != "unsealed" {
+					fixture.seal()
+				}
+				fixture.mu.Lock()
+				fixture.state.failed = health == "failed"
+				fixture.state.overflow = health == "overflow"
+				fixture.mu.Unlock()
+				events := []Event{{ID: "event-1", Kind: "final", Content: "Reference: " + fixture.code}}
+				item := browserOracleCase(t, scenario)
+				result, err := inspectBrowserFixture(item, fixture, events, artifact)
+				verdict := result.Read
+				if scenario == "artifact" {
+					verdict = result.Artifact
+				}
+				if err != nil || (health == "healthy") != (verdict == Pass) ||
+					health != "healthy" && (verdict != Inconclusive || result.ArtifactSHA256 != "") {
+					t.Fatal("positive predicate bypassed witness settlement or health", err)
+				}
+				events[0].Content = "Wrong reference"
+				artifact = append(artifact, '\n')
+				wrong, err := inspectBrowserFixture(item, fixture, events, artifact)
+				if err != nil || scenario == "read" && wrong.Read != Fail ||
+					scenario == "artifact" && wrong.Artifact != Fail {
+					t.Fatal("unhealthy witness erased an observed mismatch", err)
+				}
+			})
+		}
+	}
+}

@@ -92,6 +92,12 @@ an observed download plus strictly parsed, exact source bytes from this trial. A
 without a download or a different trial's artifact cannot pass. The projection contains recipe-byte hashes,
 counts and predicate outcomes, not submitted values, nonce, origin, reference or raw artifact.
 
+Positive read and artifact predicates also require a sealed, healthy, non-overflowed witness. Host failure must
+not leave a passing read/artifact verdict or passing artifact digest behind. An independently observed wrong
+reference or wrong CSV remains a failure even when the witness is subsequently unavailable.
+Final run grading must reread retained witnesses after host shutdown and join; an earlier positive projection
+cannot be carried past a later host failure as a final receipt.
+
 These predicates are scoped to `local_fixture_only`. They do not prove authenticated browser origin, native
 intent/approval, clarification ordering, retained context, logical delivery, privacy or browser cleanup. Closing
 the fixture stops accepting writes; it cannot prove that a still-running browser would never have attempted one.
