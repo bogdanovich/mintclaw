@@ -195,5 +195,5 @@ and the protected service-account token need not be repeated.
 Physical revocation while an authenticated browser is actively in use remains
 unverified; the signed synthetic scenarios qualify that retirement behavior.
 The synthetic output inventory retains its stated provider, recovery and MFA
-limits. The actual GitHub connector remains disabled and has no real-token
-acceptance record.
+limits. The optional GitHub connector remains disabled and has no real-token
+acceptance record; it is not needed for this browser pilot or its completion.

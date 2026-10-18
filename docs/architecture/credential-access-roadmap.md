@@ -25,6 +25,12 @@ to selected aliases for at most 20 hours, with revocation, expiry, policy-change
 invalidation, and restart denial. A credential grant does not approve external
 effects such as purchases, posts, messages, or account changes.
 
+The operator clarified on 2026-10-18 that GitHub access is not needed for the
+requested browser logins. TR5's scoped connector implementation and synthetic
+qualification are delivered, but activating that optional integration is
+separate work. A GitHub token, repository selection and real-token API pilot
+are not prerequisites for completing or using the browser credential feature.
+
 ## Delivery sequence
 
 | Milestone | Reviewable change | Completion evidence |
@@ -34,7 +40,7 @@ effects such as purchases, posts, messages, or account changes.
 | TR2 | Alias-only 1Password configuration, private operator setup, and safe credential-use coordinator | Dedicated-vault read scope, no model-facing value retrieval, fixed safe errors, value-free audit records, synthetic provider tests |
 | TR3 | Integrated Android approval/revoke page and generic notifications | Owner enrollment, exact scope and HTTPS origin, user-verifying passkey ceremonies, 20-hour maximum, immediate revoke/expiry/restart behavior, physical Android qualification |
 | TR4 | Private login operation in the existing first-party browser | Exact-origin checks, current field readiness, fill/submit without model round trips, observation suppression and failure cleanup, safe MFA outcome, protected session lifetime |
-| TR5 | One explicitly scoped non-browser connector | Private credential injection at a fixed endpoint/action, independent effect policy, allowed result projection, no raw authentication headers/body in diagnostics |
+| TR5 | One explicitly scoped non-browser connector; live activation optional | Private credential injection at a fixed endpoint/action, independent effect policy, allowed result projection, no raw authentication headers/body in diagnostics |
 | TR6 | End-to-end output qualification and one personal login pilot | Synthetic canaries absent from every enabled model/durable sink; protected real-token setup; actual Android approval/login/revoke; one operator-selected account |
 
 Keep PRs focused on these complete behaviors. Do not split each OS primitive or
@@ -205,16 +211,19 @@ qualification and physical-device acceptance are recorded separately below.
   synthetically qualified, with no physical in-progress-task claim.
   The selected headless ephemeral browser is separate from the remote desktop
   and does not retain a website session after closure.
-- TR5: the [GitHub read connector](credential-github-read-connector.md) is the
-  initial read-only default while the operator chooses a preferred API. It
+- TR5: the [GitHub read connector](credential-github-read-connector.md) is an
+  optional read-only API integration. It
   reuses phone approval for exact configured repositories and an API Credential
   item. Synthetic actual-HTTP/provider/phone tests cover protected result
   release, grant reuse and cancellation on revocation. The implementation is
   merged in [#1673](https://github.com/bogdanovich/mintclaw/pull/1673) and included
-  in the deployed binary. The connector remains disabled pending configuration
-  and real-token acceptance.
-- TR5/TR6: the selected personal-account pilot is complete for the closed-session
-  revocation sequence above. Real connector rollout remains incomplete.
+  in the deployed binary. Its implementation and synthetic qualification are
+  complete. It remains disabled; repository configuration, a separate API
+  Credential item and real-token acceptance are needed only if the operator
+  later requests this integration. They do not block browser credential access.
+- TR5/TR6: the integrated implementation and selected personal-account pilot
+  are delivered for the qualified routes and closed-session revocation
+  sequence above. Real GitHub activation is optional and has not been requested.
   Synthetic output qualification covers the explicitly inventoried routes and
   scenarios, not every possible provider or recovery path.
   Dedicated-vault read-only scope is operator-confirmed; protected token entry,
