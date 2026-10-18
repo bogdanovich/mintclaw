@@ -118,10 +118,17 @@ async function performWebsiteStep(page, capsule, request) {
       if (['credentials', 'password'].includes(state.step)) fill.push([state.elements.password_ref, values.password]);
       if (state.step === 'totp') fill.push([state.elements.otp_ref, values.password]);
       const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      for (const [element, value] of fill) set.call(element, value);
-      for (const [element] of fill) {
+      for (const [element, value] of fill) {
+        // Sites may clear dependent fields when the username changes. Finish
+        // one field's events before filling the next, rechecking native refs
+        // and the destination before exposing another value to the page.
+        set.call(element, value);
         element.dispatchEvent(new Event('input', {bubbles: true}));
         element.dispatchEvent(new Event('change', {bubbles: true}));
+        if (!state.ready() || element.value !== value) {
+          for (const [target] of fill) set.call(target, '');
+          return false;
+        }
       }
       if (!state.ready() || fill.some(([element, value]) => element.value !== value)) {
         for (const [element] of fill) set.call(element, '');

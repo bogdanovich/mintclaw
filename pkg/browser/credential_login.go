@@ -98,6 +98,14 @@ func (bound *credentialSession) protectCookies(values []string) error {
 		if value == "" || len(value) > 4096 {
 			return errCredentialDriver
 		}
+		// Cookie inventories include public boolean flags. Registering these
+		// known literals as secrets would redact structural numbers and opaque
+		// browser refs process-wide. The private cookie envelope still suppresses
+		// them at source; all other cookie values retain echo protection.
+		switch value {
+		case "0", "1", "true", "false":
+			continue
+		}
 		if _, exists := bound.cookies[value]; exists {
 			continue
 		}

@@ -57,6 +57,32 @@ func TestCredentialCookieEnvelopeRegistersBeforeReturningOrdinaryResult(t *testi
 	}
 }
 
+func TestCredentialCookieFlagsPreserveBrowserReferences(t *testing.T) {
+	bound := &credentialSession{}
+	defer bound.close()
+	const token = "opaque-cookie-with-1-fixture-P42"
+	const code = "001743"
+	if bound.protectCookies([]string{"0", "1", "true", "false", token, code}) != nil {
+		t.Fatal("mixed cookie inventory protection unavailable")
+	}
+	const metadata = `{"browser_session_id":"session_01truefalse","snapshot_generation":1,"active":true}`
+	if secretvalues.Redact(metadata) != metadata {
+		t.Fatal("public cookie flag corrupted browser continuation metadata")
+	}
+	if secretvalues.Redact(token) != secretvalues.Marker || secretvalues.Redact(code) != secretvalues.Marker {
+		t.Fatal("cookie flags bypassed protection for opaque or numeric cookie values")
+	}
+	// This exception applies only to cookie flags, never vault credentials.
+	release, err := secretvalues.Register([]byte("1"))
+	if err != nil {
+		t.Fatal("credential output protection unavailable")
+	}
+	defer release()
+	if secretvalues.Redact("1") != secretvalues.Marker {
+		t.Fatal("cookie flag handling weakened credential protection")
+	}
+}
+
 func TestCredentialCookieEnvelopeRejectsOpaqueAndUnprotectedOutput(t *testing.T) {
 	for _, failGuard := range []bool{false, true} {
 		envelope, err := json.Marshal(map[string]any{

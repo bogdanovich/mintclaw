@@ -182,3 +182,26 @@ test('verification rejects logout controls hidden before preparation or completi
     }
   }
 });
+
+test('combined login fills password after username handlers finish', async t => {
+  for (const javascriptButton of [false, true]) {
+    const f = await fixture(t, true, '<script>' +
+      'const user = document.querySelector("input[name=username]");' +
+      'if (user) for (const event of ["input", "change"]) user.addEventListener(event, () => {' +
+      'document.querySelector("input[type=password]").value = "";});</script>');
+    if (javascriptButton) await f.page.locator('button').evaluate(button => {
+      const replacement = document.createElement('div');
+      replacement.setAttribute('role', 'button');
+      replacement.tabIndex = 0;
+      replacement.textContent = button.textContent;
+      replacement.addEventListener('click', () => replacement.closest('form').requestSubmit());
+      button.replaceWith(replacement);
+    });
+    const request = await values(f.page, 'credentials', {
+      username_ref: 'Account', password_ref: 'Password', submit_ref: 'Sign in',
+    });
+    assert.equal(await perform(f.page, request), 'submitted');
+    assert.deepEqual(f.posts, ['/combined']);
+    assert.equal(await perform(f.page, await values(f.page, 'verify', {authenticated_ref: 'Log out'})), 'logged_in');
+  }
+});
