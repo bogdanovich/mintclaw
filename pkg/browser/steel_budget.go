@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"net/http"
 	"os"
 	"time"
 
@@ -81,9 +82,17 @@ type steelCostClient interface {
 	SessionCost(context.Context, string) (float64, error)
 }
 
+// Steel reports HTTP 409 until a session has been released and final usage is
+// available. This is an expected metering state, not a failed cost check.
+var errSteelCostPending = errors.New("steel session cost is pending final usage")
+
 func (client *steelSDKRuntimeClient) SessionCost(ctx context.Context, id string) (float64, error) {
-	cost, err := client.client.Sessions.Cost(ctx, id)
+	cost, err := client.client.Sessions.Cost(ctx, id, steelapi.WithRequestMaxRetries(0))
 	if err != nil {
+		var apiErr *steelapi.APIError
+		if ctx.Err() == nil && errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {
+			return 0, errSteelCostPending
+		}
 		return 0, classifySteelAPIError(ctx, err)
 	}
 	if cost.ID != id || cost.Currency != steelapi.SessionCostResponseCurrencyUsd ||
@@ -123,14 +132,16 @@ func (runtimeHandle *steelPlaywrightRuntime) startBudgetMonitor(limit float64) {
 					if ctx.Err() != nil {
 						return
 					}
-					if err == nil && cost < limit {
+					if errors.Is(err, errSteelCostPending) || (err == nil && cost < limit) {
 						continue
 					}
 					stopping = true
 				}
-				// Missing cost evidence fails closed. Release remotely even while
-				// the driver remains alive; normal broker cleanup still owns the
-				// profile flush and exclusive lease. Retry the latched stop decision
+				// Unexpected cost failures fail closed. Pending final usage remains
+				// bounded by the provider's independent session lifetime limit.
+				// Release remotely even while the driver remains alive; normal
+				// broker cleanup still owns the profile flush and exclusive lease.
+				// Retry the latched stop decision
 				// regardless of any later, cheaper provider cost report.
 				if runtimeHandle.stopForBudget() {
 					return
