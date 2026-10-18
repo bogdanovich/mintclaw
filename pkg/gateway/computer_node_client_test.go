@@ -596,10 +596,10 @@ func computerClientFixtureConfig(
 			},
 			Agents:   []string{"browser"},
 			Runtimes: []runtimecap.Kind{runtimecap.KindGateway},
-			// Use the normal lease for the schema/persistence-heavy lifecycle.
-			// Expiry is tested explicitly without depending on machine speed.
+			// Use production defaults for schema/persistence-heavy fresh lifecycles.
+			// Separate tests force expired leases and elapsed observation budgets.
 			LeaseSeconds:       0,
-			ObservationSeconds: 5,
+			ObservationSeconds: 0,
 		},
 	}}
 	client, err := newNodeComputerClient(cfg, runtime)
@@ -665,6 +665,29 @@ func TestComputerNodeClientSameResourceAndGatewayClock(t *testing.T) {
 				t.Fatal("release failed", err)
 			}
 		})
+	}
+}
+
+func TestComputerNodeClientObservationCannotRenewElapsedBudget(t *testing.T) {
+	client, handler := computerClientFixture(t, 0)
+	policy := client.policy.Targets["desktop"]
+	policy.ObservationSeconds = 1
+	client.policy.Targets["desktop"] = policy
+	principal := computerClientPrincipal()
+	opened := openComputerClientFixture(t, client)
+	handler.delay = 1100 * time.Millisecond
+	observation, err := client.Observe(t.Context(), principal, opened.Binding.SessionID, "late-observation")
+	handler.delay = 0
+	if !errors.Is(err, computer.ErrExpired) || observation.ID != "" || observation.AccessibilityText != "" ||
+		len(observation.Screenshot) != 0 || handler.observations != 1 {
+		t.Fatal("a late native observation obtained a fresh gateway budget or exposed stale context", err)
+	}
+	sessions, err := client.OwnedSessions(t.Context(), principal)
+	if err != nil || len(sessions) != 1 || sessions[0] != opened {
+		t.Fatal("observation expiry changed original ownership or its lease", err)
+	}
+	if err := client.Shutdown(t.Context()); err != nil || !handler.session.Control.Terminal() {
+		t.Fatal("observation expiry prevented original resource cleanup", err)
 	}
 }
 
