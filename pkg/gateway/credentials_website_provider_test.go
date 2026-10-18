@@ -12,10 +12,11 @@ import (
 // A scripted local provider chooses only public metadata and fresh browser refs.
 // It never receives or computes the fixture password or one-time code.
 type credentialWebsiteProviderScript struct {
-	sessionID    string
-	credentialID string
-	observation  browser.Observation
-	login        browser.CredentialLoginResult
+	sessionID        string
+	retiredSessionID string
+	credentialID     string
+	observation      browser.Observation
+	login            browser.CredentialLoginResult
 }
 
 func (script *credentialWebsiteProviderScript) next(phase int, decode func(any) bool) (string, map[string]any, error) {
@@ -37,7 +38,7 @@ func (script *credentialWebsiteProviderScript) next(phase int, decode func(any) 
 		var opened struct {
 			ID string `json:"browser_session_id"`
 		}
-		if !decode(&opened) || opened.ID == "" {
+		if !decode(&opened) || opened.ID == "" || opened.ID == script.retiredSessionID {
 			return failed()
 		}
 		script.sessionID = opened.ID

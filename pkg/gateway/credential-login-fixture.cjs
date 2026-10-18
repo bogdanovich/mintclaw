@@ -123,6 +123,7 @@ async function phone() {
     stage = 'login-request';
     const pending = await fixture('/_fixture/login');
     stage = 'approve';
+    if (config.lifetime === 'discovery_wait') await new Promise(resolve => setTimeout(resolve, 46_000));
     await page.goto(pending.link);
     await page.getByRole('button', { name: 'Approve with passkey' }).waitFor();
     if (config.discovery) assert.match(await page.locator('#accounts').innerText(), /All website-matching Login items/);

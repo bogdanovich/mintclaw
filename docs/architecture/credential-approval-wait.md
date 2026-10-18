@@ -1,7 +1,8 @@
 # Phone approval without a short response race
 
-Status: replacement behavior requested by the owner on 2026-10-18; implementation
-pending. The deployed continuation fix is recorded in the
+Status: source implementation and qualification in progress for the owner's
+2026-10-18 two-hour preference. Production rollout remains a separate gate. The
+previous deployed behavior is recorded in the
 [rollout evidence](credential-website-login-rollout.md).
 
 ## User behavior
@@ -61,3 +62,25 @@ wait and remains ineligible for automatic replay.
 This remains part of the existing credential discovery goal. The physical
 Facebook login/TOTP gate is still open; a plan or waiting task does not certify
 an authenticated account.
+
+## Credential composition
+
+The approval controller retains its single bounded in-memory request map.
+`RequestLifetime` is two hours; `PendingLifetime` remains five minutes for
+WebAuthn ceremonies and private setup. Reopening an unattempted expired ceremony
+creates a fresh challenge without renewing the original request deadline.
+Finishing a challenge checks that deadline again after durable owner persistence.
+
+The browser source returns immediately with a JSON-excluded wait descriptor.
+Its durable reference is SHA-256 of the private phone locator, not that locator
+or a grant ID. The registered `browser_login` resolver restores the original
+browser owner and checks current policy and a verified active grant for exactly
+that principal and covered account scope. A verified matching grant from another
+request can release the wait; checking readiness never issues or renews a grant.
+
+The model receives a safe readiness result after the normal recovery loop claims
+the interaction. Native cleanup receipts survive the pause. A fresh browser and
+Website lookup are required before consuming any username, password or stored
+code. Timeout and lost approval finish without another model call or automatic
+request creation. This change wires browser login; connector consumers retain
+their existing bounded inline wait.

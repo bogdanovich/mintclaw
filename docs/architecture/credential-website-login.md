@@ -132,6 +132,16 @@ selected item and website domain for the session; adding an item or taking a
 new step does not renew the grant. Existing revoke/expiry/restart behavior is
 preserved. Grant duration does not make ephemeral browser cookies persistent.
 
+A browser login needing phone approval becomes a durable external wait with a
+two-hour absolute deadline. The runtime closes the idle browser with native
+cleanup evidence before waiting; no vault value is retrieved. After approval,
+the existing recovery loop resumes the same task with a safe readiness result.
+The model opens a fresh session, observes new controls and matches the Website
+again. It does not replay the original call with stale form references. See
+[phone approval waiting](credential-approval-wait.md) for lifetime separation,
+original-caller binding, cancellation and lost-request behavior. Production
+rollout of this replacement is recorded separately from source qualification.
+
 Synthetic Chromium, virtual-passkey and real provider-adapter fixtures exercise
 discovery, password, TOTP, fresh verification, grant reuse and revocation. Canary
 values are checked against model requests, serialized tools, browser state,
