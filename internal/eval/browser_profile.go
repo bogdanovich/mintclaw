@@ -51,7 +51,13 @@ func validateBrowserEvalPolicy(cfg *config.Config, preset Preset) error {
 			return ErrUnsafeTarget
 		}
 		for _, effect := range rule.Match.Effects {
-			if effect != "read" && effect != "local_edit" {
+			switch effect {
+			case "read", "local_edit":
+			case "navigation":
+				if !slices.Equal(rule.Match.Actions, []string{"navigate"}) || len(rule.Match.Effects) != 1 {
+					return ErrUnsafeTarget
+				}
+			default:
 				return ErrUnsafeTarget
 			}
 		}

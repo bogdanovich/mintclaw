@@ -14,7 +14,8 @@ fix does not upgrade the historical report or qualify native browser grading.
 
 The [v2 pilot](manual-agent-evals-browser-read-v2-pilot-20261018.md) verified startup on the fix but stopped at native
 navigation approval with zero page visits. `navigation` is a separate native effect from `read`; the harness did not
-send an unbound approval. Exact fixture-navigation admission and native correlation remain unfinished.
+send an unbound approval. The current seed now grants a separate exact-origin `navigate + navigation` rule. The old
+result is unchanged; native correlation and complete browser grading remain unfinished.
 
 ## Corpus Contracts
 
@@ -78,7 +79,11 @@ The owned runner binds the exact fixture origin before launching its gateway chi
 through native child stop/reap. Browser attachment to an unrelated running gateway is refused. One local headless
 ephemeral library profile is admitted for the native sender and routed agent; broad/cloud/companion/attached
 profiles, hooks, privileged execution and approval bypasses remain excluded. Allow rules must explicitly match
-only read/local-edit effects on the fixture origin; commits and unknown effects cannot be silently allowed.
+read/local-edit effects, or a separate rule containing only `navigate` and `navigation`, on the one fixture origin.
+Commits and unknown effects cannot be silently allowed. Native policy derives the navigation effect and checks its
+destination origin; the harness does not relabel a click or unknown effect as navigation. The owned immutable fixture
+has only read-only GET routes; submissions/removals require nonce-bound POST requests. This grant does not apply to
+arbitrary loopback services, public sites or an unowned running gateway.
 
 The first execution stage attempts `read` and `artifact`. Missing native approval evidence interrupts an approval
 prompt without sending `allow_once`. Submit/followup report `browser_private_input_unavailable`; ambiguity/denial
