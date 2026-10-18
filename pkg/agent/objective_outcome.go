@@ -249,7 +249,12 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 			"the runtime suspends before execution and preserves the continuation. Never replace that tool call with a " +
 			"prose approval question, a textual awaiting_approval status, or a completed result, and do not close the " +
 			"browser session while the runtime is suspended. Read, navigation, and local_edit invocation IDs " +
-			"are not external-action receipts. For each external_action, copy one or more " +
+			"are not external-action receipts. When reporting succeeded, account for every successful browser_act " +
+			"invocation with effect " +
+			"external_commit or unknown, including unknown-effect download, upload, and file_chooser operations, " +
+			"not only the final Save or Submit. Each such receipt must appear exactly once across matching completed " +
+			"external_action items. Failed or not-dispatched invocations do not prove a completed effect. " +
+			"For each external_action, copy one or more " +
 			"invocation_id values from successful browser_act results into receipt_ids. Do not claim an external action " +
 			"without its runtime receipt. If the commit ran but later verification cannot confirm the requested external " +
 			"effect, keep the external_action item missing and explain the unverified postcondition instead of claiming it " +
@@ -339,6 +344,7 @@ func objectiveOutcomeRepairInstructionWithReceipts(
 	receipts []taskresult.Receipt,
 	checklist []runtimeObjectiveItem,
 ) (string, bool) {
+	var validated *taskresult.Outcome
 	start := strings.LastIndex(content, objectiveOutcomeStart)
 	end := strings.LastIndex(content, objectiveOutcomeEnd)
 	reason := "the required objective outcome block was not reported"
@@ -352,6 +358,7 @@ func objectiveOutcomeRepairInstructionWithReceipts(
 				return "", false
 			}
 			outcome := validateObjectiveOutcome(reported, audits, receipts, checklist)
+			validated = outcome
 			if outcome.Status == taskresult.OutcomeSucceeded {
 				return "", false
 			}
@@ -371,7 +378,54 @@ func objectiveOutcomeRepairInstructionWithReceipts(
 		"external action, or claim a new side effect. Treat the latest user guidance in the conversation as " +
 		"authoritative: if it ended or superseded an earlier objective, report partial or blocked instead of reviving " +
 		"that objective. If the existing context cannot supply a complete output, report partial or blocked and " +
-		"identify the missing objective instead of claiming succeeded.", true
+		"identify the missing objective instead of claiming succeeded." +
+		unclaimedObjectiveReceiptContext(audits, receipts, validated), true
+}
+
+func unclaimedObjectiveReceiptContext(
+	audits []toolshared.WriteAuditEntry,
+	verified []taskresult.Receipt,
+	validated *taskresult.Outcome,
+) string {
+	claimed := make(map[string]struct{})
+	if validated != nil {
+		for _, item := range validated.CompletedItems {
+			for _, receipt := range item.Receipts {
+				claimed[receipt.ID] = struct{}{}
+			}
+		}
+	}
+	evidence := objectiveRuntimeReceiptEvidence(audits, verified)
+	var ids []string
+	for id := range evidence {
+		if _, found := claimed[id]; !found {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	sort.Strings(ids)
+	type receiptView struct {
+		ID   string `json:"id"`
+		Kind string `json:"kind"`
+	}
+	views := make([]receiptView, 0, min(len(ids), objectiveOutcomeLimit))
+	for _, id := range ids {
+		if len(views) >= objectiveOutcomeLimit {
+			break
+		}
+		// Never truncate an opaque ID into a different receipt. Private payloads,
+		// targets, summaries and metadata are deliberately not projected here.
+		if boundedObjectiveText(id) == id {
+			views = append(views, receiptView{ID: id, Kind: evidence[id].Kind})
+		}
+	}
+	encoded, _ := json.Marshal(views)
+	return fmt.Sprintf(" Unclaimed runtime receipt IDs (%d of %d shown): %s. ", len(views), len(ids), encoded) +
+		"Claim only existing receipts that match a declared objective with a verified outcome. " +
+		"Unexpected effects or unverified postconditions must remain partial or blocked; receipts are not permission " +
+		"to add objectives or perform more actions. This bounded list does not prove omitted receipts are absent."
 }
 
 func liveHandoffRecoveryInstruction(
@@ -504,26 +558,10 @@ type objectiveOutcomeValidationPolicy struct {
 	ignoreUnclaimedHandoffReceipts bool
 }
 
-func validateObjectiveOutcomeWithPolicy(
-	reported reportedObjectiveOutcome,
+func objectiveRuntimeReceiptEvidence(
 	audits []toolshared.WriteAuditEntry,
 	verifiedReceipts []taskresult.Receipt,
-	checklist []runtimeObjectiveItem,
-	policy objectiveOutcomeValidationPolicy,
-) *taskresult.Outcome {
-	status := strings.TrimSpace(reported.Status)
-	switch status {
-	case string(taskresult.OutcomeSucceeded),
-		string(taskresult.OutcomePartial),
-		string(taskresult.OutcomeBlocked):
-	default:
-		return blockedObjectiveOutcome("objective outcome status was invalid")
-	}
-	if (status == string(taskresult.OutcomePartial) || status == string(taskresult.OutcomeBlocked)) &&
-		strings.TrimSpace(reported.Explanation) == "" {
-		return blockedObjectiveOutcome("objective outcome explanation was required")
-	}
-	missingResult := status == string(taskresult.OutcomeSucceeded) && terminalResultText(reported.Result) == ""
+) map[string]taskresult.Receipt {
 	receipts := make(map[string]taskresult.Receipt)
 	for _, audit := range audits {
 		if !audit.Success || audit.Kind != "external_action" || audit.Tool != "browser_act" ||
@@ -556,6 +594,30 @@ func validateObjectiveOutcomeWithPolicy(
 		receipt.Metadata = copyObjectiveMetadata(receipt.Metadata)
 		receipts[receipt.ID] = receipt
 	}
+	return receipts
+}
+
+func validateObjectiveOutcomeWithPolicy(
+	reported reportedObjectiveOutcome,
+	audits []toolshared.WriteAuditEntry,
+	verifiedReceipts []taskresult.Receipt,
+	checklist []runtimeObjectiveItem,
+	policy objectiveOutcomeValidationPolicy,
+) *taskresult.Outcome {
+	status := strings.TrimSpace(reported.Status)
+	switch status {
+	case string(taskresult.OutcomeSucceeded),
+		string(taskresult.OutcomePartial),
+		string(taskresult.OutcomeBlocked):
+	default:
+		return blockedObjectiveOutcome("objective outcome status was invalid")
+	}
+	if (status == string(taskresult.OutcomePartial) || status == string(taskresult.OutcomeBlocked)) &&
+		strings.TrimSpace(reported.Explanation) == "" {
+		return blockedObjectiveOutcome("objective outcome explanation was required")
+	}
+	missingResult := status == string(taskresult.OutcomeSucceeded) && terminalResultText(reported.Result) == ""
+	receipts := objectiveRuntimeReceiptEvidence(audits, verifiedReceipts)
 	outcome := &taskresult.Outcome{Explanation: boundedObjectiveText(reported.Explanation)}
 	expected := make(map[string]runtimeObjectiveItem, len(checklist))
 	for _, item := range checklist {

@@ -89,3 +89,11 @@ The native protocol can return that one result alongside receipted effects only
 when the entire objective succeeds. Partial, unreceipted, ambiguous, invalid,
 and oversized results do not receive a standalone success projection. Human
 presentation remains separate from these machine-readable records.
+
+To report overall success, `browser_act` operations classified as `unknown` or
+`external_commit` must all be accounted for by the matching external-action
+objective, including download and upload, not just the final Submit. Failed or not-dispatched actions
+do not supply completion receipts. If the producer omits receipts, the existing
+model-only finalization repair supplies a bounded list of unclaimed runtime IDs
+without repeating browser actions. The runtime still rejects unexpected effects
+and unverified postconditions; receipt accounting is not publication authority.
