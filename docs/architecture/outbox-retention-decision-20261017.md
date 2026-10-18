@@ -119,3 +119,10 @@ remain caller-owned primitives and do not acquire that lifecycle lock. Older
 binaries do not honor the new lock. This prerequisite does not establish a safe
 mixed-version rollout, invent an old-reader fence, enable retirement, or finish
 R4. Those activation gates above remain mandatory.
+
+
+The existing native eval census recognizes the exact empty outbox owner lock as
+lifecycle metadata. It does not count that lock as a document operation or delivery
+and still rejects nonempty, private-content, aliased and unsafe surfaces. A live
+coordinator regression exercises this compatibility boundary. These deterministic
+checks do not qualify the unfinished live PDF/browser evaluation cases.
