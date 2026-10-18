@@ -355,13 +355,13 @@ func TestInteractionNoticeReleasesInboundAfterAckFailure(t *testing.T) {
 func (b *finalResponseAdmissionTestBus) AckInbound(
 	ctx context.Context,
 	msg bus.InboundMessage,
-) error {
+) (bus.InboundAckReceipt, error) {
 	b.mu.Lock()
 	b.acked = append(b.acked, msg.SpoolID)
 	err := b.ackErrByID[msg.SpoolID]
 	b.mu.Unlock()
 	if err != nil {
-		return err
+		return bus.InboundAckReceipt{}, err
 	}
 	return b.MessageBus.AckInbound(ctx, msg)
 }

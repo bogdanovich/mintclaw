@@ -498,7 +498,7 @@ func configureGatewayInboundSpool(cfg *config.Config, msgBus *bus.MessageBus) er
 	if workspace == "" {
 		return nil
 	}
-	spool, err := bus.NewInboundSpool(filepath.Join(workspace, "state", "ingress-spool", "inbound"))
+	spool, err := bus.NewInboundSpool(bus.InboundSpoolPath(workspace))
 	if err != nil {
 		return err
 	}

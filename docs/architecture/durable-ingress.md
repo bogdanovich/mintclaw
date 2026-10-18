@@ -71,10 +71,21 @@ callers must not treat unconfirmed persistence as a successful admission or
 acknowledgement. This is filesystem fault-contract evidence, not a physical
 power-loss qualification for every deployment filesystem.
 
-A successful acknowledgement is not yet a typed retirement proof. An in-memory
-bus can acknowledge without a spool, and steering can acknowledge at the
-canonical-history handoff while a turn continues. The retention owner must
-qualify the actual source and remaining obligations separately.
+`AckInbound` returns an opaque `bus.InboundAckReceipt` alongside its error. A
+nonzero receipt establishes that the native spool validated the source record,
+removed it, and confirmed the directory update. Its `Acknowledges` method binds
+that proof to the source ID and actual instance spool directory. An in-memory
+bus, missing source, or absent-name retry returns no receipt; a successful retry
+cannot reconstruct proof from absence. Unsupported, corrupt, mismatched,
+ambiguous, or nonregular source records remain untouched and report an error.
+Spool mutations serialize within their gateway-owned `InboundSpool`, so a
+concurrent context write cannot recreate an acknowledged source. This does not
+coordinate arbitrary external filesystem writers.
+
+The receipt proves source removal rather than completion of its turn. Steering
+can acknowledge at the canonical-history handoff while a turn continues. No
+retention operation consumes these receipts yet; the retention owner must still
+qualify the final source boundary and all remaining domain obligations.
 
 ## Steering Caveat
 

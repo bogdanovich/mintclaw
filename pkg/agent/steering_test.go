@@ -2026,7 +2026,7 @@ type recordingMessageBus struct {
 	releasedIDs []string
 }
 
-func (b *recordingMessageBus) AckInbound(ctx context.Context, msg bus.InboundMessage) error {
+func (b *recordingMessageBus) AckInbound(ctx context.Context, msg bus.InboundMessage) (bus.InboundAckReceipt, error) {
 	b.mu.Lock()
 	b.ackedIDs = append(b.ackedIDs, msg.SpoolID)
 	b.mu.Unlock()
