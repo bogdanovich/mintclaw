@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -38,9 +39,28 @@ func malformedCallResponse(err error) bool {
 	if err == nil || callCanceled(err) {
 		return false
 	}
+	var remoteErr *jsonrpc.Error
+	if errors.As(err, &remoteErr) {
+		return false
+	}
 	var syntaxErr *json.SyntaxError
 	var typeErr *json.UnmarshalTypeError
-	return errors.As(err, &syntaxErr) || errors.As(err, &typeErr)
+	var encodingErr base64.CorruptInputError
+	if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.As(err, &encodingErr) {
+		return true
+	}
+	// The pinned SDK's content decoder returns plain errors for these cases.
+	// Keep that compatibility at the MCP boundary, after excluding structured
+	// remote errors; their server-controlled messages are application failures.
+	for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+		message := cause.Error()
+		if message == "nil content" || strings.HasPrefix(message, "unrecognized content type ") ||
+			strings.HasPrefix(message, "invalid content type ") ||
+			strings.HasPrefix(message, "tool_result nested content: ") {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldReconnectCallError(err error) bool {

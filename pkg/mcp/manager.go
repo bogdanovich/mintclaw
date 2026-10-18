@@ -715,6 +715,11 @@ func (m *Manager) CallTool(
 
 	result, err := conn.Session.CallTool(ctx, params)
 	if err != nil {
+		// Decode failures can contain arbitrary response text, including text
+		// resembling session loss. Classify them before transport compatibility.
+		if malformedCallResponse(err) {
+			return nil, &CallTransportError{Err: err}
+		}
 		if shouldReconnectCallError(err) {
 			logger.WarnCF("mcp", "MCP server session was lost during tool call, recovering session",
 				map[string]any{
@@ -739,9 +744,6 @@ func (m *Manager) CallTool(
 			}
 		}
 
-		if malformedCallResponse(err) {
-			return nil, &CallTransportError{Err: err}
-		}
 		return nil, fmt.Errorf("failed to call tool: %w", err)
 	}
 

@@ -34,10 +34,51 @@ func TestCallToolClassifiesMalformedResponsesWithoutReplaying(t *testing.T) {
 		fatal  bool
 	}{
 		{name: "malformed response", raw: json.RawMessage("{private-response-canary"), fatal: true},
-		{name: "long wrapped malformed response", err: fmt.Errorf("private-response-canary %s: %w", strings.Repeat("detail ", 80), syntaxErr), fatal: true},
+		{
+			name:  "long wrapped malformed response",
+			err:   fmt.Errorf("private-response-canary %s: %w", strings.Repeat("detail ", 80), syntaxErr),
+			fatal: true,
+		},
 		{name: "invalid response shape", raw: json.RawMessage(`{"content":"private-response-canary"}`), fatal: true},
+		{name: "unknown content", raw: json.RawMessage(`{"content":[{"type":"private-response-canary"}]}`), fatal: true},
+		{
+			name:  "unknown content mentioning transport",
+			raw:   json.RawMessage(`{"content":[{"type":"private-response-canary unexpected EOF"}]}`),
+			fatal: true,
+		},
+		{
+			name:  "invalid image encoding",
+			raw:   json.RawMessage(`{"content":[{"type":"image","data":"!private-response-canary","mimeType":"image/png"}]}`),
+			fatal: true,
+		},
+		{
+			name:  "invalid audio encoding",
+			raw:   json.RawMessage(`{"content":[{"type":"audio","data":"!private-response-canary","mimeType":"audio/wav"}]}`),
+			fatal: true,
+		},
+		{name: "nil content", raw: json.RawMessage(`{"content":[null]}`), fatal: true},
+		{
+			name:  "invalid nested content",
+			raw:   json.RawMessage(`{"content":[{"type":"tool_result","content":[{"type":"private-response-canary"}]}]}`),
+			fatal: true,
+		},
 		{name: "ordinary error", err: errors.New("typeof is unavailable")},
-		{name: "server error mentioning transport", remote: &jsonrpc.Error{Code: -32603, Message: "unexpected EOF in user input"}},
+		{
+			name:   "server error mentioning transport",
+			remote: &jsonrpc.Error{Code: -32603, Message: "unexpected EOF in user input"},
+		},
+		{
+			name:   "server error mentioning decoding",
+			remote: &jsonrpc.Error{Code: -32603, Message: `unrecognized content type "user input"`},
+		},
+		{
+			name: "canceled decoder lookalike",
+			err:  fmt.Errorf("unrecognized content type private-response-canary: %w", context.Canceled),
+		},
+		{
+			name: "timed out decoder lookalike",
+			err:  fmt.Errorf("invalid content type private-response-canary: %w", context.DeadlineExceeded),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			conn, transport, err := newScriptedServerConnection("", nil, tc.err)
