@@ -19,19 +19,15 @@ import (
 
 func postStopPDFControl(t *testing.T) (*pdfConversation, Trial) {
 	t.Helper()
-	prepared := newPDFTrialFixture(t)
-	corpus, err := LoadCorpus(prepared.item.Root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	selected, err := Select(corpus, Selection{IDs: []string{"pdf.cancel.no-write"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	prepared.item = selected[0]
+	return postStopPreparedPDFControl(t, newPDFTrialFixture(t))
+}
+
+func postStopPreparedPDFControl(t *testing.T, prepared *pdfTrial) (*pdfConversation, Trial) {
+	t.Helper()
+	prepared.item = loadPDFTestCase(t, "pdf.cancel.no-write")
 	prepared.item.Case.Rubric = nil
 	initializeCensusRoots(t, prepared)
-	if err = prepared.beginNativeCensus(t.Context()); err != nil {
+	if err := prepared.beginNativeCensus(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	domain := &pdfConversation{prepared: prepared, wire: &pdfWireObservation{workspace: prepared.workspace}}
@@ -271,7 +267,7 @@ func TestPDFPostStopWritesOnlyFinalizedTrialToTheCanonicalReportName(t *testing.
 	}
 	result := RunReport{Trials: []TrialSummary{{ID: trial.ID, File: name}}}
 	if err = pending.finish(t.Context(), report, &result, cleanPDFLifecycle(), nil, nil,
-		&PrivateSurfaceObservation{Code: "observed"}); err != nil {
+		&PrivateSurfaceObservation{Code: "observed"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := readPrivateReportFile(report.root, name)

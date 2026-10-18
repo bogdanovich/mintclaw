@@ -145,6 +145,7 @@ func (pending *pdfRunFinalization) knownCohort(
 func (pending *pdfRunFinalization) finish(
 	ctx context.Context, report *privateReport, result *RunReport, lifecycle *TargetLifecycle,
 	facts map[string]string, filter *strings.Replacer, surfaces *PrivateSurfaceObservation,
+	assess func(Case, *Trial),
 ) error {
 	if len(pending.trials) == 0 {
 		return nil
@@ -153,13 +154,20 @@ func (pending *pdfRunFinalization) finish(
 	var observationErr error
 	workspace := ""
 	for _, entry := range pending.trials {
-		entry.prepared.item.Case.Driver.Facts = facts
+		entry.prepared.scanFacts = facts
 		inventory, observationErr = entry.prepared.nativeInventory(ctx)
 		workspace = entry.prepared.workspace
 		break
 	}
 	defer inventory.close()
 	known := pending.knownCohort(ctx, inventory, workspace)
+	type finalizedTrial struct {
+		index int
+		item  Case
+		trial Trial
+	}
+	finalized := []finalizedTrial{}
+	retainedBytes := 0
 	for index := range result.Trials {
 		if ctx.Err() != nil {
 			return ErrReport
@@ -174,19 +182,35 @@ func (pending *pdfRunFinalization) finish(
 			return ErrReport
 		}
 		trial, err := decodeDocument[Trial](data, 8*1024*1024)
+		retainedBytes += len(data)
 		clear(data)
-		if err != nil || trial.ID != summary.ID || trial.CaseID != entry.prepared.item.Case.ID ||
+		if err != nil || retainedBytes > maxRetainedPDFBytes || trial.ID != summary.ID ||
+			trial.CaseID != entry.prepared.item.Case.ID ||
 			trial.CaseSHA256 != entry.prepared.item.Digest || trial.SessionID != entry.prepared.sessionID ||
 			trial.PDF == nil || credentialJSONValue(trial, filter) || privateJSONValue(trial, facts) {
 			return ErrReport
 		}
-		entry.prepared.item.Case.Driver.Facts = facts
+		item := entry.prepared.item.Case
+		entry.prepared.scanFacts = facts
 		entry.conclude(ctx, &trial, inventory, observationErr, known, lifecycle, surfaces)
+		finalized = append(finalized, finalizedTrial{index, item, trial})
+		delete(pending.trials, summary.ID)
+	}
+	// Native observation/cleanup finishes under its own budget before any model
+	// call. Assessment uses the suite budget and cannot starve later cleanup.
+	for _, final := range finalized {
+		trial := final.trial
+		summary := &result.Trials[final.index]
+		if assess != nil {
+			assess(final.item, &trial)
+		}
+		if credentialJSONValue(trial, filter) || privateJSONValue(trial, facts) {
+			return ErrReport
+		}
 		if report.write(summary.File, trial) != nil {
 			return ErrReport
 		}
 		summary.Verdict, summary.Code, summary.DurationMS = trial.Verdict, trial.Code, trial.DurationMS
-		delete(pending.trials, summary.ID)
 	}
 	return nil
 }

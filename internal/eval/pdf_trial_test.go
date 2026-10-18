@@ -2,34 +2,66 @@ package eval
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 )
 
+var pdfTestCorpus = sync.OnceValues(func() ([]LoadedCase, error) { return LoadCorpus("../../evals") })
+
+// Reuse only validated public templates, never a prepared trial or mutable case.
+// Parser/corpus tests still exercise fresh filesystem reads independently.
+func loadPDFTestCase(t *testing.T, id string) LoadedCase {
+	t.Helper()
+	corpus, err := pdfTestCorpus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := Select(corpus, Selection{IDs: []string{id}})
+	if err != nil || len(items) != 1 {
+		t.Fatal("PDF case fixture unavailable", err)
+	}
+	item := items[0]
+	data, err := json.Marshal(item.Case)
+	var cloned Case
+	if err != nil || json.Unmarshal(data, &cloned) != nil {
+		t.Fatal("PDF case fixture copy unavailable", err)
+	}
+	item.Case = cloned
+	return item
+}
+
+func TestPDFCaseFixtureCopiesDoNotShareMutableTemplates(t *testing.T) {
+	first := loadPDFTestCase(t, "pdf.loan.fill")
+	first.Case.Driver.Facts["contact-reference"] = "private-test-copy"
+	first.Case.PDF.Fields[0].Name = "changed-copy"
+	first.Case.Tags[0] = "changed-copy"
+	second := loadPDFTestCase(t, "pdf.loan.fill")
+	if second.Case.Validate() != nil || second.Case.Driver.Facts["contact-reference"] != generatePrivateFact ||
+		second.Case.PDF.Fields[0].Name == "changed-copy" || second.Case.Tags[0] == "changed-copy" ||
+		first.Digest != second.Digest || first.Root != second.Root {
+		t.Fatal("cached public fixtures shared a mutable case or lost source identity")
+	}
+}
+
 func newPDFTrialFixture(t *testing.T) *pdfTrial {
 	t.Helper()
-	corpus, err := LoadCorpus("../../evals")
-	if err != nil {
-		t.Fatal(err)
-	}
-	items, err := Select(corpus, Selection{IDs: []string{"pdf.loan.fill"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	item := loadPDFTestCase(t, "pdf.loan.fill")
 	home := t.TempDir()
-	if err = os.Chmod(home, 0o700); err != nil {
+	if err := os.Chmod(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	workspace := filepath.Join(home, "workspace")
-	if err = os.Mkdir(workspace, 0o700); err != nil {
+	if err := os.Mkdir(workspace, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	trial, err := preparePDFTrial(items[0], home, workspace, uuid.NewString(), "eval-agent")
+	trial, err := preparePDFTrial(item, home, workspace, uuid.NewString(), "eval-agent")
 	if err != nil {
 		t.Fatal("synthetic PDF preparation failed", err)
 	}

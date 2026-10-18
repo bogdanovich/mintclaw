@@ -9,7 +9,9 @@ confirmation and exact fixture-scoped approval. Read-only native receipts bind c
 form job, delivered write operation, and recovered outbox intent. Authenticated artifact collection retains the exact
 downloaded PDF for independent field/structure/appearance checks. Delivery uniqueness, complete private-surface
 coverage, and complete owned-resource cleanup remain pending. Owned post-stop census can establish a scoped no-write
-check and remove a verified settled source fixture. Required missing evidence still prevents a passing trial;
+check and remove a verified settled source fixture. The finalized cancellation/no-write contract below
+can additionally admit judging/regrading without private facts or output artifacts. Other PDF cases remain gated.
+Required missing evidence still prevents a passing trial;
 a first question, caption, or oracle control is not qualification.
 
 The cases cover loan filling, correction/Back, own-request conditional intent, empty required values, cancel/no-write,
@@ -81,7 +83,7 @@ Report failure retains private partial evidence; it never restarts a target or r
 
 The runner retains source handles and native baselines within a 128 MiB run-wide budget, refusing the next PDF task
 before sending it if retention cannot fit. Artifact-oracle source byte caches are cleared after use. Finalization
-has a separate 30-second budget and reuses one bounded final native inventory; limits do not become empty counts.
+has a separate 30-second native budget and reuses one bounded final native inventory; limits do not become empty counts.
 The original conversation census remains in `pdf.census`; `pdf.post_stop` records the distinct later observation.
 
 Only a verified clean owned-child exit, complete owner-bound census, unchanged source, zero pending operations and
@@ -101,9 +103,37 @@ parent/directory/file identities, pinned source bytes and a directory containing
 replacement objects and incomplete scans are retained rather than recursively removed. The receipt reports only
 this owned fixture cleanup, not deletion of native history, protected state, outputs or all temporary resources.
 
-`pdf.post_stop` never grants whole-runtime privacy, positive PDF delivery qualification or PDF judge/regrade eligibility.
-Those witnesses and real-model qualification remain mandatory. These deterministic controls use native stores and
+`pdf.post_stop` alone never grants whole-runtime privacy, positive PDF delivery qualification or judge/regrade eligibility.
+Those independent witnesses and real-model qualification remain mandatory. These deterministic controls use native stores and
 an owned protocol child stub; they are not evidence of a live model/backend scenario passing.
+
+### Finalized No-Write Assessment
+
+`owned_post_stop_no_write_v1` is the first admitted assessment scope. It requires a prompt-bound terminal
+cancellation; no private case facts, write intent, settlement or artifact; unchanged source;
+zero writes/media/deliveries/pending operations/foreign changes; joined complete client observation; clean owned
+exit without truncated logs; completed valid raw-profile observation; observed typed role boundaries; and verified
+source removal. Ordinary questions require their terminal interaction witness. Protected PDF questions additionally
+require the matching canceled form job and both monotonic terminal revisions/timestamps; neither terminal record
+alone suffices. Missing, legacy, malformed, forced, opaque or contradictory evidence never acquires this scope.
+
+The two-phase finalizer first finishes every native observation/source cleanup under the native budget, retaining
+at most 128 MiB of serialized trial evidence for assessment. Only then does it invoke the tools-disabled judge
+under the remaining suite budget and write canonical trial reports. A slow or canceled judge cannot consume a
+later trial's native cleanup budget. Run-wide scan values remain separate from original case fact handles.
+
+Within this explicit scope, `private_surfaces` combines the bounded profile-file, joined raw-frame and typed-role
+witnesses; it does not promise universal encoding coverage, provider-internal/raw-HTTP coverage or deletion of all
+retained native history/temporary resources. Hard checks remain authoritative. A new private judge response fails;
+unavailable judge-boundary inspection revokes eligibility, even for an optional rubric. All returned judge usage,
+including these post-stop calls, contributes to the run's role totals.
+
+`eval grade` validates this scope, source lifecycle/profile receipts, original case digest, route, terminal
+cancellation and native counts before any billable call. It recomputes the no-write/privacy predicates from these
+operator-owned retained receipts without opening the deleted source or current native stores, rerunning an oracle,
+connecting to a gateway or executing tools. Evidence is not cryptographically signed. Old inconclusive reports,
+private fact cases and filled/output PDFs are not upgraded by this contract.
+Offline controls do not establish a real-model cancellation result or qualify the remaining five PDF cases.
 
 ## Post-Stop Raw File Observation
 
@@ -162,7 +192,8 @@ from per-case trial counts. Older reports without this optional receipt do not a
 `owned_profile_files_v1` is a bounded file observation, not proof of native idle, no-write, delivery uniqueness,
 complete transport/encoded-data privacy or cleanup. Forced/unobserved shutdown remains independently non-passing.
 The final value-free run receipt and summary are written after observation. Required per-trial privacy checks
-remain inconclusive until the independent witnesses are complete; this does not qualify E3.
+remain inconclusive until the independent witnesses are complete. The no-write assessment above is a
+bounded exception, not complete E3 qualification.
 
 ## Dialogue Admission
 
@@ -182,8 +213,9 @@ ephemeral native `/answer` request. Ordinary scripted slash commands cannot bypa
 Only the narrowly admitted write-intent path below can send `allow_once`. A public native job state is a value-free
 observation, not a
 claim of artifact correctness, no-write safety, complete privacy coverage or remote cleanup. All attempted PDF
-fixtures are conservatively retained while native settlement is unknown. PDF evidence is not yet eligible for
-judge-only regrading. Later write/delivery witnesses must replace these explicit unknowns before E3 exits.
+fixtures are conservatively retained while native settlement is unknown. Only the finalized no-write
+contract above is currently eligible for judge-only regrading. Later write/delivery/private-value witnesses must
+replace the other explicit unknowns before E3 exits.
 
 ## Question Cancellation Receipts
 

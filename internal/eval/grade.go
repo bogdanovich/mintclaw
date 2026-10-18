@@ -94,6 +94,7 @@ func Grade(
 		}
 		trial, decodeErr := decodeDocument[Trial](data, 8*1024*1024)
 		if decodeErr != nil || !gradeEligible(trial, item, summary, preset, workspace) ||
+			item.Case.PDF != nil && !observedPDFProfile(original.TargetLifecycle, original.PrivateSurfaces) ||
 			sessions[trial.SessionID] || credentialJSONValue(trial, filter) {
 			return RunReport{}, ErrGrade
 		}
@@ -138,6 +139,9 @@ func Grade(
 		item := selected[trial.CaseID]
 		last := lastOutcome(trial.Events)
 		trial.Checks = gradeConversation(item.Case.Checks, trial.Events, last)
+		if item.Case.PDF != nil {
+			trial.Checks = gradeFinalizedPDFChecks(item.Case, trial)
+		}
 		trial.Verdict, trial.Code = trial.ExecutionVerdict, trial.ExecutionCode
 		for _, check := range trial.Checks {
 			trial.Verdict = combineVerdicts(trial.Verdict, check.Verdict)
@@ -148,6 +152,7 @@ func Grade(
 			judgement.Verdict, judgement.Code = Fail, "private_judge_output"
 		}
 		trial.Judge = &judgement
+		retainPDFJudgePrivacy(item.Case, &trial)
 		if !roleBoundaryEligible(judgement.Call) {
 			trial.EvidenceEligible = false
 		}
@@ -230,13 +235,22 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||
 		!trial.TransportClosed || !trial.EvidenceEligible || trial.ExecutionVerdict != Pass ||
-		len(item.Case.Driver.Facts) != 0 || len(item.Case.Fixtures) != 0 || len(item.Case.Rubric) == 0 ||
+		len(item.Case.Driver.Facts) != 0 || item.Case.PDF == nil && len(item.Case.Fixtures) != 0 ||
+		len(item.Case.Rubric) == 0 ||
 		len(trial.Events) == 0 || len(trial.Events) > 256 {
 		return false
 	}
 	if trial.Judge != nil && trial.Judge.Code == "private_judge_output" {
 		return false
 	}
+	if item.Case.PDF != nil {
+		return validPDFNoWriteEvidence(trial, item.Case, workspace) &&
+			trial.PDF.PostStop.AssessmentScope == pdfNoWriteAssessmentScope
+	}
+	return validTrialConversation(trial, preset.ExpectedAgent, workspace)
+}
+
+func validTrialConversation(trial Trial, agent, workspace string) bool {
 	if _, err := visibleConversation(trial.Events, nil); err != nil {
 		return false
 	}
@@ -244,7 +258,7 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 		if event.Kind == "input" {
 			continue
 		}
-		if event.AgentID != "" && event.AgentID != preset.ExpectedAgent ||
+		if event.AgentID != "" && event.AgentID != agent ||
 			event.SessionKey != "" && event.SessionKey != trial.SessionKey {
 			return false
 		}

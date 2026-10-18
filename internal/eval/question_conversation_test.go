@@ -32,7 +32,7 @@ func ordinaryQuestionFixture(
 	}
 	registry := interactions.NewRegistry(interactions.WorkspaceStorePath(domain.workspace))
 	record, err := registry.Create(interactions.CreateRequest{
-		ID: "interaction_ordinary111", Kind: interactions.KindQuestion, Route: route,
+		ID: "interaction_" + digest([]byte(domain.sessionID))[:24], Kind: interactions.KindQuestion, Route: route,
 		Origin: interactions.Origin{
 			TurnID: request.ID, ToolName: "request_user_input", ToolCallID: "ordinary-call",
 			ExecutionContext: &bus.InboundContext{MessageID: request.ID},
@@ -48,7 +48,10 @@ func ordinaryQuestionFixture(
 		content = "private-question-canary"
 	}
 	intent, err := outbox.NewMessageIntent(domain.workspace, outbox.Identity{
-		SourceID: "ordinary-prompt", Channel: route.Channel, ChatID: route.ChatID, SessionKey: route.SessionKey,
+		SourceID:   "ordinary-prompt-" + request.ID,
+		Channel:    route.Channel,
+		ChatID:     route.ChatID,
+		SessionKey: route.SessionKey,
 	}, bus.OutboundMessage{
 		AgentID: domain.agent, SessionKey: route.SessionKey, Content: content,
 		Metadata: bus.OutboundMetadata{

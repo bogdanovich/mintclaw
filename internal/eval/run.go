@@ -200,8 +200,15 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		}
 	}
 	finalCtx, finalCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	err = pendingPDF.finish(finalCtx, writer, &result, lifecycle, retainedFacts.values, filter, privateSurfaces)
+	err = pendingPDF.finish(finalCtx, writer, &result, lifecycle, retainedFacts.values, filter, privateSurfaces,
+		func(item Case, trial *Trial) {
+			assessFinalizedPDFNoWrite(suiteCtx, roles.judge, item, trial, lifecycle, privateSurfaces)
+			if trial.Judge != nil && trial.Judge.Call != nil {
+				roleCalls = append(roleCalls, *trial.Judge.Call)
+			}
+		})
 	finalCancel()
+	result.RoleUsage = []RoleUsage{summarizeRoleCalls("user", roleCalls), summarizeRoleCalls("judge", roleCalls)}
 	if err != nil {
 		result.Verdict = combineVerdicts(result.Verdict, Error)
 		result.DurationMS = time.Since(result.StartedAt).Milliseconds()

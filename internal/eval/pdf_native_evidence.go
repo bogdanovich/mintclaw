@@ -267,5 +267,8 @@ func readPDFNativeFile(root *os.Root, name string, maximum int64) ([]byte, error
 }
 
 func (trial *pdfTrial) scanNativeSurface(data []byte) error {
+	if trial.scanFacts != nil {
+		return inspectPDFWire(data, trial.scanFacts, trial.filter)
+	}
 	return inspectPDFWire(data, trial.item.Case.Driver.Facts, trial.filter)
 }

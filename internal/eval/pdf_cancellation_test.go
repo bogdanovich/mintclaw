@@ -9,28 +9,32 @@ import (
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 func TestProtectedPDFCancellationRequiresBothNativeTerminalRecords(t *testing.T) {
 	for _, mode := range []string{
 		"complete", "registry-only", "job-only", "missing-controls", "foreign-reply", "private-registry",
-		"changed-origin", "changed-binding", "changed-source", "private-job", "foreign-interaction",
+		"changed-origin", "changed-binding", "changed-source", "private-job", "foreign-interaction", "finalized-no-write",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			prepared := newPDFTrialFixture(t)
 			defer func() { _ = prepared.release(true) }()
+			if mode == "finalized-no-write" {
+				prepared.item = loadPDFTestCase(t, "pdf.cancel.no-write")
+			}
 			prepared.item.Case.Driver.Mode, prepared.item.Case.Driver.Persona = "scripted", ""
 			prepared.item.Case.Driver.Steps = []Step{{
 				WaitFor: Expectation{Kind: "question"}, Action: Action{Kind: "cancel"},
 			}}
 			prepared.item.Case.Rubric = nil
-			if mode == "complete" {
+			if mode == "complete" || mode == "finalized-no-write" {
 				initializeCensusRoots(t, prepared)
 				if err := prepared.beginNativeCensus(t.Context()); err != nil {
 					t.Fatal(err)
 				}
 			}
-			domain := &pdfConversation{prepared: prepared}
+			domain := &pdfConversation{prepared: prepared, wire: &pdfWireObservation{workspace: prepared.workspace}}
 			transport := newFakeConversation()
 			var waiting interactions.Record
 			var jobs *document.FormJobStore
@@ -143,11 +147,12 @@ func TestProtectedPDFCancellationRequiresBothNativeTerminalRecords(t *testing.T)
 			}
 			trial := runDomainConversation(t.Context(), transport, prepared.item, prepared.sessionID,
 				prepared.agent, prepared.workspace, conversationRoles{}, domain)
+			domain.concludeWire(&trial, true)
 			if len(transport.sent) != 2 || trial.Verdict == Pass || trial.EvidenceEligible ||
 				trial.RemoteState != "unknown" || trial.PDF == nil || trial.Cancellation != nil {
 				t.Fatal("protected witness replayed input or implied whole PDF/cleanup qualification", trial.Code)
 			}
-			if mode == "complete" {
+			if mode == "complete" || mode == "finalized-no-write" {
 				proof := trial.PDF.Cancellation
 				if trial.ExecutionVerdict != Pass || proof == nil || lastOutcome(trial.Events).Kind != "canceled" ||
 					proof.Question.PromptMessageID != prompt.MessageID || proof.Question.WaitingRevision >=
@@ -159,7 +164,8 @@ func TestProtectedPDFCancellationRequiresBothNativeTerminalRecords(t *testing.T)
 				t.Fatal("unsettled or foreign native cancellation was admitted", trial.Code)
 			}
 			data, err := json.Marshal(trial)
-			if err != nil || bytes.Contains(data, []byte(prepared.item.Case.Driver.Facts["contact-reference"])) ||
+			value := prepared.item.Case.Driver.Facts["contact-reference"]
+			if err != nil || value != "" && bytes.Contains(data, []byte(value)) ||
 				bytes.Contains(data, []byte(waiting.ProtectedAnswer.Token)) {
 				t.Fatal("private fact or sealed binding entered retained evidence")
 			}
@@ -167,7 +173,7 @@ func TestProtectedPDFCancellationRequiresBothNativeTerminalRecords(t *testing.T)
 				(trial.Verdict != Fail || trial.Code != "private_native_evidence") {
 				t.Fatal("private native cancellation evidence was softened", trial.Code)
 			}
-			if mode == "complete" {
+			if mode == "complete" || mode == "finalized-no-write" {
 				pending := pdfRunFinalization{}
 				pending.retain(domain, trial)
 				entry := pending.trials[trial.ID]
@@ -176,10 +182,63 @@ func TestProtectedPDFCancellationRequiresBothNativeTerminalRecords(t *testing.T)
 					t.Fatal(err)
 				}
 				defer inventory.close()
-				entry.conclude(t.Context(), &trial, inventory, nil, nil, cleanPDFLifecycle(),
-					&PrivateSurfaceObservation{Code: "observed"})
+				item := prepared.item.Case
+				surfaces := observePrivateSurfaces(t.Context(), prepared.home, nil, nil,
+					map[string]bool{item.Fixtures[0].SHA256: true})
+				entry.conclude(t.Context(), &trial, inventory, nil, nil, cleanPDFLifecycle(), &surfaces)
 				if !trial.PDF.PostStop.RuntimeStopped || !trial.PDF.PostStop.FixtureRemoved || trial.Verdict == Pass {
 					t.Fatal("protected native cancellation could not finalize its owned fixture", trial.PDF.PostStop)
+				}
+				if mode == "finalized-no-write" {
+					item.Rubric = []Criterion{
+						{ID: "coherent", Description: "Cancellation is coherent.", Required: true},
+					}
+					provider := &roleTestProvider{mediated: true, response: &providers.LLMResponse{
+						Content: adaptiveJudgePass, FinishReason: "stop",
+					}}
+					judge := &ModelRole{provider: provider, identity: RoleIdentity{Role: "judge"}}
+					assessFinalizedPDFNoWrite(t.Context(), judge, item, &trial, cleanPDFLifecycle(), &surfaces)
+					if trial.Verdict != Pass || !trial.EvidenceEligible || provider.calls != 1 ||
+						!validPDFNoWriteEvidence(trial, item, prepared.workspace) {
+						t.Fatal("bound native protected cancellation could not be judged", trial.Code, surfaces.Code)
+					}
+					manifest, _ := json.Marshal(item)
+					trial.CaseSHA256 = digest(manifest)
+					summary := TrialSummary{
+						ID: trial.ID, CaseSHA256: trial.CaseSHA256,
+						Verdict: trial.Verdict, Code: trial.Code,
+					}
+					loaded := LoadedCase{Case: item, Digest: trial.CaseSHA256}
+					if !gradeEligible(
+						trial,
+						loaded,
+						summary,
+						Preset{ExpectedAgent: trial.AgentID},
+						prepared.workspace,
+					) {
+						t.Fatal("protected cancellation lost offline grade admission")
+					}
+					baseline, _ := json.Marshal(trial)
+					for _, change := range []string{"job-revision", "job-time", "job-state", "both-proofs"} {
+						var corrupted Trial
+						if json.Unmarshal(baseline, &corrupted) != nil {
+							t.Fatal("invalid corruption fixture")
+						}
+						switch change {
+						case "job-revision":
+							corrupted.PDF.Cancellation.JobTerminalRevision = corrupted.PDF.Cancellation.JobWaitingRevision
+						case "job-time":
+							corrupted.PDF.Cancellation.JobTerminalAt = corrupted.PDF.Cancellation.Question.ResolvedAt + 1
+						case "job-state":
+							corrupted.PDF.State = string(document.FormJobCompleted)
+						case "both-proofs":
+							corrupted.Cancellation = &corrupted.PDF.Cancellation.Question
+						}
+						if gradeEligible(corrupted, loaded, summary,
+							Preset{ExpectedAgent: trial.AgentID}, prepared.workspace) {
+							t.Fatal("invalid protected terminal evidence reached grade admission", change)
+						}
+					}
 				}
 			}
 		})
