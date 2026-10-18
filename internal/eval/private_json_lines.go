@@ -29,7 +29,7 @@ func (scan *privateContentScan) jsonLines(data []byte) bool {
 			uncertain = true
 			continue
 		}
-		line = bytes.TrimSpace(line)
+		line = bytes.Trim(line, " \t\r")
 		if len(line) == 0 {
 			continue
 		}

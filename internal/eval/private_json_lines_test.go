@@ -82,6 +82,27 @@ func TestPrivateJSONLinesAdmitExactLineBound(t *testing.T) {
 	}
 }
 
+func TestPrivateJSONLinesRejectNonJSONWhitespace(t *testing.T) {
+	for _, whitespace := range []string{"\v", "\f", "\u00a0", "\u0085"} {
+		for _, data := range []string{whitespace + "{}", "{}" + whitespace, "{}\n" + whitespace + "\n{}"} {
+			home := t.TempDir()
+			if err := os.WriteFile(filepath.Join(home, "history.jsonl"), []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result := observePrivateSurfaces(t.Context(), home, map[string]string{"name": "private-canary"}, nil, nil)
+			if !result.valid() || result.Code != "unavailable" || result.OpaqueFiles != 1 || result.LeakObserved {
+				t.Fatal("non-JSON whitespace normalized an invalid record", result)
+			}
+		}
+	}
+	for _, data := range []string{" \t\r{}\t \r\n\t \r\n{} ", "\t \r\n"} {
+		scan := privateContentScan{facts: map[string]string{"name": "private-canary"}, tokens: 100}
+		if scan.jsonLines([]byte(data)) || scan.uncertain {
+			t.Fatal("ordinary JSON whitespace or CRLF was refused")
+		}
+	}
+}
+
 func TestPrivateJSONLinesKeepOtherFormatsAndRoleContextsStrict(t *testing.T) {
 	data := "{\"name\":\"public\\u002dvalue\"}\n{\"safe\":true}\n"
 	facts := map[string]string{"name": "private-canary"}
