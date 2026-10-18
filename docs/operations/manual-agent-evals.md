@@ -168,9 +168,10 @@ The workspace must be the physical `HOME/workspace` directory and may initially 
 PID files, ownership markers, logs, extra roots, and symlink entries are refused before launching. Existing
 prepared-target tool/channel/network/approval admission still applies. Provider credentials should use native
 file references in this private profile; the child does not inherit the parent's environment or secret stores.
-Only the explicit home/config, PATH, fixed language, admitted warn/error/fatal logging and owned temporary-directory
-environment are supplied. Launch creates a new private `HOME/eval-tmp` and binds `TMPDIR`, `TMP` and `TEMP` to it,
-so native tools' default temporary scratch stays under the observed profile instead of the host's shared temp.
+Only the explicit home/config, PATH, fixed language, admitted warn/error/fatal logging, native JSON console format
+and owned temporary-directory environment are supplied. Launch creates a new private `HOME/eval-tmp` and binds
+`TMPDIR`, `TMP` and `TEMP` to it, so native tools' default temporary scratch stays under the observed profile instead
+of the host's shared temp.
 An existing temp root is never adopted. It remains private after stop for raw inspection; this is not a promise
 that native scratch is empty or cleaned. Do not recursively delete it before inspecting retained evidence.
 
@@ -184,12 +185,15 @@ independent cleanup budget. SIGKILL, a crash or host loss cannot execute that cl
 state must be treated as uncertain, not resumed or reported as canceled.
 
 The private `target_lifecycle` receipt records admitted PID, stop/exit observations, exit code, forced exit and
-log truncation. Captured child output is private and bounded to 1 MiB; native runtime logs remain separate
-surfaces needing inspection. An exit-zero receipt does not grant PDF/browser idle, privacy, no-write, delivery,
-or domain cleanup checks, and does not rewrite per-trial remote state. Reports remain outside git. Judge-only
-regrading preserves source lifecycle uncertainty without starting a target; comparison distinguishes owned and
-attached modes. Automatic per-trial provisioning, effective-input and post-settlement domain witnesses remain
-later E5/qualification work.
+log truncation. Captured child output is private and bounded to 1 MiB in `eval-gateway-<id>.jsonl`; native runtime
+logs remain separate surfaces needing inspection. The owned child explicitly uses `MINTCLAW_LOG_FORMAT=json`.
+Both stdout and stderr remain captured. Existing raw JSON-lines inspection rejects incomplete or malformed records
+and keeps known leaks after earlier malformed output; neither a new extension nor exit 0 grants positive evidence.
+Historical `.log` captures are not rewritten or newly exempted. An exit-zero receipt does not grant PDF/browser idle,
+privacy, no-write, delivery or domain cleanup checks, and does not rewrite per-trial remote state. Reports remain
+outside git. Judge-only regrading preserves source lifecycle uncertainty without starting a target; comparison
+distinguishes owned and attached modes. Automatic per-trial provisioning, effective-input and post-settlement
+domain witnesses remain later E5/qualification work.
 
 Use a new private profile, not the production profile or a copy of its sessions, memory, ledgers, or auth store.
 Both runner and gateway must use the same explicit `MINTCLAW_HOME`. Keep configuration and profile files immutable

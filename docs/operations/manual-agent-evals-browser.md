@@ -29,6 +29,11 @@ installation lookup. Existing native close/recovery owns removal, including fail
 binary caches or delete them to promote an old report. Managed/remote/unmarked drivers and Windows behavior are
 unchanged. This is scoped runtime containment, not an OS sandbox or complete privacy/cleanup qualification.
 
+New owned runs also request native JSON console records and retain bounded stdout/stderr as `.jsonl`, using the
+existing raw-record privacy scanner rather than interpreting console prose or skipping logs. Earlier `.log` results
+are unchanged. This removes a capture-format obstacle, not the remaining native authority, context, artifact,
+private-input or all-resource cleanup requirements.
+
 ## Corpus Contracts
 
 ```sh

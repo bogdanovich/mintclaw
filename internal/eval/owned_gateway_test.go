@@ -25,6 +25,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/health"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/pid"
 )
@@ -52,11 +53,23 @@ func runOwnedGatewayTestChild() int {
 	data, err := os.ReadFile(filepath.Join(home, ".security", "eval-child.json"))
 	var control ownedGatewayControl
 	if err != nil || json.Unmarshal(data, &control) != nil || os.Getenv("HOME") != home ||
-		os.Getenv("MINTCLAW_EVAL_PARENT_SECRET") != "" || os.Getenv("MINTCLAW_GATEWAY_HOST") != "" {
+		os.Getenv("MINTCLAW_EVAL_PARENT_SECRET") != "" || os.Getenv("MINTCLAW_GATEWAY_HOST") != "" ||
+		os.Getenv("MINTCLAW_LOG_FORMAT") != "json" {
 		return 8
 	}
 	if control.Mode == "early_exit" {
 		return 9
+	}
+	switch control.Mode {
+	case "structured_safe":
+		logger.WarnCF("eval-fixture", "Synthetic log", map[string]any{"value": "public\nquoted\"value"})
+	case "structured_encoded":
+		_, _ = os.Stdout.WriteString("{\"value\":\"\\u0050RIVATE_LOG_CANARY\"}\n")
+	case "structured_malformed":
+		_, _ = os.Stderr.WriteString("{\"incomplete\":\n")
+	case "structured_late_leak":
+		_, _ = os.Stderr.WriteString("not-json\\opaque\n")
+		_, _ = os.Stdout.WriteString("{\"value\":\"\\u0050RIVATE_LOG_CANARY\",\"value\":\"public\"}\n")
 	}
 	cfg, err := config.LoadConfigReadOnly(filepath.Join(home, "config.json"))
 	if err != nil {
@@ -534,12 +547,56 @@ func TestOwnedGatewayLogIsBoundedPrivateAndTruncationVisible(t *testing.T) {
 	if err != nil || result.TargetLifecycle == nil || !result.TargetLifecycle.LogTruncated {
 		t.Fatal("bounded log truncation was hidden", err)
 	}
-	logs, err := filepath.Glob(filepath.Join(fixture.home, "eval-gateway-*.log"))
+	logs, err := filepath.Glob(filepath.Join(fixture.home, "eval-gateway-*.jsonl"))
 	if err != nil || len(logs) != 1 {
 		t.Fatal("owned log unavailable")
 	}
 	info, err := os.Stat(logs[0])
 	if err != nil || info.Mode().Perm() != 0o600 || info.Size() != ownedGatewayLogBytes {
 		t.Fatal("owned log escaped its byte/permission bounds")
+	}
+}
+
+func TestOwnedGatewayStructuredLogsAreScannedBeforeAnyProjection(t *testing.T) {
+	for _, mode := range []string{"safe", "encoded", "malformed", "late_leak"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newOwnedGatewayFixture(t, "structured_"+mode)
+			child, target, err := startOwnedGateway(t.Context(), fixture.preset, fixture.home)
+			registerOwnedGatewayCleanup(t, child)
+			if err != nil || child == nil {
+				t.Fatal("structured capture child was not admitted", err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if receipt := child.stopAndWait(ctx); receipt.Code != "native_exit_zero" || receipt.LogTruncated {
+				t.Fatal("log capture did not settle normally", receipt.Code)
+			}
+			logs, err := filepath.Glob(filepath.Join(fixture.home, "eval-gateway-*.jsonl"))
+			if err != nil || len(logs) != 1 {
+				t.Fatal("native capture did not declare its strict JSON-lines format", err)
+			}
+			data, err := os.ReadFile(logs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			// This legacy process fixture has inline synthetic credentials. Inspect
+			// the unmodified capture, not an unrelated whole-profile privacy claim.
+			logHome := t.TempDir()
+			if os.WriteFile(filepath.Join(logHome, "capture.jsonl"), data, 0o600) != nil {
+				t.Fatal("raw capture observation unavailable")
+			}
+			observation := observePrivateSurfaces(t.Context(), logHome,
+				map[string]string{"name": "PRIVATE_LOG_CANARY"}, target.config.SensitiveDataReplacer(), nil)
+			want := "leak_observed"
+			switch mode {
+			case "safe":
+				want = "observed"
+			case "malformed":
+				want = "unavailable"
+			}
+			if !observation.valid() || observation.Code != want {
+				t.Fatal("raw log projection lost safe records, encoded leaks, or uncertainty", mode, observation)
+			}
+		})
 	}
 }

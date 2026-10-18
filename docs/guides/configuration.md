@@ -56,6 +56,12 @@ When omitted, the default is `warn`. Supported values: `debug`, `info`, `warn`, 
 
 You can also override this with the environment variable `MINTCLAW_LOG_LEVEL`.
 
+Set `MINTCLAW_LOG_FORMAT=json` before starting the process for native JSON-lines console records. Gateway startup
+and service status messages use the same structured output in this mode, without suppressing them at higher log
+levels. Registered credential redaction still runs before console/file output. An unset or unrecognized value keeps
+the existing human-readable console format; native file logs remain JSON. This setting changes output formatting,
+not diagnostic capture, model usage or task authority.
+
 ### Workspace Layout
 
 MintClaw stores data in your configured workspace (default: `~/.mintclaw/workspace`):
