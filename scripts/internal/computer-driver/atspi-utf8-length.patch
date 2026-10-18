@@ -27,5 +27,3 @@
 +        }
 +        assert_eq!(editable_text_byte_len("世界").unwrap(), 6);
 +        assert_eq!(editable_text_byte_len("😀").unwrap(), 4);
-@@ -7357,0 +7377 @@
-+

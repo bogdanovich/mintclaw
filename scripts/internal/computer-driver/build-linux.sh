@@ -31,8 +31,8 @@ git -C "$source_dir" diff --quiet HEAD --
 helper_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 patch_path="$helper_dir/atspi-utf8-length.patch"
 native_path="$source_dir/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs"
-git -C "$source_dir" apply --unidiff-zero --check "$patch_path"
-git -C "$source_dir" apply --unidiff-zero "$patch_path"
+git -C "$source_dir" apply --unidiff-zero --whitespace=error-all --check "$patch_path"
+git -C "$source_dir" apply --unidiff-zero --whitespace=error-all "$patch_path"
 native_sha=$(sha256sum "$native_path" | cut -d ' ' -f 1)
 
 export CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2
