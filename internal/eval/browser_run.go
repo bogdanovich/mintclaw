@@ -32,12 +32,13 @@ func (receipt *BrowserFixtureHostEvidence) verdict() Verdict {
 }
 
 type BrowserTrialEvidence struct {
-	Version         int                   `json:"version"`
-	Scope           string                `json:"scope"`
-	Fixture         *browserFixtureOracle `json:"fixture,omitempty"`
-	NativeAuthority string                `json:"native_authority"`
-	NativeCleanup   string                `json:"native_cleanup"`
-	Read            *BrowserReadEvidence  `json:"read,omitempty"`
+	Version         int                      `json:"version"`
+	Scope           string                   `json:"scope"`
+	Fixture         *browserFixtureOracle    `json:"fixture,omitempty"`
+	NativeAuthority string                   `json:"native_authority"`
+	NativeCleanup   string                   `json:"native_cleanup"`
+	Read            *BrowserReadEvidence     `json:"read,omitempty"`
+	Download        *BrowserDownloadEvidence `json:"download,omitempty"`
 }
 
 type browserRun struct {
@@ -88,6 +89,14 @@ func (run *browserRun) finish(
 		return nil
 	}
 	observed, observationErr := observeBrowserNative(ctx, target.preset.ExpectedWorkspace, facts, filter)
+	var transfers browserTransferSnapshot
+	var transferErr error
+	for _, pending := range run.trials {
+		if pending.item.Browser.Scenario == "artifact" {
+			transfers, transferErr = observeBrowserTransfers(ctx, target.preset.ExpectedWorkspace, facts, filter)
+			break
+		}
+	}
 	temporaryEmpty := browserTemporaryRootsEmpty(target.preset.IsolationRoot)
 	type finalizedTrial struct {
 		index int
@@ -133,6 +142,9 @@ func (run *browserRun) finish(
 				trial.Browser.NativeAuthority, trial.Browser.NativeCleanup = "observed", "observed"
 			}
 		}
+		if observationErr == nil && pending.item.Browser.Scenario == "artifact" {
+			trial.Browser.Download = inspectBrowserDownload(trial, target, observed, transfers)
+		}
 		trial.EvidenceEligible = false
 		for checkIndex, check := range pending.item.Checks {
 			if checkIndex >= len(trial.Checks) {
@@ -151,7 +163,7 @@ func (run *browserRun) finish(
 				}
 			case "private_surfaces":
 				if report.PrivateSurfaces != nil && report.PrivateSurfaces.LeakObserved ||
-					errors.Is(observationErr, ErrPrivateEvidence) {
+					errors.Is(observationErr, ErrPrivateEvidence) || errors.Is(transferErr, ErrPrivateEvidence) {
 					*result = CheckResult{
 						ID:          check.ID,
 						Verdict:     Fail,

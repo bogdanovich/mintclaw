@@ -208,6 +208,26 @@ reports can be regraded without a gateway or original browser state files. This 
 read evidence, not all browser resources, browser-provider parity or completion of E4. The v4 result qualifies one
 Linux merged-revision read trial; the other five cases and macOS live coverage remain unfinished.
 
+### Native Download Metadata
+
+Artifact finalization now captures a separate bounded `owned_browser_download_metadata_v1` receipt. It uses
+`nodes.InspectTransferSpoolSnapshot` on the native metadata path, after the owned child stops. The inspection
+reuses the transfer store's strict decoder and record invariants, without constructing a store, acquiring its
+lease, reconciling staging/expired records or deleting files. The native API limits bytes/records; eval additionally
+requires an anchored owner-only regular file, rejects aliases, and scans original bytes before decoding/hashing.
+
+A `native_metadata_observed` receipt joins a succeeded native download to its exact session/owner/execution,
+action hash, admitted profile/policy revision, committed transfer source/generation and settled media outbox
+intent. The transfer's complete routed owner, artifact digest/size/ref and native terminal artifact must agree.
+Its claimed media ref and recovery identity must match a unique matching delivered media intent. Ambiguous matches are
+unavailable, not selected arbitrarily. Known encoded raw leaks remain hard failures even if decoding is refused.
+
+This is metadata, not a file-byte, approval, actual client delivery or full cleanup witness. It does not validate
+the spool's data file, download media, grant `allow_once`, change manifests/policy or make an artifact trial eligible
+for a judge/regrade. A valid receipt can therefore coexist with an inconclusive artifact trial. Missing consumed
+native approval, authenticated bounded byte collection, wire identity/uniqueness and independent CSV checks remain
+mandatory before artifact qualification. The qualified read path is unchanged; no live artifact result is claimed.
+
 ## Offline Controls
 
 ```sh
