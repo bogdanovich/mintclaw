@@ -59,6 +59,12 @@ then verified repaired startup but stopped at an unbound native navigation appro
 Native `navigation` is distinct from the current read/local-edit allow rules. Both attempts remain inconclusive;
 exact fixture-navigation admission/action correlation is next, not broad approval or a promoted page-read pass.
 
+Exact owned-fixture navigation admission then merged in #1750. The
+[browser read v3 pilot](../operations/manual-agent-evals-browser-read-v3-pilot-20261018.md) visited the page once,
+matched its fresh code and completed two scripted turns with no fixture mutations. The overall result remained
+inconclusive: native owner/execution/action assessment, privacy and cleanup are not qualified. All earlier outcomes
+remain unchanged; complete native correlation and the six-case browser suite are still mandatory.
+
 ## Milestones
 
 | Stage | Outcome | Dependency | Status |

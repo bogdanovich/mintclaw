@@ -17,6 +17,11 @@ navigation approval with zero page visits. `navigation` is a separate native eff
 send an unbound approval. The current seed now grants a separate exact-origin `navigate + navigation` rule. The old
 result is unchanged; native correlation and complete browser grading remain unfinished.
 
+The [v3 pilot](manual-agent-evals-browser-read-v3-pilot-20261018.md) on merged #1750 then visited the page and matched
+its fresh reference code across the scripted read/follow-up. Fixture read/no-effect predicates passed, but the overall
+trial remained inconclusive because mandatory native authority, privacy and cleanup evidence was unavailable.
+This does not qualify the browser suite or replace either earlier result.
+
 ## Corpus Contracts
 
 ```sh
