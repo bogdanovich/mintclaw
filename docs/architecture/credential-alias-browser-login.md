@@ -71,6 +71,12 @@ frames and other login patterns deny before credential use. Facebook, eBay,
 Craigslist, SSO, multi-step login, MFA continuation and companion placement each
 need their own flow qualification before claiming support.
 
+Fixed-alias and generic website logins share one private fill operation. It
+finishes each field's synchronous `input` and `change` events, then checks the
+original live targets and destination before filling the next field or
+submitting. Each path retains its own admission rules and authentication
+evidence requirements.
+
 Keep real-account login disabled until the roadmap's full serialized-output
 audit and protected token/physical Android/one-account pilot gates pass. The
 synthetic Chromium fixture checks actual tool/gateway/driver and virtual

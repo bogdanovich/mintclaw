@@ -4,7 +4,7 @@
 // exceptions, page content, credential values, or authentication cookies.
 const REF = /^(?:f[1-9][0-9]{0,9})?e[1-9][0-9]{0,9}$/;
 const MARKER = /^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/;
-const {prepareWebsiteStep, performWebsiteStep} = require('./credential-steps.cjs');
+const {prepareWebsiteStep, performWebsiteStep, submitCredentialForm} = require('./credential-steps.cjs');
 
 function validOrigin(value) {
   try {
@@ -56,7 +56,8 @@ async function prepareCredentialLogin(page, request) {
         !submit.disabled && !submit.matches(':disabled') && submit.type === 'submit' &&
         (submit instanceof HTMLButtonElement || submit instanceof HTMLInputElement) &&
         postDestination();
-      return ready() ? { username, password, submit, form, ready } : null;
+      return ready() ? { elements: { username_ref: username, password_ref: password },
+        step: 'credentials', submit, form, ready } : null;
     }, { origin: request.origin, elements });
     if (!(await capsule.evaluate(value => value !== null))) {
       await capsule.dispose();
@@ -85,22 +86,7 @@ async function performCredentialLogin(page, capsule, request) {
     const navigation = page.waitForURL(url => url.origin === request.origin &&
       url.href !== entryURL, { timeout, waitUntil: 'domcontentloaded' }).catch(() => null);
     attempted = true;
-    const dispatched = await capsule.evaluate((state, values) => {
-      if (!state || !state.ready()) return false;
-      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      set.call(state.username, values.username);
-      set.call(state.password, values.password);
-      // Changes may update trusted site state. Recheck the live targets after
-      // listeners run, before dispatching the single native submit operation.
-      state.username.dispatchEvent(new Event('input', { bubbles: true }));
-      state.password.dispatchEvent(new Event('input', { bubbles: true }));
-      if (!state.ready() || state.username.value !== values.username || state.password.value !== values.password) {
-        set.call(state.username, ''); set.call(state.password, '');
-        return false;
-      }
-      HTMLFormElement.prototype.requestSubmit.call(state.form, state.submit);
-      return true;
-    }, { username: request.username, password: request.password });
+    const dispatched = await submitCredentialForm(capsule, { username: request.username, password: request.password });
     if (!dispatched) {
       await page.context().close().catch(() => {});
       return 'denied';
@@ -123,7 +109,7 @@ async function performCredentialLogin(page, capsule, request) {
       await capsule.evaluate(state => {
         if (!state) return;
         const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        set.call(state.username, ''); set.call(state.password, '');
+        set.call(state.elements.username_ref, ''); set.call(state.elements.password_ref, '');
       }).catch(() => {});
       await page.context().close().catch(() => {});
     }

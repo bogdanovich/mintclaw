@@ -57,6 +57,33 @@ test('private login submits once and returns only fixed authentication evidence'
   assert.equal(values.username, ''); assert.equal(values.password, '');
 });
 
+for (const event of ['input', 'change']) {
+  test(`fixed-alias fills password after username ${event} handlers finish`, { timeout: 30000 }, async t => {
+    const f = await fixture(t, `<script>
+      const marker = document.createElement('input');
+      marker.type = 'hidden'; marker.name = 'username_event';
+      document.querySelector('form').append(marker);
+      document.querySelector('[name="username"]').addEventListener('${event}', () => {
+        document.querySelector('[name="password"]').value = '';
+        marker.value = '${event}';
+      });
+    </script>`);
+    let observedEvent = '';
+    f.page.on('request', incoming => {
+      if (new URL(incoming.url()).pathname === '/session') {
+        observedEvent = new URLSearchParams(incoming.postData()).get('username_event');
+      }
+    });
+    const values = request(f.refs);
+    const capsule = await prepareCredentialLogin(f.page, values);
+    assert.ok(capsule, 'private readiness unavailable');
+    assert.equal(await performCredentialLogin(f.page, capsule, values), 'logged_in');
+    assert.equal(f.submissions(), 1, 'private login must submit exactly once');
+    assert.equal(observedEvent, event, 'username handlers must complete before submission');
+    assert.equal(values.username, ''); assert.equal(values.password, '');
+  });
+}
+
 test('origin changes before injection do not submit credentials', { timeout: 30000 }, async t => {
   const f = await fixture(t), values = request(f.refs);
   const capsule = await prepareCredentialLogin(f.page, values);
