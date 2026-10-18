@@ -1,5 +1,12 @@
 # Credential Access Roadmap
 
+The fixed-binding implementation below was delivered. On 2026-10-18 the
+operator requested a replacement: discover Login items from the live website,
+use generic browser forms and privately fill a stored one-time code. The active
+follow-up design and delivery plan are
+[Website-discovered browser credentials](credential-discovery-redesign.md).
+Its milestones are not complete merely because the earlier TR milestones are.
+
 ## Current decision and intended outcome
 
 Revised on 2026-10-11 following the operator's explicit design clarification:
