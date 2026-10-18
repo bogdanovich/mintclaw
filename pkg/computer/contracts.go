@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap/identity"
 )
 
 var (
@@ -97,12 +97,12 @@ func (target Target) Validate() error {
 // Binding is trusted per-session authority. It is not a model-authored target
 // selector. Replacements of a worker, policy, scope, or owner invalidate evidence.
 type Binding struct {
-	Principal      runtimecap.Principal `json:"principal"`
-	SessionID      string               `json:"session_id"`
-	Target         Target               `json:"target"`
-	WorkerID       string               `json:"worker_id"`
-	PolicyRevision string               `json:"policy_revision"`
-	Generation     uint64               `json:"generation"`
+	Principal      identity.Principal `json:"principal"`
+	SessionID      string             `json:"session_id"`
+	Target         Target             `json:"target"`
+	WorkerID       string             `json:"worker_id"`
+	PolicyRevision string             `json:"policy_revision"`
+	Generation     uint64             `json:"generation"`
 }
 
 func (binding Binding) Validate() error {
@@ -206,7 +206,7 @@ func (session Session) Transition(event ControlEvent, expectedGeneration uint64)
 }
 
 type OpenRequest struct {
-	Principal runtimecap.Principal
+	Principal identity.Principal
 	Target    Target
 }
 
@@ -224,9 +224,9 @@ func (request OpenRequest) Validate() error {
 // Release revokes automation, never implicitly closes user-owned applications.
 // Input and managed-environment destruction are intentionally separate later APIs.
 type Host interface {
-	Targets(context.Context, runtimecap.Principal) ([]Target, error)
+	Targets(context.Context, identity.Principal) ([]Target, error)
 	Open(context.Context, OpenRequest) (Session, error)
-	Status(context.Context, runtimecap.Principal, string) (Session, error)
+	Status(context.Context, identity.Principal, string) (Session, error)
 	Observe(context.Context, Session) (Observation, error)
 	Handoff(context.Context, Binding) (Session, error)
 	RequestResume(context.Context, Binding) (Session, error)

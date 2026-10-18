@@ -3446,7 +3446,7 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 	}
 }
 
-func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testing.T) {
+func TestDeliverResponseHandledToolResultMarksMixedChannelManagerOutputFinal(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = t.TempDir()
 	msgBus := bus.NewMessageBus()
@@ -3468,12 +3468,21 @@ func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testi
 		Text: "handled response",
 		ObjectiveOutcome: &taskresult.Outcome{
 			Status: taskresult.OutcomeSucceeded,
-			CompletedItems: []taskresult.Item{{
-				Item: "Return status", Kind: taskresult.ObjectiveKindResult,
-				Output: &taskresult.ObjectiveOutput{
-					Kind: "records", Records: []map[string]string{{"state": "ready"}},
+			CompletedItems: []taskresult.Item{
+				{
+					Item: "Complete the action",
+					Kind: taskresult.ObjectiveKindExternalAction,
+					Receipts: []taskresult.Receipt{
+						{ID: "runtime-action", Kind: taskresult.ObjectiveKindExternalAction},
+					},
 				},
-			}},
+				{
+					Item: "Return status", Kind: taskresult.ObjectiveKindResult,
+					Output: &taskresult.ObjectiveOutput{
+						Kind: "records", Records: []map[string]string{{"state": "ready"}},
+					},
+				},
+			},
 		},
 	}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	if _, outcome, err := al.deliverToolResultToUser(
@@ -3483,6 +3492,9 @@ func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testi
 	}
 	waitForSentMessages(t, channel, 1)
 	sent := channel.messagesSnapshot()[0]
+	if sent.Content != "handled response" {
+		t.Fatalf("human presentation changed: %q", sent.Content)
+	}
 	metadata := sent.Metadata
 	if !metadata.IsFinal() || metadata.IsInterim() {
 		t.Fatalf("channel-manager outbound metadata = %#v, want final", metadata)

@@ -20,7 +20,10 @@ import (
 
 var ErrOwnedGateway = errors.New("eval: owned gateway could not be admitted or stopped cleanly")
 
-const ownedGatewayLogBytes = 1024 * 1024
+const (
+	ownedGatewayLogBytes      = 1024 * 1024
+	ownedGatewayTempDirectory = "eval-tmp"
+)
 
 // A child receipt is not a document/browser settlement or privacy witness.
 type TargetLifecycle struct {
@@ -150,7 +153,7 @@ func startOwnedGateway(ctx context.Context, preset Preset, home string) (*ownedG
 }
 
 func validateFreshOwnedProfile(profile preparedProfile) error {
-	if profile.workspace != filepath.Join(profile.home, "workspace") {
+	if profile.config == nil || profile.workspace != filepath.Join(profile.home, "workspace") {
 		return ErrOwnedGateway
 	}
 	root, err := os.OpenRoot(profile.home)
@@ -158,6 +161,9 @@ func validateFreshOwnedProfile(profile preparedProfile) error {
 		return ErrOwnedGateway
 	}
 	defer func() { _ = root.Close() }()
+	if profile.config.Tools.IsToolEnabled("document") && validateFreshPDFJournal(root) != nil {
+		return ErrOwnedGateway
+	}
 	for _, directory := range []string{".", "workspace"} {
 		file, openErr := root.Open(directory)
 		if openErr != nil {
@@ -171,6 +177,9 @@ func validateFreshOwnedProfile(profile preparedProfile) error {
 		allowed := []string{
 			"config.json", config.SecurityConfigFile, config.SecurityConfigFile + ".lock",
 			".security", "workspace", "reports",
+		}
+		if directory == "." && profile.config.Tools.IsToolEnabled("document") {
+			allowed = append(allowed, "state")
 		}
 		if directory == "workspace" {
 			allowed = []string{"AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "skills"}
@@ -190,6 +199,34 @@ func validateFreshOwnedProfile(profile preparedProfile) error {
 	return nil
 }
 
+// Only this empty native hierarchy is a provisioned PDF prerequisite. No old
+// operation, lock, other state, or symlink may become a fresh target baseline.
+func validateFreshPDFJournal(root *os.Root) error {
+	for _, level := range []struct{ directory, child string }{
+		{"state", "document-writes"}, {"state/document-writes", "journal"}, {"state/document-writes/journal", ""},
+	} {
+		before, err := root.Lstat(level.directory)
+		if err != nil || !before.IsDir() || before.Mode().Perm() != 0o700 {
+			return ErrOwnedGateway
+		}
+		directory, err := root.Open(level.directory)
+		if err != nil {
+			return ErrOwnedGateway
+		}
+		opened, statErr := directory.Stat()
+		entries, readErr := directory.ReadDir(2)
+		closeErr := directory.Close()
+		after, pathErr := root.Lstat(level.directory)
+		if statErr != nil || pathErr != nil || !sameCensusFile(before, opened) || !sameCensusFile(opened, after) ||
+			readErr != nil && !errors.Is(readErr, io.EOF) || closeErr != nil ||
+			level.child == "" && len(entries) != 0 ||
+			level.child != "" && (len(entries) != 1 || entries[0].Name() != level.child) {
+			return ErrOwnedGateway
+		}
+	}
+	return nil
+}
+
 func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGateway, error) {
 	root, err := os.OpenRoot(profile.home)
 	if err != nil {
@@ -204,6 +241,13 @@ func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGatew
 	if lock.Close() != nil {
 		return nil, ErrOwnedGateway
 	}
+	// Keep native tools' os.TempDir scratch inside the observed private home.
+	// An existing directory is never adopted, including after an earlier run.
+	if root.Mkdir(ownedGatewayTempDirectory, 0o700) != nil {
+		_ = root.Remove(".eval-gateway-owner")
+		return nil, ErrOwnedGateway
+	}
+	temporary := filepath.Join(profile.home, ownedGatewayTempDirectory)
 	logFile, err := root.OpenFile("eval-gateway-"+uuid.NewString()+".log", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = root.Remove(".eval-gateway-owner")
@@ -216,6 +260,7 @@ func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGatew
 		"HOME=" + profile.home, config.EnvHome + "=" + profile.home,
 		config.EnvConfig + "=" + filepath.Join(profile.home, "config.json"),
 		"PATH=" + os.Getenv("PATH"), "LANG=C", "MINTCLAW_LOG_LEVEL=" + config.EffectiveGatewayLogLevel(profile.config),
+		"TMPDIR=" + temporary, "TMP=" + temporary, "TEMP=" + temporary,
 	}
 	command.Stdout, command.Stderr = log, log
 	command.WaitDelay = 2 * time.Second

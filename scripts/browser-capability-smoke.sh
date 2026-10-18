@@ -4,7 +4,7 @@ set -eu
 
 usage() {
 	cat >&2 <<'EOF'
-usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff> --json-output <path> [options]
+usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|image-transfer|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff> --json-output <path> [options]
 
 Options:
   --gateway-host <ssh-host>  Run the live client on the gateway over SSH.
@@ -106,7 +106,7 @@ if [ "${#profile}" -gt 64 ]; then
 	exit 2
 fi
 case "$suite" in
-core|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff) ;;
+core|image-transfer|click-recovery|semantic-observation|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff) ;;
 *)
 	echo "unsupported browser smoke suite" >&2
 	exit 2
@@ -319,6 +319,12 @@ ephemeral-cleanup)
 	stage_two_checks='cookie_removed, local_storage_removed, cache_removed, service_worker_removed'
 	stage_two_workflow="Open the verification session with the same target and profile and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check, call browser_observe until it shows cookie=false, local_storage=false, cache=false, and service_worker=false, and close this session."
 	;;
+image-transfer)
+	stage_one=image-transfer
+	stage_one_checks='initial_blank, image_observed, download_not_dispatched, same_session_preserved, original_artifact_retained, upload_selected, upload_received, source_page_preserved'
+	stage_one_workflow="Open one session and observe about:blank. Navigate to ${fixture_origin}/browser-smoke/image-transfer and observe fresh state. Require Original transfer photo. Call browser_act kind=download on the button Not a download exactly once; require code=download_not_dispatched, download_dispatched=false and session_preserved=true. This one expected tool error is not safe_error. Do not click or replay this target. Observe fresh state in the exact same session. Download the image Original transfer photo once using its fresh ref; require a committed image/png artifact, not a screenshot. Observe fresh state and require the same source URL and title. Use upload with the returned artifact_ref on Upload original photo. Observe UPLOAD_SELECTED_1, then click Send test upload once with effect=external_commit. I authorize this POST to this local fixture only without another confirmation. Observe UPLOAD_RECEIVED_ORIGINAL; require original bytes, not a filename-only or dispatch-only claim. Use only browser_targets, browser_session, browser_observe, browser_act and read-only browser_contexts list when needed, not browser_execute or direct HTTP tools. Keep the same session throughout and close it exactly once."
+	stage_two=""
+	;;
 semantic-observation)
 	stage_one=semantic-observation
 	stage_one_checks='initial_blank, map_context_preserved, decorative_images_not_product_photos, gallery_context_preserved, unlabeled_image_evidence, exact_gallery_control, gallery_open_verified, map_unchanged'
@@ -416,6 +422,12 @@ make_stage_prompt() {
 	stage_name=$1
 	stage_workflow=$2
 	stage_checks=$3
+	objective_shape='exactly one result objective'
+	external_objective=''
+	if [ "$suite" = image-transfer ]; then
+		objective_shape='exactly two objectives: one external_action objective and one result objective'
+		external_objective='Set the external_action item to exactly: Capture the original image, attach it, and submit one upload to the owned image-transfer fixture. Set kind=external_action and omit acceptance for this item. Require actual runtime receipts for every completed externally classified download, upload, and submit action; do not treat these effects as an unclaimed result-only workflow.'
+	fi
 	cat <<EOF
 Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
 
@@ -429,7 +441,8 @@ Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact tar
 Return one record of browser smoke predicates using string true or false values only, with exactly the required fields supplied by the result objective. On failure, close every opened session and set each predicate from the actual terminal state.
 END_BROWSER_TASK
 
-When calling delegate, set objective_items to exactly one result objective with acceptance output_kind=records, min_items=1, and required_fields exactly: target_ready, capability_observe, capability_navigate, capability_click, ${stage_checks}, session_closed, safe_error_absent. Set the objective item to exactly: Return one record of browser smoke predicates using string true or false values only. Require the child to return exactly one record with exactly those fields and use only the strings true or false for every value. On failure, still close every opened session and set each predicate from the actual terminal state. Do not ask for JSON text and do not add separate workflow or report objectives.
+When calling delegate, set objective_items to ${objective_shape}. ${external_objective}
+For the result objective, use acceptance output_kind=records, min_items=1, and required_fields exactly: target_ready, capability_observe, capability_navigate, capability_click, ${stage_checks}, session_closed, safe_error_absent. Set the result item to exactly: Return one record of browser smoke predicates using string true or false values only. Require the child to return exactly one record with exactly those fields and use only the strings true or false for every value. On failure, still close every opened session and set each predicate from the actual terminal state. Do not ask for JSON text and do not add any other objectives.
 EOF
 }
 
@@ -542,6 +555,10 @@ if [ "$suite" = semantic-observation ]; then
 	"$python_command" "$helper" semantic-probe --origin "$fixture_origin" \
 		--output "$smoke_root/semantic-oracle.json"
 fi
+if [ "$suite" = image-transfer ]; then
+	"$python_command" "$helper" image-probe --origin "$fixture_origin" \
+		--output "$smoke_root/image-oracle.json"
+fi
 
 stop_pid "$fixture_pid"
 fixture_pid=""
@@ -556,6 +573,9 @@ if [ -n "$prompt_two" ]; then
 fi
 if [ "$suite" = semantic-observation ]; then
 	set -- "$@" --semantic-oracle "$smoke_root/semantic-oracle.json"
+fi
+if [ "$suite" = image-transfer ]; then
+	set -- "$@" --image-oracle "$smoke_root/image-oracle.json"
 fi
 set -- "$@" \
 	--cleanup-json "$cleanup_json" \

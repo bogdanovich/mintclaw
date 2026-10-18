@@ -86,14 +86,32 @@ func TestPickerRendersBoundedAccessibleThreadAndCatalogueStates(t *testing.T) {
 	model.height = 15
 	view := model.View()
 	for _, want := range []string{
-		"MintClaw resume", "scope current project", "> 1. Fix parser", "2h ago", "11111111",
-		"Handle nested input", "[dirty]", "[stale]", "branch feature/parser", "/work/mintclaw",
-		"[missing]", "[locked]", "3 corrupt catalog entries skipped", "catalog scan truncated",
-		"↑/↓ select", "/ search", "A scope", "Enter resume", "Q cancel",
+		"Resume a previous session", "Filter:", "Cwd", "All", "Status:", "Active", "Archived",
+		"Sort:", "Updated", "› 2h ago", "Fix parser", "[dirty, stale]", "Missing project",
+		"[missing, locked]", "3 corrupt catalog entries skipped", "catalog scan truncated",
+		"↑/↓ browse", "type search", "A scope", "enter resume", "esc cancel",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("picker view omits %q: %q", want, view)
 		}
+	}
+	if strings.Count(view, "Fix parser") != 1 || strings.Contains(view, "11111111") ||
+		strings.Contains(view, "Handle nested input") || strings.Contains(view, "/work/mintclaw") {
+		t.Fatalf("collapsed picker leaks duplicated or technical detail: %q", view)
+	}
+	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'E'}})
+	expanded := model.View()
+	for _, want := range []string{"Session:", "11111111", "Directory:", "/work/mintclaw", "Branch:", "feature/parser"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded picker omits %q: %q", want, expanded)
+		}
+	}
+	if lines := strings.Split(
+		expanded,
+		"\n",
+	); len(lines) != model.height ||
+		!strings.Contains(lines[len(lines)-1], "esc cancel") {
+		t.Fatalf("expanded picker displaced its footer: lines=%d height=%d view=%q", len(lines), model.height, expanded)
 	}
 	model.query.Search = "parser"
 	if warning := model.catalogWarning(); !strings.Contains(
@@ -153,15 +171,14 @@ func TestPickerSearchPagingScopeAndStrictUnavailableSelection(t *testing.T) {
 	}
 
 	model = newPickerModel(t.Context(), source, query, initial, time.Now)
-	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Z'}})
 	if latest := source.latestQuery(t); !latest.Archived || latest.Offset != 0 {
 		t.Fatalf("archived query = %+v", latest)
 	}
-	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
 	if latest := source.latestQuery(t); !latest.AllProjects || latest.Offset != 0 {
 		t.Fatalf("all-project query = %+v", latest)
 	}
-	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	for _, r := range "available" {
 		model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -192,24 +209,86 @@ func TestPickerExpandsBoundedHistoricalMatch(t *testing.T) {
 		time.Now,
 	)
 	model.width = 54
-	model.height = 16
+	model.height = 20
 	view := model.View()
 	for _, want := range []string{
-		"historical parser regression", "match transcript", "transcript search truncated", "E match",
+		"Historical result", "transcript search truncated",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("collapsed historical picker omits %q: %q", want, view)
 		}
 	}
-	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	if !model.expanded || !strings.Contains(model.View(), "match in aaaaaaaa · transcript · message 7") ||
-		!strings.Contains(model.View(), "exact failure evidence") {
+	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'E'}})
+	if !model.expanded || !strings.Contains(model.View(), "Session:") ||
+		!strings.Contains(model.View(), "Match:") || !strings.Contains(model.View(), "transcript · message 7") ||
+		!strings.Contains(model.View(), "exact failure") || !strings.Contains(model.View(), "evidence") {
 		t.Fatalf("expanded historical picker = %q", model.View())
 	}
 	for _, line := range strings.Split(model.View(), "\n") {
 		if pickerLineWidth(line) > model.width {
 			t.Fatalf("expanded line exceeds width %d: %q", model.width, line)
 		}
+	}
+}
+
+func TestFormatPickerAgeKeepsOlderSessionsScannable(t *testing.T) {
+	now := time.Date(2026, time.October, 17, 12, 0, 0, 0, time.UTC)
+	if got := formatPickerAge(now, now.Add(-69*24*time.Hour)); got != "69d ago" {
+		t.Fatalf("formatPickerAge() = %q, want %q", got, "69d ago")
+	}
+}
+
+func TestPickerShortTerminalAlwaysKeepsFooter(t *testing.T) {
+	item := codingpicker.Item{
+		ThreadID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Title: "Short terminal", UpdatedAt: time.Now(),
+		ProjectRoot: "/work", InvocationCWD: "/work", CurrentProject: true,
+		Location: codingpicker.LocationAvailable,
+	}
+	testCases := []struct {
+		name       string
+		height     int
+		diagnostic string
+		mutate     func(*pickerModel)
+	}{
+		{name: "content at height five", height: 5, mutate: func(*pickerModel) {}},
+		{name: "notice at height five", height: 5, diagnostic: "Notice: busy", mutate: func(model *pickerModel) {
+			model.notice = "busy"
+		}},
+		{
+			name:       "error at height five",
+			height:     5,
+			diagnostic: "Error: catalog unavailable",
+			mutate: func(model *pickerModel) {
+				model.err = fmt.Errorf("catalog unavailable")
+			},
+		},
+		{
+			name:       "warning at height five",
+			height:     5,
+			diagnostic: "1 corrupt catalog entry skipped",
+			mutate: func(model *pickerModel) {
+				model.page.SkippedTotal = 1
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			model := newPickerModel(
+				t.Context(), &fakePickerSource{}, codingpicker.Query{Limit: 20},
+				codingpicker.Page{Items: []codingpicker.Item{item}, Matched: 1}, time.Now,
+			)
+			model.width = 80
+			model.height = testCase.height
+			testCase.mutate(model)
+			lines := strings.Split(model.View(), "\n")
+			if len(lines) != testCase.height || !strings.Contains(lines[len(lines)-1], "esc cancel") ||
+				!strings.Contains(lines[len(lines)-2], "1 / 1") {
+				t.Fatalf("short picker displaced its footer: height=%d view=%q", testCase.height, model.View())
+			}
+			if testCase.diagnostic != "" && !strings.Contains(model.View(), testCase.diagnostic) {
+				t.Fatalf("short picker hid %q: %q", testCase.diagnostic, model.View())
+			}
+		})
 	}
 }
 
@@ -224,13 +303,14 @@ func TestPickerEmptyAndErrorPagesRemainUsable(t *testing.T) {
 	model := newPickerModel(
 		t.Context(), source, codingpicker.Query{Limit: 20}, codingpicker.Page{}, time.Now,
 	)
-	if view := model.View(); !strings.Contains(view, "No coding threads found") || !strings.Contains(view, "Q cancel") {
+	if view := model.View(); !strings.Contains(view, "No coding threads found") ||
+		!strings.Contains(view, "esc cancel") {
 		t.Fatalf("empty picker is not usable: %q", view)
 	}
 	model.search.SetValue("fail")
 	model.searching = true
 	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	if model.err == nil || !strings.Contains(model.View(), "R retry") || !strings.Contains(model.View(), "Q cancel") {
+	if model.err == nil || !strings.Contains(model.View(), "R retry") || !strings.Contains(model.View(), "esc cancel") {
 		t.Fatalf("error picker is not usable: error=%v view=%q", model.err, model.View())
 	}
 }

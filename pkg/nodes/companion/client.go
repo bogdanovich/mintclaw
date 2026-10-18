@@ -162,6 +162,9 @@ func cloneCatalog(catalog nodes.CapabilityCatalog) nodes.CapabilityCatalog {
 		result.Commands[index].BrowserProfiles = nodes.CloneBrowserProfileDescriptors(
 			catalog.Commands[index].BrowserProfiles,
 		)
+		result.Commands[index].ComputerProfiles = append(
+			[]nodes.ComputerProfileDescriptor(nil),
+			catalog.Commands[index].ComputerProfiles...)
 		result.Commands[index].UpdateProfiles = nodes.CloneUpdateProfileDescriptors(
 			catalog.Commands[index].UpdateProfiles,
 		)
@@ -420,6 +423,7 @@ func (client *Client) serveConnected(ctx context.Context, connection *websocket.
 		_ = connection.Close()
 		workers.requests.Wait()
 		client.disconnectBrowser()
+		client.disconnectComputer()
 		client.disconnectTerminals()
 		workers.events.Wait()
 	}()
@@ -905,6 +909,17 @@ func (client *Client) disconnectBrowser() {
 	}
 }
 
+func (client *Client) disconnectComputer() {
+	if client == nil || client.runtime == nil || client.runtime.computerHost == nil {
+		return
+	}
+	cleanupContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if client.runtime.computerHost.Disconnect(cleanupContext) != nil {
+		client.logger.Error("companion computer disconnect cleanup failed")
+	}
+}
+
 func (client *Client) writeTerminalAccessError(
 	writer *connectedWriter,
 	requestID string,
@@ -1017,6 +1032,9 @@ func executionPlanMatchesProtocol(plan nodes.ExecutionPlan, protocolVersion int)
 func invocationCommandFailure(err error) (string, string) {
 	if failure, ok := boundedInvocationFailure(err); ok {
 		switch failure.Code {
+		case nodes.InvocationDispatchComputerStale, nodes.InvocationDispatchComputerBusy,
+			nodes.InvocationDispatchComputerExpired, nodes.InvocationDispatchComputerUnavailable:
+			return failure.Code, "computer operation did not complete"
 		case nodes.InvocationDispatchFileNotFound:
 			return nodes.InvocationDispatchFileNotFound, "workspace file was not found"
 		case nodes.InvocationDispatchBrowserSessionNotFound:
@@ -1025,6 +1043,8 @@ func invocationCommandFailure(err error) (string, string) {
 			return nodes.InvocationDispatchBrowserNavigationFailed, "browser navigation failed"
 		case nodes.InvocationDispatchBrowserClickNotDispatched:
 			return nodes.InvocationDispatchBrowserClickNotDispatched, "browser click was not dispatched"
+		case nodes.InvocationDispatchBrowserDownloadNotDispatched:
+			return nodes.InvocationDispatchBrowserDownloadNotDispatched, "browser download was not dispatched"
 		case nodes.InvocationDispatchBrowserCleanupRequired:
 			return nodes.InvocationDispatchBrowserCleanupRequired,
 				"browser cleanup requires operator attention"

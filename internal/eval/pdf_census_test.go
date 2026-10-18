@@ -73,6 +73,7 @@ func TestPDFNativeInventoryRefusesUnsafeOrIncompleteSurfaces(t *testing.T) {
 	for _, mode := range []string{
 		"unknown-file", "directory", "symlink", "ancestor-alias", "public-file", "public-directory", "oversize",
 		"trailing", "duplicate-key", "oversize-inventory", "canceled", "lock-content", "credential", "private-field",
+		"outbox-lock-content", "outbox-lock-credential",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			prepared := newPDFTrialFixture(t)
@@ -132,6 +133,13 @@ func TestPDFNativeInventoryRefusesUnsafeOrIncompleteSurfaces(t *testing.T) {
 				ctx, data = canceled, nil
 			case "lock-content":
 				path = filepath.Join(directory, ".write-journal.lock")
+			case "outbox-lock-content", "outbox-lock-credential":
+				path = filepath.Join(outbox.Path(prepared.workspace), ".writer.lock")
+				if mode == "outbox-lock-credential" {
+					prepared.filter = strings.NewReplacer("synthetic-credential", "<redacted>")
+					data = []byte(`{"ignored":"synthetic-credential"}`)
+					wanted = ErrPrivateEvidence
+				}
 			case "credential":
 				prepared.filter = strings.NewReplacer("synthetic-credential", "<redacted>")
 				data = []byte(`{"ignored":"synthetic-credential"}`)
@@ -376,5 +384,24 @@ func TestCensusJSONNullAdmissionDoesNotRelaxManifestContracts(t *testing.T) {
 	}
 	if _, err := decodeJSONValue(json.NewDecoder(strings.NewReader(`{"id":null,"id":1}`)), 0, true); err == nil {
 		t.Fatal("nullable census parser accepted duplicate keys")
+	}
+}
+
+func TestPDFNativeCensusAcceptsEmptyLiveOutboxOwnerLock(t *testing.T) {
+	prepared := newPDFTrialFixture(t)
+	defer func() { _ = prepared.release(true) }()
+	initializeCensusRoots(t, prepared)
+	coordinator, err := outbox.OpenCoordinator(prepared.workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	inventory, err := prepared.nativeInventory(t.Context())
+	if err != nil || inventory == nil {
+		t.Fatalf("live outbox owner invalidated census: %v", err)
+	}
+	defer inventory.close()
+	if len(inventory.files) != 0 {
+		t.Fatal("owner lock counted as native task evidence")
 	}
 }

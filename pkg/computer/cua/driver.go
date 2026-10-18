@@ -168,7 +168,9 @@ func (driver *Driver) Capture(ctx context.Context, target computer.Target) (comp
 	windowID, _ := strconv.ParseUint(target.Scope.WindowID, 10, 64)
 	result, err := driver.call(ctx, "get_window_state", map[string]any{
 		"pid": driver.config.PID, "window_id": windowID,
-		"include_screenshot": true, "include_accessibility_tree": true,
+		// The pinned Linux AT-SPI bridge correlates roots by geometry rather
+		// than native window identity. Do not request an unproven subtree.
+		"include_screenshot": true, "include_accessibility_tree": false,
 		"max_elements": 128, "max_depth": 12, "max_image_dimension": 0, "timeout_ms": 1000,
 	})
 	if err != nil {
@@ -177,7 +179,11 @@ func (driver *Driver) Capture(ctx context.Context, target computer.Target) (comp
 	if !driver.config.ScopeAlive(ctx, target.Scope) {
 		return computer.Capture{}, computer.ErrStale
 	}
-	return decodeCapture(result, target.Scope, driver.config.PID, windowID)
+	capture, err := decodeCapture(result, target.Scope, driver.config.PID, windowID)
+	// Defense in depth if the worker ignores the requested projection. Exact
+	// native AX-root attestation is a separate capability, not a PID heuristic.
+	capture.AccessibilityText = ""
+	return capture, err
 }
 
 // call is private to the adapter/qualification tests. It never retries a lost
@@ -228,6 +234,7 @@ type windowState struct {
 	Scale        float64 `json:"screenshot_scale"`
 	MIME         string  `json:"screenshot_mime_type"`
 	FrameValid   bool    `json:"screenshot_frame_valid"`
+	Composited   bool    `json:"screenshot_composited"`
 	Tree         string  `json:"tree_markdown"`
 	WindowBounds struct {
 		X      float64 `json:"x"`
@@ -245,7 +252,8 @@ func decodeCapture(
 		return computer.Capture{}, computer.ErrInvalid
 	}
 	var state windowState
-	if json.Unmarshal(data, &state) != nil || state.PID != pid || state.WindowID != windowID || !state.FrameValid {
+	if json.Unmarshal(data, &state) != nil || state.PID != pid || state.WindowID != windowID ||
+		!state.FrameValid || state.Composited {
 		return computer.Capture{}, computer.ErrStale
 	}
 	// The pinned live platform output may omit screenshot_scale. Derive the

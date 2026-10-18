@@ -218,6 +218,7 @@ type gatewayBrowserToolSource struct {
 	limits              config.BrowserLimitsConfig
 	downloadAvailable   bool
 	handoffProfiles     map[string]struct{}
+	credentialProfiles  map[string]struct{}
 }
 
 func (source *gatewayBrowserToolSource) HandoffAvailable() bool {
@@ -782,6 +783,13 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 	}
 	agentLoop.SetBrowserCapabilityClient(capabilityClient)
 	factories := map[string]agent.RuntimeToolFactory{
+		"browser_login": func(reloadCfg *config.Config) (toolshared.Tool, error) {
+			source, err := sourceFor(reloadCfg)
+			if err != nil {
+				return nil, err
+			}
+			return tools.NewBrowserLoginTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
+		},
 		"browser_targets": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
@@ -840,7 +848,7 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 		},
 	}
 	for _, name := range []string{
-		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_capture",
+		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_capture", "browser_login",
 		"browser_diagnostics", "browser_act", "browser_execute",
 	} {
 		if err := agentLoop.RegisterRuntimeTool(name, factories[name]); err != nil {
@@ -868,9 +876,10 @@ func newGatewayBrowserToolSource(
 		screenshotRetention: browserScreenshotRetention(
 			cfg.Tools.Browser.Limits.Effective().RetentionSecs,
 		),
-		limits:            cfg.Tools.Browser.Limits.Effective(),
-		downloadAvailable: browser.PlaywrightDownloadAvailable(cfg),
-		handoffProfiles:   browserHandoffProfiles(cfg.Tools.Browser),
+		limits:             cfg.Tools.Browser.Limits.Effective(),
+		downloadAvailable:  browser.PlaywrightDownloadAvailable(cfg),
+		handoffProfiles:    browserHandoffProfiles(cfg.Tools.Browser),
+		credentialProfiles: browserCredentialProfiles(cfg.Tools.Browser),
 	}, nil
 }
 

@@ -440,6 +440,12 @@ instead of uploading the private state directory.
 - **`model is required`:** configure a coding-capable model or pass
   `--model <configured-name>`. OpenAI device authentication is available with
   `mintclaw auth login --provider openai --device-code`.
+- **Authentication failed during a turn:** an OAuth access token normally
+  refreshes automatically. If the saved login is no longer usable, follow the
+  sign-in command in the error on the same host and under the same account,
+  then retry in the existing session. API-key routes instead require checking
+  the configured key and provider permissions. MintClaw does not automatically
+  start a login flow or replay a failed turn.
 - **The TUI did not open:** both streams must be terminal files and `TERM` must
   not be `dumb`. Use `mintclaw code exec` intentionally for pipes and scripts.
 - **Colors are hard to read:** set `MINTCLAW_TUI_THEME=light` or `dark`, or use

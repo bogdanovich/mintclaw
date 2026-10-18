@@ -13,7 +13,6 @@ func browserFlowRules() []credentialbroker.AccountRule {
 	rules := testRules()
 	rules[0].Login = &credentialbroker.LoginFlow{
 		NavigationURL: "https://www.facebook.com/login", EntryOrigin: "https://www.facebook.com",
-		FormID: "login", UsernameID: "username", PasswordID: "password", UsernameType: "email",
 		SubmitURL: "https://www.facebook.com/session", SuccessURL: "https://www.facebook.com/home",
 		SuccessMarkerID: "authenticated",
 	}
@@ -59,9 +58,9 @@ func TestSignedApprovalSnapshotsCanonicalFlowAndRetiresOnFlowChange(t *testing.T
 	if err != nil || flow != *browserFlowRules()[0].Login {
 		t.Fatal("canonical browser flow unavailable")
 	}
-	flow.PasswordID = "mutated-return"
-	rules[0].Login.PasswordID = "mutated-input"
-	if copied, copyErr := lease.Flow(ctx, request); copyErr != nil || copied.PasswordID != "password" {
+	flow.SuccessMarkerID = "mutated-return"
+	rules[0].Login.SuccessMarkerID = "mutated-input"
+	if copied, copyErr := lease.Flow(ctx, request); copyErr != nil || copied.SuccessMarkerID != "authenticated" {
 		t.Fatal("caller mutated immutable flow")
 	}
 	other := request

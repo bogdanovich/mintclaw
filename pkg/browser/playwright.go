@@ -1936,11 +1936,15 @@ func (worker *playwrightWorker) uploadLocked(
 		action.Value == "" || !filepath.IsAbs(action.Value) || worker.outputDir == "" {
 		return ErrWorkerUnavailable
 	}
-	stagedPath, cleanup, err := worker.stageUploadArtifact(action)
+	stagedPath, err := worker.stageUploadArtifact(action)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	// setFiles(path) leaves a file-backed File in the page. The site can read
+	// it asynchronously or only when the user later clicks Save. Deleting the
+	// copy when this RPC returns makes those reads fail with NotFoundError.
+	// After dispatch begins, the session owns the copy until its browser stops;
+	// Close removes the private output directory for successful/unknown uploads.
 	if expectedToken != "" {
 		text, checkErr := worker.callAndConsume(
 			ctx,
@@ -2010,7 +2014,7 @@ func playwrightNavigationCheckedUploadCode(
 	return playwrightNavigationCheckedCode(identity, dispatch)
 }
 
-func (worker *playwrightWorker) stageUploadArtifact(action DriverAction) (string, func(), error) {
+func (worker *playwrightWorker) stageUploadArtifact(action DriverAction) (string, error) {
 	filename := action.ArtifactFilename
 	if filename == "" {
 		filename = filepath.Base(action.Value)
@@ -2018,27 +2022,27 @@ func (worker *playwrightWorker) stageUploadArtifact(action DriverAction) (string
 	if filename == "" || filename == "." || filename != filepath.Base(filename) || len(filename) > 255 ||
 		strings.ContainsRune(filename, 0) || !validDigest(action.ArtifactSHA256) || action.ArtifactBytes < 1 ||
 		action.ArtifactBytes > int64(worker.limits.UploadBytes) {
-		return "", func() {}, ErrDenied
+		return "", ErrDenied
 	}
 	source, err := os.Open(action.Value)
 	if err != nil {
-		return "", func() {}, ErrDenied
+		return "", ErrDenied
 	}
 	defer func() { _ = source.Close() }()
 	info, err := source.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() != action.ArtifactBytes {
-		return "", func() {}, ErrDenied
+		return "", ErrDenied
 	}
 	stagingDir, err := os.MkdirTemp(worker.outputDir, "upload-")
 	if err != nil {
-		return "", func() {}, ErrWorkerUnavailable
+		return "", ErrWorkerUnavailable
 	}
 	cleanup := func() { _ = os.RemoveAll(stagingDir) }
 	stagedPath := filepath.Join(stagingDir, filename)
 	staged, err := os.OpenFile(stagedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		cleanup()
-		return "", func() {}, ErrWorkerUnavailable
+		return "", ErrWorkerUnavailable
 	}
 	digest := sha256.New()
 	count, copyErr := io.Copy(io.MultiWriter(staged, digest), io.LimitReader(source, action.ArtifactBytes+1))
@@ -2046,9 +2050,9 @@ func (worker *playwrightWorker) stageUploadArtifact(action DriverAction) (string
 	if copyErr != nil || closeErr != nil || count != action.ArtifactBytes ||
 		hex.EncodeToString(digest.Sum(nil)) != action.ArtifactSHA256 {
 		cleanup()
-		return "", func() {}, ErrDenied
+		return "", ErrDenied
 	}
-	return stagedPath, cleanup, nil
+	return stagedPath, nil
 }
 
 func (worker *playwrightWorker) Download(

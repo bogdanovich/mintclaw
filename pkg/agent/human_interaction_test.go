@@ -1248,10 +1248,10 @@ func TestRecoveredInteractionPromptAdmissionIsAbandonedAfterAgentRemoval(t *test
 		_ = second.Close()
 	})
 	admissions, err := second.Recover()
-	if err != nil || len(admissions) != 1 {
+	if err != nil || len(admissions.Admissions) != 1 {
 		t.Fatalf("Recover() = %+v, %v", admissions, err)
 	}
-	publish, err := al.ReconcileRecoveredInteractionAdmission(admissions[0], time.Now().UTC())
+	publish, err := al.ReconcileRecoveredInteractionAdmission(admissions.Admissions[0], time.Now().UTC())
 	if err != nil || publish {
 		t.Fatalf("orphaned prompt reconciliation = %t, %v", publish, err)
 	}
@@ -1309,10 +1309,10 @@ func TestRecoveredTaskInteractionPromptIsAbandonedAfterOwnerWorkspaceRemoval(t *
 		_ = second.Close()
 	})
 	admissions, err := second.Recover()
-	if err != nil || len(admissions) != 1 {
+	if err != nil || len(admissions.Admissions) != 1 {
 		t.Fatalf("Recover() = %+v, %v", admissions, err)
 	}
-	publish, err := al.ReconcileRecoveredInteractionAdmission(admissions[0], time.Now().UTC())
+	publish, err := al.ReconcileRecoveredInteractionAdmission(admissions.Admissions[0], time.Now().UTC())
 	if err != nil || publish {
 		t.Fatalf("orphaned task prompt reconciliation = %t, %v", publish, err)
 	}
@@ -1415,23 +1415,23 @@ func TestRecoveredInteractionPromptSettlesExactAdmissionReceipt(t *testing.T) {
 		t, coordinator, workspace, record, outbox.StatusDefinitelyFailed, 1,
 	)
 	admissions, err := coordinator.Recover()
-	if err != nil || len(admissions) != 1 {
+	if err != nil || len(admissions.Admissions) != 1 {
 		t.Fatalf("Recover() = %+v, %v", admissions, err)
 	}
 	settled := make(chan error, 1)
 	go func() {
-		settled <- al.SettleRecoveredInteractionAdmission(t.Context(), admissions[0])
+		settled <- al.SettleRecoveredInteractionAdmission(t.Context(), admissions.Admissions[0])
 	}()
-	if err = coordinator.PrepareAdmission(admissions[0].Lease); err != nil {
+	if err = coordinator.PrepareAdmission(admissions.Admissions[0].Lease); err != nil {
 		t.Fatalf("PrepareAdmission() error = %v", err)
 	}
-	if err = coordinator.CommitAdmission(admissions[0].Lease); err != nil {
+	if err = coordinator.CommitAdmission(admissions.Admissions[0].Lease); err != nil {
 		t.Fatalf("CommitAdmission() error = %v", err)
 	}
-	if err = coordinator.BeginAttempt(admissions[0].Intent.ID); err != nil {
+	if err = coordinator.BeginAttempt(admissions.Admissions[0].Intent.ID); err != nil {
 		t.Fatalf("BeginAttempt() error = %v", err)
 	}
-	if err = coordinator.MarkDelivered(admissions[0].Intent.ID, outbox.Outcome{}); err != nil {
+	if err = coordinator.MarkDelivered(admissions.Admissions[0].Intent.ID, outbox.Outcome{}); err != nil {
 		t.Fatalf("MarkDelivered() error = %v", err)
 	}
 	select {

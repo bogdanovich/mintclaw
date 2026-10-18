@@ -2057,6 +2057,15 @@ func (broker *Broker) executePreparedLocked(
 	)
 	defer cancelCompletion()
 	if executeErr != nil || executionContextErr != nil {
+		if executionContextErr == nil && invocation.PreparedActionID != "" && DownloadNotDispatched(executeErr) {
+			prepared, preparedErr := broker.store.GetPreparedAction(completionCtx, invocation.PreparedActionID)
+			if preparedErr == nil && prepared.Action.Kind == ActionDownload {
+				failed, failErr := broker.completeInvocationLocked(
+					completionCtx, invocation, InvocationFailed, nil, "download_not_dispatched",
+				)
+				return diagnoseRecoveredOutcome(failed), failErr
+			}
+		}
 		if executionContextErr == nil && invocation.PreparedActionID != "" && ClickNotDispatched(executeErr) {
 			prepared, preparedErr := broker.store.GetPreparedAction(completionCtx, invocation.PreparedActionID)
 			if preparedErr == nil && prepared.Action.Kind == ActionClick {

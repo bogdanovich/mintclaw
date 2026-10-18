@@ -181,6 +181,68 @@ func TestStandaloneResultOutputProjectsOnlyOneBoundedSucceededResult(t *testing.
 	}
 }
 
+func TestStandaloneResultOutputProjectsOneResultWithReceiptedObjectives(t *testing.T) {
+	for _, kind := range []string{ObjectiveKindExternalAction, ObjectiveKindLiveHandoff} {
+		t.Run(kind, func(t *testing.T) {
+			value := &Deliverable{Text: "Human-readable answer", ObjectiveOutcome: &Outcome{
+				Status: OutcomeSucceeded,
+				CompletedItems: []Item{
+					{Item: "Complete the action", Kind: kind, Receipts: []Receipt{{ID: "runtime-receipt", Kind: kind}}},
+					{Item: "Return data", Kind: ObjectiveKindResult, Output: &ObjectiveOutput{
+						Kind: "records", Records: []map[string]string{{"state": "uploaded"}},
+					}},
+				},
+			}}
+			output := StandaloneResultOutput(value)
+			if output == nil || output.Records[0]["state"] != "uploaded" {
+				t.Fatalf("StandaloneResultOutput() = %#v", output)
+			}
+			output.Records[0]["state"] = "mutated"
+			if value.Text != "Human-readable answer" ||
+				value.ObjectiveOutcome.CompletedItems[1].Output.Records[0]["state"] != "uploaded" {
+				t.Fatal("projection changed the canonical result or human presentation")
+			}
+			for name, mutate := range map[string]func(*Deliverable){
+				"partial":    func(v *Deliverable) { v.ObjectiveOutcome.Status = OutcomePartial },
+				"blocked":    func(v *Deliverable) { v.ObjectiveOutcome.Status = OutcomeBlocked },
+				"missing":    func(v *Deliverable) { v.ObjectiveOutcome.MissingItems = []string{"verification"} },
+				"no receipt": func(v *Deliverable) { v.ObjectiveOutcome.CompletedItems[0].Receipts = nil },
+				"empty receipt ID": func(v *Deliverable) {
+					v.ObjectiveOutcome.CompletedItems[0].Receipts[0].ID = " "
+				},
+				"wrong receipt kind": func(v *Deliverable) {
+					v.ObjectiveOutcome.CompletedItems[0].Receipts[0].Kind = "unverified"
+				},
+				"unknown objective": func(v *Deliverable) { v.ObjectiveOutcome.CompletedItems[0].Kind = "unknown" },
+				"effect with output": func(v *Deliverable) {
+					v.ObjectiveOutcome.CompletedItems[0].Output = v.ObjectiveOutcome.CompletedItems[1].Output
+				},
+				"multiple results": func(v *Deliverable) {
+					v.ObjectiveOutcome.CompletedItems = append(
+						v.ObjectiveOutcome.CompletedItems, v.ObjectiveOutcome.CompletedItems[1],
+					)
+				},
+				"no result":         func(v *Deliverable) { v.ObjectiveOutcome.CompletedItems = v.ObjectiveOutcome.CompletedItems[:1] },
+				"no result payload": func(v *Deliverable) { v.ObjectiveOutcome.CompletedItems[1].Output = nil },
+			} {
+				t.Run(name, func(t *testing.T) {
+					candidate := CloneDeliverable(value)
+					mutate(candidate)
+					if got := StandaloneResultOutput(candidate); got != nil {
+						t.Fatalf("StandaloneResultOutput() = %#v, want nil", got)
+					}
+				})
+			}
+			// The result may precede the effect without changing the projection.
+			items := value.ObjectiveOutcome.CompletedItems
+			items[0], items[1] = items[1], items[0]
+			if output := StandaloneResultOutput(value); output == nil || output.Records[0]["state"] != "uploaded" {
+				t.Fatalf("result-first projection = %#v", output)
+			}
+		})
+	}
+}
+
 func TestNormalizeObjectiveOutputRejectsInvalidKindPayloads(t *testing.T) {
 	for name, output := range map[string]*ObjectiveOutput{
 		"missing":            nil,

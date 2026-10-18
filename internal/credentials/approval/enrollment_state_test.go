@@ -27,6 +27,9 @@ func assertEnrollmentInactive(t *testing.T, controller *Controller) {
 	if controller.ready(context.Background()) || !controller.owner.EnrollmentPending || len(controller.grants) != 0 {
 		t.Fatal("unaccepted registration became active authority")
 	}
+	if _, err := controller.BeginVerification(context.Background()); err == nil {
+		t.Fatal("unaccepted owner key could begin verification")
+	}
 	if controller.Check(context.Background(), "", checkedRequest(controller.policy.Revision())) == nil {
 		t.Fatal("unaccepted owner admitted credential use")
 	}
@@ -107,7 +110,7 @@ func TestRejectedEnrollmentStaysInactiveAndRecoversPrivately(t *testing.T) {
 				t.Fatal("rejected owner proof activated a grant")
 			}
 			assertEnrollmentInactive(t, restarted)
-			// A new protected console action can deliberately replace a pending
+			// A new protected operator action can deliberately replace a pending
 			// candidate. Ordinary phone links never obtain this capability.
 			fresh, err := NewEnrollment(setup)
 			if err != nil {

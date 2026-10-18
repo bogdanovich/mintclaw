@@ -33,6 +33,7 @@ let initialized = false
 let unsubscribeGateway: (() => void) | null = null
 let hydratePromise: Promise<void> | null = null
 let connectionGeneration = 0
+let sessionSelectionGeneration = 0
 let reconnectTimer: number | null = null
 let reconnectAttempts = 0
 let shouldMaintainConnection = false
@@ -267,8 +268,11 @@ export async function hydrateActiveSession() {
     return
   }
 
-  hydratePromise = loadSessionMessages(storedSessionId)
+  const hydration: Promise<void> = loadSessionMessages(storedSessionId)
     .then((historyMessages) => {
+      if (hydratePromise !== hydration) {
+        return
+      }
       const currentState = getChatState()
       if (currentState.activeSessionId !== storedSessionId) {
         return
@@ -292,6 +296,9 @@ export async function hydrateActiveSession() {
       })
     })
     .catch((error) => {
+      if (hydratePromise !== hydration) {
+        return
+      }
       console.error("Failed to restore last session history:", error)
 
       const currentState = getChatState()
@@ -312,10 +319,13 @@ export async function hydrateActiveSession() {
       })
     })
     .finally(() => {
-      hydratePromise = null
+      if (hydratePromise === hydration) {
+        hydratePromise = null
+      }
     })
 
-  return hydratePromise
+  hydratePromise = hydration
+  return hydration
 }
 
 interface SendChatMessageInput {
@@ -342,6 +352,7 @@ export function sendChatMessage({
   }
 
   const socket = wsRef
+  const previousTyping = getChatState().isTyping
   const id = `msg-${++msgIdCounter}-${Date.now()}`
 
   updateChatStore((prev) => ({
@@ -377,19 +388,23 @@ export function sendChatMessage({
     console.error("Failed to send mintclaw message:", error)
     updateChatStore((prev) => ({
       messages: prev.messages.filter((message) => message.id !== id),
-      isTyping: false,
+      isTyping: previousTyping,
     }))
     return false
   }
 }
 
 export async function switchChatSession(sessionId: string) {
+  const generation = ++sessionSelectionGeneration
   if (sessionId === activeSessionIdRef) {
     return
   }
 
   try {
     const historyMessages = await loadSessionMessages(sessionId)
+    if (generation !== sessionSelectionGeneration) {
+      return
+    }
 
     disconnectChatInternal({ clearDesiredConnection: false })
     setActiveSessionId(sessionId)
@@ -405,12 +420,16 @@ export async function switchChatSession(sessionId: string) {
       await connectChat()
     }
   } catch (error) {
+    if (generation !== sessionSelectionGeneration) {
+      return
+    }
     console.error("Failed to load session history:", error)
     toast.error(i18n.t("chat.historyOpenFailed"))
   }
 }
 
 export async function newChatSession() {
+  sessionSelectionGeneration += 1
   if (getChatState().messages.length === 0) {
     return
   }
@@ -477,6 +496,8 @@ export function initializeChatStore() {
 }
 
 export function teardownChatStore() {
+  sessionSelectionGeneration += 1
+  hydratePromise = null
   unsubscribeGateway?.()
   unsubscribeGateway = null
   initialized = false

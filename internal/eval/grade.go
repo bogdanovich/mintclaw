@@ -60,7 +60,11 @@ func Grade(
 	if err != nil || original.Version != Version || !original.Complete || original.Mode != "run" ||
 		!validID(original.ID) || original.PresetID != preset.ID || len(original.Trials) == 0 ||
 		len(original.Trials) > MaxCorpusCases || original.Repeat < 0 || original.Repeat > MaxRepeat ||
-		credentialJSONValue(original, filter) || !original.TargetLifecycle.valid() {
+		credentialJSONValue(
+			original,
+			filter,
+		) || !original.TargetLifecycle.valid() || !original.WorkspaceInputs.valid() ||
+		!original.PrivateSurfaces.valid() || original.PrivateSurfaces != nil && original.PrivateSurfaces.LeakObserved {
 		return RunReport{}, ErrGrade
 	}
 	repeat := original.Repeat
@@ -120,6 +124,8 @@ func Grade(
 		Repeat: original.Repeat,
 		Trials: []TrialSummary{}, Coverage: map[Verdict]int{}, Usage: "unknown", Cleanup: "no_target_or_tool_work",
 		TargetLifecycle: original.TargetLifecycle,
+		WorkspaceInputs: original.WorkspaceInputs,
+		PrivateSurfaces: original.PrivateSurfaces,
 	}
 	writer, err := newPrivateReport(options.OutputParent, home, workspace, result.ID)
 	if err != nil {
@@ -172,7 +178,11 @@ func Grade(
 			return result, ErrReport
 		}
 	}
-	result.Verdict = combineVerdicts(result.Verdict, original.TargetLifecycle.verdict())
+	result.Verdict = combineVerdicts(
+		result.Verdict,
+		original.TargetLifecycle.verdict(),
+		original.PrivateSurfaces.verdict(),
+	)
 	result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 	result.Complete = true
 	if writer.finish(result) != nil {

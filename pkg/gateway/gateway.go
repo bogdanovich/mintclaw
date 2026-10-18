@@ -1072,10 +1072,21 @@ func setupAndStartServicesWithHooks(
 	if err = checkpoint(gatewayStartupOutboundOutboxOpened); err != nil {
 		return nil, err
 	}
-	recoveredOutbound, err := outboundOutbox.Recover()
+	outboundRecovery, err := outboundOutbox.Recover()
 	if err != nil {
 		return nil, fmt.Errorf("error recovering outbound outbox: %w", err)
 	}
+	if len(outboundRecovery.Issues) > 0 {
+		logger.WarnCF(
+			"gateway",
+			"Outbox recovery isolated blocked delivery records; repair is required",
+			map[string]any{
+				"isolated_count": len(outboundRecovery.Issues),
+				"issues":         outboundRecovery.Issues[:min(len(outboundRecovery.Issues), 10)],
+			},
+		)
+	}
+	recoveredOutbound := outboundRecovery.Admissions
 	if err = checkpoint(gatewayStartupOutboundOutboxRecovered); err != nil {
 		return nil, err
 	}
@@ -1137,7 +1148,9 @@ func setupAndStartServicesWithHooks(
 		listenAddr,
 		runningServices.HealthServer,
 	)
-	runningServices.Credentials, err = setupCredentialRuntime(cfg, authToken, runningServices.ChannelManager)
+	runningServices.Credentials, err = setupCredentialRuntime(
+		cfg, authToken, runningServices.ChannelManager, credentialNotificationPublisher(msgBus),
+	)
 	if err != nil {
 		return nil, errCredentialsUnavailable
 	}
@@ -1183,6 +1196,9 @@ func setupAndStartServicesWithHooks(
 	}
 	if err = setupBrowserTools(cfg, agentLoop, runningServices); err != nil {
 		return nil, fmt.Errorf("error setting up browser tools: %w", err)
+	}
+	if err = setupCredentialTools(cfg, agentLoop, runningServices); err != nil {
+		return nil, errors.New("credential tool setup unavailable")
 	}
 	if err = checkpoint(gatewayStartupBrowserToolsReady); err != nil {
 		return nil, err

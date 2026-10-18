@@ -345,18 +345,19 @@ func (tool *DocumentTool) continueFormIntake(
 		if pending == reference {
 			intake.Intent = result.intent
 		}
-		intake.Findings = append(intake.Findings, result.findings...)
 		if processErr != nil {
 			intake.Failure = &safeDocumentFormFailure{
 				Code:    "intake_pending",
 				Message: "Some protected input remains pending. Accepted fields are preserved; retry or clarify without repeating them.",
 				Stage:   result.failureStage,
+				Reason:  documentFormIntakeFailureReason(processErr),
 			}
 			if errors.Is(processErr, document.ErrFormEditableOutputUnavailable) {
 				intake.Failure = &safeDocumentFormFailure{
 					Code:    "editable_output_unavailable",
 					Message: "Verified editable output is unavailable for this job. Protected input and accepted fields are preserved; continue complete filling or cancel. No draft was produced.",
 					Stage:   result.failureStage,
+					Reason:  "editable_output_unavailable",
 				}
 			}
 			// A retained older error must not suppress a later admitted control or
@@ -368,15 +369,49 @@ func (tool *DocumentTool) continueFormIntake(
 		return documentFormToolError(document.ErrFormJobConflict)
 	}
 	intake.Progress = *progress
-	if len(intake.Findings) > document.MaxFormIntakeCandidates {
-		intake.FindingsTruncated = true
-		intake.Findings = intake.Findings[:document.MaxFormIntakeCandidates]
+	// A later input may settle earlier findings in this same atomic ledger.
+	// Project current native state, not the earlier intermediate pass results.
+	for _, pending := range references {
+		current, readErr := tool.formJobs.ReadFormIntakeInput(ctx, pending, owner)
+		if readErr != nil {
+			return documentFormToolError(readErr)
+		}
+		for _, finding := range current.Findings {
+			if len(intake.Findings) < document.MaxFormIntakeCandidates {
+				intake.Findings = append(intake.Findings, finding)
+			} else {
+				intake.FindingsTruncated = true
+			}
+		}
+	}
+	if progress.PendingInputs == 0 {
+		intake.Failure = nil
 	}
 	record, err := tool.formJobs.Get(ctx, input.JobID, owner)
 	if err != nil {
 		return documentFormToolError(err)
 	}
 	return tool.formIntakeResult(ctx, owner, schema, record, "continue", intake)
+}
+
+// Never project err.Error(): private provider/native wrappers can contain input.
+// These closed categories explain a processing failure, not missing field data
+// or permission to retry, discard protected input, change scope or commit.
+func documentFormIntakeFailureReason(err error) string {
+	switch {
+	case errors.Is(err, document.ErrFormJobCapacityExceeded):
+		return "capacity_exceeded"
+	case errors.Is(err, document.ErrFormJobAnswerConflict):
+		return "answer_rejected"
+	case errors.Is(err, document.ErrFormJobConflict):
+		return "state_changed"
+	case errors.Is(err, document.ErrFormAuditUnavailable):
+		return "interpretation_unavailable"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "interrupted"
+	default:
+		return "unavailable"
+	}
 }
 
 type formIntakeProcessedInput struct {
@@ -393,7 +428,13 @@ func (tool *DocumentTool) processFormIntakeInput(
 	progress document.FormIntakeProgress, reference, trigger string,
 ) (formIntakeProcessedInput, error) {
 	var result formIntakeProcessedInput
+	result.failureStage = "input"
+	retained, retainedErr := tool.formJobs.ReadFormIntakeInput(ctx, reference, owner)
+	if retainedErr != nil {
+		return result, retainedErr
+	}
 	windows := formIntakeCandidateWindows(schema, progress.Context.CandidateFieldIDs)
+	prioritizeFormIntakeFindingWindows(windows, retained.Findings)
 	for _, ids := range windows {
 		result.failureStage = "input"
 		input, err := tool.formJobs.ReadFormIntakeInput(ctx, reference, owner)
@@ -539,6 +580,29 @@ func (tool *DocumentTool) processFormIntakeInput(
 	result.findings = input.Findings
 	result.failureStage = ""
 	return result, nil
+}
+
+// A clarification must reach known blockers before unrelated traversal spends
+// the remaining persisted budget. Reorder whole existing windows only: their
+// candidate, page, reservation and apply bindings are unchanged.
+func prioritizeFormIntakeFindingWindows(windows [][]string, findings []document.FormFieldMappingBlocker) {
+	if len(findings) == 0 {
+		return
+	}
+	slices.SortStableFunc(windows, func(first, second []string) int {
+		firstFinding, secondFinding := false, false
+		for _, finding := range findings {
+			firstFinding = firstFinding || slices.Contains(first, finding.FieldID)
+			secondFinding = secondFinding || slices.Contains(second, finding.FieldID)
+		}
+		if firstFinding == secondFinding {
+			return 0
+		}
+		if firstFinding {
+			return -1
+		}
+		return 1
+	})
 }
 
 // Windows are structural batches, not a semantic planner. Hash-sorted field

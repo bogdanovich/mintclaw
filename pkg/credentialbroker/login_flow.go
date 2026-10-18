@@ -18,10 +18,6 @@ var (
 type LoginFlow struct {
 	NavigationURL   string `json:"navigation_url"`
 	EntryOrigin     string `json:"entry_origin"`
-	FormID          string `json:"form_id"`
-	UsernameID      string `json:"username_id"`
-	PasswordID      string `json:"password_id"`
-	UsernameType    string `json:"username_type"`
 	SubmitURL       string `json:"submit_url"`
 	SuccessURL      string `json:"success_url"`
 	SuccessMarkerID string `json:"success_marker_id"`
@@ -35,13 +31,9 @@ type LoginFlow struct {
 func NormalizeLoginFlow(flow LoginFlow, origins []string) (LoginFlow, error) {
 	entry, err := credentialOrigin(flow.EntryOrigin)
 	if err != nil || len(origins) == 0 || len(origins) > MaxOriginsPerAccount || !slices.Contains(origins, entry) ||
-		!htmlIDPattern.MatchString(flow.FormID) || !htmlIDPattern.MatchString(flow.UsernameID) ||
-		!htmlIDPattern.MatchString(flow.PasswordID) || flow.FormID == flow.UsernameID ||
-		flow.FormID == flow.PasswordID || flow.UsernameID == flow.PasswordID ||
 		!htmlIDPattern.MatchString(flow.SuccessMarkerID) ||
 		(flow.HandoffURL == "") != (flow.HandoffMarkerID == "") ||
-		(flow.HandoffMarkerID != "" && !htmlIDPattern.MatchString(flow.HandoffMarkerID)) ||
-		(flow.UsernameType != "text" && flow.UsernameType != "email") {
+		(flow.HandoffMarkerID != "" && !htmlIDPattern.MatchString(flow.HandoffMarkerID)) {
 		return LoginFlow{}, ErrInvalidPolicy
 	}
 	flow.EntryOrigin = entry

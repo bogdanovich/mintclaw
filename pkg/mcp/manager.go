@@ -715,6 +715,11 @@ func (m *Manager) CallTool(
 
 	result, err := conn.Session.CallTool(ctx, params)
 	if err != nil {
+		// Decode failures can contain arbitrary response text, including text
+		// resembling session loss. Classify them before transport compatibility.
+		if malformedCallResponse(err) {
+			return nil, &CallTransportError{Err: err}
+		}
 		if shouldReconnectCallError(err) {
 			logger.WarnCF("mcp", "MCP server session was lost during tool call, recovering session",
 				map[string]any{
@@ -758,12 +763,7 @@ func listServerTools(
 
 	for tool, err := range session.Tools(ctx, nil) {
 		if err != nil {
-			logger.WarnCF("mcp", "Error listing tool",
-				map[string]any{
-					"server": name,
-					"error":  err.Error(),
-				})
-			continue
+			return nil, fmt.Errorf("list tools for MCP server %q: %w", name, err)
 		}
 		tools = append(tools, tool)
 	}
@@ -775,29 +775,6 @@ func listServerTools(
 		})
 
 	return tools, nil
-}
-
-func shouldReconnectCallError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, mcp.ErrSessionMissing) {
-		return true
-	}
-	message := strings.ToLower(err.Error())
-	if strings.Contains(message, mcp.ErrSessionMissing.Error()) {
-		return true
-	}
-
-	// Stdio MCP servers can disappear after a config reload or an external
-	// process failure. The SDK wraps the underlying pipe error in a
-	// "client is closing" error rather than ErrSessionMissing, so recognize
-	// the concrete closed-transport forms too and reconnect once.
-	return strings.Contains(message, "client is closing") ||
-		strings.Contains(message, "connection closed") ||
-		strings.Contains(message, "file already closed") ||
-		strings.Contains(message, "broken pipe") ||
-		strings.Contains(message, "unexpected eof")
 }
 
 func (m *Manager) reconnectServer(
