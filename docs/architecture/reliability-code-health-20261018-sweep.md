@@ -1,6 +1,7 @@
 # Reliability And Code Health — Second Sweep
 
-Status: assessment complete; proposed implementation work awaits owner selection.
+Status: S1 and S2 are implemented and merged. S3 remains conditional; S4 and S5
+retain their existing qualification owners and measured follow-up triggers.
 
 The modular runtime remains a sound foundation. This sweep found two reproducible
 correctness defects and a concrete opportunity to reduce duplicated private login
@@ -27,15 +28,52 @@ the test results remain attributed to the frozen review snapshot.
 
 | ID | Priority | Improvement | Evidence and disposition |
 | --- | --- | --- | --- |
-| S1 | High | Preserve unresolved native computer cleanup through status and finalization | Reproduced defect; first correctness PR |
-| S2 | Medium | Correct fixed-alias login event ordering and share private fill primitives | Reproduced compatibility defect; focused fix with a bounded extraction |
+| S1 | High | Preserve unresolved native computer cleanup through status and finalization | Merged in [#1778](https://github.com/bogdanovich/mintclaw/pull/1778); cleanup failure remains unresolved until confirmed |
+| S2 | Medium | Correct fixed-alias login event ordering and share private fill primitives | Merged in [#1781](https://github.com/bogdanovich/mintclaw/pull/1781); shared sequential private fill |
 | S3 | Medium, conditional | Share repeated eval report-finalization mechanics | Source-backed maintenance candidate; preserve domain evidence checks and extract during related work |
 | S4 | High, existing owner | Finish approval-wait and behavioral qualification | Link existing credential/eval programs; avoid a second implementation queue |
 | S5 | Medium, carried forward | Revisit storage budgets and dependency exceptions on their stated triggers | Preserve first-sweep measurements and November 17 expiry; no new backend project |
-| S6 | Low | Correct architecture navigation status | Addressed with this assessment: the first roadmap is complete and this sweep is a proposal |
+| S6 | Low | Correct architecture navigation status | Assessment and navigation published in [#1773](https://github.com/bogdanovich/mintclaw/pull/1773); implementation disposition now recorded |
 
-S1 and S2 are separate review units. S3 is not a prerequisite for either fix.
-Implementation selection and operational rollout remain separate decisions.
+The owner selected S1 and S2 for implementation as separate review units. Both
+are merged; no deployment or real-account rollout was performed. S3 remains a
+candidate for the next related change, and S4/S5 keep their existing owners.
+
+## Implementation Delivery
+
+The defect analysis and original probes below describe the frozen review
+snapshot. The following commits contain the corrections and permanent regression
+tests; the original expected-failure probes remain historical evidence.
+
+| Fix | Reviewed head | Merge commit |
+| --- | --- | --- |
+| S1 / [#1778](https://github.com/bogdanovich/mintclaw/pull/1778) | `be42e21d1ce8a4400124e23592b125e4913a5688` | `5a4f03746b07e64743c516df7d62f0843caaff91` |
+| S2 / [#1781](https://github.com/bogdanovich/mintclaw/pull/1781) | `624ba71504bab0cd2402e519da3c792d064adf98` | `468c30c938109de9b5ee0cf9f98da7980efb8819` |
+
+S1 joins the existing native cleanup error into terminal status. It retains the
+current control state machine. Six worker/observer release/loss/expiry cases
+first failed against the old host and then passed with the fix. A composed
+public-tool/gateway regression verifies that release, cached status, finalization,
+receipts and shutdown cannot acknowledge unresolved cleanup. Successful status
+later reconciles the original cleanup without another release, replacement or
+capture. The surrounding computer/native/companion suites and gateway/tool
+selections passed; native, gateway and tool race selections also passed. The
+broader gateway race selection took 243.471 seconds after an initial four-minute
+local cap; no assertion or CI timeout was changed. Root formatting and full lint
+passed.
+
+S2 removes the duplicate alias fill sequence and reuses the generic path's
+private per-field input/change/recheck/submit operation. Each path retains its
+own admission and authentication-evidence rules. Both new alias event regressions
+first failed and then passed, alongside the generic control. The direct Node
+suite completed 43 tests: 41 passed and two Linux-only startup cases skipped on
+macOS. Full Go browser/secret-value suites and synthetic gateway/browser flows
+through both provider adapters passed, including the integrated race selection.
+Both PRs completed CI and current-head review before merge.
+
+This closes the two selected correctness fixes. It does not complete the live
+credential/evaluation programs, authorize a broad eval framework extraction, or
+change the retained storage and dependency follow-ups.
 
 ## S1: Terminal Computer Status Hides Failed Worker Cleanup
 
@@ -173,7 +211,7 @@ security audit or an instruction to force major dependency upgrades.
   substantial in this change set, and the two findings identify specific missing
   cases rather than a reason to replace the test strategy.
 
-## Validation And Scope Limits
+## Assessment Validation And Scope Limits
 
 On Intel macOS with Go 1.26.9, the following local runs passed:
 
@@ -201,5 +239,7 @@ their expected failures are not failures of those existing suites.
 These checks cover nine Go packages with the selections above, not the full Go
 suite, race matrix, frontend suite or deployed Linux qualification. No production
 service, credential, real account, GUI application or paid model trial was used.
-This documentation publication implements no runtime fix. The completed first
-goal stays complete; this assessment supplies the next decision.
+The initial assessment publication (#1773) contained no runtime fix. The
+implementation delivery above records the subsequently authorized S1/S2 work;
+these original assessment results remain attributed to their frozen snapshot.
+The completed first goal stays complete.
