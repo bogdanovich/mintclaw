@@ -1,6 +1,8 @@
 # Website-discovered browser credentials
 
-Status: D0–D3 delivered on 2026-10-18; owner's Facebook pilot D4 pending.
+Status: D0–D3 delivered on 2026-10-18; the first owner-approved Facebook attempt
+found the Login but ended unknown. The reviewed continuation fix is merged;
+D4 still requires fresh authentication evidence.
 This replaces the requirement to
 preconfigure each browser account's item UUID, allowed origins and site-specific
 success markers. The new path is reviewed, qualified and deployed; see the
@@ -49,6 +51,11 @@ model arguments/results or ordinary logs/traces/artifacts. Do not print an item
 or use a model-facing `op item get`. Missing or ambiguous TOTP, SMS/email codes,
 CAPTCHA, approval on another device and unsupported forms require an explicit
 safe handoff; do not bypass them or repeatedly submit uncertain attempts.
+
+The owner explicitly permits an SMS challenge code in ordinary chat. Such a
+code is visible to the model provider and history; this is separate from the
+private guarantee for vault passwords and stored TOTP. Use the normal current
+challenge and browser action checks, never request a vault password or token.
 
 A successful submission is not proof of authentication. Return a bounded
 submission/continuation outcome and inspect a fresh protected observation to
