@@ -84,6 +84,9 @@ type FormIntakeMessageRequest struct {
 // FormIntakeInput is an ephemeral protected read. Even accidental ordinary JSON
 // serialization cannot expose its utterance or interpretation context.
 type FormIntakeInput struct {
+	// AdmissionOrder is the immutable, one-based position in the native mode.
+	// It is private interpretation context, never write or semantic authority.
+	AdmissionOrder int `json:"-"`
 	// AdmittedRevision is the immutable origin, not current write authority.
 	AdmittedRevision int64 `json:"-"`
 	// DialogIntent is derived from the last committed private pass, never approval.

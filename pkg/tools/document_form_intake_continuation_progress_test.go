@@ -161,6 +161,7 @@ func TestDocumentFormIntakeAcceptedClarificationAndExhaustedOlderInputHaveSepara
 			got := decodeWorkflowResult(t, result.ForLLM)
 			if result.IsError || got.Intake == nil || got.Intake.Failure == nil ||
 				got.Intake.Failure.Reason != "capacity_exceeded" || got.Intake.AcceptedCount != 1 ||
+				len(got.Intake.AcceptedFields) != 1 || got.Intake.AcceptedFields[0].FieldID != target ||
 				got.Intake.Progress.PendingInputs != 1 || got.Intake.ReceivedInputState != "accounted" ||
 				got.Intake.RetainedFindingCount != 1 {
 				t.Fatal("accepted clarification was conflated with retained older failure")

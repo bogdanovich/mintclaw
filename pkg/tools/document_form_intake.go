@@ -16,21 +16,24 @@ import (
 )
 
 type safeDocumentFormIntake struct {
-	Progress             document.FormIntakeProgress        `json:"progress"`
-	RequestRevision      int64                              `json:"request_revision,omitempty"`
-	Question             string                             `json:"question,omitempty"`
-	Summary              string                             `json:"form_summary,omitempty"`
-	Plan                 string                             `json:"collection_plan,omitempty"`
-	AcceptedCount        int                                `json:"accepted_count"`
-	AcknowledgedCount    int                                `json:"acknowledged_count"`
-	ScopedCount          int                                `json:"scoped_count,omitempty"`
-	Findings             []document.FormFieldMappingBlocker `json:"findings,omitempty"`
-	FindingFields        []safeDocumentFormField            `json:"finding_fields,omitempty"`
-	Intent               document.FormIntakeDialogIntent    `json:"intent,omitempty"`
-	FindingsTruncated    bool                               `json:"findings_truncated,omitempty"`
-	Failure              *safeDocumentFormFailure           `json:"failure,omitempty"`
-	ReceivedInputState   string                             `json:"received_input_state,omitempty"`
-	RetainedFindingCount int                                `json:"retained_finding_count,omitempty"`
+	Progress                document.FormIntakeProgress `json:"progress"`
+	RequestRevision         int64                       `json:"request_revision,omitempty"`
+	Question                string                      `json:"question,omitempty"`
+	Summary                 string                      `json:"form_summary,omitempty"`
+	Plan                    string                      `json:"collection_plan,omitempty"`
+	AcceptedCount           int                         `json:"accepted_count"`
+	AcceptedFields          []safeDocumentFormField     `json:"accepted_fields,omitempty"`
+	AcceptedFieldsTruncated bool                        `json:"accepted_fields_truncated,omitempty"`
+	acceptedIDs             []string
+	AcknowledgedCount       int                                `json:"acknowledged_count"`
+	ScopedCount             int                                `json:"scoped_count,omitempty"`
+	Findings                []document.FormFieldMappingBlocker `json:"findings,omitempty"`
+	FindingFields           []safeDocumentFormField            `json:"finding_fields,omitempty"`
+	Intent                  document.FormIntakeDialogIntent    `json:"intent,omitempty"`
+	FindingsTruncated       bool                               `json:"findings_truncated,omitempty"`
+	Failure                 *safeDocumentFormFailure           `json:"failure,omitempty"`
+	ReceivedInputState      string                             `json:"received_input_state,omitempty"`
+	RetainedFindingCount    int                                `json:"retained_finding_count,omitempty"`
 }
 
 // ProtectedFormIntakeConfigured gates fresh-message admission on the explicit
@@ -297,6 +300,25 @@ func (tool *DocumentTool) formIntakeResult(
 		return documentFormToolFailure("protected_store_unavailable", "form intake progress is unavailable")
 	}
 	projection.Intake = &intake
+	for _, field := range schema.Fields {
+		if !slices.Contains(intake.acceptedIDs, field.ID) {
+			continue
+		}
+		// Aggregate acceptance is not proof of a particular current field.
+		// Only name a newly accepted ID that still has a strong native value.
+		if !slices.ContainsFunc(record.Fields, func(state document.FormJobFieldState) bool {
+			return state.FieldID == field.ID && state.State == document.FormValueConfirmed &&
+				state.Source == document.FormValueSourceUser && state.Validation == document.FormValueValidationValid &&
+				state.Confidence != document.FormValueConfidenceLow
+		}) {
+			continue
+		}
+		if len(intake.AcceptedFields) == document.MaxFormIntakeCandidates {
+			intake.AcceptedFieldsTruncated = true
+			break
+		}
+		intake.AcceptedFields = append(intake.AcceptedFields, *documentFormFieldProjection(field, ""))
+	}
 	for _, finding := range intake.Findings {
 		if len(intake.FindingFields) == document.MaxFormIntakeCandidates {
 			break
@@ -363,6 +385,7 @@ func (tool *DocumentTool) continueFormIntake(
 	for _, pending := range references {
 		result, processErr := tool.processFormIntakeInput(ctx, owner, schema, *progress, pending, reference)
 		intake.AcceptedCount += result.accepted
+		intake.acceptedIDs = append(intake.acceptedIDs, result.acceptedIDs...)
 		intake.AcknowledgedCount += result.acknowledged
 		intake.ScopedCount += result.scoped
 		if pending == reference {
@@ -469,6 +492,7 @@ func documentFormIntakeFailureReason(err error) string {
 }
 
 type formIntakeProcessedInput struct {
+	acceptedIDs  []string
 	accepted     int
 	acknowledged int
 	scoped       int
@@ -630,6 +654,7 @@ func (tool *DocumentTool) processFormIntakeInput(
 				return result, err
 			}
 			result.accepted += len(applied.AcceptedFieldIDs)
+			result.acceptedIDs = append(result.acceptedIDs, applied.AcceptedFieldIDs...)
 			result.acknowledged += len(applied.AcknowledgedIDs)
 			result.scoped += len(applied.ScopedFieldIDs)
 			result.intent = proposal.Intent
