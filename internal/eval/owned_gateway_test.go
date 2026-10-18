@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,9 +30,11 @@ import (
 )
 
 type ownedGatewayControl struct {
-	Mode      string `json:"mode"`
-	ParentPID int    `json:"parent_pid"`
-	LateValue string `json:"late_value,omitempty"`
+	Mode              string `json:"mode"`
+	ParentPID         int    `json:"parent_pid"`
+	LateValue         string `json:"late_value,omitempty"`
+	CrossTrialValue   string `json:"cross_trial_value,omitempty"`
+	UncorrelatedMedia bool   `json:"uncorrelated_media,omitempty"`
 }
 
 // The test binary accepts the same literal gateway command as the product.
@@ -111,6 +114,9 @@ func runOwnedGatewayTestChild() int {
 		GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
 	}
 	var first atomic.Bool
+	var mediaSent atomic.Bool
+	var sessionMu sync.Mutex
+	firstSession := ""
 	upgrader := websocket.Upgrader{}
 	server := &http.Server{
 		ReadHeaderTimeout: time.Second,
@@ -145,6 +151,39 @@ func runOwnedGatewayTestChild() int {
 					entries, _ := os.ReadDir(filepath.Join(home, "reports"))
 					if len(entries) == 1 {
 						_ = os.Mkdir(filepath.Join(home, "reports", entries[0].Name(), "summary.md"), 0o700)
+					}
+				}
+				sessionMu.Lock()
+				if firstSession == "" {
+					firstSession = request.SessionID
+				}
+				crossTrial := firstSession != request.SessionID
+				sessionMu.Unlock()
+				if crossTrial && control.CrossTrialValue != "" {
+					if connection.WriteJSON(protocol.MintClawMessage{
+						Type:    protocol.TypePong,
+						Payload: map[string]any{"auxiliary": control.CrossTrialValue},
+					}) != nil {
+						return
+					}
+				}
+				if control.UncorrelatedMedia && mediaSent.CompareAndSwap(false, true) {
+					if connection.WriteJSON(protocol.MintClawMessage{
+						Type: protocol.TypeMessageCreate, SessionID: request.SessionID,
+						Payload: map[string]any{
+							protocol.PayloadKeyMessageID: "synthetic-media-message",
+							protocol.PayloadKeyAgentID:   "main", protocol.PayloadKeySessionKey: "eval-session-key",
+							protocol.PayloadKeyDeliveryID: "unsettled-delivery",
+							"attachments": []any{
+								map[string]any{
+									"type":         "file",
+									"content_type": "application/pdf",
+									"url":          "/mintclaw/media/unbound-control",
+								},
+							},
+						},
+					}) != nil {
+						return
 					}
 				}
 				response := testResponse(request, 1)

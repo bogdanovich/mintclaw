@@ -248,6 +248,11 @@ func runAdmittedTrial(
 	}
 	var domain *pdfConversation
 	options := gatewayclient.Options{InspectFrame: func(data []byte) error {
+		// The previous client's Close joins its inspector before the serial run
+		// adds new facts. Late frames must also respect earlier trial canaries.
+		if runOptions.StartTarget {
+			return inspectNativeJSON(data, retainedFacts.values, roles.filter)
+		}
 		return inspectNativeJSON(data, item.Case.Driver.Facts, roles.filter)
 	}}
 	if item.Case.PDF != nil {
@@ -259,7 +264,8 @@ func runAdmittedTrial(
 		}
 		domain = &pdfConversation{prepared: prepared, artifacts: &pdfArtifactCollector{
 			config: target.config, python: runOptions.PDFOraclePython, retain: report.retainPDFArtifact,
-		}}
+		}, wire: &pdfWireObservation{workspace: target.preset.ExpectedWorkspace}}
+		options.ObserveMessage = domain.wire.observe
 		prepared.filter = roles.filter
 		if runOptions.StartTarget && !retainedFacts.add(prepared.item.Case.Driver.Facts) {
 			_ = prepared.release(true)
@@ -291,6 +297,9 @@ func runAdmittedTrial(
 	if domain != nil {
 		trial = runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, domain)
+		// Conversation return has joined the reader, including in-flight media
+		// observations that need not have entered the conversation queue.
+		domain.concludeWire(&trial, client.Failure() == nil)
 		if runOptions.StartTarget && trial.PDF != nil && trial.PDF.Settlement != nil &&
 			trial.PDF.Artifact != nil && trial.PDF.Artifact.File != "" {
 			retainedFacts.documents[trial.PDF.Settlement.ArtifactSHA256] = true

@@ -178,6 +178,33 @@ surfaces/resources are private and closed. No required PDF check becomes passing
 observation that races unfinished native settlement remains inconclusive; it never replays input or cancels a job.
 The test controls drive the native registry/store/journal/outbox state machines but do not run a PDF worker or model.
 
+## Client Media Observation
+
+The shared client can observe decoded messages in its sole reader after raw privacy inspection and before queueing
+or heartbeat discard. PDF runs capture a bounded projection of attachments even when the message has no request ID.
+The observer never retains captions, filenames or complete protocol maps. `Close` joins the reader before the PDF
+adapter examines the projection, including a message admitted beside a final reply or during local closure.
+
+`pdf.wire` binds the observed platform message ID, delivery ID, session/agent/route and exact native artifact download
+path to `pdf.settlement`. Its `native_bound_client_media_v1` scope covers only that client connection through local
+closure. A matching artifact in two different logical message IDs fails; an identical repeated message ID is one
+logical observation. Conflicting metadata for the bound message or a witnessed binding mismatch is a hard failure.
+Limits are 16 unique media messages, 16 distinct metadata variants per ID and 16 attachments per variant, with bounded
+identity/URL/type fields. Identical retries do not consume the variant budget. All retained variants contribute to
+duplicate detection; conflicting repeats cannot hide an already observed delivery. Malformed,
+missing, unbound, limited or incomplete evidence remains unavailable; a known duplicate still fails despite a limit.
+
+The receipt exports only scope, completion, counts, code and a native-bound message ID. It never follows a URL from
+the wire: authenticated download still uses only the admitted gateway and native artifact reference below.
+No native receipt or downloaded PDF can substitute for the actual wire message. Conversely, one observed message
+does not establish no future duplicate delivery, PDF content, whole-runtime privacy or cleanup; required checks and
+PDF regrade eligibility remain pending until the other independent witnesses are complete.
+
+Owned runs inspect every admitted raw frame against the retained union of all resolved PDF trial facts, including
+values from earlier trials and discarded pongs. The serial run adds facts only after the previous client's reader
+has joined. A later general trial therefore cannot hide an earlier PDF canary in an ignored frame. This is a raw
+client-frame guard, not a claim that all role inputs or every runtime surface have complete privacy coverage.
+
 ## Authenticated Artifact Checks
 
 The runner derives the download endpoint from its admitted local gateway and native media reference, never a URL

@@ -36,6 +36,7 @@ type pdfConversation struct {
 	censusOwner           *document.Authority
 	ordinary              *questionConversation
 	protectedCancel       *pdfCancellationObservation
+	wire                  *pdfWireObservation
 }
 
 func (domain *pdfConversation) initialTask() string { return domain.prepared.task }
