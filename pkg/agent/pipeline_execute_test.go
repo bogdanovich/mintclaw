@@ -3071,7 +3071,11 @@ type delayedSteering struct {
 	messages []providers.Message
 }
 
-func (s *delayedSteering) dequeueSteeringMessagesForTurn(runtimeSessionScope, string) []providers.Message {
+func (s *delayedSteering) dequeueSteeringMessagesForTurn(
+	runtimeSessionScope,
+	string,
+	*bus.InboundContext,
+) []providers.Message {
 	s.polls++
 	if s.polls < 2 {
 		return nil
@@ -3084,18 +3088,24 @@ func (s *delayedSteering) dequeueSteeringMessagesForTurn(runtimeSessionScope, st
 func (s *delayedSteering) drainSteeringMessagesForTurn(
 	scope runtimeSessionScope,
 	senderID string,
+	_ *bus.InboundContext,
 ) []providers.Message {
-	return s.dequeueSteeringMessagesForTurn(scope, senderID)
+	return s.dequeueSteeringMessagesForTurn(scope, senderID, nil)
 }
 
 func (s *delayedSteering) returnSteeringMessagesForTurn(
 	_ runtimeSessionScope,
 	messages []providers.Message,
+	_ *bus.InboundContext,
 ) {
 	s.messages = append(messages, s.messages...)
 }
 
-func (s *oneShotLoopGuardSteering) dequeueSteeringMessagesForTurn(runtimeSessionScope, string) []providers.Message {
+func (s *oneShotLoopGuardSteering) dequeueSteeringMessagesForTurn(
+	runtimeSessionScope,
+	string,
+	*bus.InboundContext,
+) []providers.Message {
 	messages := s.messages
 	s.messages = nil
 	return messages
@@ -3104,13 +3114,15 @@ func (s *oneShotLoopGuardSteering) dequeueSteeringMessagesForTurn(runtimeSession
 func (s *oneShotLoopGuardSteering) drainSteeringMessagesForTurn(
 	scope runtimeSessionScope,
 	senderID string,
+	_ *bus.InboundContext,
 ) []providers.Message {
-	return s.dequeueSteeringMessagesForTurn(scope, senderID)
+	return s.dequeueSteeringMessagesForTurn(scope, senderID, nil)
 }
 
 func (s *oneShotLoopGuardSteering) returnSteeringMessagesForTurn(
 	_ runtimeSessionScope,
 	messages []providers.Message,
+	_ *bus.InboundContext,
 ) {
 	s.messages = append(messages, s.messages...)
 }

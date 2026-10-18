@@ -145,6 +145,7 @@ func (al *AgentLoop) runTurnAndDrainSteering(
 	process func() (string, error),
 	target *continuationTarget,
 ) finalResponseAdmission {
+	target.inbound = steeringContextForSender(&initialMsg.Context, initialMsg.Context.SenderID)
 	response, err := process()
 	initialAdmission := finalResponseAdmission{status: finalResponseAdmissionNotRequired}
 	initialResponsePublished := false

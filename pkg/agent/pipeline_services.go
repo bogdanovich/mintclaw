@@ -123,6 +123,7 @@ func (p *Pipeline) dequeueSteeringMessagesForTurn(ts *turnState) []providers.Mes
 	return p.Context.Steering.dequeueSteeringMessagesForTurn(
 		ts.runtimeSessionScope(),
 		ts.opts.Dispatch.SenderID(),
+		ts.opts.Dispatch.InboundContext,
 	)
 }
 
@@ -133,6 +134,7 @@ func (p *Pipeline) drainSteeringMessagesForTurn(ts *turnState) []providers.Messa
 	return p.Context.Steering.drainSteeringMessagesForTurn(
 		ts.runtimeSessionScope(),
 		ts.opts.Dispatch.SenderID(),
+		ts.opts.Dispatch.InboundContext,
 	)
 }
 
@@ -225,7 +227,11 @@ func (p *Pipeline) returnSteeringMessagesForTurn(ts *turnState, messages []provi
 	if p == nil || p.Context.Steering == nil || ts == nil || len(messages) == 0 {
 		return
 	}
-	p.Context.Steering.returnSteeringMessagesForTurn(ts.runtimeSessionScope(), messages)
+	p.Context.Steering.returnSteeringMessagesForTurn(
+		ts.runtimeSessionScope(),
+		messages,
+		ts.opts.Dispatch.InboundContext,
+	)
 }
 
 func (p *Pipeline) updateAutoFallbackSelection(

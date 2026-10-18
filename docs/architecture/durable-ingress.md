@@ -65,3 +65,11 @@ continuation has been injected into the running turn, the ingress spool entry is
 acked and removed because the message has crossed into the session/history
 durability boundary. A future durable steering queue could close any remaining
 gap between in-memory turn state and deeper execution checkpoints.
+
+Queued native ingress retains a frozen execution context in the runtime queue.
+Session-key dimensions control conversation reuse; they do not replace the
+source's tool authority, event identity, or reply metadata. Active turns consume
+matching authorities, and standalone continuations keep different native
+authorities in separate batches. An outer response aggregate stays within its
+delivery scope; deferred inputs for other chats are processed and published to
+their own targets. This context is not added to provider or canonical messages.

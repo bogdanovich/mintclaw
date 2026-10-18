@@ -1344,7 +1344,7 @@ func TestSteeringQueue_ReturnForTurnPreservesSenderScope(t *testing.T) {
 	if len(dequeued) != 1 {
 		t.Fatalf("dequeued messages = %#v, want one", dequeued)
 	}
-	sq.returnSteeringMessagesForTurn(scope, dequeued)
+	sq.returnSteeringMessagesForTurn(scope, dequeued, nil)
 	if leaked := sq.dequeueScopeForTurn(scope, "user-b"); len(leaked) != 0 {
 		t.Fatalf("sender-scoped steering leaked to user-b: %#v", leaked)
 	}

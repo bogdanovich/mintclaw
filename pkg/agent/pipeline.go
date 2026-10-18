@@ -129,9 +129,17 @@ type pipelineContextRuntime interface {
 }
 
 type steeringDequeuer interface {
-	dequeueSteeringMessagesForTurn(scope runtimeSessionScope, senderID string) []providers.Message
-	drainSteeringMessagesForTurn(scope runtimeSessionScope, senderID string) []providers.Message
-	returnSteeringMessagesForTurn(scope runtimeSessionScope, messages []providers.Message)
+	dequeueSteeringMessagesForTurn(
+		scope runtimeSessionScope,
+		senderID string,
+		inbound *bus.InboundContext,
+	) []providers.Message
+	drainSteeringMessagesForTurn(
+		scope runtimeSessionScope,
+		senderID string,
+		inbound *bus.InboundContext,
+	) []providers.Message
+	returnSteeringMessagesForTurn(scope runtimeSessionScope, messages []providers.Message, inbound *bus.InboundContext)
 }
 
 type reasoningPublisher interface {
