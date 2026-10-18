@@ -294,9 +294,24 @@ func (al *AgentLoop) settleInboundAdmission(
 ) error {
 	admission = transactionAdmission(ctx, admission)
 	if admission.permitsInboundAck() {
-		if err := al.turns.inbound.ack(ctx, msg); err != nil {
+		receipt, err := al.turns.inbound.ackReceipt(ctx, msg)
+		if err != nil {
 			al.turns.inbound.release(context.Background(), msg, err)
 			return err
+		}
+		publication := admission.publication
+		if publication.coordinator != nil && publication.deliveryID != "" &&
+			publication.admission.Intent.RetentionClass != "" && !publication.admission.Intent.PayloadRetired {
+			if _, sealErr := publication.coordinator.SealNativeFinalMessage(
+				publication.deliveryID,
+				receipt,
+			); sealErr != nil {
+				// The source was already durably acknowledged. Its full payload
+				// remains; never release or replay that source to retry cleanup.
+				logger.WarnCF("agent", "Native final payload source seal was not confirmed", map[string]any{
+					"delivery_id": publication.deliveryID,
+				})
+			}
 		}
 		return nil
 	}

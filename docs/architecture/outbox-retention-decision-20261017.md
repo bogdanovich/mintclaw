@@ -1,6 +1,8 @@
 # Outbox Retention Decision — October 2026
 
-Status: design decision for R4; payload retirement is not implemented or activated.
+Status: R4 retention foundation under validation; no production activation.
+Operator controls, whole-store capacity reporting and compact-history cost
+qualification remain unfinished.
 The [reliability roadmap](reliability-code-health-20261017-roadmap.md) remains
 active. No production records were inventoried, migrated, or deleted.
 
@@ -33,7 +35,7 @@ is not admitted by the current evidence.
 | `publishTransaction*ReceiptAtBoundary` | A duplicate non-dispatch admission can still invoke a commit callback | Retired replays must not invoke a candidate callback or invent a new domain obligation |
 | `outbound_recovery.go` | Replays unsettled document settlement and canonical transcript projection separately from transport | Keep full payload until exact durable acknowledgements are complete |
 | `bus.OutboundMessage` / `OutboundMediaMessage` | Carry trace settlement, result output, interaction metadata, routing and media recovery claims | Inventory each owner before admitting that payload class to retirement |
-| Coordinator root ownership | In-process map excludes a second coordinator in this process | This is not an operating-system lock; cleanup/cutover must establish exclusion of every writer |
+| Coordinator root ownership | Process map and OS lock in the actual outbox exclude cooperating writers | An offline batch owns a fresh coordinator; older binaries must be stopped before cutover |
 
 `RecoverySettlementPending` currently covers protected PDF form delivery. Its
 absence does not prove that browser media claims, interaction callbacks, trace
@@ -126,3 +128,79 @@ lifecycle metadata. It does not count that lock as a document operation or deliv
 and still rejects nonempty, private-content, aliased and unsafe surfaces. A live
 coordinator regression exercises this compatibility boundary. These deterministic
 checks do not qualify the unfinished live PDF/browser evaluation cases.
+
+
+## Source Completion Requirement Found During R4B
+
+A callback-free delivered message is not sufficient retirement proof. Its source
+inbound turn may still await a durable acknowledgement; asynchronous tasks may
+also own settlement outside the publication callback. Admission must therefore
+remain protected until the authoritative source owner seals completion. A later
+callback or binding must revoke eligibility durably before that mutation, and a
+protected or legacy record cannot acquire eligibility from a replay candidate.
+
+The existing evaluation program also owns post-stop raw evidence until its
+privacy scan. Runtime process exit alone does not prove that obligation settled.
+The first eligible source/channel classes must exclude that unqualified evidence
+ownership until its existing owner can supply a completion proof. Do not infer
+completion from age, a nil callback, a path prefix, or transport status alone.
+
+The first implementation qualifies only ordinary successful final replies from
+an enabled channel configured with the Telegram adapter type. A private marker
+exists only around that final publication; its source, instance, workspace and
+route must match. Tools, interim/error publications, asynchronous results,
+interaction bindings, media and guarded intake do not receive that marker.
+Configured adapter type matters: a native eval adapter named `telegram` is still
+protected. The existing native eval profiles use the MintClaw adapter and retain
+full raw evidence through post-stop collection; no new harness is introduced.
+
+Admission writes a version-4 full record with `native_final_source_pending`.
+It is ineligible even after transport delivery. The exact final publication
+receipt reaches the inbound owner, which seals only after a nonzero native
+acknowledgement proves removal of the matching source from the coordinator's
+actual instance spool. A missing source or in-memory bus cannot provide that
+proof. Steering's earlier canonical-history acknowledgements do not seal final
+payloads. The source seal can precede transport completion; cleanup still
+requires confirmed delivery and completed canonical transcript projection.
+A seal failure retains the full record and never releases an already removed
+source for replay. Late callbacks revoke eligibility durably before mutation;
+legacy, revoked and unqualified records cannot be promoted by a replay or stale
+acknowledgement receipt.
+
+## R4B Receipt And Offline Batch Contract
+
+Full classified records and compact delivered receipts use schema 4. Logical
+delivery keys keep identity version 3. A canonical record is its own old-reader
+fence: an atomic replacement never separates the retained identity from its
+format. Revocation keeps schema 4. Unknown future formats remain fatal to
+recovery, including the R1 isolated-record recovery API.
+
+A native executable built from byte-verified, unmodified pre-retirement outbox
+sources (`0ac5cda622709ad46d51912752ad681b748c2d49`) accepted a legacy schema-3
+fixture and rejected both classified-full and compact schema-4 fixtures on
+recovery, lookup and duplicate admission. All logical keys remained stable;
+none of the duplicate admissions dispatched. This tests old-reader rejection,
+not a mixed-version writer rollout or physical power-loss qualification.
+
+`RetirePayloadsOffline` requires an explicit positive age and 1–64 unique
+canonical delivery IDs. It defaults to dry-run, requires an existing store,
+and owns a fresh coordinator's OS lock throughout the bounded batch. Selected
+records larger than the native 2 MiB inspection bound, nonregular records,
+protected classes, uncertain outcomes, and pending settlement are preserved.
+Compact receipts have a 16 KiB bound. Repeated apply reconfirms the canonical
+receipt write; interruption yields the original full record or the same
+no-replay compact receipt. A replay never substitutes its candidate body or
+runs a new callback against a retired payload. Late waiters retain delivered
+truth.
+
+Compact records retain private delivery/source identity, routing, workspace,
+platform message IDs and terminal timestamps. They remove the body, media,
+transient errors and retry diagnostics; they are not anonymous or a promise
+of secure erasure from filesystem snapshots, backups, channels or providers.
+Permanent receipt bytes and excluded-owner payloads still grow. No background
+cleaner, default horizon or production migration is enabled by this packet.
+
+R4 remains unfinished until operator controls, whole-store capacity reporting
+with budget action, and measured compact-history recovery are implemented and
+verified. Activation separately requires stopped older writers, a supported
+schema-4 rollback floor, backup evidence and a qualified filesystem.

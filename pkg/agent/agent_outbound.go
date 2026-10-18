@@ -41,8 +41,9 @@ const (
 )
 
 type finalResponseAdmission struct {
-	status finalResponseAdmissionStatus
-	err    error
+	status      finalResponseAdmissionStatus
+	err         error
+	publication outboundPublication
 }
 
 func (a finalResponseAdmission) permitsInboundAck() bool {
@@ -282,10 +283,14 @@ func (al *AgentLoop) publishResponseWithMetadataAndScopes(
 	if !metadata.IsInterim() {
 		markFinalOutbound(&msg)
 	}
-	if _, err := al.publishTransactionMessage(ctx, workspace, msg); err != nil {
+	publication, err := al.publishTransactionMessageReceiptAtBoundary(ctx, workspace, msg, nil)
+	if err != nil {
 		return rejectedFinalResponseAdmission(err)
 	}
-	return transactionAdmission(ctx, finalResponseAdmission{status: finalResponseAdmissionAccepted})
+	return transactionAdmission(
+		ctx,
+		finalResponseAdmission{status: finalResponseAdmissionAccepted, publication: publication},
+	)
 }
 
 func outboundMetadataForTurnResult(result turnResult) bus.OutboundMetadata {
