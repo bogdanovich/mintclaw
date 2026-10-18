@@ -6,7 +6,9 @@
 on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,
 bootstrap skills, deploy a binary, restart a gateway, grant broad approval, or retry uncertain task admission.
 
-Native browser execution, effective-input witnesses and complete domain qualification remain later packets.
+The [browser guide](manual-agent-evals-browser.md) adds owned-profile read/artifact task execution with local fixture
+witnesses, not native browser grading. Protected browser inputs, action/delivery/context binding, effective-input
+witnesses and complete domain qualification remain later packets.
 Offline `compare` reports all retained trial counts, case compatibility and observed environment changes; it does
 not execute tasks, regrade evidence, or establish causal quality drift.
 Missing capabilities/drivers/domain evidence produce explicit non-passing coverage. A text response never proves

@@ -63,6 +63,7 @@ type Trial struct {
 	TransportClosed  bool                          `json:"transport_closed"`
 	RemoteState      string                        `json:"remote_state"`
 	PDF              *PDFTrialEvidence             `json:"pdf,omitempty"`
+	Browser          *BrowserTrialEvidence         `json:"browser,omitempty"`
 	Cancellation     *QuestionCancellationEvidence `json:"question_cancellation,omitempty"`
 }
 

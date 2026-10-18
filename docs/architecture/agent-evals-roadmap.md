@@ -56,7 +56,7 @@ may run in normal CI without credentials, a live gateway, paid models, or instal
 | E1 | Run bounded scripted multi-turn cases and produce honest reports | E0 | Contracts/client/runtime admission merged; both required general scripted cases passed on Linux after #1598, with recorded platform/cleanup limits |
 | E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation/adaptive runner/grade merged (#1531, #1541); judge v2 live calibration passed 6/6; adaptive live qualification pending |
 | E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Fixtures/oracle, preparation, approval contracts, dialogue, write intent, native write observation, metadata settlement and artifact collection merged (#1544, #1546, #1547, #1550, #1552, #1553, #1557, #1558); uniqueness/privacy/cleanup and live qualification pending |
-| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Fixture/native snapshots and independent fixture oracles merged (#1564, #1567, #1591); six typed cases; native execution/privacy/cleanup/live qualification pending |
+| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Fixture/native snapshots/oracles and scoped loopback host merged; owned read/artifact execution and isolated profile preparation available; native grading/private input/action/delivery/context/cleanup and live qualification pending |
 | E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Repeats/all-trial regrade/comparison (#1588), owned gateway (#1639), file observations (#1648) and explicit allowlisted seed provisioning (#1665) merged; Linux general repeats/regrade/error comparison exercised; per-trial/effective-input witnesses and domain qualification pending |
 
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
@@ -106,7 +106,9 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    cases and protected/private-value/worker/output behavior still require actual qualification.
    Preserve earlier failures and unknowns.
 3. E4: integrate native browser admission, fixture execution, approval/artifact/context correlation and owned
-   cleanup; qualify all six cases, including adaptive and denied-action evidence. Browser cases still skip today.
+   cleanup; qualify all six cases, including adaptive and denied-action evidence. Read/artifact tasks can run on
+   owned profiles but remain unqualified. Submit/followup retain private-input gates; ambiguity/denial retain
+   native-action evidence gates. No local fixture pass qualifies native browser behavior.
 4. Exit: extend the exercised general repeats/regrade/comparison to qualified domain evidence, available all-call
    usage and remaining negative controls; record platform/transport/oracle limits and merge the exit record. Do not
    turn unavailable

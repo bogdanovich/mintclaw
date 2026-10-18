@@ -1,0 +1,89 @@
+{
+  "version": 4,
+  "agents": {
+    "defaults": {
+      "workspace": "REPLACE_WITH_CANONICAL_PRIVATE_HOME/workspace",
+      "model_name": "eval-target",
+      "restrict_to_workspace": true,
+      "allow_read_outside_workspace": false
+    },
+    "list": [{
+      "id": "main",
+      "default": true,
+      "tool_policy": {
+        "default": "deny",
+        "allow": ["request_user_input", "browser_targets", "browser_session", "browser_observe", "browser_act", "browser_contexts", "browser_capture", "browser_diagnostics"]
+      },
+      "mcp_server_policy": {"default": "deny"}
+    }]
+  },
+  "model_list": [{
+    "model_name": "eval-target",
+    "provider": "openai",
+    "model": "REPLACE_WITH_PROVIDER_NATIVE_MODEL_ID",
+    "enabled": true
+  }],
+  "channel_list": {
+    "mintclaw": {
+      "type": "mintclaw",
+      "enabled": true,
+      "allow_from": ["mintclaw-user"],
+      "settings": {"read_timeout": 60}
+    }
+  },
+  "gateway": {"host": "127.0.0.1", "port": 18791, "hot_reload": false, "log_level": "warn"},
+  "hooks": {"enabled": false},
+  "heartbeat": {"enabled": false},
+  "devices": {"enabled": false},
+  "diagnostics": {"trace_capture": {"enabled": false}},
+  "tools": {
+    "approval": {"mode": "required"},
+    "exec": {"enabled": false},
+    "cron": {"enabled": false},
+    "mcp": {"enabled": false},
+    "document": {"enabled": false},
+    "web": {"prefer_native": false},
+    "request_user_input": {"enabled": true},
+    "browser": {
+      "enabled": true,
+      "agents": ["main"],
+      "default_target": "gateway",
+      "targets": {
+        "gateway": {
+          "enabled": true,
+          "driver": "playwright_library",
+          "driver_executable": "REPLACE_WITH_ABSOLUTE_SIDECAR_PATH",
+          "driver_arguments": ["--browser=chromium", "--executable-path=REPLACE_WITH_ABSOLUTE_CHROMIUM_PATH"],
+          "default_profile": "eval-browser",
+          "profiles": {
+            "eval-browser": {
+              "enabled": true,
+              "revision": "eval-browser-v1",
+              "mode": "ephemeral",
+              "allowed_agents": ["main"],
+              "allowed_actors": ["mintclaw:mintclaw-user"],
+              "network_mode": "loopback_fixture",
+              "allowed_origins": ["http://127.0.0.1:18792"],
+              "capability_mode": "restricted",
+              "approval_mode": "policy",
+              "dry_run": false,
+              "allow_approved_actions": true,
+              "runtime": {
+                "ephemeral_root": "REPLACE_WITH_CANONICAL_PRIVATE_HOME/.eval-browser/ephemeral",
+                "lock_file": "REPLACE_WITH_CANONICAL_PRIVATE_HOME/.eval-browser/locks/profile.lock",
+                "headed": false
+              },
+              "policy": {
+                "default_decision": "deny",
+                "rules": [
+                  {"id": "read-and-edit", "match": {"origins": ["http://127.0.0.1:18792"], "effects": ["read", "local_edit"]}, "decision": "allow"},
+                  {"id": "ask-other", "match": {"origins": ["http://127.0.0.1:18792"]}, "decision": "ask"}
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

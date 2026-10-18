@@ -33,6 +33,12 @@ type admittedTarget struct {
 }
 
 func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admittedTarget, error) {
+	return admitPreparedTargetWithBrowser(ctx, preset, home, nil)
+}
+
+func admitPreparedTargetWithBrowser(
+	ctx context.Context, preset Preset, home string, fixture *browserFixtureHost,
+) (admittedTarget, error) {
 	var target admittedTarget
 	if preset.Validate() != nil || runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return target, ErrUnsafeTarget
@@ -42,7 +48,7 @@ func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admit
 		return target, ErrUnsafeTarget
 	}
 	cfg, physicalHome := profile.config, profile.home
-	if validateConversationProfile(cfg, preset, profile.workspace) != nil {
+	if validateConversationProfile(cfg, preset, profile.workspace) != nil || !browserFixtureMatches(cfg, fixture) {
 		return target, ErrUnsafeTarget
 	}
 	root, err := os.OpenRoot(physicalHome)
@@ -91,6 +97,7 @@ func validateConversationProfile(cfg *config.Config, preset Preset, workspace st
 // opens its lock or resolves credentials. Runtime admission also requires auth.
 func validateConversationPolicy(cfg *config.Config, preset Preset, workspace string) error {
 	pdfEnabled := slices.Contains(preset.Capabilities, "pdf")
+	browserEnabled := slices.Contains(preset.Capabilities, "browser")
 	if cfg == nil || cfg.ValidateModelList() != nil || cfg.ValidateAgents() != nil || len(cfg.Agents.List) != 1 ||
 		!cfg.Agents.Defaults.RestrictToWorkspace || cfg.Agents.Defaults.AllowReadOutsideWorkspace ||
 		cfg.WorkspacePath() != workspace || preset.ExpectedWorkspace != workspace ||
@@ -98,7 +105,7 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		cfg.Gateway.CodingRemote.Enabled || cfg.Coding.Remote.Enabled || cfg.Nodes.Enabled ||
 		cfg.Nodes.TerminalEnabled || cfg.Heartbeat.Enabled || cfg.Devices.Enabled || cfg.Hooks.Enabled ||
 		cfg.Tools.Cron.Enabled || cfg.Tools.Exec.Enabled || cfg.Tools.MCP.Enabled ||
-		cfg.Tools.Browser.Enabled || cfg.Tools.Document.Enabled != pdfEnabled ||
+		cfg.Tools.Browser.Enabled != browserEnabled || cfg.Tools.Document.Enabled != pdfEnabled ||
 		cfg.Diagnostics.TraceCapture.Enabled ||
 		cfg.Tools.Approval.EffectiveMode() != config.ToolApprovalModeRequired ||
 		len(cfg.Tools.Approval.BypassNodeTargets) != 0 || len(cfg.Tools.AllowReadPaths) != 0 ||
@@ -142,16 +149,24 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		return ErrUnsafeTarget
 	}
 	for _, tool := range agent.ToolPolicy.Allow {
-		if tool != "request_user_input" && (tool != "document" || !pdfEnabled) {
+		if tool != "request_user_input" && (tool != "document" || !pdfEnabled) &&
+			(!browserEnabled || !slices.Contains(browserEvalTools, tool)) {
 			return ErrUnsafeTarget
 		}
 	}
 	for _, capability := range preset.Capabilities {
-		if capability != "conversation" && capability != "interactions" && capability != "pdf" ||
+		if capability != "conversation" && capability != "interactions" && capability != "pdf" &&
+			capability != "browser" ||
 			capability == "interactions" && (!cfg.Tools.RequestUserInput.Enabled ||
 				!slices.Contains(agent.ToolPolicy.Allow, "request_user_input") || len(agent.ToolPolicy.Deny) != 0) {
 			return ErrUnsafeTarget
 		}
+	}
+	if browserEnabled && (validateBrowserEvalPolicy(cfg, preset) != nil ||
+		!slices.Contains(agent.ToolPolicy.Allow, "browser_session") ||
+		!slices.Contains(agent.ToolPolicy.Allow, "browser_observe") ||
+		!slices.Contains(agent.ToolPolicy.Allow, "browser_act")) {
+		return ErrUnsafeTarget
 	}
 	names := make(map[string]bool)
 	for _, model := range cfg.ModelList {

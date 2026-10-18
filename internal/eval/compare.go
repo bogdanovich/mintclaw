@@ -173,7 +173,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		report.Repeat < 0 || report.Repeat > MaxRepeat || len(report.Trials) == 0 ||
 		len(report.Trials) > MaxCorpusCases || report.DurationMS < 0 || report.StartedAt.IsZero() ||
 		report.Runtime.Version != 1 || !validDigest(report.Runtime.ConfigSHA256) || !report.TargetLifecycle.valid() ||
-		!report.WorkspaceInputs.valid() || !report.PrivateSurfaces.valid() {
+		!report.WorkspaceInputs.valid() || !report.PrivateSurfaces.valid() || !report.BrowserFixtures.valid() {
 		return result, ErrCompare
 	}
 	seen, sessions, roles := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -241,7 +241,12 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 			return result, ErrCompare
 		}
 	}
-	verdicts = append(verdicts, report.TargetLifecycle.verdict(), report.PrivateSurfaces.verdict())
+	verdicts = append(
+		verdicts,
+		report.TargetLifecycle.verdict(),
+		report.PrivateSurfaces.verdict(),
+		report.BrowserFixtures.verdict(),
+	)
 	if report.Verdict != combineVerdicts(verdicts...) {
 		return result, ErrCompare
 	}

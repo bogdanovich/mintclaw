@@ -106,6 +106,12 @@ func (log *boundedGatewayLog) Write(data []byte) (int, error) {
 // The opt-in mode launches only the current executable and a fresh, prepared
 // profile. It never adopts a PID, copies production state or widens tool policy.
 func startOwnedGateway(ctx context.Context, preset Preset, home string) (*ownedGateway, admittedTarget, error) {
+	return startOwnedGatewayWithBrowser(ctx, preset, home, nil)
+}
+
+func startOwnedGatewayWithBrowser(
+	ctx context.Context, preset Preset, home string, fixture *browserFixtureHost,
+) (*ownedGateway, admittedTarget, error) {
 	var target admittedTarget
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" || ctx == nil || ctx.Err() != nil {
 		return nil, target, ErrOwnedGateway
@@ -113,6 +119,7 @@ func startOwnedGateway(ctx context.Context, preset Preset, home string) (*ownedG
 	profile, err := readPreparedProfile(preset, home)
 	if err != nil || validateConversationProfile(profile.config, preset, profile.workspace) != nil ||
 		validateFreshOwnedProfile(profile) != nil ||
+		!browserFixtureMatches(profile.config, fixture) ||
 		!slices.Contains([]string{"warn", "error", "fatal"}, config.EffectiveGatewayLogLevel(profile.config)) {
 		return nil, target, ErrOwnedGateway
 	}
@@ -129,12 +136,15 @@ func startOwnedGateway(ctx context.Context, preset Preset, home string) (*ownedG
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		if !browserFixtureMatches(profile.config, fixture) {
+			return child, admittedTarget{}, ErrOwnedGateway
+		}
 		select {
 		case <-child.done:
 			return child, target, ErrOwnedGateway
 		default:
 		}
-		target, err = admitPreparedTarget(startupCtx, preset, home)
+		target, err = admitPreparedTargetWithBrowser(startupCtx, preset, home, fixture)
 		if err == nil {
 			if target.probe.PID != child.command.Process.Pid {
 				return child, admittedTarget{}, ErrOwnedGateway
@@ -164,6 +174,9 @@ func validateFreshOwnedProfile(profile preparedProfile) error {
 	if profile.config.Tools.IsToolEnabled("document") && validateFreshPDFJournal(root) != nil {
 		return ErrOwnedGateway
 	}
+	if profile.config.Tools.Browser.Enabled && validateFreshBrowserRuntime(root) != nil {
+		return ErrOwnedGateway
+	}
 	for _, directory := range []string{".", "workspace"} {
 		file, openErr := root.Open(directory)
 		if openErr != nil {
@@ -180,6 +193,9 @@ func validateFreshOwnedProfile(profile preparedProfile) error {
 		}
 		if directory == "." && profile.config.Tools.IsToolEnabled("document") {
 			allowed = append(allowed, "state")
+		}
+		if directory == "." && profile.config.Tools.Browser.Enabled {
+			allowed = append(allowed, browserRuntimeDirectory)
 		}
 		if directory == "workspace" {
 			allowed = []string{"AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "skills"}

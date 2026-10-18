@@ -64,7 +64,8 @@ func Grade(
 			original,
 			filter,
 		) || !original.TargetLifecycle.valid() || !original.WorkspaceInputs.valid() ||
-		!original.PrivateSurfaces.valid() || original.PrivateSurfaces != nil && original.PrivateSurfaces.LeakObserved {
+		!original.PrivateSurfaces.valid() || !original.BrowserFixtures.valid() ||
+		original.PrivateSurfaces != nil && original.PrivateSurfaces.LeakObserved {
 		return RunReport{}, ErrGrade
 	}
 	repeat := original.Repeat
@@ -127,6 +128,7 @@ func Grade(
 		TargetLifecycle: original.TargetLifecycle,
 		WorkspaceInputs: original.WorkspaceInputs,
 		PrivateSurfaces: original.PrivateSurfaces,
+		BrowserFixtures: original.BrowserFixtures,
 	}
 	writer, err := newPrivateReport(options.OutputParent, home, workspace, result.ID)
 	if err != nil {
@@ -191,6 +193,7 @@ func Grade(
 		result.Verdict,
 		original.TargetLifecycle.verdict(),
 		original.PrivateSurfaces.verdict(),
+		original.BrowserFixtures.verdict(),
 	)
 	result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 	result.Complete = true
@@ -222,6 +225,9 @@ func readPrivateReportFile(root *os.Root, name string) ([]byte, error) {
 }
 
 func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Preset, workspace string) bool {
+	if item.Case.Browser != nil {
+		return false // Native browser assessment and offline eligibility remain unqualified.
+	}
 	if !validTrialRoleBoundaries(trial) || trial.Judge != nil && !roleBoundaryEligible(trial.Judge.Call) {
 		return false
 	}
