@@ -70,6 +70,13 @@ between. This supports sites that clear a dependent password when the username
 changes without rebinding replaced controls. Native submit forms require
 same-origin HTTPS POST with no target override. JavaScript buttons are admitted
 on the trusted same-origin document.
+An initially disabled submit control may become enabled by the site's own input
+validation. Private filling requires visible, writable inputs and valid native
+targets/destination beforehand, then waits within the bounded private operation
+for that same submit control to become enabled. It never removes `disabled` or
+`aria-disabled`. Changed controls, hidden/disabled inputs, changed destinations
+or a control that stays disabled prevent submission and retire the attempted
+session; the operation is not automatically retried.
 After submission, HTTPS redirects may stay within the matched registrable
 website domain. The Go broker derives that domain using the Public Suffix List;
 model arguments cannot widen it. An unrelated redirect retires the session.

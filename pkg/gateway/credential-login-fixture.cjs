@@ -55,7 +55,9 @@ async function driver() {
       const marker = url.pathname === '/home' ? 'authenticated' : url.pathname === '/challenge' ? 'challenge' : 'unconfirmed';
       const challenge = url.pathname === '/challenge' ? discovery ?
         '<form method="post" action="/totp"><input name="code" aria-label="Verification code" autocomplete="one-time-code">' +
-        '<button>Verify</button></form>' :
+        '<button disabled>Verify</button></form><script>const input = document.querySelector("input[name=code]");' +
+        'input.addEventListener("input", () => setTimeout(() => {' +
+        'input.form.querySelector("button").disabled = input.value.length !== 8;}, 30));</script>' :
         `<input aria-label="Verification code" autocomplete="one-time-code" value="${oneTimeCode}">` : '';
       const logout = discovery && url.pathname === '/home' ? `<button type="button">Log out</button><p>${computedCode}</p>` : '';
       await route.fulfill({ contentType: 'text/html',

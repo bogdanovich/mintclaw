@@ -127,6 +127,75 @@ test('JavaScript button flow supports a code step without a native form', async 
   assert.equal(await perform(f.page, await values(f.page, 'verify', {authenticated_ref: 'Log out'})), 'logged_in');
 });
 
+test('code filling waits for native and ARIA submit controls to become enabled', async t => {
+  for (const native of [true, false]) {
+    const f = await fixture(t);
+    const submit = native ? '<button disabled>Continue</button>' :
+      '<div role="button" aria-disabled="true" tabindex="0">Continue</div>';
+    await f.page.setContent('<form method="post" action="/code">' +
+      '<input name="code" aria-label="Authenticator code" autocomplete="one-time-code">' + submit +
+      '</form><script>const input = document.querySelector("input");' +
+      'const submit = document.querySelector("button, [role=button]");' +
+      'input.addEventListener("input", () => setTimeout(() => {' +
+      'if (input.value.length === 6) { submit.disabled = false; submit.setAttribute("aria-disabled", "false"); }' +
+      '}, 30));' +
+      'if (submit.getAttribute("role") === "button") submit.addEventListener("click", () => input.form.requestSubmit());' +
+      '</script>');
+    const request = await values(f.page, 'totp', {otp_ref: 'Authenticator code', submit_ref: 'Continue'});
+    assert.equal(await perform(f.page, request), 'submitted');
+    assert.deepEqual(f.posts, ['/code']);
+    assert.equal(await perform(f.page, await values(f.page, 'verify', {authenticated_ref: 'Log out'})), 'logged_in');
+  }
+});
+
+test('an enabled submit still requires unchanged live controls and destination', async t => {
+  for (const mutation of ['never-enable', 'destination', 'replace', 'hidden', 'disabled-input']) {
+    const f = await fixture(t);
+    await f.page.setContent('<form method="post" action="/code">' +
+      '<input name="code" aria-label="Authenticator code"><button disabled>Continue</button></form>');
+    await f.page.locator('input').evaluate((input, mutation) => {
+      input.addEventListener('input', () => {
+        const submit = input.form.querySelector('button');
+        if (mutation !== 'never-enable') submit.disabled = false;
+        if (mutation === 'destination') input.form.action = 'https://other.example.net/code';
+        if (mutation === 'replace') submit.replaceWith(submit.cloneNode(true));
+        if (mutation === 'hidden') input.style.visibility = 'hidden';
+        if (mutation === 'disabled-input') input.disabled = true;
+      });
+    }, mutation);
+    const request = await values(f.page, 'totp', {otp_ref: 'Authenticator code', submit_ref: 'Continue'});
+    assert.equal(await perform(f.page, request), 'outcome_unknown', mutation);
+    assert.equal(f.posts.length, 0, mutation);
+    assert.equal(f.page.isClosed(), true, mutation);
+  }
+});
+
+test('combined fields may jointly enable submission but disabled inputs remain denied', async t => {
+  for (const disabledInput of [false, true]) {
+    const f = await fixture(t, true);
+    const request = await values(f.page, 'credentials', {
+      username_ref: 'Account', password_ref: 'Password', submit_ref: 'Sign in',
+    });
+    await f.page.locator('form').evaluate((form, disabledInput) => {
+      const [username, password] = form.querySelectorAll('input');
+      const submit = form.querySelector('button');
+      submit.disabled = true;
+      password.disabled = disabledInput;
+      for (const input of [username, password]) input.addEventListener('input', () => {
+        submit.disabled = !username.value || !password.value;
+      });
+    }, disabledInput);
+    if (disabledInput) {
+      assert.equal(await prepareCredentialLogin(f.page, request), null);
+      assert.equal(await f.page.locator('input[name=username]').inputValue(), '');
+      assert.equal(f.posts.length, 0);
+    } else {
+      assert.equal(await perform(f.page, request), 'submitted');
+      assert.deepEqual(f.posts, ['/combined']);
+    }
+  }
+});
+
 test('post-login redirects admit sibling hosts only within the trusted registrable domain', async t => {
   for (const destination of ['https://accounts.example.org/home', 'https://other.example.net/home']) {
     const context = await browser.newContext();
