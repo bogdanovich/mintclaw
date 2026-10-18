@@ -29,6 +29,11 @@ The [prepared general v1 pilot](../operations/manual-agent-evals-prepared-genera
 code head. A single regrade retained two passes and two provider-unavailable judge errors; comparison preserved all
 trials without attributing those errors to target quality. This is not complete E5 or domain qualification.
 
+The [PDF post-stop v1 pilot](../operations/manual-agent-evals-pdf-post-stop-v1-pilot-20261018.md) exercised merged
+#1706 once: scoped cancellation/no-write passed after native shutdown, but the trial remained inconclusive because
+seven opaque private-profile files prevented privacy qualification and source cleanup. No protected PDF job,
+positive artifact delivery or judge call was observed. This does not qualify the six-case PDF suite.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 
