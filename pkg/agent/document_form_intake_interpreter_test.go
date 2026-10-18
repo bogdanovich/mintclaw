@@ -80,6 +80,7 @@ func TestDocumentIntakeInterpreterUsesPrivateCallAndNeverPublicJSON(t *testing.T
 		provider.options["native_search"] != false || provider.options["temperature"] != 0 ||
 		!protocoltypes.PromptCachePlanOptionPresent(provider.options) || len(provider.messages) != 2 ||
 		provider.messages[0].Role != "system" || provider.messages[1].Role != "user" ||
+		!strings.Contains(provider.messages[0].Content, "no leading or trailing whitespace") ||
 		!strings.Contains(provider.messages[1].Content, view.Pass.Input.Text) ||
 		strings.Contains(provider.messages[0].Content, view.Pass.Input.Text) ||
 		protocoltypes.IsSensitiveRequest(t.Context()) {
@@ -102,6 +103,12 @@ func TestDocumentIntakeInterpreterRejectsMalformedAndUnboundedResponses(t *testi
 		strings.Replace(valid, `"occurrence":1`, `"occurrence":0`, 1),
 		strings.Replace(valid, `"occurrence":1`, `"occurrence":65`, 1),
 		strings.Replace(valid, `"Casey Mint"`, `" Casey Mint"`, 1),
+		strings.Replace(valid, `"Casey Mint"`, `"Casey Mint "`, 1),
+		`{"intent":"facts","non_data":[{"text":" born ","occurrence":1}]}`,
+		`{"intent":"facts","output":{"mode":"complete","literal":{"text":" complete ","occurrence":1}}}`,
+		`{"intent":"facts","proposals":[{"field_id":"field_name",` +
+			`"literals":[{"text":"Casey Mint","occurrence":1}],` +
+			`"correction_evidence":[{"text":" correct ","occurrence":1}]}]}`,
 		strings.Replace(valid, `"facts"`, `"approve"`, 1),
 		strings.Replace(valid, `"intent":`, `"secret_echo":"private","intent":`, 1),
 		`{"intent":"facts","proposals":[{"field_id":"field_name","literals":[]}]}`,
