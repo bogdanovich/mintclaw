@@ -110,6 +110,12 @@ Completion gates: bounded payload growth and measured recovery cost; cleanup
 cannot recreate a previously delivered identity, discard pending obligations,
 or turn an ambiguous outcome into a retry; interrupted cleanup recovers safely.
 
+R4's source audit found that inbound spool writes, renames and acknowledgements
+needed filesystem sync confirmation before an acknowledgement could support a
+retirement proof. That focused durability prerequisite preserves spool versions,
+message IDs and replay rules; typed source acknowledgement and evidence-owner
+completion remain separate unfinished gates.
+
 ## R5: Typed MCP Failure Classification
 
 Evidence: `pipeline_execute.go` decides fatal transport behavior from a

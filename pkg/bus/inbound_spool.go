@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
 const (
@@ -43,7 +45,9 @@ var retiredInboundInteractionRawKeys = [...]string{
 // platform updates are normalized first, then this spool preserves the common
 // bus.InboundMessage contract.
 type InboundSpool struct {
-	dir string
+	dir           string
+	writeAtomic   func(string, []byte, os.FileMode) error
+	syncDirectory func(string) error
 }
 
 type spooledInboundRecord struct {
@@ -60,10 +64,10 @@ func NewInboundSpool(dir string) (*InboundSpool, error) {
 	if dir == "" {
 		return nil, errors.New("inbound spool dir is required")
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := createInboundSpoolDirectory(dir); err != nil {
 		return nil, fmt.Errorf("create inbound spool dir: %w", err)
 	}
-	return &InboundSpool{dir: dir}, nil
+	return &InboundSpool{dir: dir, writeAtomic: fileutil.WriteFileAtomic, syncDirectory: fileutil.SyncDirectory}, nil
 }
 
 func (s *InboundSpool) Dir() string {
@@ -107,7 +111,7 @@ func (s *InboundSpool) Prepare(ctx context.Context, msg InboundMessage) (Inbound
 	if err := s.writeRecord(s.pendingPath(id), rec); err != nil {
 		return msg, err
 	}
-	if err := os.Rename(s.pendingPath(id), s.processingPath(id)); err != nil {
+	if err := s.renameRecord(s.pendingPath(id), s.processingPath(id)); err != nil {
 		return msg, fmt.Errorf("claim inbound spool entry %s: %w", id, err)
 	}
 	return msg, nil
@@ -229,10 +233,15 @@ func (s *InboundSpool) Ack(id string) error {
 	if s == nil || id == "" {
 		return nil
 	}
-	if err := removeIfExists(s.processingPath(id)); err != nil {
-		return err
+	// Reconfirm the namespace even when a retry finds both names absent:
+	// an earlier unlink may have succeeded before directory sync failed.
+	var removeErr error
+	for _, path := range []string{s.processingPath(id), s.pendingPath(id)} {
+		if removeErr = removeIfExists(path); removeErr != nil {
+			break
+		}
 	}
-	return removeIfExists(s.pendingPath(id))
+	return errors.Join(removeErr, s.syncDirectory(s.dir))
 }
 
 func (s *InboundSpool) Release(id string, cause error) error {
@@ -242,7 +251,7 @@ func (s *InboundSpool) Release(id string, cause error) error {
 	rec, err := s.readRecord(s.processingPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return s.syncDirectory(s.dir)
 		}
 		return err
 	}
@@ -253,7 +262,7 @@ func (s *InboundSpool) Release(id string, cause error) error {
 	if err := s.writeRecord(s.processingPath(id), rec); err != nil {
 		return err
 	}
-	return os.Rename(s.processingPath(id), s.pendingPath(id))
+	return s.renameRecord(s.processingPath(id), s.pendingPath(id))
 }
 
 func (s *InboundSpool) Fail(id string, cause error) error {
@@ -263,7 +272,7 @@ func (s *InboundSpool) Fail(id string, cause error) error {
 	rec, err := s.readRecord(s.processingPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return s.syncDirectory(s.dir)
 		}
 		return err
 	}
@@ -274,7 +283,7 @@ func (s *InboundSpool) Fail(id string, cause error) error {
 	if err := s.writeRecord(s.processingPath(id), rec); err != nil {
 		return err
 	}
-	return os.Rename(s.processingPath(id), s.failedPath(id))
+	return s.renameRecord(s.processingPath(id), s.failedPath(id))
 }
 
 func (s *InboundSpool) writeRecord(path string, rec spooledInboundRecord) error {
@@ -285,13 +294,8 @@ func (s *InboundSpool) writeRecord(path string, rec spooledInboundRecord) error 
 	if err != nil {
 		return fmt.Errorf("marshal inbound spool entry %s: %w", rec.ID, err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("write inbound spool entry %s: %w", rec.ID, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("commit inbound spool entry %s: %w", rec.ID, err)
+	if err := s.writeAtomic(path, data, 0o600); err != nil {
+		return fmt.Errorf("persist inbound spool entry %s: %w", rec.ID, err)
 	}
 	return nil
 }
@@ -346,4 +350,49 @@ func spoolIDFromName(name string) string {
 		name = strings.TrimSuffix(name, suffix)
 	}
 	return name
+}
+
+func (s *InboundSpool) renameRecord(from, to string) error {
+	if err := os.Rename(from, to); err != nil {
+		return err
+	}
+	if err := s.syncDirectory(s.dir); err != nil {
+		return fmt.Errorf("inbound spool rename committed but durability was not confirmed: %w", err)
+	}
+	return nil
+}
+
+// The caller supplies the directory, so anchor newly-created components at
+// its nearest existing parent rather than assuming a particular instance path.
+func createInboundSpoolDirectory(dir string) error {
+	target, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	parent := filepath.Dir(target)
+	for {
+		info, statErr := os.Stat(parent)
+		if statErr == nil {
+			if !info.IsDir() {
+				return errors.New("inbound spool parent is not a directory")
+			}
+			break
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return statErr
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return statErr
+		}
+		parent = next
+	}
+	relative, err := filepath.Rel(parent, target)
+	if err != nil {
+		return err
+	}
+	if relative == "." {
+		return fileutil.SyncDirectory(target)
+	}
+	return fileutil.MkdirAllDurable(parent, relative, 0o700)
 }
