@@ -181,6 +181,7 @@ type turnExecution struct {
 	sawSteering                     bool
 	sawAdditionalUserInput          bool
 	objectiveOutcomeRepairAttempted bool
+	verifiedPresentationRepair      *verifiedPresentationRepair
 	liveHandoffRecoveryAttempted    bool
 	resourceDispositionAttempted    bool
 	resourceDispositionVerified     bool

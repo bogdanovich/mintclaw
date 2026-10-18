@@ -20,9 +20,11 @@ import (
 func TestBlockedReportPreservesEveryParagraphAtTelegramTransport(t *testing.T) {
 	paragraphs := []string{
 		"Проверены источник и назначение. Найдены три фотографии, но перенос не выполнен.",
+		"- transfer-artifact://photo_1\n- transfer-artifact://photo_2\n- transfer-artifact://photo_3",
 		"Сессия закрыта. Изменений в объявлении не было.",
 		"Проверка результата в новой сессии не выполнялась, потому что сохранения не было.",
 		"Первый блокер: получение оригинала отклонено. Нужна проверка доступной операции, а не повтор публикации.",
+		"END-OF-REPORT",
 	}
 	content := strings.Join(paragraphs, "\n\n")
 	for _, test := range []struct {
@@ -108,7 +110,9 @@ func TestBlockedReportPreservesEveryParagraphAtTelegramTransport(t *testing.T) {
 						require.NoError(t, json.Unmarshal(request.payload["text"], &text))
 					}
 					for _, paragraph := range paragraphs {
-						require.Contains(t, text, paragraph, request.method)
+						for _, line := range strings.Split(paragraph, "\n") {
+							require.Contains(t, text, strings.TrimPrefix(line, "- "), request.method)
+						}
 					}
 				default:
 					t.Fatal("missing Telegram transport request")

@@ -373,9 +373,17 @@ func objectiveOutcomeRepairInstructionWithReceipts(
 			outcome := validateObjectiveOutcome(reported, audits, receipts, checklist)
 			validated = outcome
 			if outcome.Status == taskresult.OutcomeSucceeded {
-				return "", false
-			}
-			if len(outcome.MissingItems) > 0 {
+				if _, exact := declaredExactJSONObjectiveOutput(outcome); exact || outcome.UserSummary != "" {
+					return "", false
+				}
+				// Successful execution and an accepted final answer are separate
+				// contracts. Reuse the bounded tool-free repair before falling back
+				// to isolated outputs that lose the caller's requested presentation.
+				reason = "the user-facing answer did not preserve the verified objective outputs. " +
+					"Preserve completed_items, receipt_ids, and output values unchanged; correct only result. " +
+					"Include text outputs verbatim, every record value and artifact reference, and follow the " +
+					"requested language and response format"
+			} else if len(outcome.MissingItems) > 0 {
 				reason = strings.Join(outcome.MissingItems, "; ")
 			} else {
 				reason = "the reported succeeded outcome did not satisfy the runtime contract"

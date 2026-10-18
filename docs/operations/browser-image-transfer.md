@@ -132,6 +132,20 @@ action hint is needed. Run this on gateway/managed and companion/managed,
 alongside the transfer probe above, to cover both output-only acquisition and
 an explicitly declared external workflow.
 
+Execution success and a complete user-facing answer are separate checks. When
+all objectives are verified but the producer's answer fails output-coverage
+validation, the existing finalization repair gets one tool-free opportunity to
+correct the answer, including the caller's language and response format. It must
+retain the completed outputs and receipts; it cannot repeat downloads, reopen a
+closed session, or replay a commit. Valid answers and explicitly requested exact
+JSON do not incur this extra pass. If repair still fails, only the verified
+outputs are rendered as a bounded fallback; rejected prose is never admitted.
+The runtime retains the original verified outcome across this call. Malformed
+reports, changed verified fields, or exhausted transient provider retries cannot
+erase its outputs or closure evidence. Cancellation and policy errors retain
+their existing fail-closed handling; new user guidance remains authoritative.
+This behavior belongs to the shared agent finalizer, not a site or channel rule.
+
 With `agent live --trace-evidence-agent browser`, canonical trace publication
 can follow the visible final response. The CLI waits up to 30 seconds for this
 passive evidence, also subject to its overall command context. Missing evidence

@@ -2656,6 +2656,7 @@ type objectiveRepairCaptureProvider struct {
 	messages  [][]providers.Message
 	calls     int
 	onCall    func(int)
+	failure   error
 }
 
 func (p *objectiveRepairCaptureProvider) Chat(
@@ -2669,7 +2670,11 @@ func (p *objectiveRepairCaptureProvider) Chat(
 	p.toolDefs = append(p.toolDefs, append([]providers.ToolDefinition(nil), toolDefs...))
 	p.messages = append(p.messages, append([]providers.Message(nil), messages...))
 	if len(p.responses) == 0 {
+		failure := p.failure
 		p.mu.Unlock()
+		if failure != nil {
+			return nil, failure
+		}
 		return nil, errors.New("unexpected objective repair provider call")
 	}
 	response := p.responses[0]
