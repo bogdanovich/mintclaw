@@ -124,7 +124,10 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    Preserve earlier failures and unknowns.
 3. E4: integrate native browser admission, fixture execution, approval/artifact/context correlation and owned
    cleanup; qualify all six cases, including adaptive and denied-action evidence. Read/artifact tasks can run on
-   owned profiles but remain unqualified. Submit/followup retain private-input gates; ambiguity/denial retain
+   owned profiles. The read post-stop assessment now binds raw native owner/action/policy records and final outbox
+   replies, requires native shutdown, complete scoped privacy and empty owned temporary roots, and admits separate
+   judging/offline regrade only after those witnesses. This is not a live qualification result. Artifact and the
+   other four scenarios remain gated. Submit/followup retain private-input gates; ambiguity/denial retain
    native-action evidence gates. No local fixture pass qualifies native browser behavior.
 4. Exit: extend the exercised general repeats/regrade/comparison to qualified domain evidence, available all-call
    usage and remaining negative controls; record platform/transport/oracle limits and merge the exit record. Do not

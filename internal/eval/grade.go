@@ -95,7 +95,10 @@ func Grade(
 		}
 		trial, decodeErr := decodeDocument[Trial](data, 8*1024*1024)
 		if decodeErr != nil || !gradeEligible(trial, item, summary, preset, workspace) ||
-			item.Case.PDF != nil && !observedPDFProfile(original.TargetLifecycle, original.PrivateSurfaces) ||
+			(item.Case.PDF != nil || item.Case.Browser != nil) &&
+				!observedOwnedProfile(original.TargetLifecycle, original.PrivateSurfaces) ||
+			item.Case.Browser != nil &&
+				!observedBrowserReadHost(trial.Browser, original.BrowserFixtures) ||
 			sessions[trial.SessionID] || credentialJSONValue(trial, filter) {
 			return RunReport{}, ErrGrade
 		}
@@ -144,6 +147,9 @@ func Grade(
 		if item.Case.PDF != nil {
 			trial.Checks = gradeFinalizedPDFChecks(item.Case, trial)
 		}
+		if item.Case.Browser != nil {
+			trial.Checks = gradeFinalizedBrowserChecks(item.Case, trial)
+		}
 		trial.Verdict, trial.Code = trial.ExecutionVerdict, trial.ExecutionCode
 		for _, check := range trial.Checks {
 			trial.Verdict = combineVerdicts(trial.Verdict, check.Verdict)
@@ -155,6 +161,7 @@ func Grade(
 		}
 		trial.Judge = &judgement
 		retainPDFJudgePrivacy(item.Case, &trial)
+		retainBrowserJudgePrivacy(item.Case, &trial)
 		if !roleBoundaryEligible(judgement.Call) {
 			trial.EvidenceEligible = false
 		}
@@ -225,9 +232,6 @@ func readPrivateReportFile(root *os.Root, name string) ([]byte, error) {
 }
 
 func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Preset, workspace string) bool {
-	if item.Case.Browser != nil {
-		return false // Native browser assessment and offline eligibility remain unqualified.
-	}
 	if !validTrialRoleBoundaries(trial) || trial.Judge != nil && !roleBoundaryEligible(trial.Judge.Call) {
 		return false
 	}
@@ -252,6 +256,9 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 	if item.Case.PDF != nil {
 		return validPDFNoWriteEvidence(trial, item.Case, workspace) &&
 			trial.PDF.PostStop.AssessmentScope == pdfNoWriteAssessmentScope
+	}
+	if item.Case.Browser != nil {
+		return validBrowserReadEvidence(trial, item.Case, workspace)
 	}
 	return validTrialConversation(trial, preset.ExpectedAgent, workspace)
 }

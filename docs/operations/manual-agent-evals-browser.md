@@ -2,9 +2,9 @@
 
 This guide describes a partial E4 execution path, not a qualified browser suite. Six case definitions are visible in
 `eval list` and `validate`. With an admitted owned profile, `eval run --start-target` now sends read/artifact tasks
-through the normal gateway and retains independent fixture witnesses after shutdown. Native authority, artifact
-delivery, privacy and browser cleanup remain unqualified; these trials cannot pass or reach the judge. Private-input
-and action-bound cases remain visible skips. The offline controls use no model or native browser.
+through the normal gateway and retains independent fixture witnesses after shutdown. Read now has a bounded native
+post-stop assessment contract; artifact, private-input and action-bound qualification remains unfinished. No new
+live qualification is claimed by the offline controls, which use no model or installed browser.
 
 The [first owned read pilot](manual-agent-evals-browser-read-v1-pilot-20261018.md) retained an inconclusive result
 with zero fixture visits and a native driver startup failure. Separate model-free controls identified Chrome's
@@ -62,8 +62,8 @@ Contradictory or missing checks, unknown fields/facts/colors/accounts and oversi
 field mappings/profile authority and private fact values do not enter the user/judge model input. The adaptive
 submit/followup drivers use fact handles; the negative denial remains scripted.
 
-Fixture-only effects/read/CSV predicates are implemented, but native browser grading is not. Caption-only
-evidence remains inconclusive. Canceling an
+Fixture-only effects/read/CSV predicates cannot substitute for the native read contract below. Caption-only
+artifact evidence remains inconclusive. Canceling an
 earlier session-opening prompt does not qualify denial of the intended prepared removal; preserving chat text or
 silently reopening a browser does not qualify native context retention. A missing oracle, unbound approval,
 unfinished work or cleanup uncertainty cannot become pass. No approval policy is widened by these manifests.
@@ -109,7 +109,7 @@ remain mandatory first-release work. The expected run exit is nonzero while thes
 
 `browser_fixtures` describes only the owned HTTP host. Trial `browser.fixture` describes only independent local
 state; matching state or a download cannot establish browser provenance or delivered artifact bytes. Finalization
-retains unknown native hard checks and judge/regrade ineligibility, preserves observed fixture mismatches as
+retains unknown native hard checks unless the full read contract is observed, preserves fixture mismatches as
 failures, and checks the raw private profile before canonical reports. Fixture failure interrupts the suite and
 stops only its owned gateway process; it does not authorize replay or imply that a disconnected task was canceled.
 
@@ -173,7 +173,33 @@ cannot be carried past a later host failure as a final receipt.
 These predicates are scoped to `local_fixture_only`. They do not prove authenticated browser origin, native
 intent/approval, clarification ordering, retained context, logical delivery, privacy or browser cleanup. Closing
 the fixture stops accepting writes; it cannot prove that a still-running browser would never have attempted one.
-Native hard checks remain inconclusive; read/artifact execution is not native browser grading.
+Artifact hard checks remain inconclusive without native artifact/delivery evidence.
+
+### Native Read Assessment
+
+Only `browser.fixture.read`, without private case facts, can currently reach a post-stop judge. Before promotion,
+the owned gateway must exit natively with an untruncated capture, the fixture host must close/join, and the existing
+raw-profile observer must report complete scoped coverage. Earlier opaque captures and inconclusive trials are
+not rewritten. The assessment then requires all of the following:
+
+- Capture bounded owner-only browser/outbox files, refuse path aliases, and scan original JSON before projection.
+- Decode the browser state with `browser.InspectStateSnapshot`, not a new store or another authority parser.
+- Match the native authenticated actor, configured agent and canonical routed session. Join each selected action
+  and invocation to the exact native session/execution, action hash, profile revision and policy revision. A trace
+  turn ID is not a browser execution ID; timestamps are only freshness bounds, never the ownership join.
+- Observe successful native navigation to this trial's exact immutable fixture path, allow only the read/navigation
+  action scope, and retain the independent fresh-reference/no-effect fixture predicates.
+- Bind every observed final reply to a settled native outbox intent, exact wire message ID, input request and
+  trace scope. Request binding accepts the native context message ID when optional metadata has no request ID.
+- Require closed native sessions, terminal non-unknown invocations, and empty owned browser-ephemeral and gateway-temp roots.
+  The harness observes native cleanup; it does not delete evidence or control a broker to make the check pass.
+
+Missing, foreign, ambiguous or incomplete evidence cannot invoke the judge or grant positive checks. Known raw
+leaks and fixture contradictions remain failures. Separate tools-disabled judging runs only after native/profile
+observations; unavailable or private role-boundary evidence revokes privacy/retained eligibility. Eligible read
+reports can be regraded without a gateway or original browser state files. This is scoped Linux/macOS local-owned
+read evidence, not all browser resources, browser-provider parity or completion of E4. The other five browser cases
+and real merged-revision qualification remain mandatory.
 
 ## Offline Controls
 
@@ -204,9 +230,10 @@ rendered. E4 still needs action-level qualification; transport evidence must not
 
 ## Remaining Admission
 
-The six first-release browser cases have typed contracts but still need native observations, approval binding,
-artifact collection/delivery correlation, raw privacy checks and owned cleanup. The pure read-only native browser state decoder
-merged in #1564 is a prerequisite; parsing state is not authority or page-freshness proof.
+The six first-release browser cases have typed contracts. The read assessment now consumes the native decoder
+merged in #1564 with independent route/action/delivery/cleanup witnesses; parsing state alone is still insufficient.
+The other scenarios need approval binding, private input, context retention, artifact collection/delivery correlation
+and their own post-settlement privacy/cleanup qualification.
 
 The native browser network policy does not treat a loopback fixture as a public `exact_origins` target. The
 separate opt-in `loopback_fixture` prerequisite admits one canonical HTTP origin on `127.0.0.1` or `[::1]` with

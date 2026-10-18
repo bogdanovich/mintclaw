@@ -3416,7 +3416,7 @@ func browserOwnerFromIdentity(actorID, agentID, sessionKey, executionID string) 
 	return browser.Owner{
 		ActorID:     browser.OpaqueActorID(actorID),
 		AgentID:     browser.OpaqueAgentID(routing.NormalizeAgentID(agentID)),
-		SessionKey:  browserContextID("session", sessionKey),
+		SessionKey:  browser.OpaqueSessionKey(sessionKey),
 		ExecutionID: browserContextID("execution", executionID),
 	}, nil
 }
