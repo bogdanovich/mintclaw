@@ -418,7 +418,7 @@ func (tool *DocumentTool) continueFormIntake(
 		}
 		for _, finding := range current.Findings {
 			intake.RetainedFindingCount++
-			if pending != reference && slices.Contains(current.SupersededAdvisoryIDs, finding.FieldID) &&
+			if slices.Contains(current.SupersededAdvisoryIDs, finding.FieldID) &&
 				!documentFormIntakeActionableFinding(summary, finding) {
 				continue
 			}
