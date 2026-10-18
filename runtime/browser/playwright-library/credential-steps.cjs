@@ -49,6 +49,7 @@ async function prepareWebsiteStep(page, request) {
       const originalDocument = document;
       const live = element => element instanceof HTMLElement && element.ownerDocument === originalDocument &&
         element.isConnected && element.getClientRects().length > 0 && !element.matches(':disabled') &&
+        element.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}) &&
         element.getAttribute('aria-disabled') !== 'true';
       const input = (element, types) => live(element) && element instanceof HTMLInputElement &&
         !element.readOnly && types.includes(element.type);

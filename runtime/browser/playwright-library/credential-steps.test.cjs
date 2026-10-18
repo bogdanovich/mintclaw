@@ -153,3 +153,32 @@ test('post-login redirects admit sibling hosts only within the trusted registrab
     assert.equal(page.isClosed(), destination.includes('example.net'));
   }
 });
+
+test('generic steps reject controls hidden after their snapshot', async t => {
+  for (const style of ['visibility:hidden', 'opacity:0', 'display:none', 'content-visibility:hidden']) {
+    const f = await fixture(t, true);
+    const request = await values(f.page, 'credentials', {
+      username_ref: 'Account', password_ref: 'Password', submit_ref: 'Sign in',
+    });
+    await f.page.locator('form').evaluate((form, css) => { form.style.cssText = css; }, style);
+    assert.equal(await prepareCredentialLogin(f.page, request) === null, true, style);
+    assert.equal(await f.page.locator('input[type=password]').inputValue(), '');
+    assert.equal(f.posts.length, 0);
+  }
+});
+
+test('verification rejects logout controls hidden before preparation or completion', async t => {
+  for (const style of ['visibility:hidden', 'opacity:0', 'display:none', 'content-visibility:hidden']) {
+    for (const phase of ['prepare', 'complete']) {
+      const f = await fixture(t, true);
+      await f.page.setContent('<div><button type="button" aria-label="Log out">Log out</button></div>');
+      const request = await values(f.page, 'verify', {authenticated_ref: 'Log out'});
+      const capsule = phase === 'complete' ? await prepareCredentialLogin(f.page, request) : null;
+      if (phase === 'complete') assert.ok(capsule);
+      await f.page.locator('div').evaluate((parent, css) => { parent.style.cssText = css; }, style);
+      if (phase === 'prepare') assert.equal(await prepareCredentialLogin(f.page, request) === null, true, style);
+      else assert.equal(await performCredentialLogin(f.page, capsule, request), 'unverified', style);
+      assert.equal(f.posts.length, 0);
+    }
+  }
+});
