@@ -1,10 +1,12 @@
 # Private GitHub Pull Request Reads
 
-This is the first non-browser credential operation in the
+This is an optional non-browser credential operation in the
 [trusted-runtime roadmap](credential-access-roadmap.md). It uses the existing
 gateway, 1Password adapter, Android passkey approval and generic chat notice.
-It needs no additional service or host. GitHub is the initial read-only default
-while the operator chooses a preferred connector.
+It needs no additional service or host and stays disabled unless the operator
+requests it. Browser logins do not depend on GitHub access. No GitHub token,
+repository selection or real-token connector pilot is needed for the browser
+credential feature.
 
 ## Scope and configuration
 
@@ -83,5 +85,6 @@ It approves once, performs two agent turns with grant reuse, then revokes during
 a third in-flight API request. It scans actual provider requests, canonical
 history, Seahorse state, logs, passive traces and both support-bundle modes for
 the synthetic API token. The fixture accesses no real GitHub, 1Password account
-or physical Android device. Production activation and real-token acceptance
-remain operator rollout work.
+or physical Android device. The implementation and synthetic qualification are
+complete. Production activation and real-token acceptance are separate optional
+rollout work, not a browser-credential completion gate.
