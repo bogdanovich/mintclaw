@@ -21,6 +21,10 @@ import (
 
 const recordVersion = 3
 
+// deliveryIdentityVersion is a permanent part of the no-replay key. Storage
+// schema changes must not create a new logical delivery for an existing source.
+const deliveryIdentityVersion = 3
+
 // MaxDeliveryAttempts bounds recoverable delivery attempts for one logical
 // outbound intent. Retry ownership belongs to the outbox rather than to the
 // domain record that requested delivery.
@@ -182,7 +186,7 @@ func DeliveryID(identity Identity) (string, error) {
 		Ordinal  int    `json:"ordinal"`
 		Kind     Kind   `json:"kind"`
 	}{
-		Version:  recordVersion,
+		Version:  deliveryIdentityVersion,
 		SourceID: identity.SourceID,
 		Ordinal:  identity.Ordinal,
 		Kind:     identity.Kind,
