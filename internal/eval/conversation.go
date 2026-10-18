@@ -205,11 +205,15 @@ func runDomainConversation(
 			judgement.Verdict, judgement.Code = Fail, "private_judge_output"
 		}
 		trial.Judge = &judgement
+		if !roleBoundaryEligible(judgement.Call) {
+			trial.EvidenceEligible = false
+		}
 		if judgement.Code == "private_judge_output" {
 			trial.EvidenceEligible = false
 			trial.ExecutionVerdict, trial.ExecutionCode = Fail, judgement.Code
 		}
-		if requiredRubric(item.Case.Rubric) || judgement.Code == "private_judge_output" {
+		if requiredRubric(item.Case.Rubric) || judgement.Code == "private_judge_output" ||
+			!roleBoundaryEligible(judgement.Call) {
 			combined := combineVerdicts(trial.Verdict, judgement.Verdict)
 			if combined != trial.Verdict {
 				trial.Code = judgement.Code

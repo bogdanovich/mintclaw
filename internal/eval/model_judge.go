@@ -32,9 +32,11 @@ func judgeConversation(ctx context.Context, judge *ModelRole, item Case, events 
 		return result
 	}
 	rubric, _ := json.Marshal(item.Rubric)
-	result.RubricSHA256, result.EvidenceSHA256 = digest(rubric), digest([]byte(input))
-	output, call, err := judge.Call(ctx, JudgePromptVersion, judgeSystemPrompt, input)
+	output, call, err := judge.call(ctx, JudgePromptVersion, judgeSystemPrompt, input, item.Driver.Facts)
 	result.Call = &call
+	if call.Boundary != nil && call.Boundary.Input == "observed" {
+		result.RubricSHA256, result.EvidenceSHA256 = digest(rubric), digest([]byte(input))
+	}
 	if err != nil {
 		result.Verdict, result.Code = Error, "judge_call_failed"
 		if errors.Is(err, ErrPrivateEvidence) {
