@@ -183,6 +183,10 @@ full I-134/PDFI4 and the separately deferred XFA backend stage remain open.
 The first actual Telegram check exposed an unresolved role-only clarification and a false field-specific
 acceptance claim, plus a repeated introduction. The [bounded follow-up](pdf-intake-telegram-followup-goal.md)
 tracks these negative findings without treating the prior automatic checkpoint as a channel pass.
+Its [repair checkpoint](pdf-intake-telegram-followup-checkpoint.md) records reviewed/merged #1763,
+verified deployment and a new real Russian gateway/model test with four native value matches, truthful
+field acknowledgements and cancellation/privacy cleanup. Actual Telegram requalification remains pending;
+the negative historical job and both I-134 jobs were not modified.
 
 ### Deferred Follow-Up: Editable Hybrid Derivatives
 

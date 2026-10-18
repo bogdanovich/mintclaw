@@ -292,6 +292,13 @@ the collection response. These are semantic interpretation/reporting and present
 transport duplication. The [bounded Telegram follow-up goal](pdf-intake-telegram-followup-goal.md) preserves that
 job as read-only evidence and requires new native-value qualification; the earlier headless pass does not waive it.
 
+The [follow-up checkpoint](pdf-intake-telegram-followup-checkpoint.md) records #1763 merged and deployed as
+`82178cbd7156ff1ea77cd6c37002ec71fa6938e8`. A separate real Russian gateway/model sequence verified both names,
+borrower-only telephone and city against private native values, actual accepted-field descriptors, no repeated
+introduction, truthful acknowledgement, privacy and normal terminal cleanup. This new synthetic test does not
+replace the original negative Telegram job or qualify Telegram ingress. All three historical records stayed
+unchanged. The manual channel repetition remains pending under the operator check below.
+
 - The generic clarification/progress repair has the bounded automatic evidence above. Confirm its actual Telegram
   behavior using the [short operator check](../operations/pdfi4-free-text-form-test.md#bounded-clarification-repair-check).
   Keep fixed limits and original jobs; exhausted-input recovery requiring new authority still needs explicit admission.
