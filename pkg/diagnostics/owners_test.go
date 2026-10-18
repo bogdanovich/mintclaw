@@ -271,3 +271,85 @@ func TestInspectOwnersAccountsForMissingAndUnavailableSelectedOwners(t *testing.
 		t.Fatalf("unavailable owner outcome = %#v", report.Lookups)
 	}
 }
+
+func TestRetiredDeliveryInspectionKeepsTerminalTruthWithoutPayload(t *testing.T) {
+	root := t.TempDir()
+	spool, err := bus.NewInboundSpool(bus.InboundSpoolPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := spool.Prepare(t.Context(), bus.NormalizeInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "private-route",
+			SenderID: "owner",
+		},
+		Content: "diagnostic input",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := bus.NewMessageBus()
+	native.SetInboundSpool(spool)
+	t.Cleanup(native.Close)
+	coordinator, err := outbox.OpenCoordinator(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	admission, err := coordinator.AdmitNativeFinalMessage(
+		root,
+		outbox.Identity{
+			SourceID: input.SpoolID,
+			Kind:     outbox.KindMessage,
+			Channel:  "telegram",
+			ChatID:   "private-route",
+		},
+		bus.OutboundMessage{Content: "PRIVATE_RETIRED_BODY"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.PrepareAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.CommitAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{}); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := native.AckInbound(t.Context(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := coordinator.SealNativeFinalMessage(admission.Intent.ID, proof)
+	if err != nil || !sealed {
+		t.Fatalf("native diagnostic fixture seal=%v,%v", sealed, err)
+	}
+	if err = coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = outbox.RetirePayloadsOffline(t.Context(), root, outbox.RetirementPolicy{
+		DeliveryIDs: []string{admission.Intent.ID}, MinAge: time.Nanosecond, Apply: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	report := OwnerReport{}
+	ids := ownerIDs{deliveries: map[string]struct{}{admission.Intent.ID: {}}}
+	inspectDeliveryOwners(OwnerWorkspaceSpec{ID: "main", Workspace: root}, &ids, &report)
+	if len(report.Deliveries) != 1 || !report.Deliveries[0].PayloadRetired ||
+		report.Deliveries[0].Status != outbox.StatusDelivered || report.Deliveries[0].PayloadRetiredAt.IsZero() {
+		t.Fatalf("retired inspection = %#v", report)
+	}
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte("PRIVATE_RETIRED_BODY")) || bytes.Contains(data, []byte("private-route")) {
+		t.Fatal("retired owner report exposed payload or route")
+	}
+}

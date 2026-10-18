@@ -51,7 +51,7 @@ func TestInspectIntentUsesBoundedNativeReadContractAndValueFreeErrors(t *testing
 		}
 	}
 	for _, mutate := range []func(*Intent){
-		func(record *Intent) { record.Version++ },
+		func(record *Intent) { record.Version = retentionRecordVersion + 1 },
 		func(record *Intent) { record.Status = "invented" },
 		func(record *Intent) { record.OwnerWorkspace = "" },
 		func(record *Intent) { record.Identity.ChatID = "another-chat" },

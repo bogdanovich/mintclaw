@@ -466,13 +466,37 @@ func (c *Coordinator) AdmitMessage(
 	identity Identity,
 	msg bus.OutboundMessage,
 ) (Admission, error) {
+	return c.admitMessage(ownerWorkspace, identity, msg, "")
+}
+
+// AdmitNativeFinalMessage admits a callback-free final response owned by a
+// qualified native source. It remains ineligible until SealNativeFinalMessage
+// confirms that exact source. Transcript settlement and terminal transport
+// are independent later cleanup requirements; unknown owners use AdmitMessage.
+func (c *Coordinator) AdmitNativeFinalMessage(
+	ownerWorkspace string,
+	identity Identity,
+	msg bus.OutboundMessage,
+) (Admission, error) {
+	return c.admitMessage(ownerWorkspace, identity, msg, retentionSourcePending)
+}
+
+func (c *Coordinator) admitMessage(
+	ownerWorkspace string,
+	identity Identity,
+	msg bus.OutboundMessage,
+	retentionClass string,
+) (Admission, error) {
 	if c == nil || c.store == nil {
 		return Admission{}, errors.New("outbox coordinator is unavailable")
 	}
-
 	intent, err := NewMessageIntent(ownerWorkspace, identity, msg, c.now())
 	if err != nil {
 		return Admission{}, err
+	}
+	intent.RetentionClass = retentionClass
+	if retentionClass != "" {
+		intent.Version = retentionRecordVersion
 	}
 	return c.admit(intent)
 }
@@ -673,4 +697,18 @@ func canonicalInstanceRoot(instanceRoot string) (string, error) {
 		root = resolved
 	}
 	return filepath.Clean(root), nil
+}
+
+// ProtectPayload durably revokes retirement before a caller-managed binding.
+// A retired receipt rejects new domain ownership rather than inventing a body.
+func (c *Coordinator) ProtectPayload(deliveryID string) error {
+	if c == nil || c.store == nil {
+		return errors.New("outbox coordinator is unavailable")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.validateOpenLocked(); err != nil {
+		return err
+	}
+	return c.store.protectPayload(deliveryID)
 }

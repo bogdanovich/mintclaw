@@ -182,6 +182,8 @@ type DeliveryInspection struct {
 	DeliveryID                  string        `json:"delivery_id"`
 	Kind                        outbox.Kind   `json:"kind"`
 	Status                      outbox.Status `json:"status"`
+	PayloadRetired              bool          `json:"payload_retired,omitempty"`
+	PayloadRetiredAt            time.Time     `json:"payload_retired_at,omitzero"`
 	Attempts                    int           `json:"attempts"`
 	RetryAfter                  time.Time     `json:"retry_after,omitempty"`
 	RecoverySettled             bool          `json:"recovery_settled"`
@@ -514,6 +516,7 @@ func inspectDeliveryOwners(spec OwnerWorkspaceSpec, ids *ownerIDs, report *Owner
 		report.Deliveries = append(report.Deliveries, DeliveryInspection{
 			StoreID: spec.ID, DeliveryID: intent.ID, Kind: intent.Identity.Kind, Status: intent.Status,
 			Attempts: intent.Attempts, RetryAfter: intent.RetryAfter,
+			PayloadRetired: intent.PayloadRetired, PayloadRetiredAt: intent.PayloadRetiredAt,
 			RecoverySettled: intent.RecoverySettled, TranscriptProjected: intent.TranscriptProjected,
 			RecoverySettlementPending:   intent.RecoverySettlementPending(),
 			TranscriptProjectionPending: intent.TranscriptProjectionPending(),

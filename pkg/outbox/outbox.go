@@ -84,6 +84,9 @@ type Intent struct {
 	TranscriptProjected bool                      `json:"transcript_projected,omitempty"`
 	CreatedAt           time.Time                 `json:"created_at"`
 	UpdatedAt           time.Time                 `json:"updated_at"`
+	RetentionClass      string                    `json:"retention_class,omitempty"`
+	PayloadRetired      bool                      `json:"payload_retired,omitempty"`
+	PayloadRetiredAt    time.Time                 `json:"payload_retired_at,omitzero"`
 }
 
 // RetryExhausted reports whether a definitely-not-sent intent consumed the
@@ -297,7 +300,12 @@ func (s *Store) Create(intent Intent) (Intent, error) {
 		if !sameLogicalIdentity(existing, intent) {
 			return Intent{}, fmt.Errorf("outbox intent %q conflicts with existing record", intent.ID)
 		}
-		if existing.Status != StatusPending {
+		protect := !existing.PayloadRetired && existing.RetentionClass != "" && intent.RetentionClass == ""
+		if protect {
+			existing.RetentionClass = ""
+			existing.UpdatedAt = s.now().UTC()
+		}
+		if existing.Status != StatusPending && !protect {
 			return existing, nil
 		}
 		// Rewrite duplicate pending records so a prior uncertain directory sync
@@ -616,7 +624,7 @@ func validateIdentity(identity Identity) error {
 }
 
 func validateIntent(intent Intent) error {
-	if intent.Version != recordVersion {
+	if intent.Version != recordVersion && intent.Version != retentionRecordVersion {
 		return fmt.Errorf("unsupported outbox record version %d", intent.Version)
 	}
 	if err := validateID(intent.ID); err != nil {
@@ -640,6 +648,26 @@ func validateIntent(intent Intent) error {
 	}
 	if intent.CreatedAt.IsZero() || intent.UpdatedAt.IsZero() {
 		return errors.New("outbox timestamps are required")
+	}
+	if intent.Version == retentionRecordVersion && intent.Identity.Kind != KindMessage {
+		return errors.New("outbox retention format only admits message payloads")
+	}
+	if intent.PayloadRetired {
+		if intent.Version != retentionRecordVersion {
+			return errors.New("retired payload requires retention record version")
+		}
+		return validateRetiredIntent(intent)
+	}
+	if intent.Version == recordVersion && intent.RetentionClass != "" {
+		return errors.New("outbox retirement classification requires retention record version")
+	}
+	if !intent.PayloadRetiredAt.IsZero() {
+		return errors.New("outbox full record cannot contain retired-payload state")
+	}
+	if intent.RetentionClass != "" &&
+		((intent.RetentionClass != retentionPlainMessage && intent.RetentionClass != retentionSourcePending) ||
+			intent.Message == nil || !PlainMessageRetirementAllowed(*intent.Message)) {
+		return errors.New("outbox retention class does not match a plain message")
 	}
 	if intent.RecoverySettled &&
 		(!intent.RequiresRecoverySettlement() || !isTerminalStatus(intent.Status)) {
