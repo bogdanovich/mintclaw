@@ -48,6 +48,12 @@ the remaining harness/domain qualification; no task was retried or prior result 
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 
+The [browser read v1 pilot](../operations/manual-agent-evals-browser-read-v1-pilot-20261018.md) on merged #1746
+retained one inconclusive attempt: the script completed, but native driver startup failed and the fixture observed
+zero page visits. Model-free long/short temporary-path controls identified a Chrome Unix-socket path-length defect.
+The owned gateway/listener stopped and five credential copies were removed; native grading/privacy/cleanup and all
+six browser cases remain unqualified. The temporary-path prerequisite must preserve native isolation and recovery.
+
 ## Milestones
 
 | Stage | Outcome | Dependency | Status |
