@@ -19,6 +19,15 @@ const (
 	objectiveOutcomeResultRequired = "objective outcome result was required"
 )
 
+const objectiveOutputShapeInstruction = "Each output must use exactly one shape: " +
+	`{"kind":"text","text":"standalone result"}, ` +
+	`{"kind":"records","records":[{"field":"value"}]}, or ` +
+	`{"kind":"artifact","artifact_refs":["stable-ref"]}. ` +
+	"Never mix text, records, and artifact_refs in one output. For artifact or records outputs, put explanatory " +
+	"prose in the top-level result instead. Correct an invalid output shape without repeating completed actions. " +
+	"The runtime associates committed download receipts with matching artifact results automatically; " +
+	"keep result receipt_ids empty. An output-only download does not need an extra external_action objective. "
+
 type reportedObjectiveOutcome struct {
 	Status         string                  `json:"status"`
 	CompletedItems []reportedObjectiveItem `json:"completed_items"`
@@ -212,7 +221,7 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 	encoded, _ := json.Marshal(interactionObjectiveChecklist(checklist))
 	instruction := task + "\n\nRuntime outcome contract (required): finish with exactly one JSON block " +
 		objectiveOutcomeStart +
-		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":[],"output":{"kind":"text|records|artifact","text":"standalone result","records":[{"field":"value"}],"artifact_refs":["stable-ref"]}}],"missing_items":["objective_2"],"not_needed_items":[],"result":"one complete user-facing answer","explanation":"specific blocker when partial or blocked"}` +
+		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":[],"output":{"kind":"text","text":"standalone result"}}],"missing_items":["objective_2"],"not_needed_items":[],"result":"one complete user-facing answer","explanation":"specific blocker when partial or blocked"}` +
 		objectiveOutcomeEnd +
 		". The runtime-owned objective checklist is: " + string(encoded) +
 		". Put every checklist ID exactly once in completed_items, missing_items, or not_needed_items; never add or rename IDs. " +
@@ -228,8 +237,7 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 		"for every exact JSON value, including objects and arrays, or any result containing " +
 		"boolean, number, or null values. If acceptance exact_json=true, put valid complete final JSON only in " +
 		"that result; it becomes the entire response. Never mark supporting data exact_json. " +
-		"Use kind=artifact with stable artifact_refs. The runtime associates committed download receipts with " +
-		"matching artifact results automatically; keep result receipt_ids empty. Satisfy each declared acceptance " +
+		objectiveOutputShapeInstruction + "Use kind=artifact with stable artifact_refs. Satisfy each declared acceptance " +
 		"output_kind, required_fields, and min_items exactly. Set " +
 		"truncated=true if any requested output is missing due to size; truncated output is not accepted as complete. " +
 		"For result items, omit receipt_ids or use an empty array. " +
@@ -378,7 +386,8 @@ func objectiveOutcomeRepairInstructionWithReceipts(
 	}
 	return "Finalization repair required: " + reason + ". Return a corrected standalone final result and exactly " +
 		"one complete " + objectiveOutcomeStart + " JSON block using the same runtime-owned objective IDs. " +
-		"Include the actual output for every completed result objective. Do not refer to data as appearing above, " +
+		"Include the actual output for every completed result objective. " + objectiveOutputShapeInstruction +
+		"Do not refer to data as appearing above, " +
 		"in tool output, or elsewhere in context. This is a model-only repair pass: do not call any tool, repeat any " +
 		"external action, or claim a new side effect. Treat the latest user guidance in the conversation as " +
 		"authoritative: if it ended or superseded an earlier objective, report partial or blocked instead of reviving " +
