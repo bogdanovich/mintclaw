@@ -572,6 +572,88 @@ func TestCollectLiveExecutionEvidenceFailsClosedWithoutTrace(t *testing.T) {
 	}
 }
 
+func TestCollectLiveExecutionEvidenceWaitsForLateParentPublication(t *testing.T) {
+	rootWorkspace := t.TempDir()
+	childWorkspace := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{ID: "browser", Workspace: childWorkspace})
+	created := time.Now().UTC()
+	sessionKey := "sk_v1_late_parent_evidence"
+	root := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
+		SchemaVersion: diagnostictrace.SchemaVersionV1, TraceID: "trace-late-parent", CreatedAt: created,
+		Policy: diagnostictrace.CapturePolicy{ContentMode: diagnostictrace.ContentMetadataOnly},
+		Limits: diagnostictrace.DefaultLimits(),
+		Metadata: diagnostictrace.Metadata{
+			RootTurnID: "main-turn-late", AgentID: "main",
+			SessionHash: fmt.Sprintf("%x", sha256.Sum256([]byte(sessionKey))),
+		},
+		Records: []diagnostictrace.Record{
+			liveEvidenceRecord(t, 1, 0, diagnostictrace.RecordToolCall, "root-call", "delegate-late",
+				diagnostictrace.ToolPayload{Tool: "delegate", Status: "started", Executed: true}),
+			liveEvidenceRecord(t, 2, time.Millisecond, diagnostictrace.RecordSubTurnAdmission, "admission", "",
+				diagnostictrace.SubTurnAdmissionPayload{
+					State: "admitted", Stage: "target_agent", AgentID: "browser", ChildTurnID: "subturn-late",
+				}),
+			liveEvidenceRecord(
+				t,
+				3,
+				2*time.Millisecond,
+				diagnostictrace.RecordToolResult,
+				"root-result",
+				"delegate-late",
+				diagnostictrace.ToolPayload{Tool: "delegate", Status: "completed", Executed: true},
+			),
+		},
+		Outcome: &diagnostictrace.Outcome{Status: "completed"},
+	})
+	child := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
+		SchemaVersion: diagnostictrace.SchemaVersionV1, TraceID: "trace-late-child", CreatedAt: created,
+		Policy: diagnostictrace.CapturePolicy{ContentMode: diagnostictrace.ContentMetadataOnly},
+		Limits: diagnostictrace.DefaultLimits(),
+		Metadata: diagnostictrace.Metadata{
+			RootTurnID: "browser-turn-late", ParentTurnID: "main-turn-late", ChildTurnID: "subturn-late",
+			AgentID: "browser", SessionHash: "late-child-session",
+		},
+		Records: []diagnostictrace.Record{
+			liveEvidenceRecord(t, 1, 0, diagnostictrace.RecordToolCall, "child-call", "targets-late",
+				diagnostictrace.ToolPayload{Tool: "browser_targets", Status: "started", Executed: true}),
+			liveEvidenceRecord(t, 2, time.Millisecond, diagnostictrace.RecordToolResult, "child-result", "targets-late",
+				diagnostictrace.ToolPayload{Tool: "browser_targets", Status: "completed", Executed: true}),
+		},
+		Outcome: &diagnostictrace.Outcome{Status: "completed"},
+	})
+	childStore := diagnostictrace.Store{
+		Root: diagnostictrace.ResolveStoreRoot(cfg.Diagnostics.TraceCapture.StateDir, childWorkspace),
+	}
+	if _, err := childStore.Save(child); err != nil {
+		t.Fatal(err)
+	}
+	rootStore := diagnostictrace.Store{
+		Root: diagnostictrace.ResolveStoreRoot(cfg.Diagnostics.TraceCapture.StateDir, rootWorkspace),
+	}
+	published := make(chan error, 1)
+	go func() {
+		// Direct delivery can precede canonical parent-trace publication. Do not
+		// change this to liveEvidenceWait: it must exceed the old five-second budget.
+		time.Sleep(6 * time.Second)
+		_, err := rootStore.Save(root)
+		published <- err
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	evidence, err := collectLiveExecutionEvidence(ctx, cfg,
+		runtimeevents.NewTraceScope(rootWorkspace, "main-turn-late"), sessionKey, "browser", created)
+	if publishErr := <-published; publishErr != nil {
+		t.Fatal(publishErr)
+	}
+	if err != nil || evidence.Status != "verified" || evidence.SafeError != nil ||
+		evidence.Delegation.Admitted != 1 || evidence.Parent.ToolCalls["delegate"] != 1 ||
+		evidence.Child.ToolCalls["browser_targets"] != 1 {
+		t.Fatalf("late publication evidence = %#v, error = %v", evidence, err)
+	}
+}
+
 func TestSummarizeLiveTraceRejectsUnexecutedToolEvidence(t *testing.T) {
 	tests := []struct {
 		name           string

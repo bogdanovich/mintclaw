@@ -32,7 +32,7 @@ repository; these counts are context, not coverage or quality scores.
 | R5 | Medium | Carry typed MCP failure classifications | Admitted correctness work |
 | R6 | High | Finish behavioral evaluation qualification | Existing agent-evals program; reuse its owners and evidence |
 | R7 | Medium | Simplify tool execution around existing stages | Intentionally deferred; trigger not observed |
-| R8 | Medium | Expand frontend lifecycle regression coverage | Admitted, bounded to exercised lifecycle contracts |
+| R8 | Medium | Expand frontend lifecycle regression coverage | Implemented; CI/review pending |
 | R9 | Conditional | Decompose browser and coding integration files | Intentionally deferred; trigger not observed |
 | R10 | Conditional | Measure storage contention before redesign | Measurement admitted; replacement requires measured need |
 | R11 | Low | Improve current architecture navigation | Current-owner map added to code-health.md |
@@ -64,6 +64,20 @@ Completion gates:
 - recovery exposes bounded, redacted diagnostic issues;
 - tests cover mixed valid/damaged records, startup behavior, repair/restart,
   and preservation of no-blind-replay and domain settlement guarantees.
+
+The first implementation isolates JSON syntax failures and per-record permission
+denials only under canonical delivery filenames. The original file remains the
+blocked identity and repair evidence. Typed recovery reports separate usable
+independent work from record issues; errors invalidate the whole result and
+transfer no dispatch claims.
+Unsupported schemas, identity conflicts, unknown filenames, missing records,
+directory failures, and recovery-write failures remain fatal. Gateway startup
+reports bounded identity/code diagnostics and accepts only that explicit partial
+recovery contract. No record migration or automatic deletion is introduced.
+Operational repair restores an authoritative original record and lets normal
+recovery classify its state again. Deleting an isolated file would remove its
+duplicate-prevention identity and is not a repair. If its original state cannot
+be established, retain the blocked record and its uncertain outcome.
 
 ## R2: MCP Discovery Failures
 
@@ -110,6 +124,12 @@ Completion gates: bounded payload growth and measured recovery cost; cleanup
 cannot recreate a previously delivered identity, discard pending obligations,
 or turn an ambiguous outcome into a retry; interrupted cleanup recovers safely.
 
+R4's source audit found that inbound spool writes, renames and acknowledgements
+needed filesystem sync confirmation before an acknowledgement could support a
+retirement proof. That focused durability prerequisite preserves spool versions,
+message IDs and replay rules; typed source acknowledgement and evidence-owner
+completion remain separate unfinished gates.
+
 ## R5: Typed MCP Failure Classification
 
 Evidence: `pipeline_execute.go` decides fatal transport behavior from a
@@ -124,6 +144,14 @@ internal classification without exposing sensitive diagnostics to the model.
 Completion gates: ordinary tool failures, cancellation, timeouts, fatal framing,
 closed transports, long wrapped errors, and uncertain execution have distinct
 tests; reconnect never silently repeats an uncertain side effect.
+
+The implementation carries malformed-response classification through a typed
+MCP error with a fixed public message that preserves its underlying cause internally.
+Current-turn control and repeated-failure accounting consume that classification,
+not error summaries. SDK compatibility matching stays at the MCP boundary and
+excludes structured remote application errors and canceled/timed-out causes.
+Session-loss recovery keeps its existing uncertain outcome and never replays the
+call automatically.
 
 ## R6: Existing Behavioral Qualification
 
@@ -187,6 +215,14 @@ Preserve real durability tests. A measured budget failure may admit a separate,
 focused redesign; attractive throughput numbers alone do not justify replacing
 bounded, reliable storage.
 
+The [October storage measurements](../operations/storage-costs-20261017.md)
+record realistic snapshot/history sizes, concurrent callers, actual durability,
+profiles, outbox recovery cost, and platform limits. Byte-budget event trimming
+missed the pre-recorded latency budgets and allocated about 130 MiB per update.
+That evidence admits exact event-byte accounting in the existing pruner. The
+same workloads improve substantially, while remaining budget misses stay
+explicit. A storage backend replacement is not admitted at the measured scale.
+
 ## R11: Documentation Navigation
 
 Provide a compact current-system map and active-work index using the existing
@@ -210,6 +246,12 @@ Completion gates: addressed or explicitly evidenced dispositions for current
 alerts, reproducible frozen installation, frontend formatting/lint/tests/build,
 and a bounded repeatable advisory check that distinguishes actionable findings
 from accepted, documented exceptions. Keep this separate from runtime fixes.
+
+The first compatible dependency refresh reduces a fresh pnpm audit from 69 to
+three findings. The [frontend audit record](../operations/frontend-dependency-audit-20261017.md)
+records the remaining tooling paths, built-output witness, expiring dispositions,
+and the repeatable CI check. Merge evidence is pending; this is not a deployed
+security or live-browser qualification claim.
 
 ## Validation And Delivery
 
@@ -276,3 +318,30 @@ Merged correctness evidence: R2 [#1681](https://github.com/bogdanovich/mintclaw/
 (`5fef84bbebb2047d1ab3eb766ef06dcf5e1a3bc4`) passed exact-head CI, substantive
 review and owner merge approval. R1 #1685, R5 #1687, R8 #1691, R10 #1690 and
 R12 #1688 are published separately and remain subject to their own gates.
+
+## Frontend Delivery Evidence
+
+R3 merged in [PR #1682](https://github.com/bogdanovich/mintclaw/pull/1682)
+at `5fef84bbebb2047d1ab3eb766ef06dcf5e1a3bc4` after green CI, substantive
+review, and owner merge approval. Seven controlled-promise regressions first
+failed against the original implementation and now preserve the latest session
+selection, including teardown and stale failures.
+
+R8 adds controlled sockets and clocks to the existing Vitest suite: duplicate
+connection suppression, reconnect backoff/reset, gateway stop/error and teardown,
+stale socket events, failed sends without automatic replay, and initial history
+hydration. A new regression reproduced old hydration overwriting a reinitialized
+session; request identity now rejects stale success and failure without clearing
+a newer request. Credential request tests cover token placement, encoded flow
+identifiers, cookie credentials, expired-session redirects without mutation
+replay, and omitted versus explicit replacement model secrets. These are request
+and store contract tests, not browser/OAuth popup qualification.
+
+Failed sends also restore the preceding typing state, preserving an in-flight
+assistant response when a newer send fails synchronously. The added active-typing
+regression first failed against the original rollback.
+
+Local validation: 38 tests across six files, ESLint, Prettier, TypeScript and
+production build passed with supported Node 22.23.1 and the frozen lockfile.
+No new frontend dependency or state framework was introduced. CI and review
+remain required before this packet is complete.

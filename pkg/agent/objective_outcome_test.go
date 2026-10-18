@@ -444,6 +444,116 @@ func TestObjectiveOutcomeRepairTargetsOnlyStructurallyInvalidSuccess(t *testing.
 	}
 }
 
+func TestObjectiveOutcomeRepairIdentifiesUnclaimedTransferReceipts(t *testing.T) {
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+		{Item: "Transfer the original image and submit it", Kind: taskresult.ObjectiveKindExternalAction},
+		{Item: "Report verified upload state", Kind: taskresult.ObjectiveKindResult},
+	})
+	contract := browserObjectiveOutcomeInstruction("Transfer the image", checklist)
+	if !strings.Contains(contract, "When reporting succeeded") ||
+		!strings.Contains(contract, "including unknown-effect download, upload, and file_chooser") {
+		t.Fatal("browser contract did not require complete receipt coverage for success")
+	}
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":["inv-submit"]},` +
+		`{"objective_id":"objective_2","output":{"kind":"records","records":[{"uploaded":"true"}]}}],` +
+		`"missing_items":[],"result":"Upload verified: true."}` + objectiveOutcomeEnd
+	var audits []toolshared.WriteAuditEntry
+	for _, action := range []string{"download", "upload", "submit", "read", "failed"} {
+		effect := "unknown"
+		switch action {
+		case "submit":
+			effect = "external_commit"
+		case "read":
+			effect = "read"
+		}
+		audits = append(audits, toolshared.WriteAuditEntry{
+			Kind: "external_action", Tool: "browser_act", Action: action,
+			Success: action != "failed", Target: "private-target-must-not-appear",
+			Summary:  "private-summary-must-not-appear",
+			Metadata: map[string]string{"invocation_id": "inv-" + action, "effect": effect},
+		})
+	}
+	instruction, repair := objectiveOutcomeRepairInstruction(content, audits, checklist)
+	if !repair || !strings.Contains(instruction, "inv-download") || !strings.Contains(instruction, "inv-upload") {
+		t.Fatalf("repair omitted verified unclaimed transfer receipts: %q", instruction)
+	}
+	for _, excluded := range []string{
+		"inv-submit", "inv-read", "inv-failed", "private-target-must-not-appear", "private-summary-must-not-appear",
+	} {
+		if strings.Contains(instruction, excluded) {
+			t.Fatalf("repair included claimed, unverified or private evidence %q", excluded)
+		}
+	}
+	if !strings.Contains(instruction, "model-only repair") || !strings.Contains(instruction, "do not call any tool") {
+		t.Fatalf("repair permits replay: %q", instruction)
+	}
+	_, incomplete := extractObjectiveOutcome(content, audits, true, checklist)
+	if incomplete.Status != taskresult.OutcomePartial || taskresult.StandaloneResultOutput(
+		&taskresult.Deliverable{ObjectiveOutcome: incomplete},
+	) != nil {
+		t.Fatal("unclaimed transfer effects bypassed completion accounting")
+	}
+	corrected := strings.Replace(content, `["inv-submit"]`, `["inv-download","inv-upload","inv-submit"]`, 1)
+	_, complete := extractObjectiveOutcome(corrected, audits, true, checklist)
+	output := taskresult.StandaloneResultOutput(&taskresult.Deliverable{ObjectiveOutcome: complete})
+	if complete.Status != taskresult.OutcomeSucceeded || output == nil || output.Records[0]["uploaded"] != "true" {
+		t.Fatalf("fully receipted transfer did not project its result: outcome=%#v output=%#v", complete, output)
+	}
+	if _, repair = objectiveOutcomeRepairInstruction(corrected, audits, checklist); repair {
+		t.Fatal("a fully accounted result still required repair")
+	}
+	// A model-authored claim under a result item is not a validated receipt
+	// assignment and must not conceal that receipt from repair feedback.
+	wrongItem := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_2",` +
+		`"receipt_ids":["inv-download"],"output":{"kind":"records","records":[{"uploaded":"true"}]}}],` +
+		`"missing_items":["objective_1"],"result":"Upload verified: true."}` + objectiveOutcomeEnd
+	instruction, repair = objectiveOutcomeRepairInstruction(wrongItem, audits, checklist)
+	if !repair || !strings.Contains(instruction, "inv-download") {
+		t.Fatal("an invalid model claim concealed an unclaimed runtime receipt")
+	}
+}
+
+func TestObjectiveOutcomeReceiptRepairContextIsBoundedAndRuntimeOwned(t *testing.T) {
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "Complete the requested work", Kind: taskresult.ObjectiveKindExternalAction,
+	}})
+	var receipts []taskresult.Receipt
+	for index := range objectiveOutcomeLimit + 1 {
+		receipts = append(receipts, taskresult.Receipt{
+			ID: "receipt-" + strconv.Itoa(1000+index), Kind: taskresult.ObjectiveKindExternalAction,
+			Target: "private-target-must-not-appear", Summary: "private-summary-must-not-appear",
+			Metadata: map[string]string{"secret": "private-metadata-must-not-appear"},
+		})
+	}
+	receipts = append(receipts, taskresult.Receipt{ID: "untrusted-kind", Kind: "unknown"})
+	instruction, repair := objectiveOutcomeRepairInstructionWithReceipts("Missing outcome", nil, receipts, checklist)
+	if !repair || strings.Count(instruction, `"kind":"external_action"`) != objectiveOutcomeLimit ||
+		!strings.Contains(instruction, "64 of 65") || !strings.Contains(instruction, "receipt-1000") {
+		t.Fatalf("runtime receipt repair context is not bounded: %q", instruction)
+	}
+	for _, excluded := range []string{
+		"receipt-1064", "untrusted-kind", "private-target-must-not-appear",
+		"private-summary-must-not-appear", "private-metadata-must-not-appear",
+	} {
+		if strings.Contains(instruction, excluded) {
+			t.Fatalf("repair disclosed omitted or private value %q", excluded)
+		}
+	}
+}
+
+func TestObjectiveOutcomeReceiptRepairDoesNotTruncateOpaqueIDs(t *testing.T) {
+	id := "receipt-" + strings.Repeat("x", 300)
+	context := unclaimedObjectiveReceiptContext(nil, []taskresult.Receipt{{
+		ID: id, Kind: taskresult.ObjectiveKindExternalAction,
+	}}, nil)
+	if !strings.Contains(context, "0 of 1") || strings.Contains(context, strings.Repeat("x", 20)) {
+		t.Fatalf("oversized receipt ID was silently truncated: %q", context)
+	}
+}
+
 func TestObjectiveOutcomeUsesCurrentResultWithVerifiedReceipt(t *testing.T) {
 	content := objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +

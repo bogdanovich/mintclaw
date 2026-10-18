@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -133,22 +134,36 @@ func (r *Registry) pruneSnapshotBytesLocked() bool {
 }
 
 func (r *Registry) trimEventsForSnapshotBudgetLocked() bool {
-	if r == nil || len(r.events) == 0 || r.snapshotSizeLocked() <= r.options.MaxSnapshotBytes {
+	if r == nil || len(r.events) == 0 {
+		return false
+	}
+	size := r.snapshotSizeLocked()
+	if size <= r.options.MaxSnapshotBytes {
 		return false
 	}
 	original := r.events
-	low, high := 0, len(original)
-	for low < high {
-		mid := low + (high-low)/2
-		r.events = original[mid:]
-		if r.snapshotSizeLocked() <= r.options.MaxSnapshotBytes {
-			high = mid
-		} else {
-			low = mid + 1
+	for index, event := range original {
+		if index+1 == len(original) {
+			// With no events the entire omitempty field disappears. The caller
+			// separately handles a task-only snapshot that remains over budget.
+			r.events = original[len(original):]
+			return true
+		}
+		// Snapshot event objects start at four spaces. Removing a head item
+		// also removes its leading newline/indent and one inter-item comma.
+		// Count only removed events instead of re-encoding every task and
+		// retained event at each binary-search probe.
+		encoded, err := json.MarshalIndent(event, "    ", "  ")
+		if err != nil {
+			return false
+		}
+		size -= len(encoded) + len(",\n    ")
+		if size <= r.options.MaxSnapshotBytes {
+			r.events = original[index+1:]
+			return true
 		}
 	}
-	r.events = original[low:]
-	return low > 0
+	return false
 }
 
 func (r *Registry) pruneEventsLocked() bool {

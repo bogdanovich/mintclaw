@@ -21,6 +21,10 @@ import (
 
 const recordVersion = 3
 
+// deliveryIdentityVersion is a permanent part of the no-replay key. Storage
+// schema changes must not create a new logical delivery for an existing source.
+const deliveryIdentityVersion = 3
+
 // MaxDeliveryAttempts bounds recoverable delivery attempts for one logical
 // outbound intent. Retry ownership belongs to the outbox rather than to the
 // domain record that requested delivery.
@@ -182,7 +186,7 @@ func DeliveryID(identity Identity) (string, error) {
 		Ordinal  int    `json:"ordinal"`
 		Kind     Kind   `json:"kind"`
 	}{
-		Version:  recordVersion,
+		Version:  deliveryIdentityVersion,
 		SourceID: identity.SourceID,
 		Ordinal:  identity.Ordinal,
 		Kind:     identity.Kind,
@@ -373,14 +377,15 @@ func (s *Store) MarkAmbiguous(id string, outcome Outcome) (Intent, error) {
 }
 
 // Recover converts interrupted attempts to ambiguous and returns records that
-// are known safe to dispatch again.
-func (s *Store) Recover() ([]Intent, error) {
+// are known safe to dispatch again. Isolated record issues are diagnostics in
+// the result; fatal errors return no usable recovery work.
+func (s *Store) Recover() (RecoveryReport, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	records, err := s.list()
+	records, issues, err := s.list()
 	if err != nil {
-		return nil, err
+		return RecoveryReport{}, err
 	}
 	dispatchable := make([]Intent, 0, len(records))
 	for _, intent := range records {
@@ -403,7 +408,7 @@ func (s *Store) Recover() ([]Intent, error) {
 			intent.LastError = interruptedAttemptError
 			intent.UpdatedAt = s.now().UTC()
 			if err := s.write(intent); err != nil {
-				return nil, fmt.Errorf("mark interrupted intent %q ambiguous: %w", intent.ID, err)
+				return RecoveryReport{}, fmt.Errorf("mark interrupted intent %q ambiguous: %w", intent.ID, err)
 			}
 			if intent.RecoverySettlementPending() {
 				dispatchable = append(dispatchable, intent)
@@ -411,12 +416,12 @@ func (s *Store) Recover() ([]Intent, error) {
 		case StatusAmbiguous:
 			if intent.LastError == interruptedAttemptError {
 				if err := s.write(intent); err != nil {
-					return nil, fmt.Errorf("reconfirm interrupted intent %q: %w", intent.ID, err)
+					return RecoveryReport{}, fmt.Errorf("reconfirm interrupted intent %q: %w", intent.ID, err)
 				}
 			}
 		}
 	}
-	return dispatchable, nil
+	return RecoveryReport{Intents: dispatchable, Issues: issues}, nil
 }
 
 // MarkRecoverySettled durably acknowledges that the domain state machine
@@ -518,19 +523,25 @@ func (s *Store) transition(
 	return intent, nil
 }
 
-func (s *Store) list() ([]Intent, error) {
+func (s *Store) list() ([]Intent, []RecoveryIssue, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
-		return nil, fmt.Errorf("read outbox directory: %w", err)
+		return nil, nil, fmt.Errorf("read outbox directory: %w", err)
 	}
 	records := make([]Intent, 0, len(entries))
+	var issues []RecoveryIssue
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		intent, err := s.read(strings.TrimSuffix(entry.Name(), ".json"))
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		intent, err := s.read(id)
 		if err != nil {
-			return nil, err
+			if issue, isolated := isolatedRecordIssue(id, err); isolated {
+				issues = append(issues, issue)
+				continue
+			}
+			return nil, nil, err
 		}
 		records = append(records, intent)
 	}
@@ -540,7 +551,7 @@ func (s *Store) list() ([]Intent, error) {
 		}
 		return cmp.Compare(a.ID, b.ID)
 	})
-	return records, nil
+	return records, issues, nil
 }
 
 func (s *Store) read(id string) (Intent, error) {
@@ -709,7 +720,7 @@ func validateMediaRoute(identity Identity, msg bus.OutboundMediaMessage) error {
 }
 
 func validateID(id string) error {
-	if len(id) != len("out_")+32 || !strings.HasPrefix(id, "out_") {
+	if len(id) != len("out_")+32 || !strings.HasPrefix(id, "out_") || id != strings.ToLower(id) {
 		return fmt.Errorf("invalid outbox delivery ID %q", id)
 	}
 	if _, err := hex.DecodeString(strings.TrimPrefix(id, "out_")); err != nil {
