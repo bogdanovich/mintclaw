@@ -8,7 +8,8 @@ Keep secret values out of all model-provider requests, tool arguments and
 results, transcripts, local traces, logs, error messages, and browser artifacts.
 Secret names/slugs and fixed operation outcomes may be visible. The operator
 uses Android and a personal 1Password account, and has created a service
-account/token. No real token has been provisioned to this implementation.
+account/token. The operator has provisioned the token through the protected
+terminal setup path; its value was not supplied through chat or agent tools.
 
 The authoritative contract is the
 [trusted-runtime design](credential-trusted-runtime-design.md). It replaces the
@@ -24,6 +25,12 @@ to selected aliases for at most 20 hours, with revocation, expiry, policy-change
 invalidation, and restart denial. A credential grant does not approve external
 effects such as purchases, posts, messages, or account changes.
 
+The operator clarified on 2026-10-18 that GitHub access is not needed for the
+requested browser logins. TR5's scoped connector implementation and synthetic
+qualification are delivered, but activating that optional integration is
+separate work. A GitHub token, repository selection and real-token API pilot
+are not prerequisites for completing or using the browser credential feature.
+
 ## Delivery sequence
 
 | Milestone | Reviewable change | Completion evidence |
@@ -33,7 +40,7 @@ effects such as purchases, posts, messages, or account changes.
 | TR2 | Alias-only 1Password configuration, private operator setup, and safe credential-use coordinator | Dedicated-vault read scope, no model-facing value retrieval, fixed safe errors, value-free audit records, synthetic provider tests |
 | TR3 | Integrated Android approval/revoke page and generic notifications | Owner enrollment, exact scope and HTTPS origin, user-verifying passkey ceremonies, 20-hour maximum, immediate revoke/expiry/restart behavior, physical Android qualification |
 | TR4 | Private login operation in the existing first-party browser | Exact-origin checks, current field readiness, fill/submit without model round trips, observation suppression and failure cleanup, safe MFA outcome, protected session lifetime |
-| TR5 | One explicitly scoped non-browser connector | Private credential injection at a fixed endpoint/action, independent effect policy, allowed result projection, no raw authentication headers/body in diagnostics |
+| TR5 | One explicitly scoped non-browser connector; live activation optional | Private credential injection at a fixed endpoint/action, independent effect policy, allowed result projection, no raw authentication headers/body in diagnostics |
 | TR6 | End-to-end output qualification and one personal login pilot | Synthetic canaries absent from every enabled model/durable sink; protected real-token setup; actual Android approval/login/revoke; one operator-selected account |
 
 Keep PRs focused on these complete behaviors. Do not split each OS primitive or
@@ -152,7 +159,9 @@ qualification and physical-device acceptance are recorded separately below.
   confirms enrollment is durably activated. This retrieved no credentials and
   issued no account grant. The first subsequent real account request delivered
   its chat notice, the owner reported Android approval, and the private login
-  succeeded. Physical grant reuse and revocation remain acceptance steps.
+  succeeded. A second same-scope login reused the grant in the same gateway
+  lifetime. After the owner reported completing phone revocation, a later
+  same-scope request required fresh approval without a gateway restart.
   State-changing API calls retain the exact same-origin boundary.
 - TR4: the existing browser's private credential transaction is merged in
   [#1637](https://github.com/bogdanovich/mintclaw/pull/1637), including grant
@@ -188,23 +197,39 @@ qualification and physical-device acceptance are recorded separately below.
   [pilot sequence](credential-craigslist-pilot.md) records public form evidence,
   completed private setup and the first real Android-approved login on qualified
   runtime `694d716db119e14044faffbe4cd68fb1567cba25`. Its tool returned only the
-  alias and `logged_in`; same-scope grant reuse and revocation remain pending.
+  alias and `logged_in`; a second login confirmed same-scope grant reuse.
+  [#1724](https://github.com/bogdanovich/mintclaw/pull/1724) adds a native receipt
+  for confirmed private login without expanding the public result. A fresh
+  owner-requested login on deployed runtime
+  `5ce0ed6ef919db58820cf716499778a0974479d8` produced that verified receipt and
+  a succeeded objective, then closed the temporary browser.
+  The owner subsequently reported completing phone revocation; a retry at the
+  configured entry URL returned `approval_required` and delivered a fresh link
+  under the same actor/agent scope and gateway process. This completes the
+  selected account's notification, approval, login, grant-reuse and
+  closed-session revocation checks. Active-browser retirement remains
+  synthetically qualified, with no physical in-progress-task claim.
   The selected headless ephemeral browser is separate from the remote desktop
   and does not retain a website session after closure.
-- TR5: the [GitHub read connector](credential-github-read-connector.md) is the
-  initial read-only default while the operator chooses a preferred API. It
+- TR5: the [GitHub read connector](credential-github-read-connector.md) is an
+  optional read-only API integration. It
   reuses phone approval for exact configured repositories and an API Credential
   item. Synthetic actual-HTTP/provider/phone tests cover protected result
   release, grant reuse and cancellation on revocation. The implementation is
   merged in [#1673](https://github.com/bogdanovich/mintclaw/pull/1673) and included
-  in the deployed binary. The connector remains disabled pending configuration
-  and real-token acceptance.
-- TR5/TR6: real connector rollout and the personal-account pilot are incomplete.
+  in the deployed binary. Its implementation and synthetic qualification are
+  complete. It remains disabled; repository configuration, a separate API
+  Credential item and real-token acceptance are needed only if the operator
+  later requests this integration. They do not block browser credential access.
+- TR5/TR6: the integrated implementation and selected personal-account pilot
+  are delivered for the qualified routes and closed-session revocation
+  sequence above. Real GitHub activation is optional and has not been requested.
   Synthetic output qualification covers the explicitly inventoried routes and
   scenarios, not every possible provider or recovery path.
   Dedicated-vault read-only scope is operator-confirmed; protected token entry,
   exact site outcome metadata and the first real Android-approved login are
-  recorded. Physical grant reuse and revocation remain. These observations do
+  recorded, along with actual same-scope grant reuse and a fresh approval
+  requirement after the reported phone revocation. These observations do
   not expand the synthetic inventory's provider/recovery limits. Passing
   component tests or one successful login do not prove the complete feature or
   absence of secrets from every possible output.

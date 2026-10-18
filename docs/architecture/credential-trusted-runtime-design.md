@@ -63,11 +63,14 @@ metadata. They contain no raw SDK errors, browser exceptions, request headers,
 response bodies, DOM dumps, or authentication values. Slug visibility does not
 permit logging the associated value.
 
-Non-browser operations use a concrete endpoint and action selected by operator
-configuration. Inject credentials inside the connector immediately before the
-request, apply its own effect policy, and return an allowlisted result shape.
-Provide one useful connector first; do not expose arbitrary HTTP, `get_secret`,
-shell interpolation, or a credential-bearing request object to the model.
+Non-browser connectors are optional integrations for separately requested API
+work. The implemented GitHub pull-request reader stays disabled unless requested;
+browser logins need no GitHub account, API token or repository configuration.
+When a connector is enabled, use a concrete endpoint and action selected by
+operator configuration. Inject credentials inside the connector immediately
+before the request, apply its own effect policy, and return an allowlisted
+result shape. Do not expose arbitrary HTTP, `get_secret`, shell interpolation,
+or a credential-bearing request object to the model.
 
 ## Browser privacy transaction
 

@@ -2,9 +2,10 @@
 
 The operator selected Craigslist as the first account. This is the setup and
 acceptance sequence for the [integrated alias login](credential-alias-browser-login.md).
-The first personal-account login is recorded below; grant reuse and revocation
-still need physical acceptance. Keep `credentials.browser_login_enabled` false
-until the applicable preparation gates below have passed.
+Personal-account notification, approval, login, grant reuse and revocation
+follow-up are recorded below. Browser login is enabled for this selected
+account/principal. Keep `credentials.browser_login_enabled` false in a new
+deployment until the applicable preparation gates below have passed.
 
 ## Prepare the existing application
 
@@ -83,7 +84,9 @@ selected site flow, phone route and notification destination. Enable browser
 login only for the selected account/principal/profile and restart the affected
 gateway. A restart restores the phone passkey but no grants.
 
-Ask MintClaw to log into Craigslist using `craigslist`. Open the generic
+Ask MintClaw to open the configured entry URL
+`https://accounts.craigslist.org/login` and log in using `craigslist` with fresh
+observed field references. Open the generic
 approval link delivered through the existing chat notification on Android and
 approve with the passkey. Approval lasts at most 20 hours. If the tool returns
 `approval_required` before phone approval finishes, a later invocation can use
@@ -154,7 +157,43 @@ its local website session state; the separate access grant permits another
 scoped login until revocation or its deadline, at most 20 hours. Grant reuse
 does not preserve website cookies after the browser is closed.
 
-Actual same-scope grant reuse and phone revocation retiring an open,
-authenticated MintClaw browser remain unverified. Keep the overall pilot
-incomplete until those checks pass. The synthetic output inventory retains its
-stated provider, recovery and MFA limits.
+The next owner-requested login reused the same signed grant and returned
+`logged_in` without another approval. Both logins ran under the same stable
+actor/agent scope in one gateway lifetime; their different task/session
+identities do not change that scope. Both temporary browsers were explicitly
+closed.
+
+The native login receipt fix in
+[#1724](https://github.com/bogdanovich/mintclaw/pull/1724) is deployed at
+`5ce0ed6ef919db58820cf716499778a0974479d8`. A fresh Android-approved login on
+that runtime returned only the alias and `logged_in`. Its authoritative
+delegated outcome was `succeeded`, with the verified native `browser_login`
+receipt and no missing objectives. The browser was explicitly closed. This
+confirms the earlier missing-receipt error is resolved for an ordinary login
+task.
+
+After the owner reported completing the phone-revocation step, one follow-up
+returned `denied` before the approval wait and closed its browser. That attempt
+started through the public homepage; the exact failed admission check is not
+retained in safe metadata. It establishes neither successful grant revocation
+nor a permanent refusal after revocation. The owner then reported receiving a
+new approval link on a retry through the configured entry URL. That retry's
+actual `browser_login` result was `approval_required`; the pending request
+waited about 45 seconds, performed no successful login and explicitly closed
+its temporary browser. The stable actor/agent scope and gateway process were
+unchanged from the preceding approved login. The old permission therefore did
+not authorize the new request after the reported revocation step.
+
+The selected account's closed-session acceptance sequence is complete. This
+records the owner's phone report together with the runtime's fresh approval
+requirement; the earlier `denied` alone was not revocation evidence. For normal
+use, approve a fresh link and repeat login if its temporary browser already
+closed. Consumed request links, expired five-minute locators and requests from
+before a gateway restart cannot restore a grant. Existing verified enrollment
+and the protected service-account token need not be repeated.
+
+Physical revocation while an authenticated browser is actively in use remains
+unverified; the signed synthetic scenarios qualify that retirement behavior.
+The synthetic output inventory retains its stated provider, recovery and MFA
+limits. The optional GitHub connector remains disabled and has no real-token
+acceptance record; it is not needed for this browser pilot or its completion.
