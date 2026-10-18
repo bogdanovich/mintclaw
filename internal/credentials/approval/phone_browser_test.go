@@ -125,7 +125,7 @@ func testPhoneBrowserFixture(t *testing.T, pagePath string) {
 	var output bytes.Buffer
 	command.Stdout, command.Stderr = &output, &output
 	if command.Run() != nil {
-		for _, stage := range []string{"fixture-input", "browser-launch", "enrollment-page", "enrollment-passkey", "approval-page", "approval-passkey", "revocation-passkey", "replay-denial"} {
+		for _, stage := range []string{"fixture-input", "browser-launch", "enrollment-page", "enrollment-passkey", "verification-passkey", "approval-page", "approval-passkey", "revocation-passkey", "replay-denial", "browser-errors", "external-navigation", "route-coverage"} {
 			if output.String() == "phone browser qualification: failed at "+stage+"\n" {
 				t.Fatalf("synthetic browser/WebAuthn qualification failed at %s", stage)
 			}
@@ -135,8 +135,8 @@ func testPhoneBrowserFixture(t *testing.T, pagePath string) {
 	if output.String() != "phone browser qualification: OK\n" || strings.Contains(output.String(), string(invite)) {
 		t.Fatal("unexpected browser fixture output")
 	}
-	if fixture.store.commits != 3 {
-		t.Fatal("browser enrollment, approval and revocation were not all persisted")
+	if fixture.store.commits != 4 {
+		t.Fatal("browser enrollment, verification, approval and revocation were not all persisted")
 	}
 }
 

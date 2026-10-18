@@ -69,6 +69,10 @@ mintclaw credentials enroll
 ```
 
 Open the private five-minute link on Android and create the approval passkey.
+Then choose **Verify approval passkey** and confirm that setup is complete
+before restarting the gateway. If the key was created in 1Password on a
+computer, open the plain `/credentials/` page in Android Chrome to verify the
+synced key there; do not reuse the consumed enrollment link.
 Keep that setup link out of chat and logs. Enrollment creates no access grant
 and does not retrieve the Craigslist password.
 

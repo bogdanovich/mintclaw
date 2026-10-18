@@ -84,6 +84,7 @@ const (
 	enroll ceremonyKind = iota + 1
 	approve
 	revoke
+	verify
 )
 
 type pendingCeremony struct {

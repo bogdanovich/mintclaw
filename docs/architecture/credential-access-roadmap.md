@@ -131,6 +131,10 @@ behavior. Retain normal policy for subsequent authenticated actions.
   virtual-authenticator tests cover the component. The alias operation queues
   generic approval links through the existing outbound chat channel; actual
   Android enrollment and notification delivery remain required.
+  Setup verification on the plain phone page proves the saved passkey works
+  and durably completes enrollment without retrieving credentials or issuing
+  an account grant. External notification links may navigate to that page;
+  state-changing API calls retain the exact same-origin boundary.
 - TR4: the existing browser's private credential transaction is merged in
   [#1637](https://github.com/bogdanovich/mintclaw/pull/1637), including grant
   checks around preparation/retrieval and authenticated session retirement.
