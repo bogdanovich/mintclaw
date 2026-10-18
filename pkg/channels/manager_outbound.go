@@ -50,7 +50,13 @@ func outboundMessageEditPayload(msg bus.OutboundMessage, content string) map[str
 }
 
 func (m *Manager) decorateOutboundResponseFooter(msg bus.OutboundMessage) bus.OutboundMessage {
-	if m == nil || !m.lifecycle.responseFooterEnabled() {
+	return DecorateOutboundResponseFooter(msg, m != nil && m.lifecycle.responseFooterEnabled())
+}
+
+// DecorateOutboundResponseFooter projects the configured final text without
+// delivering a message or changing the source message.
+func DecorateOutboundResponseFooter(msg bus.OutboundMessage, enabled bool) bus.OutboundMessage {
+	if !enabled {
 		return msg
 	}
 	if !outboundMessageIsFinal(msg) || outboundMessageIsToolFeedback(msg) || outboundMessageIsToolCalls(msg) {

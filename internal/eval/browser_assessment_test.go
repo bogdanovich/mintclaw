@@ -110,6 +110,33 @@ func TestFinalizedBrowserReadAdmitsJudgeOnlyWithAllIndependentEvidence(t *testin
 	}
 }
 
+func TestFinalizedBrowserReadRejectsContradictoryNativeReplyBeforeJudge(t *testing.T) {
+	control := newBrowserReadControl(t)
+	for _, event := range control.trial.Events {
+		if event.Kind != "final" {
+			continue
+		}
+		intent, err := newBrowserFinalIntent(control.fixture.workspace, control.trial, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intent.Message.Content = "Contradictory native reply."
+		writeAdmissionJSON(t, filepath.Join(control.fixture.workspace, "state/outbox", intent.ID+".json"), intent)
+	}
+	trial := control.finalize(t)
+	provider := &roleTestProvider{mediated: true, response: &providers.LLMResponse{
+		Content: browserJudgePass(trial), FinishReason: "stop",
+	}}
+	judge := &ModelRole{provider: provider, identity: RoleIdentity{Role: "judge"}}
+	assessFinalizedBrowserRead(t.Context(), judge, control.item.Case, &trial, control.fixture.workspace,
+		cleanPDFLifecycle(), &PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "observed"},
+		browserReadHost(control))
+	if trial.Verdict == Pass || trial.EvidenceEligible || provider.calls != 0 ||
+		trial.Browser.Read.Code != "native_delivery_unavailable" {
+		t.Fatal("contradictory native delivery evidence was judged or promoted", trial.Code, provider.calls)
+	}
+}
+
 func TestFinalizedBrowserReadPreservesHardAndRolePrivacyFailures(t *testing.T) {
 	for _, mode := range []string{"hard", "opaque", "private", "canceled"} {
 		t.Run(mode, func(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
+	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -175,7 +176,10 @@ func inspectBrowserRead(
 		}
 		id := intent.PlatformMessageIDs[0]
 		event, found := finals[id]
-		if !found || seen[id] || message.Context.MessageID != event.RequestID ||
+		projected := channels.DecorateOutboundResponseFooter(
+			*message, target.config.Agents.Defaults.IsResponseFooterEnabled(),
+		)
+		if !found || seen[id] || projected.Content != event.Content || message.Context.MessageID != event.RequestID ||
 			message.Metadata.RequestID != "" && message.Metadata.RequestID != event.RequestID ||
 			!slices.Equal(message.TraceScopes, event.TraceScopes) {
 			return proof

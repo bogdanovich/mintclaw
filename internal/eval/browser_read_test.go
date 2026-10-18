@@ -13,6 +13,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 )
@@ -147,7 +148,7 @@ func TestBrowserNativeReadBindsOwnerActionPolicyDeliveryAndCleanup(t *testing.T)
 	for _, mode := range []string{
 		"complete", "actor", "agent", "route", "session-execution", "action-execution", "invocation-execution",
 		"policy", "revision", "dry-run", "origin", "url", "hash", "tab", "unsettled", "unknown", "lost", "temporary",
-		"delivery-id", "delivery-request", "delivery-scope", "missing-final", "foreign-native", "unknown-extra",
+		"delivery-id", "delivery-request", "delivery-scope", "delivery-content", "missing-final", "foreign-native", "unknown-extra",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			control := newBrowserReadControl(t)
@@ -199,6 +200,8 @@ func TestBrowserNativeReadBindsOwnerActionPolicyDeliveryAndCleanup(t *testing.T)
 				observed.intents[0].Message.Context.MessageID = "foreign-request"
 			case "delivery-scope":
 				observed.intents[0].Message.TraceScopes = []events.TraceScope{{Workspace: "foreign", TurnID: "turn"}}
+			case "delivery-content":
+				observed.intents[0].Message.Content = "Contradictory native reply."
 			case "missing-final":
 				observed.intents = observed.intents[:1]
 			case "foreign-native":
@@ -223,6 +226,54 @@ func TestBrowserNativeReadBindsOwnerActionPolicyDeliveryAndCleanup(t *testing.T)
 			}
 			if mode == "unknown-extra" && proof.Code != "native_cleanup_unavailable" {
 				t.Fatal("unknown outcome was not retained as logical settlement uncertainty", proof.Code)
+			}
+		})
+	}
+}
+
+func TestBrowserNativeReadContentMatchesConfiguredNativeFooter(t *testing.T) {
+	for _, mode := range []string{
+		"complete", "altered-text", "missing-footer", "altered-footer", "disabled", "disabled-unexpected-footer",
+	} {
+		t.Run(mode, func(t *testing.T) {
+			control := newBrowserReadControl(t)
+			enabled := !strings.HasPrefix(mode, "disabled")
+			control.fixture.cfg.Agents.Defaults.ResponseFooter.Enabled = enabled
+			for index, event := range control.trial.Events {
+				if event.Kind != "final" {
+					continue
+				}
+				intent, err := newBrowserFinalIntent(control.fixture.workspace, control.trial, event)
+				if err != nil {
+					t.Fatal(err)
+				}
+				intent.Message.Metadata.ModelName = "fallback-model"
+				intent.Message.Metadata.DefaultModelName = "primary-model"
+				intent.Message.Metadata.UsageInputTokens = 10252
+				intent.Message.Metadata.UsageOutputTokens = 20
+				projected := channels.DecorateOutboundResponseFooter(*intent.Message, enabled)
+				control.trial.Events[index].Content = projected.Content
+				switch mode {
+				case "altered-text":
+					intent.Message.Content = "Contradictory native reply."
+				case "missing-footer":
+					control.trial.Events[index].Content = event.Content
+				case "altered-footer", "disabled-unexpected-footer":
+					control.trial.Events[index].Content += "\n\nmodel: forged"
+				}
+				writeAdmissionJSON(
+					t,
+					filepath.Join(control.fixture.workspace, "state/outbox", intent.ID+".json"),
+					intent,
+				)
+			}
+			trial := control.finalize(t)
+			if (trial.Browser.Read.Code == "native_post_stop_observed") != (mode == "complete" || mode == "disabled") {
+				t.Fatal(
+					"native final content or configured footer mismatch was promoted",
+					mode,
+					trial.Browser.Read.Code,
+				)
 			}
 		})
 	}
