@@ -442,6 +442,7 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
                 self.server.image_events["uploads"] += 1
                 self.server.image_events["uploaded-bytes"] = len(body)
                 self.server.image_events["uploaded-sha256"] = hashlib.sha256(body).hexdigest()
+                self.server.image_events["uploaded-content-type"] = self.headers.get("Content-Type", "")
             self._reply("text/plain", b"UPLOAD_RECEIVED_ORIGINAL" if body == TRANSFER_IMAGE else b"UPLOAD_WRONG_BYTES")
             return
         event = self.path.removeprefix("/browser-smoke/semantic-event/")
@@ -473,6 +474,7 @@ def serve(args: argparse.Namespace) -> int:
     server.image_events = {
         "source-visits": 0, "authenticated-image-reads": 0, "unauthorized-reads": 0,
         "unexpected-clicks": 0, "uploads": 0, "uploaded-bytes": 0, "uploaded-sha256": "",
+        "uploaded-content-type": "",
     }
     host = args.advertise_host
     if ":" in host and not host.startswith("["):
@@ -856,6 +858,7 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
                 "source-visits": 1, "authenticated-image-reads": 2, "unauthorized-reads": 0,
                 "unexpected-clicks": 0, "uploads": 1, "uploaded-bytes": len(TRANSFER_IMAGE),
                 "uploaded-sha256": hashlib.sha256(TRANSFER_IMAGE).hexdigest(),
+                "uploaded-content-type": "image/png",
             }
             oracle_passed = oracle == expected_oracle
             report["fixture_outcome_audit"] = {

@@ -241,7 +241,9 @@ if sys.argv[3] in {"image-transfer", "image-transfer-freeform"}:
             photo = response.read()
     if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_IMAGE") == "1":
         photo = b"X" * len(photo)
-    with opener.open(urllib.request.Request(origin + "/browser-smoke/image-upload", data=photo, method="POST")) as response:
+    mime = "application/octet-stream" if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_MIME") == "1" else "image/png"
+    with opener.open(urllib.request.Request(origin + "/browser-smoke/image-upload", data=photo, method="POST",
+                                           headers={"Content-Type": mime})) as response:
         response.read()
 if sys.argv[3] == "semantic-observation":
     origin = re.search(r"Navigate to (http://[^\s]+?)/browser-smoke/map-only", sys.argv[6]).group(1)
@@ -420,6 +422,7 @@ if sys.argv[2] == "semantic-observation":
 if sys.argv[2] in {"image-transfer", "image-transfer-freeform"}:
     assert report["fixture_outcome_audit"]["state"] == "passed"
     assert report["fixture_outcome_audit"]["events"]["uploaded-bytes"] == 68
+    assert report["fixture_outcome_audit"]["events"]["uploaded-content-type"] == "image/png"
 assert report["cleanup"] == {"fixture": "stopped", "session_close": "closed", "state": "clean"}
 assert report["process_audit"] == {"immediate_reuse": True, "state": "passed"}
 assert report["execution_audit"] == {
@@ -680,8 +683,9 @@ done
 nonterminal_status_output="$test_root/nonterminal-status.json"
 wrong_widget_output="$test_root/wrong-widget.json"
 for image_suite in image-transfer image-transfer-freeform; do
-wrong_image_output="$test_root/wrong-image-$image_suite.json"
-if MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_IMAGE=1 \
+for failure_variable in MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_IMAGE MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_MIME; do
+wrong_image_output="$test_root/wrong-image-$image_suite-$failure_variable.json"
+if env "$failure_variable=1" \
 	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
 	"$repo_root/scripts/browser-capability-smoke.sh" \
 	--target gateway --profile managed --suite "$image_suite" \
@@ -697,6 +701,7 @@ report = json.loads(pathlib.Path(sys.argv[1]).read_text())
 assert report["fixture_outcome_audit"]["state"] == "failed"
 assert report["safe_error"]["code"] == "suite_failed"
 PY
+done
 done
 if MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_WIDGET=1 \
 	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \

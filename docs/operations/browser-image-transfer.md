@@ -93,7 +93,7 @@ permission, guarantee a retained artifact, or make every image source supported.
 Run the gateway command on the gateway host. For the companion command,
 advertise a fixture address reachable by both endpoints. The fixture sets
 only its own scoped test cookie and accepts only a small test image. Its
-independent receipt checks uploaded bytes and SHA-256, authenticated reads,
+independent receipt checks uploaded bytes, SHA-256 and MIME, authenticated reads,
 and the absence of unintended clicks. Claimed success with different image
 bytes must fail the smoke runner's self-test. Trace evidence must show the
 first-party operations, and cleanup must close the session and immediately
