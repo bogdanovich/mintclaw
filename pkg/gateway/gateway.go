@@ -188,7 +188,7 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	}
 	// Debug mode permanently overrides the config log level to DEBUG.
 	if debug {
-		fmt.Println("🔍 Debug mode enabled")
+		logger.Statusf("🔍 Debug mode enabled\n")
 	} else {
 		effectiveLogLevel := config.EffectiveGatewayLogLevel(cfg)
 		logger.SetLevelFromString(effectiveLogLevel)
@@ -249,10 +249,10 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	msgBus.SetEventPublisher(agentLoop.RuntimeEventBus())
 	publishGatewayEvent(agentLoop, runtimeevents.KindGatewayStart, startedAt, nil)
 
-	fmt.Println("\n📦 Agent Status:")
+	logger.Statusf("\n📦 Agent Status:\n")
 	startupStatus := collectGatewayStartupStatus(agentLoop.GetStartupInfo())
-	fmt.Printf("  • Tools: %d loaded\n", startupStatus.toolsCount)
-	fmt.Printf("  • Skills: %d/%d available\n", startupStatus.skillsAvailable, startupStatus.skillsTotal)
+	logger.Statusf("  • Tools: %d loaded\n", startupStatus.toolsCount)
+	logger.Statusf("  • Skills: %d/%d available\n", startupStatus.skillsAvailable, startupStatus.skillsTotal)
 
 	logger.InfoCF("agent", "Agent initialized", startupStatus.logFields)
 
@@ -316,9 +316,9 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	agentLoop.SetReloadFunc(reloadTrigger)
 
 	for _, bindHost := range listenResult.BindHosts {
-		fmt.Printf("✓ Gateway started on %s\n", net.JoinHostPort(bindHost, strconv.Itoa(cfg.Gateway.Port)))
+		logger.Statusf("✓ Gateway started on %s\n", net.JoinHostPort(bindHost, strconv.Itoa(cfg.Gateway.Port)))
 	}
-	fmt.Println("Press Ctrl+C to stop")
+	logger.Statusf("Press Ctrl+C to stop\n")
 
 	go func() {
 		if recovered := agentLoop.RecoverHumanInteractions(ctx); recovered > 0 {
@@ -476,7 +476,7 @@ func createStartupProvider(
 	modelName := cfg.Agents.Defaults.GetModelName()
 	if modelName == "" && allowEmptyStartup {
 		reason := "no default model configured; gateway started in limited mode"
-		fmt.Printf("⚠ Warning: %s\n", reason)
+		logger.Statusf("⚠ Warning: %s\n", reason)
 		logger.WarnCF("gateway", "Gateway started without default model", map[string]any{
 			"limited_mode": true,
 		})
@@ -1026,7 +1026,7 @@ func setupAndStartServicesWithHooks(
 	if err = checkpoint(gatewayStartupCronStarted); err != nil {
 		return nil, err
 	}
-	fmt.Println("✓ Cron service started")
+	logger.Statusf("✓ Cron service started\n")
 
 	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
 		cfg.WorkspacePath(),
@@ -1045,7 +1045,7 @@ func setupAndStartServicesWithHooks(
 	if err = checkpoint(gatewayStartupHeartbeatStarted); err != nil {
 		return nil, err
 	}
-	fmt.Println("✓ Heartbeat service started")
+	logger.Statusf("✓ Heartbeat service started\n")
 
 	mediaStore, err := newWorkspaceMediaStore(cfg)
 	if err != nil {
@@ -1129,9 +1129,9 @@ func setupAndStartServicesWithHooks(
 
 	enabledChannels := runningServices.ChannelManager.GetEnabledChannels()
 	if len(enabledChannels) > 0 {
-		fmt.Printf("✓ Channels enabled: %s\n", enabledChannels)
+		logger.Statusf("✓ Channels enabled: %s\n", enabledChannels)
 	} else {
-		fmt.Println("⚠ Warning: No channels enabled")
+		logger.Statusf("⚠ Warning: No channels enabled\n")
 	}
 
 	runningServices.authToken = authToken
@@ -1261,7 +1261,7 @@ func setupAndStartServicesWithHooks(
 	}
 
 	healthAddr := net.JoinHostPort(listenResult.ProbeHost, strconv.Itoa(cfg.Gateway.Port))
-	fmt.Printf(
+	logger.Statusf(
 		"✓ Health endpoints available at http://%s/health, /ready and /reload (POST)\n",
 		healthAddr,
 	)
@@ -1278,7 +1278,7 @@ func setupAndStartServicesWithHooks(
 	if err = runningServices.DeviceService.Start(context.Background()); err != nil {
 		logger.ErrorCF("device", "Error starting device service", map[string]any{"error": err.Error()})
 	} else if cfg.Devices.Enabled {
-		fmt.Println("✓ Device event service started")
+		logger.Statusf("✓ Device event service started\n")
 	}
 	if err = checkpoint(gatewayStartupDeviceRuntimeInitialized); err != nil {
 		return nil, err

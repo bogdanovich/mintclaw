@@ -264,7 +264,7 @@ func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGatew
 		return nil, ErrOwnedGateway
 	}
 	temporary := filepath.Join(profile.home, ownedGatewayTempDirectory)
-	logFile, err := root.OpenFile("eval-gateway-"+uuid.NewString()+".log", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	logFile, err := root.OpenFile("eval-gateway-"+uuid.NewString()+".jsonl", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = root.Remove(".eval-gateway-owner")
 		return nil, ErrOwnedGateway
@@ -276,6 +276,7 @@ func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGatew
 		"HOME=" + profile.home, config.EnvHome + "=" + profile.home,
 		config.EnvConfig + "=" + filepath.Join(profile.home, "config.json"),
 		"PATH=" + os.Getenv("PATH"), "LANG=C", "MINTCLAW_LOG_LEVEL=" + config.EffectiveGatewayLogLevel(profile.config),
+		"MINTCLAW_LOG_FORMAT=json",
 		"TMPDIR=" + temporary, "TMP=" + temporary, "TEMP=" + temporary,
 	}
 	command.Stdout, command.Stderr = log, log

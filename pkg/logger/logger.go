@@ -42,6 +42,7 @@ var (
 	mu            sync.RWMutex
 	writers       []io.Writer
 	consoleWriter zerolog.ConsoleWriter
+	jsonConsole   = os.Getenv("MINTCLAW_LOG_FORMAT") == "json"
 )
 
 // defaultTimeFormat is the console timestamp layout used until SetTimeFormat
@@ -77,7 +78,7 @@ func init() {
 			NoColor: !isTTY,
 		}
 
-		writers = append(writers, consoleWriter)
+		writers = append(writers, consoleOutput())
 
 		logger = zerolog.New(loggerOutput()).With().Timestamp().Caller().Logger()
 	})
@@ -146,8 +147,29 @@ func DisableConsole() {
 func EnableConsole() {
 	mu.Lock()
 	defer mu.Unlock()
-	writers[0] = consoleWriter
+	writers[0] = consoleOutput()
 	logger = logger.Output(loggerOutput())
+}
+
+func consoleOutput() io.Writer {
+	if jsonConsole {
+		return consoleWriter.Out
+	}
+	return consoleWriter
+}
+
+// Statusf preserves unconditional human status output by default. Structured
+// consoles receive the same message through the native filtered JSON writer.
+func Statusf(format string, values ...any) {
+	mu.RLock()
+	defer mu.RUnlock()
+	if !jsonConsole {
+		_, _ = fmt.Fprintf(secretOutputWriter{destination: os.Stdout}, format, values...)
+		return
+	}
+	skip, component := getCallerSkip()
+	logger.Log().Str(Component, component).Str("event", "status").
+		CallerSkipFrame(skip).Msg(fmt.Sprintf(format, values...))
 }
 
 func GetLevel() LogLevel {

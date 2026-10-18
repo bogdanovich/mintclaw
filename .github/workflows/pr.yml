@@ -304,6 +304,12 @@ jobs:
           ./pkg/workspace
           ./internal/eval
 
+      - name: Check native structured console without models
+        run: >-
+          go test -count=1 -tags goolm,stdjson
+          -run '^(TestConsoleFormatSelection|TestGatewayJSONConsoleNativeStartupAndShutdownWithoutModels)$'
+          ./pkg/logger ./pkg/gateway
+
       - name: Check credential state filesystem aliases
         run: >-
           go test -count=1 -tags goolm,stdjson
