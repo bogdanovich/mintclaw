@@ -66,18 +66,34 @@ func TestCredentialGitHubOutputFixture(t *testing.T) {
 func TestCredentialRestartOutputFixture(t *testing.T) {
 	for _, kind := range []string{"openai_compat", "codex"} {
 		t.Run(kind, func(t *testing.T) {
-			testCredentialBrowserFixtureScenario(t, kind, "logged_in", true)
+			testCredentialBrowserFixtureScenario(t, kind, "logged_in", "restart")
+		})
+	}
+}
+
+func TestCredentialLifetimeOutputFixture(t *testing.T) {
+	for _, mode := range []string{"cancel", "expiry"} {
+		t.Run(mode, func(t *testing.T) {
+			outcome := "logged_in"
+			if mode == "expiry" {
+				outcome = "outcome_unknown"
+			}
+			testCredentialBrowserFixtureScenario(t, "codex", outcome, mode)
 		})
 	}
 }
 
 func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expectedOutcome string) {
 	t.Helper()
-	testCredentialBrowserFixtureScenario(t, providerKind, expectedOutcome, false)
+	testCredentialBrowserFixtureScenario(t, providerKind, expectedOutcome, "")
 }
 
-func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOutcome string, restart bool) {
+func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOutcome, mode string) {
 	t.Helper()
+	restart, canceled, expiry := mode == "restart", mode == "cancel", mode == "expiry"
+	if mode != "" && !restart && !canceled && !expiry {
+		t.Fatal("unknown credential fixture scenario")
+	}
 	connectorMode := strings.HasPrefix(providerKind, "github:")
 	providerKind = strings.TrimPrefix(providerKind, "github:")
 	providerMode := providerKind != ""
@@ -86,6 +102,8 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Second)
 	defer cancel()
+	server := httptest.NewUnstartedServer(nil)
+	t.Cleanup(server.Close)
 	script, err := filepath.Abs("credential-login-fixture.cjs")
 	if err != nil {
 		t.Fatal("gateway browser fixture path unavailable")
@@ -105,6 +123,10 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	target.Driver, target.DriverServer, target.DriverExecutable = config.BrowserDriverPlaywrightLibrary, "", "node"
 	target.DriverArguments = []string{script, "driver", expectedOutcome}
+	if canceled || expiry {
+		target.DriverArguments = append(target.DriverArguments,
+			"--fixture-submission-checkpoint=http://"+server.Listener.Addr().String())
+	}
 	target.DefaultProfile = "ephemeral"
 	target.Profiles = map[string]config.BrowserProfileConfig{
 		"ephemeral": {
@@ -305,8 +327,9 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 		return result, nil
 	}
 	finalize := func() {}
+	cancelCurrent := func() {}
 	if providerMode {
-		perform, finalize = credentialProviderFixture(
+		perform, finalize, cancelCurrent = credentialProviderFixture(
 			t,
 			ctx,
 			cfg,
@@ -315,6 +338,7 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			providerKind,
 			connectorMode,
 			expectedOutcome,
+			canceled,
 			func(data []byte) {
 				mu.Lock()
 				outputs = append(outputs, append([]byte(nil), data...))
@@ -325,8 +349,10 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	defer finalize()
 	results := make(chan browser.CredentialLoginResult, 1)
 	var failure atomic.Value
+	var submitted atomic.Int32
+	var liveAtSubmission atomic.Bool
 	var runtimeMu sync.RWMutex
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/_fixture/restart" {
 			runtimeMu.RLock()
 			defer runtimeMu.RUnlock()
@@ -352,7 +378,17 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 					return
 				}
 				parts := strings.Fields(notice.Content)
-				respond(map[string]string{"link": parts[len(parts)-1]})
+				link := parts[len(parts)-1]
+				if expiry {
+					ref, requestErr := credentials.controller.Request(ctx,
+						cfg.Credentials.Accounts[0].Principals[0], []string{"fixture-account"}, 10*time.Second)
+					if requestErr != nil {
+						http.Error(writer, "fixture approval unavailable", http.StatusServiceUnavailable)
+						return
+					}
+					link = cfg.Credentials.Origin + credentialPagePath + "#request=" + ref
+				}
+				respond(map[string]string{"link": link})
 			case <-results:
 				http.Error(writer, "fixture unavailable", http.StatusServiceUnavailable)
 			case <-ctx.Done():
@@ -408,6 +444,20 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 					return
 				}
 			}
+			if canceled {
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					all, listErr := running.Browser.store.ListSessions(ctx)
+					if listErr == nil && len(all) == 1 && all[0].State.Terminal() {
+						break
+					}
+					if time.Now().After(deadline) {
+						http.Error(writer, "canceled browser retained", http.StatusServiceUnavailable)
+						return
+					}
+					time.Sleep(25 * time.Millisecond)
+				}
+			}
 			result, performErr := perform()
 			if performErr != nil {
 				failure.Store(performErr.Error())
@@ -415,7 +465,7 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 				return
 			}
 			respond(result)
-		case "/_fixture/revoked":
+		case "/_fixture/expired", "/_fixture/revoked":
 			if connectorMode {
 				select {
 				case result := <-inflightResult:
@@ -446,7 +496,7 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
 				all, listErr := running.Browser.store.ListSessions(ctx)
-				retired = listErr == nil && len(all) == 2
+				retired = listErr == nil && len(all) == int(retrieved.Load())
 				for _, session := range all {
 					retired = retired && session.State.Terminal()
 				}
@@ -454,12 +504,37 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 					cfg.Credentials.Accounts[0].Principals[0], "fixture-account", origin)
 				_, grantErr := credentials.controller.ActiveLogin(ctx, scope)
 				retired = retired && scopeErr == nil && grantErr != nil
+				if expiry {
+					retired = retired && liveAtSubmission.Load() && submitted.Load() == retrieved.Load()
+				}
 				if retired {
 					break
 				}
 				time.Sleep(50 * time.Millisecond)
 			}
 			respond(map[string]bool{"retired": retired})
+		case "/_fixture/submitted":
+			if !canceled && !expiry {
+				http.NotFound(writer, request)
+				return
+			}
+			count := submitted.Add(1)
+			if expiry {
+				scope, _, scopeErr := credentials.controller.LoginRequest(ctx,
+					cfg.Credentials.Accounts[0].Principals[0], "fixture-account", origin)
+				lease, leaseErr := credentials.controller.ActiveLogin(ctx, scope)
+				live := false
+				if scopeErr == nil && leaseErr == nil {
+					remaining, remainingErr := lease.Remaining(ctx, scope)
+					live = remainingErr == nil && remaining > 0
+				}
+				liveAtSubmission.Store(live)
+			}
+			respond(map[string]bool{"hold": expiry || count == 1})
+			if canceled && count == 1 {
+				writer.(http.Flusher).Flush()
+				cancelCurrent()
+			}
 		case "/_fixture/inflight":
 			if !connectorMode {
 				http.NotFound(writer, request)
@@ -491,7 +566,8 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 		default:
 			routes.handler.ServeHTTP(writer, request)
 		}
-	}))
+	})
+	server.Start()
 	defer server.Close()
 	invite, err := routes.handler.(*credentialHTTPHandler).enrollment.Issue(ctx)
 	if err != nil {
@@ -502,6 +578,7 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 		"backend": server.URL, "invite": string(invite), "outcome": expectedOutcome,
 		"inflight": map[bool]string{true: "true", false: ""}[connectorMode],
 		"restart":  map[bool]string{true: "true", false: ""}[restart],
+		"lifetime": mode,
 	})
 	if err != nil {
 		t.Fatal("synthetic phone configuration unavailable")
@@ -518,6 +595,7 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 		for _, candidate := range []string{
 			"start", "enroll", "login-request", "approve", "login-result", "reuse", "revoke",
 			"restart", "restart-request", "restart-approve", "restart-result",
+			"expiry", "expiry-request", "expiry-approve", "expiry-result",
 		} {
 			if childOutput.String() == "credential gateway fixture failed at "+candidate+"\n" {
 				stage = candidate

@@ -50,7 +50,8 @@ output, including after browser cleanup releases session guards.
 | Phone/grant lifetime | Actual virtual passkey approval/revoke and signed lease/component tests | Physical Android enrollment, notification delivery and personal-account pilot remain required |
 | MFA/unconfirmed submission | Actual provider-backed turns, fixed outcomes, single-submit assertion and browser cleanup; two actual traces and four bundles per scenario | MFA continuation/private operator interaction remains unqualified |
 | Credential runtime recreation | Two actual provider-backed browser turns for each qualified adapter, with the credential runtime closed/recreated from its owner store between turns; retained passkey, denied old lease/grant, fresh notification/assertion before another retrieval; inspect both traces/history/exports | Exercises component recreation inside the fixture, not an OS process crash |
-| Cancel/expiry | Existing focused component tests | The complete serialized-output scenario matrix remains incomplete |
+| Caller cancellation during submission | Codex-backed turn canceled only after Chromium confirms the synthetic username/password POST; require browser retirement before a second explicit turn; inspect requests, history, traces and exports after cleanup | Qualifies this cancellation point and adapter, alongside focused component tests |
+| Grant expiry during submission | Real short-lived signed approval, positive live-lease check at POST, held website response until expiry, uncertain outcome and browser retirement; a fresh phone assertion precedes the second retrieval; inspect both Codex-backed turns | The fixture shortens the grant to ten seconds; production account requests retain their 20-hour maximum |
 
 The tests report fixed stages and boolean assertions. They do not print a
 detected canary, HTTP request body, vault error or child-process output.
