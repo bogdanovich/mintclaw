@@ -13,6 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
@@ -331,8 +332,8 @@ func TestExternalWaitDelegatedTaskRetainsOwnerAcrossDelayAndReload(t *testing.T)
 			installInteractionChannelManager(t, al, newInteractionChannelManager())
 			agent.Tools.Register(tool)
 			const taskID = "external-wait-task"
-			const ownerSession = "owner-external-session"
-			const childSession = "child-external-session"
+			ownerSession := session.BuildOpaqueSessionKey("agent:main:test:external-wait-owner")
+			childSession := session.BuildOpaqueSessionKey("agent:main:test:external-wait-child")
 			tasks := al.taskRegistryForWorkspace(agent.Workspace)
 			if err := tasks.Upsert(taskregistry.Record{
 				TaskID:              taskID,
