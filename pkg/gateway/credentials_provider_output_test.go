@@ -39,11 +39,15 @@ func credentialProviderFixture(
 	providerKind string,
 	connectorMode bool,
 	expectedOutcome string,
+	cancelFirst bool,
+	beforeCleanup func() error,
 	capture func([]byte),
-) (func() (browser.CredentialLoginResult, error), func()) {
+) (func() (browser.CredentialLoginResult, error), func(), func()) {
 	t.Helper()
 	var mu sync.Mutex
 	calls := 0
+	step := 0
+	var activeCancel context.CancelFunc
 	sessionID := ""
 	lastLogin := browser.CredentialLoginResult{}
 	failure := ""
@@ -98,7 +102,8 @@ func credentialProviderFixture(
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		phase := calls % stepsPerTurn
+		phase := step
+		step++
 		calls++
 		decode := func(target any) bool {
 			return json.NewDecoder(strings.NewReader(toolContent)).Decode(target) == nil
@@ -157,6 +162,11 @@ func credentialProviderFixture(
 			case 3:
 				if !decode(&lastLogin) || lastLogin.Alias != "fixture-account" || lastLogin.Outcome != expectedOutcome {
 					failure = "provider did not receive the expected fixed alias outcome"
+				}
+				if beforeCleanup != nil {
+					if cleanupErr := beforeCleanup(); cleanupErr != nil {
+						failure = cleanupErr.Error()
+					}
 				}
 				name, arguments = "browser_observe", map[string]any{"browser_session_id": sessionID}
 				if expectedOutcome == "outcome_unknown" {
@@ -299,18 +309,30 @@ func credentialProviderFixture(
 	previousHistoryMessages := 0
 	perform := func() (browser.CredentialLoginResult, error) {
 		turns++
+		turnCtx, cancelTurn := context.WithCancel(ctx)
+		defer cancelTurn()
+		mu.Lock()
+		step, activeCancel = 0, cancelTurn
+		mu.Unlock()
 		prompt := "Log in to fixture-account, observe the result, close the browser, then report completion."
 		if connectorMode {
 			prompt = "Read open pull requests from fixture-owner/fixture-repo with fixture-account, then report completion."
 		}
-		response, runErr := loop.ProcessDirectWithOptions(ctx,
+		response, runErr := loop.ProcessDirectWithOptions(turnCtx,
 			prompt,
 			"fixture-provider-session-"+string(rune('a'+turns)), "telegram", "fixture-owner-chat",
 			agent.DirectTurnOptions{SuppressBackgroundCompaction: true})
 		mu.Lock()
 		result, fixedFailure := lastLogin, failure
+		activeCancel = nil
+		callCount := calls
 		mu.Unlock()
-		if runErr != nil || !strings.Contains(response, "fixture complete") || fixedFailure != "" {
+		if cancelFirst && turns == 1 {
+			if !errors.Is(turnCtx.Err(), context.Canceled) || callCount != 3 || fixedFailure != "" {
+				return browser.CredentialLoginResult{}, errors.New("private submission did not cancel the actual turn")
+			}
+			result = browser.CredentialLoginResult{Alias: "fixture-account", Outcome: "caller_canceled"}
+		} else if runErr != nil || !strings.Contains(response, "fixture complete") || fixedFailure != "" {
 			if fixedFailure == "" {
 				fixedFailure = "provider-backed agent turn failed"
 			}
@@ -344,12 +366,23 @@ func credentialProviderFixture(
 			qualifyCredentialTraceExports(t, cfg, capture)
 			mu.Lock()
 			defer mu.Unlock()
-			if calls != 2*stepsPerTurn || failure != "" {
+			expectedCalls := 2 * stepsPerTurn
+			if cancelFirst {
+				expectedCalls = 3 + stepsPerTurn
+			}
+			if calls != expectedCalls || failure != "" {
 				t.Error("provider qualification did not complete its two real request sequences")
 			}
 		})
 	}
-	return perform, finalize
+	return perform, finalize, func() {
+		mu.Lock()
+		cancel := activeCancel
+		mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	}
 }
 
 type credentialCodexFixtureTransport struct{ endpoint *url.URL }
