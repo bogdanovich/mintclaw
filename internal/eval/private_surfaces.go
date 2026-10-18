@@ -162,6 +162,10 @@ func observePrivateSurfaces(
 				continue
 			}
 			if info.IsDir() {
+				if fileName == privateSQLitePath {
+					complete = false
+					result.SQLite = &SQLiteSurfaceObservation{Scope: privateSQLiteScope, Code: "unavailable"}
+				}
 				if fileName == ".security" || fileName == "keys" {
 					result.ExcludedDirectories++
 					continue
@@ -184,7 +188,7 @@ func observePrivateSurfaces(
 			result.Bytes += int64(len(data))
 			if filter != nil && filter.Replace(string(data)) != string(data) {
 				result.LeakObserved = true
-			} else if bytes.HasPrefix(data, []byte("%PDF-")) && documents[digest(data)] {
+			} else if fileName != privateSQLitePath && bytes.HasPrefix(data, []byte("%PDF-")) && documents[digest(data)] {
 				result.AuthorizedDocuments++
 			} else if containsRetainedLiteral(data, facts) {
 				result.LeakObserved = true

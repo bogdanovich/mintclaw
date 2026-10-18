@@ -8,6 +8,9 @@ import (
 	"errors"
 	"slices"
 	"strings"
+
+	modernsqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const (
@@ -78,6 +81,12 @@ func InspectSnapshot(
 		return result, ErrSnapshotUnavailable
 	}
 	defer func() { _ = conn.Close() }()
+	if _, err = modernsqlite.Limit(conn, sqlite3.SQLITE_LIMIT_LENGTH, SnapshotMaxBytes); err != nil {
+		return result, ErrSnapshotUnavailable
+	}
+	if _, err = modernsqlite.Limit(conn, sqlite3.SQLITE_LIMIT_SQL_LENGTH, 256*1024); err != nil {
+		return result, ErrSnapshotUnavailable
+	}
 	copyImage := bytes.Clone(image)
 	defer clear(copyImage)
 	// Deserialize does not support WAL-format images. Only this private decoding

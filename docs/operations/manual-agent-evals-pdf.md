@@ -142,6 +142,7 @@ created separately in memory. Neither constructor, migration, checkpoint, repair
 store. Header adaptation for in-memory decoding changes only the private copy. Temporary SQL structures are forced
 to memory; no SQL spill files are admitted by the decoder. Canonical text and native FTS shadow BLOB values are
 inspected; unexpected BLOB types, schema changes, corruption and limits remain unavailable.
+Connection-local SQLite value/query length limits are applied before decoding untrusted images.
 Limits: 8 MiB image/logical values, 8,192 total rows, 64 KiB per value and 256 schema entries. File identity, size,
 mode and mtime must remain stable, with WAL/SHM/rollback sidecars absent before and after observation. Even an empty
 sidecar refuses complete coverage. Other SQLite paths remain opaque rather than acquiring native identity.

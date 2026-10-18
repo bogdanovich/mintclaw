@@ -8,7 +8,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
 )
 
-const privateSQLitePath = "workspace/sessions/seahorse.db"
+const (
+	privateSQLitePath  = "workspace/sessions/seahorse.db"
+	privateSQLiteScope = "seahorse_text_and_raw_json_escapes_v1"
+)
 
 type SQLiteSurfaceObservation struct {
 	Scope       string `json:"scope"`
@@ -23,7 +26,7 @@ func (observation *SQLiteSurfaceObservation) valid() bool {
 	if observation == nil {
 		return true
 	}
-	return observation.Scope == "seahorse_text_and_raw_json_escapes_v1" &&
+	return observation.Scope == privateSQLiteScope &&
 		(observation.Code == "observed" || observation.Code == "unavailable" || observation.Code == "leak_observed") &&
 		observation.Rows >= 0 && observation.Rows <= seahorse.SnapshotMaxRows &&
 		observation.TextValues >= 0 && observation.TextValues <= seahorse.SnapshotMaxRows*64+1024 &&
@@ -44,7 +47,7 @@ func sqliteSidecarsAbsent(root *os.Root) bool {
 func observePrivateSQLite(
 	ctx context.Context, root *os.Root, before os.FileInfo, image []byte, sidecarsBefore bool, scan *privateContentScan,
 ) SQLiteSurfaceObservation {
-	result := SQLiteSurfaceObservation{Scope: "seahorse_text_and_raw_json_escapes_v1", Code: "unavailable"}
+	result := SQLiteSurfaceObservation{Scope: privateSQLiteScope, Code: "unavailable"}
 	if scan.rawEscapes(ctx, image) {
 		if !scan.uncertain {
 			result.Code = "leak_observed"

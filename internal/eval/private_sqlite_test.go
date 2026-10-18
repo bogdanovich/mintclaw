@@ -126,10 +126,11 @@ func TestPrivateSQLiteFailsEncodedResidualAfterNativeClear(t *testing.T) {
 }
 
 func TestPrivateSQLiteRefusesSidecarsCorruptionAndForeignLocation(t *testing.T) {
-	for _, kind := range []string{"wal", "shm", "journal", "corrupt", "foreign", "text"} {
+	for _, kind := range []string{"wal", "shm", "journal", "corrupt", "foreign", "text", "document", "directory"} {
 		t.Run(kind, func(t *testing.T) {
 			home, _ := sqlitePrivateFixture(t, "Public synthetic conversation.", false)
 			name := filepath.Join(home, filepath.FromSlash(privateSQLitePath))
+			var documents map[string]bool
 			switch kind {
 			case "wal", "shm", "journal":
 				if err := os.WriteFile(name+"-"+kind, nil, 0o600); err != nil {
@@ -147,15 +148,33 @@ func TestPrivateSQLiteRefusesSidecarsCorruptionAndForeignLocation(t *testing.T) 
 				if err := os.WriteFile(name, data, 0o600); err != nil {
 					t.Fatal(err)
 				}
+			case "document":
+				data := []byte("%PDF-1.7\nsynthetic authorized source")
+				documents = map[string]bool{digest(data): true}
+				if err := os.WriteFile(name, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Remove(name); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(name, 0o700); err != nil {
+					t.Fatal(err)
+				}
 			}
 			result := observePrivateSurfaces(
 				t.Context(),
 				home,
 				map[string]string{"name": "private-sqlite-canary"},
 				nil,
-				nil,
+				documents,
 			)
-			if !result.valid() || result.Code != "unavailable" || result.LeakObserved || result.OpaqueFiles != 1 {
+			wantOpaque := 1
+			if kind == "directory" {
+				wantOpaque = 0
+			}
+			if !result.valid() || result.Code != "unavailable" || result.LeakObserved ||
+				result.OpaqueFiles != wantOpaque {
 				t.Fatal("incomplete or unadmitted native image became complete coverage", kind, result)
 			}
 		})
