@@ -3,7 +3,7 @@
 ## Decision
 
 PDFI4 is **not complete**. This is a dated evidence checkpoint, not an exit report. The
-[implementation goal](pdf-agentic-intake-pdfi4-goal.md) remains authoritative. As of 2026-10-18 04:14 UTC,
+[implementation goal](pdf-agentic-intake-pdfi4-goal.md) remains authoritative. As of 2026-10-18 06:49 UTC,
 implementation is merged and deployed, five artifact lanes have passed independent checks, and the complete
 official I-134 transaction and actual Telegram qualification remain outstanding. Do not infer a complete milestone
 from a merged implementation, ready review, or successful headless response.
@@ -30,6 +30,7 @@ daemon, alternate planner or form-specific production rules. Major merged packet
 | Value-independent PDF schema and output-only guidance | [#1662](https://github.com/bogdanovich/mintclaw/pull/1662), [#1663](https://github.com/bogdanovich/mintclaw/pull/1663) |
 | Current-proof correction/guidance settlement and verified quoted booleans | [#1667](https://github.com/bogdanovich/mintclaw/pull/1667), [#1674](https://github.com/bogdanovich/mintclaw/pull/1674), [#1677](https://github.com/bogdanovich/mintclaw/pull/1677) |
 | Delayed advisory reconciliation against current native accepted events | [#1709](https://github.com/bogdanovich/mintclaw/pull/1709) |
+| Cross-window collection validated by current native unresolved state | [#1720](https://github.com/bogdanovich/mintclaw/pull/1720) |
 
 The quoted-boolean packet #1677 merged as `223b9af0dd0a7a4243e56100df0470212703c452` after all 17 checks
 were green on reviewed head `b3a25ae0fc7ce09d99349caa458e2fc0d5790814`, substantive clean review
@@ -43,13 +44,13 @@ filter. Clean substantive review `6245417076`, owner PR-level rocket `576855612`
 actionable thread preceded normal merge. Full local document tests, tools/agent intake selections, complete
 three-package intake races, repository formatting, scoped test-inclusive production lint and docs lint passed.
 
-The current main gateway executes merged `694d716db`; process, CLI and runtime-binary SHA-256 agree:
+The #1709 deployment executed merged `694d716db`; process, CLI and runtime-binary SHA-256 agreed:
 `caa371ecbf119d402101b2fcb6f9a9e17a0564f211e05e0d4bd9798e9abb4cee`.
 Before this deployment the checkout/CLI had advanced to `aa6b3767a`, but the actual main still executed `223b9af0d`.
 Both distinct old binaries were preserved. Fresh traces identify actual runtime source; a checkout or CLI version
 alone is not proof of the running version. The workspace and harness revisions were not changed.
 
-The current coherent stopped-main backup is `/home/server/mintclaw-pdfi4-backup.78F76h`, with a
+That coherent stopped-main backup is `/home/server/mintclaw-pdfi4-backup.78F76h`, with a
 4,346,920,960-byte profile archive, six binary backups, five configurations and systemd units. Archive and binary
 checksums passed; live configurations remained byte-identical. Independent coding workspaces were excluded from
 the quiescent-main snapshot and left running. The old main exceeded its shutdown deadline and systemd forcibly
@@ -200,7 +201,7 @@ full-form pass. The accepted facts and pending counters survived a subsequent ac
 Trace `trace-turn-94c67d8bd8a11339202c3b0b` additionally exposed a coherent-selection defect: after browsing
 several bounded views, a source-valid eight-field selection was rejected by latest-view-only proposal validation.
 The focused fix is tracked in [PR #1720](https://github.com/bogdanovich/mintclaw/pull/1720); this checkpoint does
-not assert that its review, deployment or same-job postdeployment continuation has finished.
+not treat that fix as full I-134 qualification. It merged and was deployed as recorded below.
 
 Before sending the remaining financial facts, source-only inspection found that three original full-output targets
 are read-only: employment type, employer name and the asset total. The source XFA scripts enable the first two
@@ -213,8 +214,55 @@ The operator explicitly chose to finish current intake fixes and defer this gene
 waive its original full-output oracle, admit script execution or complete PDFI4. The unrelated ordinary-form and
 actual Telegram acceptance remain distinct.
 
+### Cross-Window Deployment And Same-Job Negative Continuation
+
+#1720 merged as `727600bcc6619f87d3528df2cf1ad72c33c202fe` after exact head
+`dcdb043a0c339a1be5a585c18d4b3e9da2c00aad` passed ten applicable CI checks; two jobs were skipped by existing
+path policy. Clean substantive review `6246456622`, owner PR-level rocket `576983072`, clean mergeability and
+no actionable thread preceded normal merge. An earlier inconclusive advisory was resolved by correcting its
+wrapper invocation to use a literal worktree path; no shell guard or review policy was disabled.
+
+The deployment deliberately pins that merged fix instead of adding unrelated PRs arriving during the build.
+Actual main PID 1839561, CLI and runtime-binary SHA-256 matched
+`766058265eedc2687a880d58df7686e7bd4ea1b9fdc20ffeec6cf2b688dce3f0`; Go build metadata identifies the full
+merge commit. A changed-checkout guard stopped the first attempt before service mutation. The verified stage was
+then reused only after clean-tree, exact-build, source ancestry, three-package test and configuration checks.
+Staged intake tests passed: document 34.168s, tools 33.124s, agent 1.711s. All five configurations had zero error
+findings and remained byte-identical; pre-existing policy findings were retained.
+
+Backup `/home/server/mintclaw-pdfi4-backup.7qmIID` contains a 4,358,287,360-byte stopped-main archive, seven
+binary copies including the actual running inode, five configurations and systemd units. Archive and all binary
+checksums passed. Independent coding workspaces were excluded and left running. The old main again exceeded
+its shutdown deadline and systemd forcibly stopped it; this was not a clean shutdown. All ten expected services
+were subsequently active with zero failed units, legacy processes or error-level ten-minute journal entries.
+Stateless smoke trace `trace-turn-9b0f6fbb4159b6e45d58fb57` identifies the exact merged source, is complete
+and untruncated, and confirms the exact marker with six records and no tool calls.
+
+The fresh I-134 retained revision 32, ledger 31 and its accepted values across deployment. A single targeted
+four-checkbox clarification then used the same job; no accepted name, address or birth fact was resent. Trace
+`trace-turn-a9505093edbe00f8d902634c`, sequence 8, reports four accepted assignments and four acknowledgements,
+revision 36, ledger 35 and one old retained input. Independent native readback confirmed the original 13 text
+matches, unchanged original control matches and all four newly supplied negative controls. A separate clarification
+oracle augments, rather than replaces, the original 40-text/15-control oracle. No mismatched expected value or
+unexpected positive assignment was found. No PDF was requested or delivered.
+
+This is **not successful pending-input recovery**. The earlier 859-byte input went from 21 to its persisted
+32-pass ceiling and still retains four ambiguity findings, even though the new clarification was accepted and
+consumed. The public result reports `reservation/capacity_exceeded`. The ordinary reply incorrectly says the
+clarification was not applied and again offers alternative statuses despite the accepted citizenship and negative
+controls. These are unresolved retained-input/progress UX findings, separate from both cross-window selection and
+XFA support. The continuation stopped at pending-input failure, so it does not qualify a live post-fix cross-window
+collect action. Do not reset its counters, repeat accepted facts or label another fresh job as recovery.
+
+Three distinct already-accepted private sentinels had zero hits across canonical metadata/history, 35 derived
+messages, one summary, 26 tool parts, six matching untruncated traces, public/encrypted records and the main journal
+bounded from this job's creation. This is a case-specific scan, not a provider-retention guarantee. The historical
+I-134 job remained unchanged at revision 47, ledger 45. Both incomplete jobs remain protected, not terminally erased.
+
 ### Open Qualification And Exit
 
+- Repair and qualify retained-clarification/no-progress behavior and truthful reporting of already accepted fields.
+  Keep the fixed limits and original jobs; any exhausted-input recovery requiring new authority needs explicit admission.
 - Complete applicable filling of the pinned official I-134 with synthetic data, followed by separate approval,
   one verified print-ready artifact, all-ten-page independent text/control/layout QA and terminal cleanup.
   Its Linux hybrid backend is admitted; editable hybrid output remains explicitly deferred.
