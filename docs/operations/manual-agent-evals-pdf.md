@@ -131,6 +131,29 @@ Known literal facts/credentials still fail before this check. Changed, extra, sy
 workspace-local copies do not acquire that identity and undergo the ordinary raw scan. This is a public-byte
 witness, not whole-bundle integrity, active/loaded catalog identity or a SQLite/other binary exemption.
 
+The exact native `workspace/sessions/seahorse.db` can additionally carry a `sqlite` receipt with scope
+`seahorse_text_and_raw_json_escapes_v1`. Original bytes are inspected first, including contiguous deleted payloads;
+valid JSON escape spans are decoded with the standard JSON parser for up to eight layers under the shared token,
+byte and time limits. This detects mixed/nested Unicode escapes without requiring surviving JSON framing. It does
+not change model-context admission or interpret arbitrary binary bytes as a valid JSON document.
+
+The native Seahorse owner decodes a private in-memory copy and compares its schema with the current native schema
+created separately in memory. Neither constructor, migration, checkpoint, repair nor vacuum opens the original
+store. Header adaptation for in-memory decoding changes only the private copy. Temporary SQL structures are forced
+to memory; no SQL spill files are admitted by the decoder. Canonical text and native FTS shadow BLOB values are
+inspected; unexpected BLOB types, schema changes, corruption and limits remain unavailable.
+Connection-local SQLite value/query length limits are applied before decoding untrusted images.
+Limits: 8 MiB image/logical values, 8,192 total rows, 64 KiB per value and 256 schema entries. File identity, size,
+mode and mtime must remain stable, with WAL/SHM/rollback sidecars absent before and after observation. Even an empty
+sidecar refuses complete coverage. Other SQLite paths remain opaque rather than acquiring native identity.
+
+This bounded scope does not reconstruct historical overflow fragments or decode arbitrary compressed/custom
+representations. It is not a secure-erasure, whole-runtime or all-role privacy guarantee. The
+[encoded-residual control](manual-agent-evals-sqlite-probe-20261018.md) must fail from original bytes after native
+`ClearSession`, even when current message/FTS rows are empty; current-row-only inspection is never sufficient.
+Old unavailable receipts do not gain this coverage retroactively. Required domain privacy checks still need their
+complete admitted role/transport/output witnesses.
+
 The value-free `private_surfaces` receipt contains only scope, counts and an observation code. A known leak is a
 run-level hard failure; unavailable coverage prevents a passing run. Regrading refuses known-leak sources and
 preserves unavailable coverage without rescanning or target work. Comparison retains both run verdicts separately

@@ -22,28 +22,36 @@ const (
 // cleanup. Authorized credential/key roots are excluded; no paths or values are
 // exported. An opaque surface cannot establish absence of encoded private data.
 type PrivateSurfaceObservation struct {
-	Scope                 string `json:"scope"`
-	Code                  string `json:"code"`
-	Files                 int    `json:"files"`
-	Bytes                 int64  `json:"bytes"`
-	ExcludedDirectories   int    `json:"excluded_directories"`
-	OpaqueFiles           int    `json:"opaque_files"`
-	AuthorizedDocuments   int    `json:"authorized_documents"`
-	AuthorizedSystemFiles int    `json:"authorized_system_files,omitempty"`
-	LeakObserved          bool   `json:"leak_observed"`
+	Scope                 string                    `json:"scope"`
+	Code                  string                    `json:"code"`
+	Files                 int                       `json:"files"`
+	Bytes                 int64                     `json:"bytes"`
+	ExcludedDirectories   int                       `json:"excluded_directories"`
+	OpaqueFiles           int                       `json:"opaque_files"`
+	AuthorizedDocuments   int                       `json:"authorized_documents"`
+	AuthorizedSystemFiles int                       `json:"authorized_system_files,omitempty"`
+	LeakObserved          bool                      `json:"leak_observed"`
+	SQLite                *SQLiteSurfaceObservation `json:"sqlite,omitempty"`
 }
 
 func (observation *PrivateSurfaceObservation) valid() bool {
 	if observation == nil {
 		return true
 	}
+	qualifiedSQLite := 0
+	if observation.SQLite != nil && observation.SQLite.Code == "observed" {
+		qualifiedSQLite = 1
+	}
 	return observation.Scope == "owned_profile_files_v1" &&
+		observation.SQLite.valid() &&
+		(observation.SQLite == nil || observation.SQLite.Code != "leak_observed" || observation.LeakObserved) &&
+		(observation.SQLite == nil || observation.SQLite.Code != "unavailable" || observation.Code != "observed") &&
 		observation.Files >= 0 && observation.Files <= maxPrivateScanEntries &&
 		observation.Bytes >= 0 && observation.Bytes <= maxPrivateScanBytes &&
 		observation.OpaqueFiles >= 0 && observation.OpaqueFiles <= observation.Files &&
 		observation.AuthorizedDocuments >= 0 && observation.AuthorizedDocuments <= observation.Files &&
 		observation.AuthorizedSystemFiles >= 0 && observation.AuthorizedSystemFiles <= observation.Files &&
-		observation.OpaqueFiles+observation.AuthorizedDocuments+observation.AuthorizedSystemFiles <= observation.Files &&
+		observation.OpaqueFiles+observation.AuthorizedDocuments+observation.AuthorizedSystemFiles+qualifiedSQLite <= observation.Files &&
 		observation.ExcludedDirectories >= 0 && observation.ExcludedDirectories <= 2 &&
 		(observation.Code == "leak_observed" && observation.LeakObserved ||
 			!observation.LeakObserved && (observation.Code == "unavailable" ||
@@ -154,6 +162,10 @@ func observePrivateSurfaces(
 				continue
 			}
 			if info.IsDir() {
+				if fileName == privateSQLitePath {
+					complete = false
+					result.SQLite = &SQLiteSurfaceObservation{Scope: privateSQLiteScope, Code: "unavailable"}
+				}
 				if fileName == ".security" || fileName == "keys" {
 					result.ExcludedDirectories++
 					continue
@@ -165,6 +177,7 @@ func observePrivateSurfaces(
 				complete = false
 				continue
 			}
+			sqliteReady := fileName != privateSQLitePath || sqliteSidecarsAbsent(root)
 			data, fileErr := readBoundedFile(root, fileName,
 				min(maxPrivateScanFileBytes, int64(maxPrivateScanBytes)-result.Bytes))
 			if fileErr != nil {
@@ -175,12 +188,20 @@ func observePrivateSurfaces(
 			result.Bytes += int64(len(data))
 			if filter != nil && filter.Replace(string(data)) != string(data) {
 				result.LeakObserved = true
-			} else if bytes.HasPrefix(data, []byte("%PDF-")) && documents[digest(data)] {
+			} else if fileName != privateSQLitePath && bytes.HasPrefix(data, []byte("%PDF-")) && documents[digest(data)] {
 				result.AuthorizedDocuments++
 			} else if containsRetainedLiteral(data, facts) {
 				result.LeakObserved = true
 			} else if privateCompiledSystemFile(fileName, data, info.Mode()) {
 				result.AuthorizedSystemFiles++
+			} else if fileName == privateSQLitePath {
+				observation := observePrivateSQLite(ctx, root, info, data, sqliteReady, &scan)
+				result.SQLite = &observation
+				if observation.Code == "leak_observed" {
+					result.LeakObserved = true
+				} else if observation.Code != "observed" {
+					result.OpaqueFiles++
+				}
 			} else if bytes.HasPrefix(data, []byte("%PDF-")) {
 				result.OpaqueFiles++
 			} else if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
