@@ -148,6 +148,12 @@ do not describe that new test as recovery of old input. Native capacity state ou
 ## Large Public Form And Unsupported Output
 
 The official I-134 is a separate required complete-applicable transaction, not a substitute for the unrelated form.
+It is **not fully qualified today**. The fresh 2026-10-18 test found three applicable read-only source fields
+controlled by XFA conditional/calculation scripts; the current backend neither executes those scripts nor writes
+those fields. The operator deferred that capability to the
+[separate follow-up](../architecture/pdf-conditional-calculated-fields-roadmap.md). Do not bypass flags, omit
+these targets from a full-output oracle, or label a static subset as a complete I-134. Test ordinary-form intake
+independently while this official-form gate remains open.
 Use the pinned edition/hash/provenance from the goal's qualification record, synthetic sponsor/beneficiary/address/
 financial data and actual role/applicability instructions. Do not infer legal or financial facts, sign, certify or submit.
 Inspect every visible page independently and correlate the one delivered PDF to the verified native operation.

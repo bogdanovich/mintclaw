@@ -19,11 +19,14 @@ operator experience on top of PDF3 without reopening its protected storage or do
 PDFI1 natural-language orchestration, PDFI2 agent-owned form dialogue, and bounded PDFI3 semantic planning are complete;
 their evidence and limits are recorded in the [PDFI2 exit report](pdf-agentic-intake-pdfi2-exit.md) and
 [PDFI3 exit report](pdf-agentic-intake-pdfi3-exit.md). PDFI4 free-text, multi-fact intake and large-form qualification are
-admitted under the [PDFI4 implementation goal](pdf-agentic-intake-pdfi4-goal.md); implementation, deployment, and
-qualification are not complete. PDFI4 includes explicit editable partial drafts for ordinary AcroForms and real
-Telegram ingress, not just a section-by-section questionnaire. Editable hybrid derivatives, including I-134, are
+admitted under the [PDFI4 implementation goal](pdf-agentic-intake-pdfi4-goal.md); implementation is merged and
+deployed, but qualification is not complete. PDFI4 includes explicit editable partial drafts for ordinary AcroForms
+and real Telegram ingress, not just a section-by-section questionnaire. Editable hybrid derivatives, including I-134, are
 deferred by the operator's 2026-10-10 scope decision in that goal; current hybrid output remains print-ready and
 flattened.
+The 2026-10-18 fresh I-134 test found applicable source fields that depend on XFA conditional access or calculations.
+The operator deferred this capability to a [separate backend roadmap](pdf-conditional-calculated-fields-roadmap.md),
+without treating I-134 as fully qualified or expanding the current intake fixes.
 Two completed follow-up lanes kept runtime maintenance separate from platform
 expansion: the archived
 [PDF Runtime Reliability mini-roadmap](archive/pdf-runtime-reliability-roadmap.md)
@@ -1035,6 +1038,14 @@ The official I-134 revision is a live qualification input, never a production al
 implementation contains no form-specific IDs or rules. The detailed PR sequence, refusal matrix, live harness, stop
 gates, and done criteria are fixed by the [PDF4H goal](pdf4h-hybrid-form-print-goal.md). The admitted Linux slice is
 complete; its deployed evidence and residual boundaries are in the [PDF4H exit record](pdf4h-exit-record.md).
+
+### Conditional And Calculated Form Semantics: Separately Deferred Backend Stage
+
+The [conditional/calculated follow-up](pdf-conditional-calculated-fields-roadmap.md) records the operator's
+2026-10-18 decision and ordered done criteria. Begin with backend feasibility and explicit admission, then qualify
+one conditional branch, one calculated dependency and complete public-large-form requalification. Current static
+hybrid support does not imply those semantics, and source read-only flags must not be silently bypassed.
+No implementation or script-execution authority is admitted by this roadmap entry.
 
 ### PDF5A-PDF5D: Separately admitted expansion slices
 
