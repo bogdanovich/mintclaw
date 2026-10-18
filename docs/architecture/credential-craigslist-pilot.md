@@ -111,6 +111,13 @@ for that verified owner. This setup check issued no account grant and retrieved
 no Craigslist credential.
 
 The existing HTTPS phone route and merged phone-page update are deployed.
+The private CLI's localhost repair and website/name discovery are also installed;
+the operator need not copy item UUIDs to create subsequent alias bindings.
+All thirteen synthetic browser/provider/connector scenarios passed with the
+race detector after adding credential-runtime recreation, actual caller
+cancellation and signed-grant expiry. These results establish the listed
+synthetic paths, not a personal-account login or OS process-crash recovery.
+
 Browser login remains disabled. At the latest setup check the private service
 token was absent; dedicated-vault read scope and protected token entry remain
 operator steps. The site's exact success URL/marker, real approval notification,
