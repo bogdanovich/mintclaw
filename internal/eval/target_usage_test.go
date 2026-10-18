@@ -26,7 +26,7 @@ func TestReturnedTargetUsageRequiresExactCompleteNonnegativeCounts(t *testing.T)
 		map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 4},
 		map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 3, "other": 0},
 		map[string]any{"input_tokens": int64(1 << 53), "output_tokens": 0, "total_tokens": int64(1 << 53)},
-		map[string]any{"input_tokens": math.MaxInt64, "output_tokens": 1, "total_tokens": 0},
+		map[string]any{"input_tokens": int64(math.MaxInt64), "output_tokens": 1, "total_tokens": 0},
 		map[string]any{"input_tokens": math.Inf(1), "output_tokens": 0, "total_tokens": math.Inf(1)},
 	} {
 		if usage := returnedTokenUsage(raw); usage != nil {
