@@ -1,4 +1,4 @@
-// Package vault is a runtime-internal adapter for exact 1Password login reads.
+// Package vault is a runtime-internal adapter for exact 1Password credential reads.
 // Trusted MintClaw code may use it after approval; secret values must stay
 // outside model-facing results, diagnostics and durable output. It supplies
 // no model tool, transport, setup command, or direct grant-issuing API.
@@ -114,11 +114,19 @@ func (provider Provider) GetLogin(ctx context.Context, binding Binding) (result 
 			result, resultErr = Login{}, ErrUnavailable
 		}
 	}()
+	item, err := provider.getItem(ctx, binding)
+	if err != nil {
+		return Login{}, err
+	}
+	return loginFromItem(binding, item)
+}
+
+func (provider Provider) getItem(ctx context.Context, binding Binding) (onepassword.Item, error) {
 	if ctx == nil || ctx.Err() != nil || provider.items == nil || provider.slot == nil {
-		return Login{}, ErrUnavailable
+		return onepassword.Item{}, ErrUnavailable
 	}
 	if !validProviderID(binding.VaultID) || !validProviderID(binding.ItemID) {
-		return Login{}, ErrInvalidLogin
+		return onepassword.Item{}, ErrInvalidLogin
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, providerTimeout)
 	defer cancel()
@@ -127,16 +135,19 @@ func (provider Provider) GetLogin(ctx context.Context, binding Binding) (result 
 	case provider.slot <- struct{}{}:
 		defer func() { <-provider.slot }()
 	case <-requestCtx.Done():
-		return Login{}, ErrUnavailable
+		return onepassword.Item{}, ErrUnavailable
 	}
 	if requestCtx.Err() != nil {
-		return Login{}, ErrUnavailable
+		return onepassword.Item{}, ErrUnavailable
 	}
 	item, err := provider.items.Get(requestCtx, binding.VaultID, binding.ItemID)
 	if err != nil || requestCtx.Err() != nil {
-		return Login{}, ErrUnavailable
+		return onepassword.Item{}, ErrUnavailable
 	}
-	return loginFromItem(binding, item)
+	if item.VaultID != binding.VaultID || item.ID != binding.ItemID {
+		return onepassword.Item{}, ErrInvalidLogin
+	}
+	return item, nil
 }
 
 func loginFromItem(binding Binding, item onepassword.Item) (Login, error) {

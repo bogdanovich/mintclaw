@@ -104,6 +104,7 @@ async function phone() {
     stage = 'reuse';
     assert.equal((await fixture('/_fixture/reuse')).outcome, config.outcome || 'logged_in');
     stage = 'revoke';
+    if (config.inflight) assert.equal((await fixture('/_fixture/inflight')).started, true);
     await page.getByRole('button', { name: 'Revoke access' }).click();
     await page.getByRole('button', { name: 'Revoke with passkey' }).click();
     await page.getByRole('status').filter({ hasText: 'Access revoked.' }).waitFor();

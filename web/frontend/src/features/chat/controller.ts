@@ -33,6 +33,7 @@ let initialized = false
 let unsubscribeGateway: (() => void) | null = null
 let hydratePromise: Promise<void> | null = null
 let connectionGeneration = 0
+let sessionSelectionGeneration = 0
 let reconnectTimer: number | null = null
 let reconnectAttempts = 0
 let shouldMaintainConnection = false
@@ -384,12 +385,16 @@ export function sendChatMessage({
 }
 
 export async function switchChatSession(sessionId: string) {
+  const generation = ++sessionSelectionGeneration
   if (sessionId === activeSessionIdRef) {
     return
   }
 
   try {
     const historyMessages = await loadSessionMessages(sessionId)
+    if (generation !== sessionSelectionGeneration) {
+      return
+    }
 
     disconnectChatInternal({ clearDesiredConnection: false })
     setActiveSessionId(sessionId)
@@ -405,12 +410,16 @@ export async function switchChatSession(sessionId: string) {
       await connectChat()
     }
   } catch (error) {
+    if (generation !== sessionSelectionGeneration) {
+      return
+    }
     console.error("Failed to load session history:", error)
     toast.error(i18n.t("chat.historyOpenFailed"))
   }
 }
 
 export async function newChatSession() {
+  sessionSelectionGeneration += 1
   if (getChatState().messages.length === 0) {
     return
   }
@@ -477,6 +486,7 @@ export function initializeChatStore() {
 }
 
 export function teardownChatStore() {
+  sessionSelectionGeneration += 1
   unsubscribeGateway?.()
   unsubscribeGateway = null
   initialized = false

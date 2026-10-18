@@ -69,6 +69,10 @@ mintclaw credentials enroll
 ```
 
 Open the private five-minute link on Android and create the approval passkey.
+Then choose **Verify approval passkey** and confirm that setup is complete
+before restarting the gateway. If the key was created in 1Password on a
+computer, open the plain `/credentials/` page in Android Chrome to verify the
+synced key there; do not reuse the consumed enrollment link.
 Keep that setup link out of chat and logs. Enrollment creates no access grant
 and does not retrieve the Craigslist password.
 
@@ -97,3 +101,18 @@ cookies, raw page dumps or network bodies. Complete the actual Android remote
 notification, approval, login and revocation checks before expanding beyond this
 one account. None of these physical-device or personal-account checks has been
 claimed complete by the synthetic fixtures.
+
+## Recorded acceptance status
+
+On 2026-10-18 UTC the operator completed **Verify approval passkey** on a Pixel
+using Android Chrome and 1Password. A metadata-only server check confirmed that
+the owner record's enrollment is no longer pending. Do not repeat enrollment
+for that verified owner. This setup check issued no account grant and retrieved
+no Craigslist credential.
+
+The existing HTTPS phone route and merged phone-page update are deployed.
+Browser login remains disabled. At the latest setup check the private service
+token was absent; dedicated-vault read scope and protected token entry remain
+operator steps. The site's exact success URL/marker, real approval notification,
+login, grant reuse and revocation are still unverified. Keep this pilot
+incomplete until those checks pass.

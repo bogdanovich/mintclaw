@@ -630,6 +630,13 @@ func validateDescriptorInvocationInput(descriptor CommandDescriptor, input map[s
 	if IsBrowserCommand(descriptor.Name) {
 		return validateBrowserInvocationInput(descriptor, input)
 	}
+	if IsComputerCommand(descriptor.Name) {
+		raw, err := json.Marshal(input)
+		if err != nil {
+			return ErrInvalidInvocation
+		}
+		return validateComputerInvocationInput(descriptor, raw)
+	}
 	return nil
 }
 
@@ -672,6 +679,11 @@ func ValidateInvocationOutput(
 			object,
 		); validationErr != nil {
 			return nil, validationErr
+		}
+	}
+	if IsComputerCommand(descriptor.Name) {
+		if err := validateComputerInvocationOutput(descriptor, canonical); err != nil {
+			return nil, err
 		}
 	}
 	return json.RawMessage(canonical), nil

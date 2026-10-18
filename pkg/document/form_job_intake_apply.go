@@ -14,12 +14,21 @@ import (
 // Proposals are private interpreter output. Values are derived from exact
 // source literals, never from replacement text supplied by an interpreter.
 type FormIntakeProposal struct {
-	FieldID            string                `json:"field_id"`
-	Disposition        FormIntakeDisposition `json:"disposition,omitempty"`
-	Literals           []FormIntakeLiteral   `json:"-"`
-	SupersedesEventID  string                `json:"supersedes_event_id,omitempty"`
-	ReplaceExisting    bool                  `json:"replace_existing,omitempty"`
-	CorrectionEvidence []FormIntakeLiteral   `json:"-"`
+	FieldID            string                   `json:"field_id"`
+	Disposition        FormIntakeDisposition    `json:"disposition,omitempty"`
+	Literals           []FormIntakeLiteral      `json:"-"`
+	SupersedesEventID  string                   `json:"supersedes_event_id,omitempty"`
+	ReplaceExisting    bool                     `json:"replace_existing,omitempty"`
+	CorrectionEvidence []FormIntakeLiteral      `json:"-"`
+	Resolves           []FormIntakePriorLiteral `json:"-"`
+}
+
+// A private proposal to settle exact earlier rejected evidence. The replacement
+// remains the current proposal's validated literal, never text copied from here.
+type FormIntakePriorLiteral struct {
+	Reference      string            `json:"-"`
+	ExpectedPasses int               `json:"-"`
+	Literal        FormIntakeLiteral `json:"-"`
 }
 
 type FormIntakeApplyRequest struct {
@@ -70,7 +79,8 @@ type formIntakeStoredOutcome struct {
 	ScopedInstruction bool                      `json:"scoped_instruction,omitempty"`
 	ScopedIDs         []string                  `json:"scoped_ids,omitempty"`
 	// Native-derived settlement of advisory uncertainty, never a value or approval.
-	ResolvedGuidanceIDs []string `json:"resolved_guidance_ids,omitempty"`
+	ResolvedGuidanceIDs []string                     `json:"resolved_guidance_ids,omitempty"`
+	PriorResolutions    []formIntakeStoredResolution `json:"prior_resolutions,omitempty"`
 }
 
 // ApplyFormIntakePass publishes accepted ledger events, raw-input accounting
@@ -121,6 +131,7 @@ func (store *FormJobStore) ApplyFormIntakePass(
 			return false, nil
 		}
 		if source.Intake.State != FormIntakeActive || input.State != formIntakeInputCommitted ||
+			formIntakeReservationSuperseded(source.Intake, input.ID, passIndex) ||
 			!formIntakeMutable(record.Public) || record.Public.Revision != request.ExpectedRevision ||
 			len(record.PendingEvents) != 0 || pass.ReceiptCount != len(source.Intake.Inputs) {
 			return false, ErrFormJobConflict
@@ -160,8 +171,17 @@ func (store *FormJobStore) ApplyFormIntakePass(
 			ScopedIDs:         selection.ScopedIDs,
 		}
 		pass.Outcome.ResolvedGuidanceIDs = formIntakeResolvedGuidanceIDs(*input, *pass)
-		consumed := len(formIntakeCurrentFindings(*input)) == 0 && (input.Intent != interactions.ProtectedAnswerValue ||
-			formIntakeTextAccounted(input.Text, input.Accounted))
+		if resolveErr := store.resolvePriorFormIntakeLiterals(
+			&source, index, record, key, request, selection, pass.Outcome,
+		); resolveErr != nil {
+			return false, resolveErr
+		}
+		consumeOlderFormIntakeGuidance(
+			source.Intake, index, request.Schema, record.Public, selection.CurrentValueIDs, pass.Outcome,
+		)
+		consumed := len(formIntakeCurrentModeFindings(source.Intake, *input)) == 0 &&
+			(input.Intent != interactions.ProtectedAnswerValue ||
+				formIntakeTextAccounted(input.Text, input.Accounted))
 		if consumed && formIntakeHasScopedInstruction(*input) {
 			consumed = formIntakeScopeCoverageComplete(*input, request.Schema)
 		}
@@ -189,6 +209,11 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		Text       string
 		Occurrence int
 	}
+	type priorLiteral struct {
+		Reference string
+		Passes    int
+		Literal   literal
+	}
 	type proposal struct {
 		FieldID           string
 		Disposition       FormIntakeDisposition `json:"Disposition,omitempty"`
@@ -196,12 +221,14 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		SupersedesEventID string
 		ReplaceExisting   bool
 		Correction        []literal
+		Resolves          []priorLiteral `json:"Resolves,omitempty"`
 	}
 	type output struct {
 		Mode    FormIntakeOutputMode
 		Literal literal
 	}
 	count, bytes, valid := 0, 0, true
+	resolutionCount := 0
 	convert := func(refs []FormIntakeLiteral) []literal {
 		result := make([]literal, len(refs))
 		for i, ref := range refs {
@@ -235,6 +262,19 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 			FieldID: item.FieldID, Disposition: item.Disposition, Literals: convert(item.Literals),
 			SupersedesEventID: item.SupersedesEventID, ReplaceExisting: item.ReplaceExisting,
 			Correction: convert(item.CorrectionEvidence),
+		}
+		for _, prior := range item.Resolves {
+			resolutionCount++
+			if resolutionCount > MaxFormIntakeCandidates || prior.ExpectedPasses < 1 ||
+				prior.ExpectedPasses > MaxFormIntakeExtractionPasses {
+				return "", ErrFormJobCapacityExceeded
+			}
+			if _, _, err := parseFormIntakeReceipt(prior.Reference); err != nil {
+				return "", ErrFormJobAnswerConflict
+			}
+			refs := convert([]FormIntakeLiteral{prior.Literal})
+			proposals[i].Resolves = append(proposals[i].Resolves,
+				priorLiteral{prior.Reference, prior.ExpectedPasses, refs[0]})
 		}
 	}
 	nonData := convert(request.NonData)

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/internal/credentials/githubread"
 	"github.com/bogdanovich/mintclaw/internal/credentials/vault"
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -56,8 +57,16 @@ func TestCredentialCodexOutputFixture(t *testing.T) {
 	}
 }
 
+func TestCredentialGitHubOutputFixture(t *testing.T) {
+	for _, kind := range []string{"openai_compat", "codex"} {
+		t.Run(kind, func(t *testing.T) { testCredentialAliasBrowserAndPhoneFixture(t, "github:"+kind, "success") })
+	}
+}
+
 func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expectedOutcome string) {
 	t.Helper()
+	connectorMode := strings.HasPrefix(providerKind, "github:")
+	providerKind = strings.TrimPrefix(providerKind, "github:")
 	providerMode := providerKind != ""
 	if os.Getenv("MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE") != "1" {
 		t.Skip("synthetic Chromium qualification only")
@@ -121,6 +130,15 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 			},
 		}},
 	}
+	if connectorMode {
+		cfg.Credentials.BrowserLoginEnabled = false
+		cfg.Credentials.GitHubReadEnabled = true
+		cfg.Credentials.Accounts[0].Origins = []string{credentialbroker.GitHubAPIOrigin}
+		cfg.Credentials.Accounts[0].Login = nil
+		cfg.Credentials.Accounts[0].GitHub = &credentialbroker.GitHubReadScope{
+			Repositories: []string{"fixture-owner/fixture-repo"},
+		}
+	}
 	if os.Chmod(cfg.Credentials.StateDirectory, 0o700) != nil {
 		t.Fatal("private approval fixture state unavailable")
 	}
@@ -140,6 +158,42 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 		}
 		retrieved.Add(1)
 		return use([]byte("gateway-private-account@example.org"), []byte("gateway-private-password-Q68"))
+	}
+	const apiToken = "gateway-private-api-token-U42"
+	var apiCalls atomic.Int32
+	inflight := make(chan struct{})
+	var inflightResult chan string
+	if connectorMode {
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/repos/fixture-owner/fixture-repo/pulls" ||
+				r.URL.RawQuery != "state=open&per_page=20" || r.Header.Get("Authorization") != "Bearer "+apiToken {
+				t.Error("connector fixture changed private HTTP authority")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			if apiCalls.Add(1) == 3 {
+				close(inflight)
+				<-r.Context().Done()
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"number": 7, "state": "open", "title": "Pull request " + apiToken,
+				"body": apiToken, "html_url": "https://ignored.invalid/" + apiToken,
+			}})
+		}))
+		t.Cleanup(api.Close)
+		credentials.githubReader = githubread.New(credentialGitHubFixtureTransport{api: api})
+		credentials.consumeAPIKey = func(_ context.Context, binding vault.Binding, use func([]byte) error) error {
+			if binding.VaultID != "fixture-vault" || binding.ItemID != "fixture-item" {
+				return errors.New("private connector binding changed")
+			}
+			retrieved.Add(1)
+			key := []byte(apiToken)
+			defer clear(key)
+			return use(key)
+		}
+		inflightResult = make(chan string, 1)
 	}
 	running := &services{Credentials: credentials}
 	if err := cfg.ValidateBrowserConfig(); err != nil {
@@ -246,6 +300,7 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 			running,
 			messageBus,
 			providerKind,
+			connectorMode,
 			expectedOutcome,
 			func(data []byte) {
 				mu.Lock()
@@ -311,6 +366,32 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 			}
 			respond(result)
 		case "/_fixture/revoked":
+			if connectorMode {
+				select {
+				case result := <-inflightResult:
+					mu.Lock()
+					outputs = append(outputs, []byte(result))
+					mu.Unlock()
+					scope, _, scopeErr := credentials.controller.GitHubRequest(
+						ctx,
+						cfg.Credentials.Accounts[0].Principals[0],
+						"fixture-account",
+						"fixture-owner/fixture-repo",
+					)
+					_, grantErr := credentials.controller.ActiveLogin(ctx, scope)
+					respond(
+						map[string]bool{
+							"retired": scopeErr == nil && grantErr != nil && apiCalls.Load() == 3 &&
+								strings.Contains(result, `"outcome":"unavailable"`),
+						},
+					)
+				case <-ctx.Done():
+					http.Error(writer, "fixture unavailable", http.StatusServiceUnavailable)
+				case <-time.After(5 * time.Second):
+					respond(map[string]bool{"retired": false})
+				}
+				return
+			}
 			retired := false
 			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
@@ -329,6 +410,34 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 				time.Sleep(50 * time.Millisecond)
 			}
 			respond(map[string]bool{"retired": retired})
+		case "/_fixture/inflight":
+			if !connectorMode {
+				http.NotFound(writer, request)
+				return
+			}
+			source := &credentialReadSource{
+				runtime: credentials,
+				reader:  credentials.githubReader,
+				agents:  map[string]bool{"browser": true},
+			}
+			if result := source.ReadCredentialPullRequests(
+				ctx,
+				"fixture-account",
+				"unconfigured/repository",
+			); result != `{"outcome":"denied"}` || apiCalls.Load() != 2 ||
+				retrieved.Load() != 2 {
+				http.Error(writer, "fixture scope unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			go func() {
+				inflightResult <- source.ReadCredentialPullRequests(ctx, "fixture-account", "fixture-owner/fixture-repo")
+			}()
+			select {
+			case <-inflight:
+				respond(map[string]bool{"started": true})
+			case <-ctx.Done():
+				http.Error(writer, "fixture unavailable", http.StatusServiceUnavailable)
+			}
 		default:
 			routes.handler.ServeHTTP(writer, request)
 		}
@@ -341,6 +450,7 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 	defer clear(invite)
 	input, err := json.Marshal(map[string]string{
 		"backend": server.URL, "invite": string(invite), "outcome": expectedOutcome,
+		"inflight": map[bool]string{true: "true", false: ""}[connectorMode],
 	})
 	if err != nil {
 		t.Fatal("synthetic phone configuration unavailable")
@@ -364,7 +474,11 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 		}
 		t.Fatalf("synthetic gateway/browser/phone qualification failed at %s", stage)
 	}
-	if retrieved.Load() != 2 || len(messageBus.OutboundChan()) != 0 {
+	expectedReads := int32(2)
+	if connectorMode {
+		expectedReads = 3
+	}
+	if retrieved.Load() != expectedReads || len(messageBus.OutboundChan()) != 0 {
 		t.Fatal("signed grant reuse retrieved unexpectedly or sent another approval notification")
 	}
 	finalize()
@@ -393,6 +507,7 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 		for _, value := range []string{
 			"gateway-private-account@example.org", "gateway-private-password-Q68", "gateway-private-cookie-K82",
 			"gateway-private-otp-R49",
+			apiToken,
 		} {
 			if bytes.Contains(output, []byte(value)) {
 				t.Fatal("synthetic credential escaped into a serialized tool, browser state or logger sink")

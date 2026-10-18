@@ -79,6 +79,12 @@ func (source *gatewayBrowserToolSource) resolveBrowserUploadArtifact(
 	if err != nil {
 		return nil, nodes.TransferArtifactRecord{}, browser.ErrDenied
 	}
+	// A retained download is an immutable file owned by this routed browser
+	// session, not by the destination's current observation. ResolveRoutedDownload
+	// already checked that owner and expiry; the caller verifies bytes and digest.
+	if validBrowserDownloadRecord(record) {
+		return file, record, nil
+	}
 	if !validBrowserScreenshotRecord(record) ||
 		record.Spec.SourceScope != request.TabID ||
 		record.Spec.SourceID != request.SnapshotID ||

@@ -61,8 +61,9 @@ func TestDecodeCaptureGeometryAndPrivacy(t *testing.T) {
 		t.Fatal("protected payload escaped")
 	}
 	for name, mutate := range map[string]func(*sdkmcp.CallToolResult){
-		"identity": func(r *sdkmcp.CallToolResult) { r.StructuredContent.(map[string]any)["pid"] = 99 },
-		"frame":    func(r *sdkmcp.CallToolResult) { r.StructuredContent.(map[string]any)["screenshot_frame_valid"] = false },
+		"identity":   func(r *sdkmcp.CallToolResult) { r.StructuredContent.(map[string]any)["pid"] = 99 },
+		"frame":      func(r *sdkmcp.CallToolResult) { r.StructuredContent.(map[string]any)["screenshot_frame_valid"] = false },
+		"composited": func(r *sdkmcp.CallToolResult) { r.StructuredContent.(map[string]any)["screenshot_composited"] = true },
 		"geometry": func(r *sdkmcp.CallToolResult) {
 			r.StructuredContent.(map[string]any)["window_bounds"] = map[string]any{"width": 3, "height": 100}
 		},
@@ -164,7 +165,7 @@ func TestPrivateDriverPinnedAdmission(t *testing.T) {
 		t.Fatal("private manifest admits broader authority")
 	}
 	capture, err := driver.Capture(t.Context(), config.Target)
-	if err != nil || len(capture.Screenshot) == 0 {
+	if err != nil || len(capture.Screenshot) == 0 || capture.AccessibilityText != "" {
 		t.Fatal(err)
 	}
 	other := config.Target
@@ -221,7 +222,11 @@ func TestPrivateCuaHelper(t *testing.T) {
 	}
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "private-cua-fixture", Version: Version}, nil)
 	server.AddTool(&sdkmcp.Tool{Name: "get_window_state", InputSchema: map[string]any{"type": "object"}},
-		func(ctx context.Context, _ *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		func(ctx context.Context, request *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+			var args map[string]any
+			if json.Unmarshal(request.Params.Arguments, &args) != nil || args["include_accessibility_tree"] != false {
+				return nil, errors.New("unproven accessibility root requested")
+			}
 			if mode == "error" {
 				return &sdkmcp.CallToolResult{IsError: true, Content: []sdkmcp.Content{
 					&sdkmcp.TextContent{Text: "PROTECTED_ERROR_TEXT"},

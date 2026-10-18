@@ -30,6 +30,11 @@ export default defineConfig([
     },
   },
   {
+    files: ["scripts/*.{mjs,cjs}"],
+    extends: [js.configs.recommended],
+    languageOptions: { globals: globals.node },
+  },
+  {
     files: ["src/routes/**/*.{ts,tsx}"],
     rules: {
       // TanStack Router route modules must export Route objects, so this rule

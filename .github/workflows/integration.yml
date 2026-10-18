@@ -1,0 +1,115 @@
+name: Integration
+
+on:
+  workflow_call:
+    inputs:
+      credentials:
+        type: boolean
+        default: true
+      documents:
+        type: boolean
+        default: true
+      companion:
+        type: boolean
+        default: true
+      docker:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Qualify private passkey approval and protected owner storage
+        if: inputs.credentials
+        run: bash ./scripts/qualify-credential-approval.sh
+
+      - name: Setup Node.js for the synthetic phone approval fixture
+        if: inputs.credentials
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install pinned phone approval browser fixture
+        if: inputs.credentials
+        run: |
+          npm ci --ignore-scripts --prefix runtime/browser/playwright-library
+          node runtime/browser/playwright-library/node_modules/playwright/cli.js install --with-deps chromium
+
+      - name: Qualify integrated private setup and browser passkey UI
+        if: inputs.credentials
+        run: bash ./scripts/qualify-credential-phone.sh
+
+      - name: Qualify direct private credential browser transactions
+        if: inputs.credentials
+        run: >-
+          env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
+          node --test runtime/browser/playwright-library/credential-login.test.cjs
+          runtime/browser/playwright-library/credential-protocol.test.cjs
+          runtime/browser/playwright-library/navigation-evidence.test.cjs
+
+      - name: Qualify integrated alias login and phone approval
+        if: inputs.credentials
+        run: >-
+          env -u OP_SERVICE_ACCOUNT_TOKEN -u DEBUG -u PWDEBUG -u NODE_OPTIONS
+          MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE=1
+          go test -count=1 -race -timeout 4m -tags goolm,stdjson
+          -run '^TestCredential(AliasBrowserAndPhone|ProviderOutput|ProviderOutcome|CodexOutput|GitHubOutput)Fixture$' ./pkg/gateway
+
+      - name: Install pinned document runtime
+        if: inputs.documents
+        run: |
+          snapshot=20261011T000000Z
+          sudo apt-get update --snapshot "$snapshot"
+          sudo apt-get install --yes --no-install-recommends --allow-downgrades --snapshot "$snapshot" \
+            bubblewrap=0.9.0-1ubuntu0.3 \
+            ghostscript=10.02.1~dfsg1-0ubuntu7.9 \
+            libgs-common=10.02.1~dfsg1-0ubuntu7.9 \
+            poppler-utils=24.02.0-1ubuntu9.10 \
+            libpoppler134=24.02.0-1ubuntu9.10 \
+            fonts-dejavu-core=2.37-8 \
+            fonts-liberation=1:2.1.5-3
+
+      - name: Enable Bubblewrap namespaces
+        if: inputs.documents
+        run: |
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns | grep -qx 1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          /usr/bin/bwrap --ro-bind / / --unshare-net -- /bin/true
+
+      - name: Run Linux document read process contract
+        if: inputs.documents
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -count=1 -v \
+            -run '^TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts$' \
+            ./pkg/document | tee "$RUNNER_TEMP/document-read-process.txt"
+          grep -Fq -- '--- PASS: TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts' \
+            "$RUNNER_TEMP/document-read-process.txt"
+
+      - name: Run real companion vertical tests
+        if: inputs.companion
+        run: bash ./scripts/run-go-integration-tests.sh companion
+
+      - name: Run real document vertical tests
+        if: inputs.documents
+        run: bash ./scripts/run-go-integration-tests.sh documents
+
+      - name: Run Docker-backed integration suites
+        if: inputs.docker
+        run: bash ./scripts/run-integration-tests.sh
+

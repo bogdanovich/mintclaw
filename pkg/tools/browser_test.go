@@ -1472,6 +1472,70 @@ func TestBrowserTargetsReportsConfiguredDefaultProfileIndependentlyOfProfileOrde
 	}
 }
 
+func TestBrowserTargetsDistinguishesSteelProxyPolicyFromNetworkBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		provider     string
+		useProxy     bool
+		proxyOnBlock bool
+	}{
+		{name: "local"},
+		{name: "steel_direct", provider: config.BrowserProviderSteel},
+		{name: "steel_direct_then_proxy", provider: config.BrowserProviderSteel, proxyOnBlock: true},
+		{name: "steel_always_proxy", provider: config.BrowserProviderSteel, useProxy: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := browserToolTestRootConfig()
+			target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+			target.Provider = test.provider
+			target.Steel.APIKeyRef = *config.NewSecureString("private-provider-key")
+			target.Steel.UseProxy, target.Steel.ProxyOnBlock = test.useProxy, test.proxyOnBlock
+			cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+			source := &fakeBrowserToolSource{available: true}
+			tool := NewBrowserTargetsTool(NewBrowserToolOptions(cfg.Tools.Browser), source)
+			response := tool.Execute(browserToolTestContext(), nil)
+			var result browserTargetResult
+			decodeBrowserToolResult(t, response, &result)
+			if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 1 {
+				t.Fatalf("target discovery = %#v", result)
+			}
+			view := result.Targets[0]
+			if view.Provider != target.EffectiveProvider() || source.readinessCalls != 1 ||
+				source.openRequest.Target != "" {
+				t.Fatalf("passive provider discovery = %#v; opened = %#v", view, source.openRequest)
+			}
+			if test.provider != config.BrowserProviderSteel {
+				if view.Steel != nil || view.Profiles[0].NetworkBoundary != "managed_request_proxy" {
+					t.Fatalf("local target advertised Steel policy = %#v", view)
+				}
+				return
+			}
+			if view.Steel == nil || view.Steel.UseProxy != test.useProxy ||
+				view.Steel.ProxyOnBlock != test.proxyOnBlock || view.Profiles[0].NetworkBoundary != "remote_request_routes" {
+				t.Fatalf("Steel proxy policy = %#v", view)
+			}
+			// False must remain explicit in the model-visible JSON, rather than
+			// becoming an absent setting that the agent has to guess.
+			var wire struct {
+				Targets []struct {
+					Steel map[string]bool `json:"steel"`
+				} `json:"targets"`
+			}
+			if err := json.Unmarshal([]byte(response.ContentForLLM()), &wire); err != nil {
+				t.Fatal(err)
+			}
+			if len(wire.Targets) != 1 || len(wire.Targets[0].Steel) != 2 {
+				t.Fatalf("Steel proxy settings omitted or exposed extra fields: %s", response.ContentForLLM())
+			}
+			for _, key := range []string{"use_proxy", "proxy_on_block"} {
+				if _, ok := wire.Targets[0].Steel[key]; !ok {
+					t.Fatalf("Steel proxy policy omitted %s: %s", key, response.ContentForLLM())
+				}
+			}
+		})
+	}
+}
+
 func TestBrowserTargetsFiltersCanonicalProfilesByExactActorAndAgentGrant(t *testing.T) {
 	root := browserToolTestRootConfig()
 	target := root.Tools.Browser.Targets["gateway"]

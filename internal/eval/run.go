@@ -65,6 +65,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		target, err = admitPreparedTarget(suiteCtx, preset, options.Home)
 	}
 	var lifecycle *TargetLifecycle
+	var retainedFacts privateFactRetention
+	var privateSurfaces *PrivateSurfaceObservation
 	stopTarget := func() {
 		if child == nil || lifecycle != nil {
 			return
@@ -74,7 +76,18 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		receipt := child.stopAndWait(cleanupCtx)
 		lifecycle = &receipt
 	}
-	defer stopTarget()
+	defer func() {
+		stopTarget()
+		// Even report I/O failures must not discard the only private fact set
+		// before attempting the post-stop raw observation.
+		if options.StartTarget && retainedFacts.values != nil && privateSurfaces == nil {
+			scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer scanCancel()
+			observePrivateSurfaces(scanCtx, options.Home, retainedFacts.values,
+				target.config.SensitiveDataReplacer(), retainedFacts.documents)
+		}
+		retainedFacts.clear()
+	}()
 	if err != nil {
 		return RunReport{}, err
 	}
@@ -128,7 +141,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		case suiteCtx.Err() != nil:
 			trial.Verdict, trial.Code = Inconclusive, "suite_interrupted"
 		default:
-			trial = runAdmittedTrial(suiteCtx, target, item, trial.SessionID, roles, options, writer)
+			trial = runAdmittedTrial(suiteCtx, target, item, trial.SessionID, roles, options, writer, &retainedFacts)
 		}
 		trial.Repetition = ordinal%options.Repeat + 1
 		name := "trial-" + trial.ID + ".json"
@@ -153,6 +166,18 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	result.WorkspaceInputs.After = observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter)
 	stopTarget()
+	if options.StartTarget && retainedFacts.values != nil {
+		scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		observation := observePrivateSurfaces(scanCtx, home, retainedFacts.values, filter, retainedFacts.documents)
+		scanCancel()
+		privateSurfaces = &observation
+		result.PrivateSurfaces = privateSurfaces
+		if observation.LeakObserved {
+			result.Verdict = combineVerdicts(result.Verdict, Fail)
+		} else if observation.Code != "observed" {
+			result.Verdict = combineVerdicts(result.Verdict, Inconclusive)
+		}
+	}
 	if lifecycle != nil {
 		result.TargetLifecycle = lifecycle
 		result.Cleanup = "owned_gateway_stopped; domain_resources_unknown"
@@ -203,6 +228,7 @@ func prepareConversationRoles(target admittedTarget, cases []LoadedCase) convers
 func runAdmittedTrial(
 	ctx context.Context, target admittedTarget, item LoadedCase, sessionID string, roles conversationRoles,
 	runOptions RunOptions, report *privateReport,
+	retainedFacts *privateFactRetention,
 ) (trial Trial) {
 	trial = newUnattemptedTrial(item, target.preset.ExpectedAgent)
 	trial.SessionID = sessionID
@@ -235,6 +261,17 @@ func runAdmittedTrial(
 			config: target.config, python: runOptions.PDFOraclePython, retain: report.retainPDFArtifact,
 		}}
 		prepared.filter = roles.filter
+		if runOptions.StartTarget && !retainedFacts.add(prepared.item.Case.Driver.Facts) {
+			_ = prepared.release(true)
+			trial.Verdict, trial.Code = Inconclusive, "private_fact_retention_limit"
+			return trial
+		}
+		if runOptions.StartTarget {
+			if retainedFacts.documents == nil {
+				retainedFacts.documents = make(map[string]bool)
+			}
+			retainedFacts.documents[item.Case.Fixtures[0].SHA256] = true
+		}
 		if censusErr := prepared.beginNativeCensus(caseCtx); errors.Is(censusErr, ErrPrivateEvidence) {
 			_ = prepared.release(true)
 			trial.Verdict, trial.Code = Fail, "private_native_census"
@@ -254,6 +291,10 @@ func runAdmittedTrial(
 	if domain != nil {
 		trial = runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, domain)
+		if runOptions.StartTarget && trial.PDF != nil && trial.PDF.Settlement != nil &&
+			trial.PDF.Artifact != nil && trial.PDF.Artifact.File != "" {
+			retainedFacts.documents[trial.PDF.Settlement.ArtifactSHA256] = true
+		}
 		if domain.prepared.release(false) != nil {
 			trial.Verdict = combineVerdicts(trial.Verdict, Inconclusive)
 			trial.Code = "pdf_local_cleanup_failed"
