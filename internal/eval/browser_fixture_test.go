@@ -181,6 +181,25 @@ func TestBrowserFixtureRecordsActualMutationsWithoutEchoingPrivateInput(t *testi
 	}
 }
 
+func TestBrowserFixtureNavigationGETCannotSubmitOrRemove(t *testing.T) {
+	fixture := newBrowserFixtureForTest(t)
+	for _, suffix := range []string{"", "report.csv", "submit", "remove", "remove?account=south", "submit?name=private"} {
+		request := httptest.NewRequest(http.MethodGet, fixture.origin+fixture.path+suffix,
+			strings.NewReader(browserFixtureForm(fixture).Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("Origin", fixture.origin)
+		response := httptest.NewRecorder()
+		fixture.ServeHTTP(response, request)
+		if (suffix == "" || suffix == "report.csv") != (response.Code == http.StatusOK) {
+			t.Fatal("fixture navigation admitted a mutating route or lost a read route", suffix, response.Code)
+		}
+		state := fixture.snapshot()
+		if len(state.submissions) != 0 || len(state.removals) != 0 {
+			t.Fatal("GET navigation performed a form/removal effect")
+		}
+	}
+}
+
 func TestBrowserFixtureRejectsForeignMalformedOrOversizedMutation(t *testing.T) {
 	fixture := newBrowserFixtureForTest(t)
 	for _, mutate := range []func(*http.Request){

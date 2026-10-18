@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
@@ -53,6 +54,12 @@ func enableAdmissionBrowser(t *testing.T, fixture *admissionFixture) {
 						ID:       "read",
 						Match:    browserpolicy.RuleMatch{Origins: []string{origin}, Effects: []string{"read"}},
 						Decision: browserpolicy.DecisionAllow,
+					},
+					{
+						ID: "fixture-navigation", Decision: browserpolicy.DecisionAllow,
+						Match: browserpolicy.RuleMatch{
+							Actions: []string{"navigate"}, Effects: []string{"navigation"}, Origins: []string{origin},
+						},
 					},
 					{
 						ID:       "ask",
@@ -162,6 +169,133 @@ func TestBrowserEvalSeedTemplatePreservesTheNarrowPolicyContract(t *testing.T) {
 	fixture.preset.Capabilities = append(fixture.preset.Capabilities, "browser")
 	if err = validateConversationPolicy(cfg, fixture.preset, fixture.workspace); err != nil {
 		t.Fatal("browser seed template policy is not admitted after replacing declared paths/model", err)
+	}
+}
+
+func TestBrowserEvalProfileAdmitsOnlyAnExplicitFixtureNavigationRule(t *testing.T) {
+	for _, mode := range []string{
+		"valid", "no-action", "wrong-action", "extra-action", "mixed-effects", "missing-origin",
+		"foreign-origin", "extra-origin", "commit", "unknown",
+	} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newAdmissionFixture(t)
+			enableAdmissionBrowser(t, fixture)
+			target := fixture.cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+			profile := target.Profiles["eval-browser"]
+			rule := profile.Policy.Rules[1]
+			switch mode {
+			case "no-action":
+				rule.Match.Actions = nil
+			case "wrong-action":
+				rule.Match.Actions = []string{"click"}
+			case "extra-action":
+				rule.Match.Actions = []string{"navigate", "click"}
+			case "mixed-effects":
+				rule.Match.Effects = []string{"navigation", "read"}
+			case "missing-origin":
+				rule.Match.Origins = nil
+			case "foreign-origin":
+				rule.Match.Origins = []string{"https://example.org"}
+			case "extra-origin":
+				rule.Match.Origins = append(slices.Clone(rule.Match.Origins), "http://127.0.0.1:23456")
+			case "commit":
+				rule.Match.Effects = []string{"navigation", "external_commit"}
+			case "unknown":
+				rule.Match.Effects = []string{"navigation", "unknown"}
+			}
+			profile.Policy.Rules[1] = rule
+			target.Profiles["eval-browser"] = profile
+			fixture.cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+			err := validateConversationPolicy(fixture.cfg, fixture.preset, fixture.workspace)
+			if (mode == "valid") != (err == nil) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+				t.Fatal("navigation policy admission widened authority or performed target work", mode, err)
+			}
+		})
+	}
+}
+
+func TestBrowserEvalSeedPolicyUsesNativeNavigationWithoutApprovingCommits(t *testing.T) {
+	data, err := os.ReadFile("../../evals/profiles/browser.template.json")
+	cfg := config.DefaultConfig()
+	if err != nil || config.DecodeCurrentConfig(data, cfg) != nil {
+		t.Fatal("browser seed unavailable", err)
+	}
+	_, profile := browserEvalProfile(cfg)
+	revision, err := browserpolicy.PolicyRevision(*profile.Policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := profile.AllowedOrigins[0]
+	for _, check := range []struct {
+		name     string
+		action   browseraction.Action
+		role     string
+		origin   string
+		decision string
+	}{
+		{
+			"fixture-navigation",
+			browseraction.Action{Kind: browseraction.ActionNavigate, URL: origin + "/eval/test/"},
+			"", origin, browserpolicy.DecisionAllow,
+		},
+		{
+			"foreign-port",
+			browseraction.Action{Kind: browseraction.ActionNavigate, URL: "http://127.0.0.1:23456/"},
+			"", "http://127.0.0.1:23456", browserpolicy.DecisionDeny,
+		},
+		{
+			"public-origin",
+			browseraction.Action{Kind: browseraction.ActionNavigate, URL: "https://example.org/"},
+			"", "https://example.org", browserpolicy.DecisionDeny,
+		},
+		{
+			"submit-button",
+			browseraction.Action{Kind: browseraction.ActionClick, Ref: "e1"},
+			"button", origin, browserpolicy.DecisionAsk,
+		},
+		{
+			"ambiguous-link",
+			browseraction.Action{Kind: browseraction.ActionClick, Ref: "e1"},
+			"link", origin, browserpolicy.DecisionAsk,
+		},
+		{
+			"keypress",
+			browseraction.Action{Kind: browseraction.ActionPress, Ref: "e1", Key: "Enter"},
+			"textbox", origin, browserpolicy.DecisionAsk,
+		},
+		{
+			"fill",
+			browseraction.Action{Kind: browseraction.ActionFill, Ref: "e1", Value: "synthetic"},
+			"textbox", origin, browserpolicy.DecisionAllow,
+		},
+		{
+			"hover",
+			browseraction.Action{Kind: browseraction.ActionHover, Ref: "e1"},
+			"button", origin, browserpolicy.DecisionAllow,
+		},
+		{
+			"accept-dialog",
+			browseraction.Action{Kind: browseraction.ActionDialog, DialogID: "dialog-test", Decision: "accept"},
+			"", origin, browserpolicy.DecisionAsk,
+		},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			effect, err := browserpolicy.DeriveActionEffect(check.action, check.role)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := browserpolicy.Evaluate(t.Context(), *profile.Policy, browserpolicy.ActionMetadata{
+				Action: string(check.action.Kind), Effect: effect, Origin: check.origin, Role: check.role,
+				ProfileRevision: profile.Revision, PolicyRevision: revision,
+			})
+			if err != nil || result.Decision != check.decision {
+				t.Fatal(
+					"native policy effect lost fixture navigation or silently approved a commit",
+					result.Decision,
+					err,
+				)
+			}
+		})
 	}
 }
 
