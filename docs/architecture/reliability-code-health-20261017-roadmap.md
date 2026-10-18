@@ -1,6 +1,6 @@
 # Reliability And Code Health Roadmap — October 2026
 
-Status: active. The owner authorized recording and executing this roadmap on
+Status: admitted repository work complete. The owner authorized this roadmap on
 2026-10-17 after reviewing the repository assessment.
 
 Assessment baseline: `origin/main` at `e6d19e2787891417595edc307150b38b29457d6a`.
@@ -21,22 +21,22 @@ of several responsibilities in execution and adapter files. Approximately
 432,000 lines of non-test Go and 471,000 lines of test Go describe the assessed
 repository; these counts are context, not coverage or quality scores.
 
-## Ordered Work
+## Work And Disposition
 
 | ID | Priority | Packet | Admission/status |
 | --- | --- | --- | --- |
-| R1 | High | Isolate damaged outbox records during recovery | Admitted correctness work |
+| R1 | High | Isolate damaged outbox records during recovery | Merged in #1685 |
 | R2 | High | Propagate MCP tool-discovery failures | Merged in #1681 |
 | R3 | High | Prevent stale Web UI session switches | Merged in #1682 |
-| R4 | High | Bound outbox payload storage and recovery cost | Admitted; retention design precedes implementation |
-| R5 | Medium | Carry typed MCP failure classifications | Admitted correctness work |
-| R6 | High | Finish behavioral evaluation qualification | Existing agent-evals program; reuse its owners and evidence |
+| R4 | High | Bound outbox payload storage and recovery cost | Merged: writer/source prerequisites, #1703 receipts and #1708 offline controls; permanent metadata growth remains |
+| R5 | Medium | Carry typed MCP failure classifications | Merged in #1687 |
+| R6 | High | Finish behavioral evaluation qualification | Linked disposition to existing active eval goal; no duplicate harness or completion claim |
 | R7 | Medium | Simplify tool execution around existing stages | Intentionally deferred; trigger not observed |
-| R8 | Medium | Expand frontend lifecycle regression coverage | Implemented; CI/review pending |
+| R8 | Medium | Expand frontend lifecycle regression coverage | Merged in #1691; rendered-browser qualification remains separate |
 | R9 | Conditional | Decompose browser and coding integration files | Intentionally deferred; trigger not observed |
-| R10 | Conditional | Measure storage contention before redesign | Measurement admitted; replacement requires measured need |
+| R10 | Conditional | Measure storage contention before redesign | Measurements and focused pruning optimization merged in #1690; remaining budget misses recorded |
 | R11 | Low | Improve current architecture navigation | Current-owner map added to code-health.md |
-| R12 | High | Triage and remediate frontend dependency advisories | Admitted follow-up from publication-time GitHub evidence |
+| R12 | High | Triage and remediate frontend dependency advisories | Merged in #1688; three bounded tooling exceptions expire 2026-11-17 |
 
 R1, R2, R3, and R5 are independent first-batch fixes and may be delivered in the
 order that keeps each PR smallest and easiest to validate. R4 follows a written
@@ -45,7 +45,7 @@ Conditional packets are not instructions for a repository-wide cleanup.
 
 ## R1: Damaged Outbox Recovery
 
-Evidence: `pkg/outbox.Store.Recover` calls `list`, which aborts on the first
+Baseline evidence: `pkg/outbox.Store.Recover` calls `list`, which aborts on the first
 unreadable or invalid record. Gateway startup propagates that error. A synthetic
 probe created one completed and one pending delivery, damaged the completed
 record, and observed zero recoverable deliveries plus a JSON decode error.
@@ -81,7 +81,7 @@ be established, retain the blocked record and its uncertain outcome.
 
 ## R2: MCP Discovery Failures
 
-Evidence: `pkg/mcp.listServerTools` logs iterator errors and returns a successful
+Baseline evidence: `pkg/mcp.listServerTools` logs iterator errors and returns a successful
 partial or empty catalogue. A synthetic HTTP MCP server returned an error for
 `tools/list`; `Manager.ConnectServer` returned nil and registered zero tools.
 
@@ -97,7 +97,7 @@ tests; existing reconnect and uncertain-call behavior remains intact.
 
 ## R3: Web UI Session Selection
 
-Evidence: `switchChatSession` awaits history without a selection generation.
+Baseline evidence: `switchChatSession` awaits history without a selection generation.
 Delayed promises reproduce selecting A then B, completing B first, and letting
 A's older response replace the active B conversation.
 
@@ -111,7 +111,7 @@ generation checks and history hydration semantics consistent with that owner.
 
 ## R4: Outbox Retention
 
-Evidence: completed outbox payloads remain on disk, startup reads the entire
+Baseline evidence: completed outbox payloads remain on disk, startup reads the entire
 directory, and the assessed repository has no outbox pruning path.
 
 Write a retention decision before deleting or migrating records. Define the
@@ -127,12 +127,32 @@ or turn an ambiguous outcome into a retry; interrupted cleanup recovers safely.
 R4's source audit found that inbound spool writes, renames and acknowledgements
 needed filesystem sync confirmation before an acknowledgement could support a
 retirement proof. That focused durability prerequisite preserves spool versions,
-message IDs and replay rules; typed source acknowledgement and evidence-owner
-completion remain separate unfinished gates.
+message IDs and replay rules. Merged #1697 confirms directory creation, writes,
+claims, failures and acknowledgements; #1698 carries exact source/instance native
+acknowledgement proof. Source absence or process exit cannot replace that proof.
+
+Merged #1693 excludes cooperating writers. Merged #1703 qualifies only ordinary
+successful Telegram-configured native final replies, sealed after exact source
+acknowledgement; delivery and transcript obligations must also settle. Legacy,
+unknown, media, interaction, domain, guarded-intake and native-evaluation payloads
+remain protected. Later domain work durably revokes eligibility. Delivery keys
+stay version 3 while strict schema-4 full records and permanent delivered receipts
+share one canonical filename. Old readers fail closed; retired duplicates cannot
+dispatch a candidate body. Interrupted replacement preserves full or compact
+authority rather than deleting a key.
+
+Merged #1708 adds explicit offline inspect/retire commands, positive operator age,
+dry-run by default, bounded exact-ID selection and whole-store capacity reports.
+Preflight, apply and after-scan share one exclusive owner; unknown authorities
+block mutation. Byte/count budgets request action without discarding protected
+work or keys. The [operator guide](../operations/outbox-retention-20261018.md)
+records activation prerequisites, partial-batch behavior and paired measurements.
+Payload savings do not bound permanent identity growth or linear recovery cost.
+No production policy, inventory, deployment, migration or cleanup was performed.
 
 ## R5: Typed MCP Failure Classification
 
-Evidence: `pipeline_execute.go` decides fatal transport behavior from a
+Baseline evidence: `pipeline_execute.go` decides fatal transport behavior from a
 200-character summary and substring matching. A probe of the current classifier
 recognized `typeof` as EOF and lost a genuine transport suffix after truncation.
 
@@ -250,8 +270,11 @@ from accepted, documented exceptions. Keep this separate from runtime fixes.
 The first compatible dependency refresh reduces a fresh pnpm audit from 69 to
 three findings. The [frontend audit record](../operations/frontend-dependency-audit-20261017.md)
 records the remaining tooling paths, built-output witness, expiring dispositions,
-and the repeatable CI check. Merge evidence is pending; this is not a deployed
-security or live-browser qualification claim.
+and the repeatable CI check. Merged #1688 reduces the fresh pnpm audit from 69
+findings to three and the publication-time GitHub alert set from 56 to three.
+The esbuild, braces and postcss-selector-parser tooling exceptions expire at
+2026-11-17T00:00:00Z; the bounded CI policy rejects changed or expired exceptions.
+This is not a deployed security or live-browser qualification claim.
 
 ## Validation And Delivery
 
@@ -261,6 +284,8 @@ incomplete: a sampled test process stalled in macOS `_dyld_start`, and the eval
 suite reached a four-minute cap. Its named test passed alone. Existing frontend
 tests were not run during the assessment. These observations do not certify the
 full CI graph or establish a production incident.
+Current implementation validation and exact-head CI are recorded in the
+confirmed ledger below.
 
 For implementation, use one isolated session worktree, focused PRs from latest
 `origin/main`, regression tests for changed behavior, repository formatting and
@@ -279,8 +304,9 @@ conditional packets. Never mark unfinished work complete to close the goal.
 R4's [retention decision](outbox-retention-decision-20261017.md) records the actual
 canonical replay readers, callback hazard, domain exclusions, identity version,
 crash ordering, cross-process exclusion and activation gates. Keep the file
-store at measured scale. Retirement implementation remains admitted and
-unfinished; this design merge does not authorize or claim production cleanup.
+store at measured scale. The qualified receipt implementation and offline
+controls are merged as described above. Operational activation remains separate;
+code merge does not authorize or claim production cleanup.
 
 R6 is assigned to the existing [agent-evals first-release goal](agent-evals-goal.md)
 and its [Next Mandatory Work](agent-evals-roadmap.md#next-mandatory-work).
@@ -293,6 +319,15 @@ privacy observation but does not finish whole-runtime privacy or domain
 qualification. This is the reliability goal's linked disposition, not a claim
 that the separately owned evaluation goal is complete. Do not create another
 harness or pay for duplicate live runs as a code-health task.
+
+Merged [#1706](https://github.com/bogdanovich/mintclaw/pull/1706) adds owned PDF
+finalization after shutdown and bounded raw evidence inspection. Its current
+roadmap still requires E5 effective-input/isolation, E3 positive PDF qualification,
+E4 browser integration and the exit evidence. It is narrower progress in the
+linked program, not completion of that goal. The retained
+[post-stop PDF pilot](../operations/manual-agent-evals-pdf-post-stop-v1-pilot-20261018.md)
+reports a scoped no-write pass with an overall inconclusive trial; it does not
+qualify the PDF suite.
 
 R7: intentional defer. R5 replaces downstream summary-text classification with a
 typed MCP boundary and the existing tool execution journal. It does not require
@@ -316,8 +351,8 @@ Merged correctness evidence: R2 [#1681](https://github.com/bogdanovich/mintclaw/
 (`b4aa5d1df41c6b31c3ec3fa08f171d11d902dbe0`) and R3
 [#1682](https://github.com/bogdanovich/mintclaw/pull/1682)
 (`5fef84bbebb2047d1ab3eb766ef06dcf5e1a3bc4`) passed exact-head CI, substantive
-review and owner merge approval. R1 #1685, R5 #1687, R8 #1691, R10 #1690 and
-R12 #1688 are published separately and remain subject to their own gates.
+review and owner merge approval. The final ledger below records the remaining
+confirmed merges and final reviewed heads.
 
 ## Frontend Delivery Evidence
 
@@ -343,5 +378,67 @@ regression first failed against the original rollback.
 
 Local validation: 38 tests across six files, ESLint, Prettier, TypeScript and
 production build passed with supported Node 22.23.1 and the frozen lockfile.
-No new frontend dependency or state framework was introduced. CI and review
-remain required before this packet is complete.
+Combined validation with the current R12 dependency graph passed 51 tests across
+seven files, formatting/lint, advisory policy and production build. R8 merged in
+#1691 after current-head CI, review and owner approval. No frontend state framework
+was introduced. Rendered-browser and OAuth-popup qualification remain separate.
+
+## Confirmed Implementation Ledger
+
+Every code PR below passed current-head CI, substantive review and authorized
+PR-level merge approval. The test-fixture prerequisites preserve existing
+assertions and timeouts rather than suppressing unrelated CI failures.
+
+| Packet | PR | Final reviewed head | Merge commit |
+| --- | --- | --- | --- |
+| R2 | [#1681](https://github.com/bogdanovich/mintclaw/pull/1681) | `36a2636fdde256173d43f4dfe9c8696972a783d3` | `b4aa5d1df41c6b31c3ec3fa08f171d11d902dbe0` |
+| R3 | [#1682](https://github.com/bogdanovich/mintclaw/pull/1682) | `468b5dc65de6561b018319ee65769f19cf76f9bb` | `5fef84bbebb2047d1ab3eb766ef06dcf5e1a3bc4` |
+| R1 | [#1685](https://github.com/bogdanovich/mintclaw/pull/1685) | `6190225a9da5743bdf980f80b351551235ee6e9a` | `7f00354aaab1458bc7b4f51f317942a86438bc1c` |
+| R5 | [#1687](https://github.com/bogdanovich/mintclaw/pull/1687) | `c6b17df8693a6ba9c20f189c1b6b96d578085e47` | `0dae73c41448fe03a5b7331f358c6e03af015065` |
+| R12 | [#1688](https://github.com/bogdanovich/mintclaw/pull/1688) | `3b9cb0c9475f3cd6c4532de5f9da571bfc40aa9f` | `1ccf307a416bbf003e1afd469cbfc8c8ad5c4b08` |
+| R10 | [#1690](https://github.com/bogdanovich/mintclaw/pull/1690) | `a852ab7edcc3b7f3026875b35302213a4255c909` | `7df7bc5b135f324fded07c659985bab8879a193b` |
+| R8 | [#1691](https://github.com/bogdanovich/mintclaw/pull/1691) | `00a185686cbfe28136432e24aed2683db05ac70b` | `664dda54d2c3f31560e3205de8d74ab14706b687` |
+| R4A | [#1693](https://github.com/bogdanovich/mintclaw/pull/1693) | `4ed78b4fea5149d846b6d913a4517b36435dd4d7` | `8b2c52720ab80fd1c2561f0e599e991ed16176cb` |
+| CI prerequisite for R1 | [#1695](https://github.com/bogdanovich/mintclaw/pull/1695) | `22d6ae9821618c19f947411e93f9c51d9e65b202` | `fe2edfa52cf1df66d684e760f64bdfc895c5d848` |
+| R4 source durability prerequisite | [#1697](https://github.com/bogdanovich/mintclaw/pull/1697) | `d2a0f6307cbeed4bb471ecec3f6c82d9e1a407fe` | `80b80781324b5d100af37e92dc5b934a5a1a117b` |
+| R4 native source acknowledgement receipt prerequisite | [#1698](https://github.com/bogdanovich/mintclaw/pull/1698) | `70b13c1c96c0af272050366df7cf06700e0bc4eb` | `b39b2210da293e8e4606e5d88143988e8e0cd744` |
+| R10 CI-discovered queued authority correction | [#1701](https://github.com/bogdanovich/mintclaw/pull/1701) | `cc338af2d9c6218e0215e1bf29f49c381772b2ad` | `f55cf72a5856a382d3b224e1bc1a317e9b79ba11` |
+| R4B native source-completion and compact receipt foundation | [#1703](https://github.com/bogdanovich/mintclaw/pull/1703) | `157e492c89dae972d6326a050e84f369fb2c6c14` | `53261ad1512f9c495824e3766fd754386179bcd5` |
+| R4B CI prerequisite: atomic document worker PID fixtures | [#1707](https://github.com/bogdanovich/mintclaw/pull/1707) | `918e4d1ff9801679eb24d33896f59d7e8ceb5ed8` | `89d991379e6ba3b37d0322bb505c8c5056fcbfd0` |
+| R4C offline operator/capacity and compact-history measurements | [#1708](https://github.com/bogdanovich/mintclaw/pull/1708) | `37318b3d9fa021bd6b8c9fdaef097bc8de71753f` | `f41bc0d196f167af04da3a5ae5e9f2e190b39f8c` |
+| CI prerequisite: shared terminal readiness observation | [#1712](https://github.com/bogdanovich/mintclaw/pull/1712) | `58eabf18259cc79726f334390ae4b76bf069185c` | `04269cb041d627dc43728f9d29b86dcdcfef2cba` |
+| CI prerequisite: drain transcript fixture before restart | [#1714](https://github.com/bogdanovich/mintclaw/pull/1714) | `8a89b974bd87d87d60179bf6e6b34c4f1615d051` | `c8cc5ffcbbe5b2dc7cd65919a8cc5776aae92e0a` |
+
+Roadmap #1678 and architecture/navigation decisions #1692 were documentation-only
+merges. The native queued-authority correction (#1701), including suspended work
+return, uses existing steering/turn owners and does not admit a pipeline rewrite.
+
+## Exit Disposition And Remaining Limits
+
+The bounded admitted repository work is implemented and measured. R6 stays with
+the existing active evaluation goal; R7 and R9 remain intentionally deferred.
+This closes the code-health program without claiming broader product
+qualification is finished.
+
+- R1 preserves damaged evidence and blocks affected replay. Unknown schemas,
+  identity conflicts, missing authorities and unsafe recovery failures stay fatal;
+  automatic data repair is not implemented.
+- R4 retires only qualified payloads. Permanent receipts, excluded payload classes
+  and recovery scans still grow. At 10,000 synthetic identities, compact warm
+  recovery averaged 432–445 ms and allocated about 31 MiB/scan on the Intel macOS
+  host. This establishes no cold-start or deployed-Linux guarantee. Activation
+  requires an operator-selected policy, stopped older writers, a compatible
+  rollback binary, backup and target-filesystem qualification.
+- R10's exact event-byte accounting reduced near-budget pruning cost by about
+  three times and allocations by about 70%. Concurrent mutation p95 remains
+  approximately 338–347 ms against the recorded 100 ms budget. No storage backend
+  replacement is admitted; the measured miss stays visible for future scope.
+- R12's three evidenced tooling exceptions expire at 2026-11-17T00:00:00Z. Future
+  expiry requires fresh triage, not silent renewal.
+- Frontend request/store tests do not establish rendered-browser or OAuth-popup
+  behavior. Native PDF/browser trial isolation, effective-input, cleanup/privacy
+  and domain acceptance remain in the existing linked evaluation program.
+
+No deployment, runtime restart, production data cleanup or duplicate paid live
+run is part of this goal. Preserve the existing owners, conservative uncertain
+outcomes and independent evidence requirements when admitting subsequent work.
