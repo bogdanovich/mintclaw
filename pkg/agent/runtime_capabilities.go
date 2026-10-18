@@ -3,6 +3,7 @@ package agent
 import (
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -53,14 +54,24 @@ func (al *AgentLoop) capabilityReportForAgent(agent *AgentInstance) runtimecap.R
 }
 
 func (al *AgentLoop) runtimeServiceCapabilityReport() runtimecap.Report {
-	if al == nil || al.turns == nil {
+	capabilities, found := al.runtimeCapabilitySnapshot()
+	if !found {
 		return runtimecap.Report{}
+	}
+	return capabilities.Report()
+}
+
+// Lifecycle callbacks are outside a model turn. Read the published immutable
+// runner generation rather than unsynchronized mutable composition inputs.
+func (al *AgentLoop) runtimeCapabilitySnapshot() (runtimecap.Context, bool) {
+	if al == nil || al.turns == nil {
+		return runtimecap.Context{}, false
 	}
 	runner := al.turns.currentRunner()
 	if runner == nil || runner.pipeline == nil {
-		return runtimecap.Report{}
+		return runtimecap.Context{}, false
 	}
-	return runner.pipeline.RuntimeCapabilities.Report()
+	return runner.pipeline.RuntimeCapabilities, true
 }
 
 func (al *AgentLoop) bindSkillCompatibilityEnvironments(registry *AgentRegistry, cfg *config.Config) {
@@ -120,6 +131,10 @@ func gatewayRuntimeActorID(ts *turnState) string {
 	if ts.opts.InteractionOriginContext != nil {
 		inbound = ts.opts.InteractionOriginContext
 	}
+	return gatewayRuntimeActorIDForInbound(inbound)
+}
+
+func gatewayRuntimeActorIDForInbound(inbound *bus.InboundContext) string {
 	if inbound == nil {
 		return ""
 	}

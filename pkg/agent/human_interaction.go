@@ -12,6 +12,8 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
+	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -26,10 +28,11 @@ func (al *AgentLoop) cleanupInteractionOriginTools(
 	agent *AgentInstance,
 	record interactions.Record,
 ) {
-	if agent == nil || agent.Tools == nil || strings.TrimSpace(record.Origin.ExecutionID) == "" {
+	if al == nil || agent == nil || agent.Tools == nil || strings.TrimSpace(record.Origin.ExecutionID) == "" {
 		return
 	}
-	cleanupCtx, cancel, err := interactionOriginToolContext(ctx, agent, record)
+	capabilities, _ := al.runtimeCapabilitySnapshot()
+	cleanupCtx, cancel, err := interactionOriginToolContext(ctx, agent, record, capabilities)
 	if err != nil {
 		return
 	}
@@ -46,6 +49,7 @@ func interactionOriginToolContext(
 	ctx context.Context,
 	agent *AgentInstance,
 	record interactions.Record,
+	capabilities runtimecap.Context,
 ) (context.Context, context.CancelFunc, error) {
 	if agent == nil || strings.TrimSpace(record.Origin.ExecutionID) == "" {
 		return nil, nil, fmt.Errorf("interaction origin execution context is unavailable")
@@ -81,6 +85,18 @@ func interactionOriginToolContext(
 		agent.Workspace,
 		record.Origin.ExecutionID,
 	)
+	// Lifecycle resolvers run before a resumed model turn is admitted. Restore
+	// the same typed owner from the trusted origin, not an ambient answer turn
+	// or tool-specific identity inference. Incomplete origins remain unbound.
+	principal := runtimecap.Principal{
+		Runtime: capabilities.Kind(), ActorID: strings.TrimSpace(record.Origin.RuntimeActorID),
+		AgentID: routing.NormalizeAgentID(agent.ID), SessionID: routeSessionKey,
+		ExecutionID: strings.TrimSpace(record.Origin.ExecutionID),
+	}
+	if capabilities.Kind() == runtimecap.KindGateway {
+		principal.ActorID = gatewayRuntimeActorIDForInbound(inbound)
+	}
+	toolCtx = toolshared.WithRuntimeCapabilities(toolCtx, capabilities.BindPrincipal(principal))
 	return toolCtx, cancel, nil
 }
 
@@ -101,7 +117,8 @@ func (al *AgentLoop) resolveDurableLiveHandoffs(
 	if len(liveReceipts) == 0 {
 		return nil, nil
 	}
-	toolCtx, cancel, err := interactionOriginToolContext(ctx, agent, record)
+	capabilities, _ := al.runtimeCapabilitySnapshot()
+	toolCtx, cancel, err := interactionOriginToolContext(ctx, agent, record, capabilities)
 	if err != nil {
 		return nil, err
 	}

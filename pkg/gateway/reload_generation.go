@@ -10,6 +10,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/audio/asr"
 	"github.com/bogdanovich/mintclaw/pkg/audio/tts"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/computer"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/devices"
 	"github.com/bogdanovich/mintclaw/pkg/heartbeat"
@@ -31,6 +32,7 @@ const (
 	gatewayReloadDevicePrepared     gatewayReloadStage = "device_prepared"
 	gatewayReloadChannelsReconciled gatewayReloadStage = "channels_reconciled"
 	gatewayReloadNodesReconciled    gatewayReloadStage = "nodes_reconciled"
+	gatewayReloadComputerPrepared   gatewayReloadStage = "computer_prepared"
 )
 
 type gatewayReloadHooks struct {
@@ -45,10 +47,11 @@ func (hooks gatewayReloadHooks) checkpoint(stage gatewayReloadStage) error {
 }
 
 type gatewayReloadGeneration struct {
-	services    *services
-	transcriber asr.Transcriber
-	cleanup     *gatewayStartupTransaction
-	msgBus      *bus.MessageBus
+	services        *services
+	transcriber     asr.Transcriber
+	cleanup         *gatewayStartupTransaction
+	msgBus          *bus.MessageBus
+	computerEnabled bool
 }
 
 func prepareReloadGeneration(
@@ -71,7 +74,12 @@ func prepareReloadGeneration(
 		authToken:        persistent.authToken,
 	}
 	cleanup := &gatewayStartupTransaction{}
-	generation = &gatewayReloadGeneration{services: next, cleanup: cleanup, msgBus: msgBus}
+	generation = &gatewayReloadGeneration{
+		services:        next,
+		cleanup:         cleanup,
+		msgBus:          msgBus,
+		computerEnabled: cfg.Tools.Computer.Enabled,
+	}
 	defer func() {
 		if prepareErr != nil {
 			prepareErr = errors.Join(prepareErr, cleanup.rollback(serviceShutdownTimeout))
@@ -173,6 +181,9 @@ func (generation *gatewayReloadGeneration) commit(
 	al *agent.AgentLoop,
 ) error {
 	next := generation.services
+	if generation.computerEnabled && next.Computer == nil {
+		return computer.ErrUnavailable
+	}
 	persistent.CronService = next.CronService
 	persistent.HeartbeatService = next.HeartbeatService
 	persistent.MediaStore = next.MediaStore
@@ -187,6 +198,12 @@ func (generation *gatewayReloadGeneration) commit(
 	next.Browser = nil
 	persistent.browserMu.Unlock()
 	next.browserMu.Unlock()
+	next.computerMu.Lock()
+	persistent.computerMu.Lock()
+	persistent.Computer = next.Computer
+	next.Computer = nil
+	persistent.computerMu.Unlock()
+	next.computerMu.Unlock()
 
 	persistent.ChannelManager.SetMediaStore(persistent.MediaStore)
 	al.SetChannelManager(persistent.ChannelManager)
@@ -214,6 +231,20 @@ func (generation *gatewayReloadGeneration) commit(
 		tts.DetectTTS(al.GetConfig()) != nil,
 	)
 	generation.cleanup.commit()
+	return nil
+}
+
+// Computer preparation occurs after node reconciliation, so its transport
+// source pins the new admission generation rather than a retired handler.
+func (generation *gatewayReloadGeneration) prepareComputer(cfg *config.Config) error {
+	if err := setupComputerRuntime(cfg, generation.services); err != nil {
+		return err
+	}
+	if generation.services.Computer != nil {
+		generation.cleanup.add("computer runtime", func(ctx context.Context) error {
+			return closeComputerRuntime(ctx, generation.services)
+		})
+	}
 	return nil
 }
 

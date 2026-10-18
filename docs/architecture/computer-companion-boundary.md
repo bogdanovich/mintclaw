@@ -5,7 +5,8 @@ runtime and authenticated connection. It does not enable desktop control in the
 normal companion configuration, install a driver, select an ambient desktop, or
 register public computer tools. A local host must be explicitly injected with
 `WithComputerHost`; the native configuration path below provides that host only
-for enabled operator profiles. Public gateway tools remain a later gate.
+for enabled operator profiles. The separate opt-in gateway tools and their
+additional grants are described in [computer gateway tools](computer-gateway-tools.md).
 
 ## Authority and lifecycle
 
@@ -151,6 +152,16 @@ Linux requires the explicit selected X11 GUI environment. On macOS also pass
 `--capture-dir` retains only owned fixture PNGs in an existing private directory
 for visual QA; by default none are retained.
 
+On macOS the test and its disposable fixture are launched in the current GUI
+session, not an old background/audit session retained across logout and login.
+The temporary qualification app requests no permissions; the actual companion
+still needs its own grants. A known screen lock or unavailable current-user GUI
+refuses qualification before the fixture starts. This uses a session-dictionary
+hint (`CGSSessionScreenIsLocked`); absence of that hint does not establish native
+window admission. The unchanged native assertions remain required. The runner
+returns the test child's numeric exit status, not `open -W`'s launch-success
+status, so a launch or a refused preflight cannot become a passing smoke test.
+
 The smoke verifies native pixels and transferred digest/dimensions, a visible
 fixture change during human control followed by different fresh resumed pixels,
 unchanged session/worker/native-window binding, release without closing either
@@ -159,9 +170,18 @@ alive, companion exit preserving remaining windows, and protected on-disk
 observation receipts. The fixture's nonce-correlated own-state responses prove
 window lifetime independently of a driver's success report.
 
-The October 17 Linux GNOME X11 real-companion runs pass these cases. The macOS
-app's own preflight confirms the correct bundle/GUI identity but reports both OS
-grants missing; positive macOS qualification is still pending. Development
-ad-hoc signatures do not establish permission persistence across rebuilds.
+The October 17 Linux GNOME X11 real-companion runs pass these cases. On October
+18, the current-GUI runner also passes with the actual macOS 26.6.2 companion
+app and its manually approved Accessibility and Screen Recording grants:
+the companion suite takes 18.31 seconds and the public gateway suite takes
+27.44 seconds. These runs use only disposable fixture windows and retain all
+identity, fresh-pixel, native-loss and independent-lifetime assertions.
+
+The passing Mac runs require an unlocked GUI. Earlier permission-denied,
+post-login stale-admission and locked-GUI attempts are not counted as passes;
+permission readiness alone does not establish window admission. The installed
+app was not rebuilt or granted permissions by the test. Development ad-hoc
+signatures do not establish permission persistence across rebuilds.
 Public gateway computer tools and their live-resource interaction integration
-remain a separate gate; enabling this native node host does not register them.
+require the [separate gateway grant](computer-gateway-tools.md); enabling this
+native node host does not register them.

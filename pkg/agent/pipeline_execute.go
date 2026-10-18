@@ -1913,7 +1913,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				durableToolResultMsg,
 				liveContextText != "",
 				hasLiveContextMedia,
-				toolName == "document" && hasLiveContextMedia,
+				hasLiveContextMedia && (toolName == "document" || toolResult.ContextMediaRequiresVision),
 			)
 		}
 	}

@@ -315,6 +315,15 @@ jobs:
           go test -count=1 -tags goolm,stdjson
           -run '^TestCredentialStateContainment' ./pkg/config
 
+      - name: Check native qualification GUI preflight and exit status
+        shell: bash
+        run: |
+          qualification_self_test="$RUNNER_TEMP/mintclaw-qualification-self-test"
+          /usr/bin/swiftc -D MINTCLAW_QUALIFICATION_SELF_TEST \
+            scripts/internal/computer-native-qualification/launcher_macos.swift \
+            -o "$qualification_self_test"
+          "$qualification_self_test"
+
       - name: Run workspace identity recovery tests
         shell: bash
         run: |

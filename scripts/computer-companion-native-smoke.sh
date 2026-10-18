@@ -4,7 +4,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: computer-companion-native-smoke.sh --driver /absolute/cua-driver --node /absolute/mintclaw-node [--app /absolute/Companion.app] [--test-binary /absolute/node.test] [--capture-dir /absolute/private/directory]'
+  echo 'Usage: computer-companion-native-smoke.sh --driver /absolute/cua-driver --node /absolute/mintclaw-node [--suite companion|gateway] [--app /absolute/Companion.app] [--test-binary /absolute/suite.test] [--capture-dir /absolute/private/directory]'
 }
 
 driver_path=''
@@ -12,6 +12,7 @@ node_path=''
 app_path=''
 test_path=''
 capture_dir=''
+suite='companion'
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 ]] || { usage; exit 2; }
   case "$1" in
@@ -20,10 +21,19 @@ while [[ $# -gt 0 ]]; do
     --app) app_path=$2 ;;
     --test-binary) test_path=$2 ;;
     --capture-dir) capture_dir=$2 ;;
+    --suite) suite=$2 ;;
     *) usage; exit 2 ;;
   esac
   shift 2
 done
+case "$suite" in
+  companion) test_name=TestCompanionNativeComputerLifecycleOverWSS; test_package=./cmd/mintclaw-node ;;
+  gateway)
+    test_name=TestGatewayNativeComputerToolsOverWSS; test_package=./pkg/gateway
+    [[ -z "$capture_dir" ]] || { echo '--capture-dir is companion-suite only.' >&2; exit 2; }
+    ;;
+  *) usage; exit 2 ;;
+esac
 for executable in "$driver_path" "$node_path"; do
   [[ "$executable" == /* && -f "$executable" && ! -L "$executable" && -x "$executable" ]] || {
     echo 'Supply absolute regular pinned-driver and companion executable paths.' >&2; exit 2;
@@ -35,7 +45,8 @@ cleanup() {
   [[ -n "$qualification_dir" && -d "$qualification_dir" ]] && rm -rf -- "$qualification_dir"
 }
 trap cleanup EXIT
-case "$(uname -s)/$(uname -m)" in
+qualification_os=$(uname -s)
+case "$qualification_os/$(uname -m)" in
   Linux/x86_64)
     driver_sha256=fd922e708099aae311873a6667beb48eaabb8c15c3abec744492db8a96b544ee
     actual_sha256=$(sha256sum "$driver_path" | cut -d ' ' -f 1)
@@ -60,13 +71,53 @@ case "$(uname -s)/$(uname -m)" in
 esac
 [[ "$actual_sha256" == "$driver_sha256" ]] || { echo 'Pinned driver checksum mismatch.' >&2; exit 2; }
 if [[ -z "$test_path" ]]; then
-  test_path="$qualification_dir/node.test"
-  (cd "$repository_root" && go test -c -tags integration -o "$test_path" ./cmd/mintclaw-node)
+  test_path="$qualification_dir/$suite.test"
+  (cd "$repository_root" && go test -c -tags goolm,stdjson,integration -o "$test_path" "$test_package")
 fi
 [[ "$test_path" == /* && -f "$test_path" && -x "$test_path" ]] || { usage; exit 2; }
-[[ $("$test_path" -test.list '^TestCompanionNativeComputerLifecycleOverWSS$') == TestCompanionNativeComputerLifecycleOverWSS ]] || {
-  echo 'The supplied test executable lacks native companion qualification.' >&2; exit 2;
+[[ $("$test_path" -test.list "^$test_name$") == "$test_name" ]] || {
+  echo 'The supplied test executable lacks the selected native qualification suite.' >&2; exit 2;
 }
+if [[ "$qualification_os" == Darwin ]]; then
+  # The controller may belong to an old Background/audit session after a GUI
+  # logout/login. Launch the test in the current GUI, like the actual companion.
+  # This helper needs no TCC grant and never borrows one for the companion.
+  qualification_app="$qualification_dir/MintClaw Native Qualification.app"
+  mkdir -p "$qualification_app/Contents/MacOS"
+  cp "$repository_root/scripts/internal/computer-native-qualification/launcher_macos.plist" \
+    "$qualification_app/Contents/Info.plist"
+  /usr/bin/swiftc "$repository_root/scripts/internal/computer-native-qualification/launcher_macos.swift" \
+    -o "$qualification_app/Contents/MacOS/qualification-launcher"
+  /usr/bin/codesign --sign - "$qualification_app"
+  launch_status=0
+  /usr/bin/open -n -W --stdout "$qualification_dir/test.stdout" --stderr "$qualification_dir/test.stderr" \
+    --env "MINTCLAW_QUALIFICATION_EXECUTABLE=$test_path" \
+    --env "MINTCLAW_QUALIFICATION_EXIT_FILE=$qualification_dir/test.exit" \
+    --env "MINTCLAW_COMPUTER_NATIVE_DRIVER=$driver_path" \
+    --env "MINTCLAW_COMPUTER_NATIVE_SHA256=$driver_sha256" \
+    --env "MINTCLAW_COMPUTER_NATIVE_FIXTURE=$fixture_path" \
+    --env "MINTCLAW_COMPUTER_COMPANION_APP=$app_path" \
+    --env "MINTCLAW_COMPUTER_NATIVE_CAPTURE_DIR=$capture_dir" \
+    --env MINTCLAW_COMPUTER_NATIVE_LOSS_CASE=1 \
+    --env "MINTCLAW_NODE_TEST_BINARY=$node_path" \
+    "$qualification_app" --args -test.run="^$test_name$" -test.v -test.count=1 -test.timeout=3m \
+    || launch_status=$?
+  [[ ! -f "$qualification_dir/test.stdout" ]] || cat "$qualification_dir/test.stdout"
+  [[ ! -f "$qualification_dir/test.stderr" ]] || cat "$qualification_dir/test.stderr" >&2
+  if [[ "$launch_status" != 0 ]]; then
+    echo 'macOS refused the qualification launch; no passing test result is established.' >&2
+    exit "$launch_status"
+  fi
+  # open -W can return zero even when its application failed. Only the child's
+  # private numeric receipt establishes the actual suite result.
+  test_exit=''
+  [[ ! -f "$qualification_dir/test.exit" ]] || test_exit=$(< "$qualification_dir/test.exit")
+  if [[ ! "$test_exit" =~ ^(0|[1-9][0-9]{0,2})$ ]] || (( test_exit > 255 )); then
+    echo 'GUI qualification produced no valid test exit receipt; refusing to report a pass.' >&2
+    exit 1
+  fi
+  exit "$test_exit"
+fi
 env MINTCLAW_COMPUTER_NATIVE_DRIVER="$driver_path" \
   MINTCLAW_COMPUTER_NATIVE_SHA256="$driver_sha256" \
   MINTCLAW_COMPUTER_NATIVE_FIXTURE="$fixture_path" \
@@ -74,4 +125,4 @@ env MINTCLAW_COMPUTER_NATIVE_DRIVER="$driver_path" \
   MINTCLAW_COMPUTER_NATIVE_CAPTURE_DIR="$capture_dir" \
   MINTCLAW_COMPUTER_NATIVE_LOSS_CASE=1 \
   MINTCLAW_NODE_TEST_BINARY="$node_path" \
-  "$test_path" -test.run='^TestCompanionNativeComputerLifecycleOverWSS$' -test.v -test.count=1 -test.timeout=3m
+  "$test_path" -test.run="^$test_name$" -test.v -test.count=1 -test.timeout=3m

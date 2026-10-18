@@ -187,6 +187,9 @@ func finalizeLoadedConfig(
 	if err := cfg.ValidateBrowserConfig(); err != nil {
 		return err
 	}
+	if err := cfg.ValidateComputerConfig(); err != nil {
+		return err
+	}
 	if err := cfg.Tools.ResultRetention.Validate(); err != nil {
 		return fmt.Errorf("invalid tools.result_retention: %w", err)
 	}

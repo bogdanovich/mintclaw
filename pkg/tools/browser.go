@@ -1336,6 +1336,10 @@ func invalidBrowserHandoffPromptResult(err error) *toolshared.ToolResult {
 }
 
 func parseBrowserHandoffPrompt(raw any) (interactions.Question, error) {
+	return parseLiveResourceHandoffPrompt(raw, "release_browser")
+}
+
+func parseLiveResourceHandoffPrompt(raw any, id string) (interactions.Question, error) {
 	prompt, ok := raw.(map[string]any)
 	if !ok {
 		return interactions.Question{}, errors.New("handoff_prompt must be an object")
@@ -1350,7 +1354,7 @@ func parseBrowserHandoffPrompt(raw any) (interactions.Question, error) {
 		}
 		withID[key] = value
 	}
-	withID["id"] = "release_browser"
+	withID["id"] = id
 	questions, err := parseInteractionQuestions([]any{withID})
 	if err != nil {
 		return interactions.Question{}, err

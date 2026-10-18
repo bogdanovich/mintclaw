@@ -82,6 +82,8 @@ type services struct {
 	CodingRemote      *codingremote.Server
 	browserMu         sync.RWMutex
 	Browser           *browserRuntime
+	computerMu        sync.RWMutex
+	Computer          *computerRuntime
 	Credentials       *credentialRuntime
 	HealthServer      *health.Server
 	VoiceAgentCancel  context.CancelFunc
@@ -1200,6 +1202,14 @@ func setupAndStartServicesWithHooks(
 	if err = setupCredentialTools(cfg, agentLoop, runningServices); err != nil {
 		return nil, errors.New("credential tool setup unavailable")
 	}
+	if err = setupComputerTools(cfg, agentLoop, runningServices); err != nil {
+		return nil, fmt.Errorf("error setting up computer tools: %w", err)
+	}
+	if runningServices.Computer != nil {
+		cleanup.add("computer runtime", func(cleanupCtx context.Context) error {
+			return closeComputerRuntime(cleanupCtx, generation)
+		})
+	}
 	if err = checkpoint(gatewayStartupBrowserToolsReady); err != nil {
 		return nil, err
 	}
@@ -1308,6 +1318,12 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 			return fmt.Errorf("close browser runtime before reload: %w", err)
 		}
 		cleanupErrors = append(cleanupErrors, fmt.Errorf("close browser runtime: %w", err))
+	}
+	if err := closeComputerRuntime(shutdownCtx, runningServices); err != nil {
+		if isReload {
+			return fmt.Errorf("close computer runtime before reload: %w", err)
+		}
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("close computer runtime: %w", err))
 	}
 
 	// Reload should not stop channels or node admission. Full shutdown drains
@@ -1686,6 +1702,12 @@ func handleConfigReloadWithHooks(
 		runningServices.ChannelManager.SetMediaStore(oldMediaStore)
 		return rollbackReloadGeneration(err, oldCfg, al, runningServices, msgBus, generation)
 	}
+	if err = generation.prepareComputer(newCfg); err != nil {
+		return rollbackReloadGeneration(err, oldCfg, al, runningServices, msgBus, generation)
+	}
+	if err = hooks.checkpoint(gatewayReloadComputerPrepared); err != nil {
+		return rollbackReloadGeneration(err, oldCfg, al, runningServices, msgBus, generation)
+	}
 
 	if err = prepared.Commit(reloadCtx); err != nil {
 		runningServices.ChannelManager.SetMediaStore(oldMediaStore)
@@ -1793,6 +1815,10 @@ func rollbackReloadGeneration(
 			"error": result.Error(),
 		})
 		return result
+	}
+	if err = restored.prepareComputer(oldCfg); err != nil {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("restore computer runtime: %w", err), restored.rollback())
+		return reloadRollbackResult(cause, rollbackErrors)
 	}
 	if err = restored.commit(runningServices, al); err != nil {
 		rollbackErrors = append(rollbackErrors, fmt.Errorf("activate restored service generation: %w", err))
