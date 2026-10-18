@@ -34,6 +34,11 @@ The [PDF post-stop v1 pilot](../operations/manual-agent-evals-pdf-post-stop-v1-p
 seven opaque private-profile files prevented privacy qualification and source cleanup. No protected PDF job,
 positive artifact delivery or judge call was observed. This does not qualify the six-case PDF suite.
 
+The [no-write v1 live result](../operations/manual-agent-evals-no-write-v1-20261018.md) on merged #1731 subsequently
+passed one ordinary cancellation/no-write trial, one judge-only regrade and comparison. Valid scoped privacy,
+post-stop/source-removal evidence and a separate judge were observed; the previous inconclusive reports remain
+unchanged. This is not protected/private-value/worker/output or complete PDF/browser-suite qualification.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 
@@ -91,6 +96,8 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    effects and verified source removal. Protected questions additionally bind both canceled native records.
    Private-fact/output cases remain gated; deterministic controls
    are not live PDF qualification. Native cleanup completes for the cohort before suite-budgeted judging begins.
+   One ordinary cancellation/no-write live path and offline regrade now passed on merged #1731; the other five PDF
+   cases and protected/private-value/worker/output behavior still require actual qualification.
    Preserve earlier failures and unknowns.
 3. E4: integrate native browser admission, fixture execution, approval/artifact/context correlation and owned
    cleanup; qualify all six cases, including adaptive and denied-action evidence. Browser cases still skip today.
