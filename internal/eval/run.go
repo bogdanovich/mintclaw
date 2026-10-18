@@ -121,6 +121,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		Repeat:  options.Repeat,
 		Verdict: Pass, StartedAt: time.Now().UTC(), Trials: []TrialSummary{}, Coverage: map[Verdict]int{},
 		Usage: "unknown", Cleanup: "local_transports_closed; remote_state_unknown",
+		TargetUsage: newTargetUsage(),
 	}
 	home, _ := privateHome(options.Home)
 	writer, err := newPrivateReport(options.OutputParent, home, preset.ExpectedWorkspace, result.ID)
@@ -170,6 +171,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 				&retainedFacts, &pendingPDF, &pendingBrowser)
 		}
 		trial.Repetition = ordinal%options.Repeat + 1
+		result.TargetUsage.addTrial(trial)
 		pendingPDF.observeTrial(trial)
 		name := "trial-" + trial.ID + ".json"
 		roleCalls = append(roleCalls, trial.DriverCalls...)

@@ -37,6 +37,7 @@ type RunReport struct {
 	Coverage        map[Verdict]int             `json:"coverage"`
 	Usage           string                      `json:"usage"`
 	RoleUsage       []RoleUsage                 `json:"role_usage,omitempty"`
+	TargetUsage     *TargetUsage                `json:"target_usage,omitempty"`
 	Mode            string                      `json:"mode,omitempty"`
 	Repeat          int                         `json:"repeat,omitempty"`
 	SourceRun       string                      `json:"source_run,omitempty"`
@@ -154,13 +155,24 @@ func (report *privateReport) finish(result RunReport) error {
 		}
 	}
 	if writeErr == nil {
+		if usage := result.TargetUsage; usage != nil {
+			counts := "unknown"
+			if usage.Coverage == "returned_finals_only" || usage.Coverage == "partial_returned_finals" {
+				counts = CompactTokens(usage.InputTokens) + " in, " + CompactTokens(usage.OutputTokens) + " out"
+			}
+			_, writeErr = fmt.Fprintf(file,
+				"\nTarget returned finals: %s (%s); %d/%d finals returned usage.\n",
+				counts, usage.Coverage, usage.ReturnedUsage, usage.Finals)
+		}
+	}
+	if writeErr == nil {
 		transport := "Local transport closure is not proof of remote cancellation."
 		if result.Mode == "grade" {
 			transport = "Judge-only regrade: no target or tool work; source remote state remains unchanged."
 		}
 		_, writeErr = io.WriteString(file,
 			"\nOnly a complete run.json qualifies this summary as a finished report.\n"+
-				"Target usage: unknown; provider-internal role attempts: unknown.\n"+
+				"Target all-call usage: unknown; provider-internal role attempts: unknown.\n"+
 				transport+" "+
 				"Individual case results are not complete PDF/browser-suite or Telegram qualification.\n")
 	}

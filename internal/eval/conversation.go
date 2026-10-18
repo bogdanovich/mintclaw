@@ -346,6 +346,7 @@ func (flow *conversation) turn(
 		}
 		for _, scope := range event.TraceScopes {
 			if !scope.Complete() || scope.Workspace != flow.workspace {
+				event.Usage = nil
 				flow.append(event)
 				return Fail, "unexpected_workspace"
 			}
@@ -355,6 +356,7 @@ func (flow *conversation) turn(
 		}
 		if event.AgentID != "" && event.AgentID != flow.agent ||
 			flow.trial.SessionKey != "" && event.SessionKey != "" && event.SessionKey != flow.trial.SessionKey {
+			event.Usage = nil
 			flow.append(event)
 			return Fail, "route_changed"
 		}
@@ -368,6 +370,7 @@ func (flow *conversation) turn(
 					return Inconclusive, "cancellation_evidence_unavailable"
 				}
 				event.Kind = "canceled"
+				event.Usage = nil
 			}
 		}
 		if !flow.append(event) {
@@ -508,6 +511,9 @@ func responseEvent(message protocol.MintClawMessage, turn int) (Event, error) {
 	} else if final, _ := message.Payload[protocol.PayloadKeyFinal].(bool); final ||
 		kind == protocol.MessageKindFinalReply || payloadString(message.Payload, protocol.PayloadKeyOutbound) == "final" {
 		event.Kind = "final"
+	}
+	if event.Kind == "final" {
+		event.Usage = returnedTokenUsage(message.Payload[protocol.PayloadKeyUsage])
 	}
 	return event, nil
 }

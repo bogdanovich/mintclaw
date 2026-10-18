@@ -304,7 +304,12 @@ contain private transcripts; they must not be published. The public CLI summary 
 codes, and the private report path, not task contents or credentials. JSON reports raw durations and observed
 identity. User/judge call usage is summed from every available caller response, separately by role. Raw integers stay
 in JSON; Markdown truncates compact counts, for example `10252` becomes `10.2k`. Missing returned usage and
-provider-internal attempts remain explicitly unknown. Target usage remains unknown until all-call collection exists.
+provider-internal attempts remain explicitly unknown. Correlated target final events retain a validated optional
+`usage` block. The run's `target_usage` sums only those returned final-event totals, with separate missing/partial,
+conflicting and overflow states. Streaming updates, prompts, control-only cancellation and context-window estimates
+are not token usage. Duplicate finals cannot double-count tokens. Offline grade recomputes this historical
+observation for its selected trials without target work. This is not all-call coverage: interrupted turns, missing
+provider usage and internal attempts remain unknown, and the top-level `usage` stays `unknown`.
 
 `pass`, `fail`, `error`, `inconclusive`, and `skipped` are distinct. Any required unknown or unavailable case prevents
 a passing run. A hard failure remains a failure even if reporting also fails. A final response ends a turn, not
