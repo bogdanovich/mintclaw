@@ -3,6 +3,8 @@ package eval
 import (
 	"context"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/document"
 )
 
 const pdfNoWriteAssessmentScope = "owned_post_stop_no_write_v1"
@@ -23,19 +25,35 @@ func observedPDFProfile(lifecycle *TargetLifecycle, surfaces *PrivateSurfaceObse
 		!lifecycle.LogTruncated && surfaces != nil && surfaces.valid() && surfaces.Code == "observed"
 }
 
-// This first finalized contract admits ordinary cancellation with no private
-// facts and no output artifact. Protected jobs/filled PDFs require their own
+// This first finalized contract admits cancellation with no private case
+// facts and no output artifact. Filled PDFs require their own
 // independent evidence admission; neither fixture presence nor prose suffices.
 func validPDFNoWriteEvidence(trial Trial, item Case, workspace string) bool {
 	pdf := trial.PDF
 	if item.PDF == nil || item.PDF.Output != "forbidden" || len(item.Driver.Facts) != 0 ||
 		!validID(trial.SessionID) || !validID(trial.AgentID) || !boundedIdentity(trial.SessionKey, 512) ||
-		len(item.Fixtures) != 1 || pdf == nil || pdf.Version != Version || pdf.JobID != "" ||
+		len(item.Fixtures) != 1 || pdf == nil || pdf.Version != Version ||
 		pdf.SourceSHA256 != item.Fixtures[0].SHA256 || pdf.Settlement != nil || pdf.Artifact != nil ||
-		pdf.WriteIntent != nil || pdf.Cancellation != nil || trial.ExecutionVerdict != Pass ||
+		pdf.WriteIntent != nil || trial.ExecutionVerdict != Pass ||
 		!trial.TransportClosed || !observedRoleBoundaries(trial) ||
-		!validTrialConversation(trial, trial.AgentID, workspace) ||
 		lastOutcome(trial.Events).Kind != "canceled" {
+		return false
+	}
+	conversation := trial
+	if pdf.JobID != "" {
+		cancellation := pdf.Cancellation
+		if !validID(pdf.JobID) || pdf.State != string(document.FormJobCanceled) || trial.Cancellation != nil ||
+			cancellation == nil || cancellation.JobWaitingRevision <= 0 ||
+			cancellation.JobTerminalRevision <= cancellation.JobWaitingRevision ||
+			cancellation.JobTerminalAt < trial.StartedAt.UnixMilli() ||
+			cancellation.JobTerminalAt > cancellation.Question.ResolvedAt {
+			return false
+		}
+		conversation.Cancellation = &cancellation.Question
+	} else if pdf.Cancellation != nil || pdf.State != "unknown" {
+		return false
+	}
+	if !validTrialConversation(conversation, trial.AgentID, workspace) {
 		return false
 	}
 	proof, wire := pdf.PostStop, pdf.Wire
@@ -78,6 +96,8 @@ func assessFinalizedPDFNoWrite(
 	workspace := ""
 	if trial.Cancellation != nil {
 		workspace = trial.Cancellation.Workspace
+	} else if trial.PDF != nil && trial.PDF.Cancellation != nil {
+		workspace = trial.PDF.Cancellation.Question.Workspace
 	}
 	if !observedPDFProfile(lifecycle, surfaces) || !validPDFNoWriteEvidence(*trial, item, workspace) {
 		return

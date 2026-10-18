@@ -86,9 +86,10 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    Owned PDF finalization now retains bounded native baselines through shutdown and raw scan, publishes canonical
    trial reports afterward, checks scoped no-write evidence and removes only verified settled source fixtures.
    Full private-surface/temporary-resource coverage, positive delivery qualification and PDF judge/regrade eligibility
-   still require completion. A bounded ordinary cancellation/no-write contract can now admit post-stop judging
+   still require completion. A bounded cancellation/no-write contract can now admit post-stop judging
    and offline regrade only with valid raw-profile/typed-role/joined-frame evidence, unchanged source, zero native
-   effects and verified source removal. Protected/private-fact/output cases remain gated; deterministic controls
+   effects and verified source removal. Protected questions additionally bind both canceled native records.
+   Private-fact/output cases remain gated; deterministic controls
    are not live PDF qualification. Native cleanup completes for the cohort before suite-budgeted judging begins.
    Preserve earlier failures and unknowns.
 3. E4: integrate native browser admission, fixture execution, approval/artifact/context correlation and owned

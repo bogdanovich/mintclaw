@@ -356,9 +356,9 @@ For a repeated source, every repetition of every selected case must be present, 
 judge call. Missing/duplicate trial or session IDs, mismatched ordinals, case hashes or evidence, and out-of-bound
 repeat counts refuse the entire selected source. Regrade retains all original trial IDs and ordinals, aggregates
 all returned judge usage, and never reruns target work. Older single-trial reports without repeat fields remain
-accepted under their existing evidence eligibility rules. PDF regrading is restricted to the finalized ordinary
-[no-write assessment contract](manual-agent-evals-pdf.md#finalized-ordinary-no-write-assessment); filled PDFs,
-private-fact cases, protected cancellations and legacy inconclusive PDF reports remain ineligible.
+accepted under their existing evidence eligibility rules. PDF regrading is restricted to the finalized
+[no-write assessment contract](manual-agent-evals-pdf.md#finalized-no-write-assessment); filled PDFs,
+private-fact cases and legacy inconclusive PDF reports remain ineligible.
 
 Calibration uses `grade --calibration` without a source directory or corpus selection flags. It persists the labelled
 agreement and private judge findings, and exposes only summary metrics through the CLI. Its limit is ten minutes,

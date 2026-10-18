@@ -243,9 +243,9 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 	if trial.Judge != nil && trial.Judge.Code == "private_judge_output" {
 		return false
 	}
-	if item.Case.PDF != nil && (!validPDFNoWriteEvidence(trial, item.Case, workspace) ||
-		trial.PDF.PostStop.AssessmentScope != pdfNoWriteAssessmentScope) {
-		return false
+	if item.Case.PDF != nil {
+		return validPDFNoWriteEvidence(trial, item.Case, workspace) &&
+			trial.PDF.PostStop.AssessmentScope == pdfNoWriteAssessmentScope
 	}
 	return validTrialConversation(trial, preset.ExpectedAgent, workspace)
 }
