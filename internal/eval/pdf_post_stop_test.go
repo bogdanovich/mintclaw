@@ -24,18 +24,10 @@ func postStopPDFControl(t *testing.T) (*pdfConversation, Trial) {
 
 func postStopPreparedPDFControl(t *testing.T, prepared *pdfTrial) (*pdfConversation, Trial) {
 	t.Helper()
-	corpus, err := LoadCorpus(prepared.item.Root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	selected, err := Select(corpus, Selection{IDs: []string{"pdf.cancel.no-write"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	prepared.item = selected[0]
+	prepared.item = loadPDFTestCase(t, "pdf.cancel.no-write")
 	prepared.item.Case.Rubric = nil
 	initializeCensusRoots(t, prepared)
-	if err = prepared.beginNativeCensus(t.Context()); err != nil {
+	if err := prepared.beginNativeCensus(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	domain := &pdfConversation{prepared: prepared, wire: &pdfWireObservation{workspace: prepared.workspace}}

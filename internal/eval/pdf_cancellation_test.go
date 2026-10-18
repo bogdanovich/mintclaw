@@ -21,15 +21,7 @@ func TestProtectedPDFCancellationRequiresBothNativeTerminalRecords(t *testing.T)
 			prepared := newPDFTrialFixture(t)
 			defer func() { _ = prepared.release(true) }()
 			if mode == "finalized-no-write" {
-				corpus, err := LoadCorpus(prepared.item.Root)
-				if err != nil {
-					t.Fatal(err)
-				}
-				items, err := Select(corpus, Selection{IDs: []string{"pdf.cancel.no-write"}})
-				if err != nil {
-					t.Fatal(err)
-				}
-				prepared.item = items[0]
+				prepared.item = loadPDFTestCase(t, "pdf.cancel.no-write")
 			}
 			prepared.item.Case.Driver.Mode, prepared.item.Case.Driver.Persona = "scripted", ""
 			prepared.item.Case.Driver.Steps = []Step{{

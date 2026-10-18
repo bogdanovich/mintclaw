@@ -19,15 +19,8 @@ import (
 func finalizedNoWriteFixture(t *testing.T) (Trial, LoadedCase, *pdfTrial, *PrivateSurfaceObservation) {
 	t.Helper()
 	domain, trial := postStopPDFControl(t)
-	corpus, err := LoadCorpus(domain.prepared.item.Root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	items, err := Select(corpus, Selection{IDs: []string{"pdf.cancel.no-write"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	domain.prepared.item = items[0]
+	item := loadPDFTestCase(t, "pdf.cancel.no-write")
+	domain.prepared.item = item
 	pending := pdfRunFinalization{}
 	pending.retain(domain, trial)
 	defer pending.close()
@@ -38,13 +31,13 @@ func finalizedNoWriteFixture(t *testing.T) (Trial, LoadedCase, *pdfTrial, *Priva
 	}
 	defer inventory.close()
 	surfaces := observePrivateSurfaces(t.Context(), prepared.home, nil, nil,
-		map[string]bool{items[0].Case.Fixtures[0].SHA256: true})
+		map[string]bool{item.Case.Fixtures[0].SHA256: true})
 	if !surfaces.valid() || surfaces.Code != "observed" {
 		t.Fatal("native no-write private-file fixture was not inspectable", surfaces.Code)
 	}
 	pending.trials[trial.ID].conclude(t.Context(), &trial, inventory, nil, nil, cleanPDFLifecycle(), &surfaces)
 	delete(pending.trials, trial.ID)
-	return trial, items[0], prepared, &surfaces
+	return trial, item, prepared, &surfaces
 }
 
 func TestFinalizedPDFNoWriteJudgesOnlyAfterIndependentEvidence(t *testing.T) {
