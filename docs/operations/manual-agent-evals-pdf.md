@@ -124,6 +124,13 @@ token budget. Malformed/trailing/opaque content and exhausted bounds remain unav
 still fails after an earlier uncertain record. This does not relax model-context admission, exempt built-in skill
 text or decode SQLite. Other raw escaped formats retain their existing conservative behavior.
 
+For native `skills/.system/generations` files, the scan can separately count `authorized_system_files`: exact bytes,
+relative path, generation grammar and platform permissions must match public assets compiled into the runner's
+binary. The native comparison API is pure and never installs, repairs or trusts an on-disk manifest as authority.
+Known literal facts/credentials still fail before this check. Changed, extra, symlinked, wrong-generation or
+workspace-local copies do not acquire that identity and undergo the ordinary raw scan. This is a public-byte
+witness, not whole-bundle integrity, active/loaded catalog identity or a SQLite/other binary exemption.
+
 The value-free `private_surfaces` receipt contains only scope, counts and an observation code. A known leak is a
 run-level hard failure; unavailable coverage prevents a passing run. Regrading refuses known-leak sources and
 preserves unavailable coverage without rescanning or target work. Comparison retains both run verdicts separately
