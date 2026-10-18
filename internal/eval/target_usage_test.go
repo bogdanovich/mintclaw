@@ -92,7 +92,7 @@ func targetUsageTrial(t *testing.T) Trial {
 }
 
 func TestReturnedTargetUsageSummarizesOnlyCorrelatedFinals(t *testing.T) {
-	for _, change := range []string{"none", "missing", "all_missing", "duplicate", "foreign", "stream"} {
+	for _, change := range []string{"none", "missing", "all_missing", "duplicate", "overlap", "foreign", "stream"} {
 		t.Run(change, func(t *testing.T) {
 			trial := targetUsageTrial(t)
 			if trial.Verdict != Pass || len(trial.Events) != 4 {
@@ -105,6 +105,8 @@ func TestReturnedTargetUsageSummarizesOnlyCorrelatedFinals(t *testing.T) {
 				trial.Events[1].Usage, trial.Events[3].Usage = nil, nil
 			case "duplicate":
 				trial.Events = append(trial.Events, trial.Events[3])
+			case "overlap":
+				trial.Events[3].TraceScopes = trial.Events[1].TraceScopes
 			case "foreign", "stream":
 				extra := trial.Events[3]
 				extra.RequestID = "foreign-request"
@@ -124,9 +126,9 @@ func TestReturnedTargetUsageSummarizesOnlyCorrelatedFinals(t *testing.T) {
 					usage.ReturnedUsage != 1 {
 					t.Fatal("missing usage became complete or was lost", usage)
 				}
-			case "all_missing", "duplicate":
+			case "all_missing", "duplicate", "overlap":
 				want := "unknown"
-				if change == "duplicate" {
+				if change == "duplicate" || change == "overlap" {
 					want = "conflicting_final_events"
 				}
 				if usage.Coverage != want || usage.TotalTokens != 0 {

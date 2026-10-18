@@ -83,6 +83,7 @@ func validEventUsage(event Event) bool {
 
 func (usage *TargetUsage) addTrial(trial Trial) {
 	inputs, finals := make(map[string]int), make(map[string]bool)
+	turns := make(map[events.TraceScope]bool)
 	for _, event := range trial.Events {
 		if event.Kind == "input" && event.RequestID != "" {
 			inputs[event.RequestID] = event.Turn
@@ -99,6 +100,14 @@ func (usage *TargetUsage) addTrial(trial Trial) {
 		}
 		finals[event.RequestID] = true
 		usage.Finals++
+		for _, scope := range event.TraceScopes {
+			if turns[scope] {
+				usage.Coverage = "conflicting_final_events"
+			}
+		}
+		for _, scope := range event.TraceScopes {
+			turns[scope] = true
+		}
 		if event.Usage == nil || !event.Usage.valid() {
 			continue
 		}
