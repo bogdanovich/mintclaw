@@ -59,6 +59,7 @@ type nodeComputerClient struct {
 	source      *nodeInvocationSource
 	workspaceID string
 	openGate    chan struct{}
+	opening     map[computerOpenTarget]*computerOpenAttempt // Guarded by openGate.
 	mu          sync.Mutex
 	sessions    map[string]*computerNodeSession
 }
@@ -82,7 +83,8 @@ func newNodeComputerClient(cfg *config.Config, runtime *nodeAdmissionRuntime) (*
 	return &nodeComputerClient{
 		policy: policy, execution: maps.Clone(cfg.Execution.Targets), source: source,
 		workspaceID: computerNodeID("workspace", cfg.WorkspacePath()),
-		openGate:    make(chan struct{}, 1), sessions: make(map[string]*computerNodeSession),
+		openGate:    make(chan struct{}, 1), opening: make(map[computerOpenTarget]*computerOpenAttempt),
+		sessions: make(map[string]*computerNodeSession),
 	}, nil
 }
 
@@ -168,8 +170,7 @@ func (client *nodeComputerClient) invoke(
 	if err != nil {
 		return "", computer.ErrInvalid
 	}
-	identity, _ := json.Marshal(principal)
-	id := computerNodeID("computer", string(identity), client.workspaceID, authority.alias, command, requestID)
+	id := client.invocationID(principal, authority.alias, command, requestID)
 	callID := computerNodeID("call", id)
 	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
 		InvocationID: id, IdempotencyKey: id, NodeID: authority.nodeID, CatalogHash: authority.catalogHash,
@@ -179,10 +180,7 @@ func (client *nodeComputerClient) invoke(
 	if err != nil {
 		return id, computer.ErrDenied
 	}
-	gatewayPrincipal := nodes.GatewayInvocationPrincipal{
-		AgentID: principal.AgentID, ActorID: principal.ActorID, SessionID: principal.SessionID,
-		ExecutionID: principal.ExecutionID, WorkspaceID: client.workspaceID,
-	}
+	gatewayPrincipal := client.invocationPrincipal(principal)
 	retained, _, err := client.source.PrepareInvocation(
 		authority.nodeRef, authority.policy.NodeTarget, callID, gatewayPrincipal, plan, descriptor, true,
 		func(current tools.NodeDiscoveryRecord) error {
@@ -302,17 +300,37 @@ func (client *nodeComputerClient) Open(
 	if err != nil {
 		return computer.Session{}, err
 	}
+	key := computerOpenTarget{node: authority.nodeID, profile: authority.profile.Alias}
+	if previous := client.opening[key]; previous != nil {
+		recovered, reconcileErr := client.reconcileOpen(ctx, previous)
+		if reconcileErr != nil {
+			return computer.Session{}, errComputerOutcomeUnknown
+		}
+		if recovered != nil && !recovered.Control.Terminal() {
+			return computer.Session{}, computer.ErrBusy
+		}
+	}
 	client.mu.Lock()
+	leased := false
 	for id, entry := range client.sessions {
-		if len(client.sessions) >= 128 && entry.terminal.Load() {
+		if !entry.terminal.Load() && entry.authority.nodeID == authority.nodeID &&
+			entry.authority.profile.Alias == authority.profile.Alias {
+			leased = true
+		}
+		if len(client.sessions)+len(client.opening) >= 128 && entry.terminal.Load() {
 			delete(client.sessions, id)
 		}
 	}
-	full := len(client.sessions) >= 128
+	full := len(client.sessions)+len(client.opening) >= 128
 	client.mu.Unlock()
-	if full {
+	if full || leased {
 		return computer.Session{}, computer.ErrBusy
 	}
+	attempt := &computerOpenAttempt{
+		authority: authority, principal: principal, started: start,
+		invocationID: client.invocationID(principal, alias, nodes.ComputerCommandOpen, requestID),
+	}
+	client.opening[key] = attempt
 	var result nodes.ComputerSessionResult
 	_, err = client.invoke(ctx, authority, principal, requestID, nodes.ComputerCommandOpen, nodes.ComputerOpenInput{
 		ComputerTurn: computerNodeTurn(
@@ -322,30 +340,25 @@ func (client *nodeComputerClient) Open(
 		ProfileRevision: authority.profile.Revision,
 	}, &result)
 	if err != nil {
-		return computer.Session{}, err
+		if !errors.Is(err, errComputerOutcomeUnknown) {
+			delete(client.opening, key)
+			return computer.Session{}, err
+		}
+		recovered, reconcileErr := client.reconcileOpen(ctx, attempt)
+		if reconcileErr != nil {
+			return computer.Session{}, errComputerOutcomeUnknown
+		}
+		if recovered == nil {
+			return computer.Session{}, computer.ErrUnavailable
+		}
+		return computerOpenResult(*recovered)
 	}
-	remote := result.Session
-	remaining := remote.ExpiresAt.Sub(result.ObservedAt)
-	deadline := computerEvidenceDeadline(start, result.ObservedAt, remote.ExpiresAt, authority.policy.LeaseTTL())
-	if remote.Binding.Principal != principal || remote.Binding.Target.Node != string(authority.nodeID) ||
-		remote.Binding.Target.Alias != authority.profile.Alias || remote.Binding.PolicyRevision != authority.profile.Revision ||
-		remote.Binding.Generation != 1 || remote.Control != computer.ControlAgent || remaining <= 0 ||
-		!time.Now().Before(deadline) {
+	opened, err := client.adoptOpen(ctx, attempt, result)
+	if err != nil {
 		return computer.Session{}, errComputerOutcomeUnknown
 	}
-	entry := &computerNodeSession{
-		gate:      make(chan struct{}, 1),
-		authority: authority,
-		remote:    remote,
-		deadline:  deadline,
-	}
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if client.sessions[remote.Binding.SessionID] != nil {
-		return computer.Session{}, errComputerOutcomeUnknown
-	}
-	client.sessions[remote.Binding.SessionID] = entry
-	return entry.projection(), nil
+	delete(client.opening, key)
+	return computerOpenResult(opened)
 }
 
 func (entry *computerNodeSession) projection() computer.Session {
@@ -598,6 +611,17 @@ func (client *nodeComputerClient) OwnedSessions(
 	if principal.Validate() != nil {
 		return nil, computer.ErrDenied
 	}
+	if err := computerNodeAcquire(ctx, client.openGate); err != nil {
+		return nil, err
+	}
+	var reconciliationErr error
+	for _, attempt := range client.opening {
+		if attempt.principal == principal {
+			_, err := client.reconcileOpen(ctx, attempt)
+			reconciliationErr = errors.Join(reconciliationErr, err)
+		}
+	}
+	computerNodeUnlock(client.openGate)
 	client.mu.Lock()
 	entries := make([]*computerNodeSession, 0, len(client.sessions))
 	for _, entry := range client.sessions {
@@ -607,7 +631,7 @@ func (client *nodeComputerClient) OwnedSessions(
 	sessions := []computer.Session{}
 	for _, entry := range entries {
 		if err := computerNodeAcquire(ctx, entry.gate); err != nil {
-			return nil, err
+			return sessions, errors.Join(reconciliationErr, err)
 		}
 		if entry.remote.Binding.Principal == principal {
 			sessions = append(sessions, entry.projection())
@@ -617,22 +641,30 @@ func (client *nodeComputerClient) OwnedSessions(
 	slices.SortFunc(sessions, func(first, second computer.Session) int {
 		return bytes.Compare([]byte(first.Binding.SessionID), []byte(second.Binding.SessionID))
 	})
-	return sessions, nil
+	return sessions, reconciliationErr
 }
 
 // Shutdown runs while the gateway generation holds exclusive ownership. It
 // releases automation only; it never sends application input or replacement open.
 func (client *nodeComputerClient) Shutdown(ctx context.Context) error {
+	if err := computerNodeAcquire(ctx, client.openGate); err != nil {
+		return err
+	}
+	var cleanupErr error
+	for _, attempt := range client.opening {
+		_, err := client.reconcileOpen(ctx, attempt)
+		cleanupErr = errors.Join(cleanupErr, err)
+	}
+	computerNodeUnlock(client.openGate)
 	client.mu.Lock()
 	entries := make([]*computerNodeSession, 0, len(client.sessions))
 	for _, entry := range client.sessions {
 		entries = append(entries, entry)
 	}
 	client.mu.Unlock()
-	var cleanupErr error
 	for _, entry := range entries {
 		if err := computerNodeAcquire(ctx, entry.gate); err != nil {
-			return computer.ErrUnavailable
+			return errors.Join(cleanupErr, err)
 		}
 		principal, id, terminal := entry.remote.Binding.Principal, entry.remote.Binding.SessionID, entry.remote.Control.Terminal()
 		computerNodeUnlock(entry.gate)

@@ -148,6 +148,30 @@ func TestComputerRuntimeLocksHonorCancellation(t *testing.T) {
 	}
 }
 
+func TestComputerRuntimeUnknownOpenRetainsOwnershipUntilLedgerProof(t *testing.T) {
+	running, source, handler := computerRuntimeFixture(t)
+	handler.loseNextOpen, handler.queryError = true, errors.New("query unavailable")
+	if _, err := source.Open(
+		t.Context(),
+		computerClientPrincipal(),
+		"desktop",
+		"unknown-open",
+	); !errors.Is(
+		err,
+		errComputerOutcomeUnknown,
+	) {
+		t.Fatal(err)
+	}
+	if err := closeComputerRuntime(t.Context(), running); err == nil || running.Computer == nil {
+		t.Fatal("shutdown discarded the runtime owning an unresolved committed open", err)
+	}
+	handler.queryError = nil
+	if err := closeComputerRuntime(t.Context(), running); err != nil || running.Computer != nil ||
+		!handler.session.Control.Terminal() {
+		t.Fatal("original open could not be reconciled and terminally released", err)
+	}
+}
+
 func TestComputerRuntimeUnknownReleaseRetainsOwnershipUntilTerminalProof(t *testing.T) {
 	running, source, handler := computerRuntimeFixture(t)
 	principal := computerClientPrincipal()

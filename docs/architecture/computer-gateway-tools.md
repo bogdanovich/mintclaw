@@ -90,6 +90,16 @@ release prevents discarding the old runtime. Unknown control outcomes fence
 further mutations; status queries cannot clear that fence merely by returning
 the unchanged pre-action state.
 
+An open acquires a cleanup obligation before dispatch, even before a native
+session ID is known. A lost reply fences the actual node/profile, including
+other gateway aliases for that target. Recovery queries the original durable
+invocation; it never retries the open or invents a replacement binding. Missing,
+unavailable or nonterminal proof keeps cleanup unresolved. A recovered session
+retains the original gateway deadline, and an already-expired successful open
+is retained for cleanup only. Finalization and shutdown cannot report success
+until each unresolved open is reconciled and every owned resource has a
+confirmed terminal disposition.
+
 ## Protected model context
 
 Pixels and accessibility text are one-shot live model context. They do not enter

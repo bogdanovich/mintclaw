@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -29,6 +30,7 @@ type computerToolTestSource struct {
 	inputCalls      int
 	applicationOpen bool
 	image           []byte
+	ownedError      error
 }
 
 func (source *computerToolTestSource) Capture(_ context.Context, target computer.Target) (computer.Capture, error) {
@@ -122,7 +124,30 @@ func (source *computerToolTestSource) OwnedSessions(
 			sessions = append(sessions, session)
 		}
 	}
-	return sessions, nil
+	return sessions, source.ownedError
+}
+
+func TestComputerCleanupRetainsUnknownObligationAndReleasesKnownSessions(t *testing.T) {
+	options, source, ctx := computerToolsFixture(t)
+	tool := NewComputerSessionTool(options, source)
+	id := openComputerTestTool(t, tool, ctx)
+	requirement, required, err := tool.TurnFinalizationRequirement(ctx)
+	if err != nil || !required || !strings.Contains(requirement.Instruction, id) {
+		t.Fatal("recovery omitted the actual owned session ID", err)
+	}
+	source.ownedError = errors.New("another original open remains unresolved")
+	if _, _, err := tool.TurnFinalizationRequirement(ctx); !errors.Is(err, source.ownedError) {
+		t.Fatal("finalization ignored an unresolved ownership obligation", err)
+	}
+	cleaned, err := tool.CleanupTurnWithResult(ctx)
+	if !errors.Is(err, source.ownedError) || len(cleaned.Receipts) != 1 {
+		t.Fatal("partial ownership skipped known cleanup or falsely confirmed complete cleanup", err)
+	}
+	status, err := source.core.Status(ctx, source.principal, id)
+	if err != nil || !status.Control.Terminal() || !source.applicationOpen || source.captures != 0 ||
+		source.inputCalls != 0 {
+		t.Fatal("cleanup failed to end known authority without input, capture or app close", err)
+	}
 }
 
 func computerToolsFixture(t *testing.T) (ComputerToolOptions, *computerToolTestSource, context.Context) {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +33,8 @@ type ComputerToolSource interface {
 	Status(context.Context, runtimecap.Principal, string, string) (computer.Session, error)
 	Control(context.Context, runtimecap.Principal, string, string, computer.ControlEvent) (computer.Session, error)
 	Observe(context.Context, runtimecap.Principal, string, string) (computer.Observation, error)
+	// Known sessions may be returned alongside an error for unresolved opens.
+	// Cleanup must retain that error while disposing any known resources.
 	OwnedSessions(context.Context, runtimecap.Principal) ([]computer.Session, error)
 }
 
@@ -453,11 +456,8 @@ func (tool *ComputerSessionTool) CleanupTurnWithResult(ctx context.Context) (Tur
 		return TurnCleanupResult{}, err
 	}
 	sessions, err := tool.runtime.source.OwnedSessions(ctx, principal)
-	if err != nil {
-		return TurnCleanupResult{}, err
-	}
 	var result TurnCleanupResult
-	var cleanupErr error
+	cleanupErr := err
 	for _, session := range sessions {
 		if session.Control.Terminal() {
 			continue
@@ -485,20 +485,21 @@ func (tool *ComputerSessionTool) TurnFinalizationRequirement(
 	if err != nil {
 		return TurnFinalizationRequirement{}, false, err
 	}
-	live := 0
+	var live []string
 	for _, session := range sessions {
 		if !session.Control.Terminal() {
-			live++
+			live = append(live, session.Binding.SessionID)
 		}
 	}
-	if live == 0 {
+	if len(live) == 0 {
 		return TurnFinalizationRequirement{}, false, nil
 	}
 	return TurnFinalizationRequirement{
 		RecoveryKind: taskresult.ObjectiveKindResourceDisposition,
 		Instruction: fmt.Sprintf(
-			"%d computer sessions remain owned by this turn. Use computer_session to release each, or hand an existing session to the user with useful results and a localized open question. Release ends automation only; application state is not checked. Do not open replacements or claim an application remains open. Handoff suspends the same turn.",
-			live,
+			"%d computer sessions remain owned by this turn (computer_session_id: %s). Use computer_session to release each, or hand an existing session to the user with useful results and a localized open question. Release ends automation only; application state is not checked. Do not open replacements or claim an application remains open. Handoff suspends the same turn.",
+			len(live),
+			strings.Join(live, ", "),
 		),
 	}, true, nil
 }
