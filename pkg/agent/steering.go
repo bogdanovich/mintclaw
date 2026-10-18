@@ -89,19 +89,22 @@ func (sq *steeringQueue) pushEntry(scope runtimeSessionScope, entry steeringEntr
 
 func (sq *steeringQueue) returnSteeringMessagesForTurn(
 	scope runtimeSessionScope,
-	messages []providers.Message,
+	entries []steeringEntry,
 	inbound *bus.InboundContext,
 ) {
-	if sq == nil || len(messages) == 0 {
+	if sq == nil || len(entries) == 0 {
 		return
 	}
-	returned := make([]steeringEntry, 0, len(messages))
-	for _, msg := range messages {
-		returned = append(returned, steeringEntry{
-			msg:      msg,
-			senderID: strings.TrimSpace(msg.SteeringSenderID),
-			inbound:  steeringContextForSender(inbound, msg.SteeringSenderID),
-		})
+	returned := make([]steeringEntry, 0, len(entries))
+	for _, entry := range entries {
+		// Native entries retain their admitted event/reply metadata. Only
+		// programmatic guidance borrows the active turn's execution context.
+		source := entry.inbound
+		if source == nil {
+			source = inbound
+		}
+		entry.inbound = steeringContextForSender(source, entry.senderID)
+		returned = append(returned, entry)
 	}
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
@@ -156,13 +159,13 @@ func (sq *steeringQueue) dequeueSteeringMessagesForTurn(
 	scope runtimeSessionScope,
 	senderID string,
 	inbound *bus.InboundContext,
-) []providers.Message {
+) []steeringEntry {
 	if sq == nil {
 		return nil
 	}
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
-	return entryMessages(sq.dequeueForTurnLocked(scope, strings.TrimSpace(senderID), inbound))
+	return sq.dequeueForTurnLocked(scope, strings.TrimSpace(senderID), inbound)
 }
 
 // drainSteeringMessagesForTurn removes every entry owned by the active turn,
@@ -172,7 +175,7 @@ func (sq *steeringQueue) drainSteeringMessagesForTurn(
 	scope runtimeSessionScope,
 	senderID string,
 	inbound *bus.InboundContext,
-) []providers.Message {
+) []steeringEntry {
 	if sq == nil {
 		return nil
 	}
@@ -181,14 +184,14 @@ func (sq *steeringQueue) drainSteeringMessagesForTurn(
 
 	senderID = strings.TrimSpace(senderID)
 	if senderID != "" || inbound != nil {
-		return entryMessages(sq.dequeueForTurnLocked(scope, senderID, inbound))
+		return sq.dequeueForTurnLocked(scope, senderID, inbound)
 	}
 	queue := sq.queues[scope]
 	if len(queue) == 0 {
 		return nil
 	}
 	delete(sq.queues, scope)
-	return entryMessages(queue)
+	return queue
 }
 
 func (sq *steeringQueue) dequeueScopeForContinuation(scope runtimeSessionScope) []providers.Message {
@@ -302,15 +305,19 @@ func (sq *steeringQueue) dequeueContinuationLocked(
 	return steeringBatch{entries: selected, senderID: firstSender, inbound: cloneInboundContext(authority)}
 }
 
+func (entry steeringEntry) promptMessage() providers.Message {
+	msg := entry.msg
+	msg.SteeringSenderID = entry.senderID
+	return msg
+}
+
 func entryMessages(entries []steeringEntry) []providers.Message {
 	if len(entries) == 0 {
 		return nil
 	}
 	msgs := make([]providers.Message, 0, len(entries))
 	for _, entry := range entries {
-		msg := entry.msg
-		msg.SteeringSenderID = entry.senderID
-		msgs = append(msgs, msg)
+		msgs = append(msgs, entry.promptMessage())
 	}
 	return msgs
 }

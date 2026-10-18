@@ -2185,7 +2185,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				"agent_id":       ts.agent.ID,
 				"steering_count": len(steerMsgs),
 			})
-		exec.pendingInputs.AppendSteering(steerMsgs...)
+		exec.pendingInputs.AppendSteeringEntries(steerMsgs...)
 		llm.toolResponseDisposition = toolResponseNeedsModel
 		return ToolLoopOutcome{Control: turnStepContinue}
 	}
@@ -2602,7 +2602,7 @@ func (r *toolLoopRunner) transferPendingSteeringOwnership() {
 	}
 	pending := r.exec.pendingInputs.Drain()
 	remaining := make([]turnPendingInput, 0, len(pending))
-	returned := make([]providers.Message, 0, len(pending))
+	returned := make([]steeringEntry, 0, len(pending))
 	for _, input := range pending {
 		msg := input.message
 		if input.kind != turnPendingSteering {
@@ -2614,7 +2614,7 @@ func (r *toolLoopRunner) transferPendingSteeringOwnership() {
 			continue
 		}
 		if msg.InboundSpoolID == "" {
-			returned = append(returned, msg)
+			returned = append(returned, steeringEntry{msg: msg, senderID: msg.SteeringSenderID, inbound: input.inbound})
 			continue
 		}
 		r.ts.recordAcceptedSteeringMessage(msg)
@@ -3039,7 +3039,7 @@ func (r *toolLoopRunner) captureSteering(markAdditional bool) {
 	} else {
 		r.exec.markSteeringObserved()
 	}
-	r.exec.pendingInputs.AppendSteering(steerMsgs...)
+	r.exec.pendingInputs.AppendSteeringEntries(steerMsgs...)
 }
 
 func (r *toolLoopRunner) skipPendingToolForGracefulInterrupt(
@@ -3214,7 +3214,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		suspensionAdmissionSealed = sealed
 		if len(steerMessages) > 0 {
 			r.exec.markSteeringObserved()
-			r.exec.pendingInputs.AppendSteering(steerMessages...)
+			r.exec.pendingInputs.AppendSteeringEntries(steerMessages...)
 			return continueWithPendingInput()
 		}
 	}

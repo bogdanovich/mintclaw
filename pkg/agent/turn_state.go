@@ -234,6 +234,7 @@ const (
 type turnPendingInput struct {
 	kind    turnPendingInputKind
 	message providers.Message
+	inbound *bus.InboundContext
 }
 
 type turnPendingInputs struct {
@@ -249,6 +250,19 @@ func newTurnPendingInputs(messages []providers.Message) turnPendingInputs {
 
 func (pending *turnPendingInputs) AppendSteering(messages ...providers.Message) {
 	pending.append(turnPendingSteering, messages...)
+}
+
+// AppendSteeringEntries carries private native metadata through pending ownership
+// without adding it to provider messages or canonical history.
+func (pending *turnPendingInputs) AppendSteeringEntries(entries ...steeringEntry) {
+	if pending == nil {
+		return
+	}
+	for _, entry := range entries {
+		pending.appendEntries(turnPendingInput{
+			kind: turnPendingSteering, message: entry.promptMessage(), inbound: cloneInboundContext(entry.inbound),
+		})
+	}
 }
 
 func (pending *turnPendingInputs) AppendSubTurn(messages ...providers.Message) {

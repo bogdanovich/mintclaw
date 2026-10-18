@@ -3075,56 +3075,56 @@ func (s *delayedSteering) dequeueSteeringMessagesForTurn(
 	runtimeSessionScope,
 	string,
 	*bus.InboundContext,
-) []providers.Message {
+) []steeringEntry {
 	s.polls++
 	if s.polls < 2 {
 		return nil
 	}
 	messages := s.messages
 	s.messages = nil
-	return messages
+	return steeringEntriesFromMessages(messages)
 }
 
 func (s *delayedSteering) drainSteeringMessagesForTurn(
 	scope runtimeSessionScope,
 	senderID string,
 	_ *bus.InboundContext,
-) []providers.Message {
+) []steeringEntry {
 	return s.dequeueSteeringMessagesForTurn(scope, senderID, nil)
 }
 
 func (s *delayedSteering) returnSteeringMessagesForTurn(
 	_ runtimeSessionScope,
-	messages []providers.Message,
+	messages []steeringEntry,
 	_ *bus.InboundContext,
 ) {
-	s.messages = append(messages, s.messages...)
+	s.messages = append(entryMessages(messages), s.messages...)
 }
 
 func (s *oneShotLoopGuardSteering) dequeueSteeringMessagesForTurn(
 	runtimeSessionScope,
 	string,
 	*bus.InboundContext,
-) []providers.Message {
+) []steeringEntry {
 	messages := s.messages
 	s.messages = nil
-	return messages
+	return steeringEntriesFromMessages(messages)
 }
 
 func (s *oneShotLoopGuardSteering) drainSteeringMessagesForTurn(
 	scope runtimeSessionScope,
 	senderID string,
 	_ *bus.InboundContext,
-) []providers.Message {
+) []steeringEntry {
 	return s.dequeueSteeringMessagesForTurn(scope, senderID, nil)
 }
 
 func (s *oneShotLoopGuardSteering) returnSteeringMessagesForTurn(
 	_ runtimeSessionScope,
-	messages []providers.Message,
+	messages []steeringEntry,
 	_ *bus.InboundContext,
 ) {
-	s.messages = append(messages, s.messages...)
+	s.messages = append(entryMessages(messages), s.messages...)
 }
 
 func (e *captureRuntimeEmitter) emitEvent(kind runtimeevents.Kind, meta HookMeta, payload any) {

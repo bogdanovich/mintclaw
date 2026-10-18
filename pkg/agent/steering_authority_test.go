@@ -135,7 +135,7 @@ func TestNativeSteeringKeepsDifferentAuthoritiesQueued(t *testing.T) {
 		t.Fatal(err)
 	}
 	selected := fixture.Loop.steering.dequeueSteeringMessagesForTurn(scope, first.SenderID, &first)
-	if len(selected) != 1 || selected[0].Content != "matching" {
+	if len(selected) != 1 || selected[0].msg.Content != "matching" {
 		t.Fatalf("active turn consumed another authority: %#v", selected)
 	}
 	fixture.Loop.steering.returnSteeringMessagesForTurn(scope, selected, &first)
@@ -166,9 +166,9 @@ func TestReturnedSenderlessSteeringKeepsOneAtATimePolicyWithNativeContext(t *tes
 	inbound := bus.NormalizeInboundContext(bus.InboundContext{
 		Channel: "telegram", ChatID: "chat", ChatType: "direct", SenderID: "owner",
 	})
-	queue.returnSteeringMessagesForTurn(scope, []providers.Message{
+	queue.returnSteeringMessagesForTurn(scope, steeringEntriesFromMessages([]providers.Message{
 		{Role: "user", Content: "first"}, {Role: "user", Content: "second"},
-	}, &inbound)
+	}), &inbound)
 	for _, expected := range []string{"first", "second"} {
 		batch := queue.dequeueScopeForContinuationBatch(scope, &inbound)
 		if len(batch.entries) != 1 || batch.entries[0].msg.Content != expected {
@@ -232,4 +232,56 @@ func TestDeferredNativeSteeringPublishesEachDeliveryTargetSeparately(t *testing.
 		fixture.Loop.pendingSteeringCountForScope(scope) != 0 {
 		t.Fatalf("deferred authorities incomplete: executions %d, last %#v", probe.executions, probe.inbound)
 	}
+}
+
+func TestReturnedNativeSteeringPreservesFollowupContext(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &simpleMockProvider{response: "unused"})
+	scope := newRuntimeSessionScope(fixture.Agent.Workspace, "native-suspension-return")
+	root := bus.NormalizeInboundContext(bus.InboundContext{
+		Channel: "telegram", ChatID: "chat", ChatType: "direct", SenderID: "owner", ActorID: "owner",
+		MessageID: "root-event", SourceRef: "root-source", ReplyToMessageID: "root-reply",
+		ReplyHandles: map[string]string{"native": "root-handle"}, Raw: map[string]string{"event": "root-raw"},
+	})
+	followup := *cloneInboundContext(&root)
+	followup.MessageID, followup.SourceRef, followup.ReplyToMessageID = "followup-event", "followup-source", "followup-reply"
+	followup.ReplyHandles["native"], followup.Raw["event"] = "followup-handle", "followup-raw"
+	expected := cloneInboundContext(&followup)
+	if err := fixture.Loop.enqueueInboundSteering(scope, fixture.Agent.ID, bus.InboundMessage{
+		Context: followup, Content: "unspooled native followup",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	spec := makeTestTurnSpec(scope.sessionKey)
+	spec.Dispatch.InboundContext = &root
+	ts := newTurnState(fixture.Agent, spec, turnEventScope{})
+	pipeline := newTestPipeline(fixture.Loop)
+	exec := newTurnExecution(fixture.Agent, ts.opts, nil, nil, nil)
+	selected := pipeline.dequeueSteeringMessagesForTurn(ts)
+	if len(selected) != 1 {
+		t.Fatalf("selected = %#v", selected)
+	}
+	exec.pendingInputs.AppendSteeringEntries(selected...)
+	followup.ReplyHandles["native"], followup.Raw["event"] = "mutated-handle", "mutated-raw"
+	runner := &toolLoopRunner{p: pipeline, ts: ts, exec: exec}
+	runner.transferPendingSteeringOwnership()
+	if exec.pendingInputs.Len() != 0 {
+		t.Fatal("returned input remained turn-owned")
+	}
+	resumed := fixture.Loop.steering.dequeueScopeForContinuationBatch(scope, nil)
+	if len(resumed.entries) != 1 || !reflect.DeepEqual(resumed.inbound, expected) {
+		t.Fatalf("returned native context = %#v, want %#v", resumed.inbound, expected)
+	}
+	encoded, err := json.Marshal(resumed.entries[0].msg)
+	if err != nil || strings.Contains(string(encoded), "followup-handle") ||
+		strings.Contains(string(encoded), "followup-raw") {
+		t.Fatal("private native metadata entered provider or canonical data")
+	}
+}
+
+func steeringEntriesFromMessages(messages []providers.Message) []steeringEntry {
+	entries := make([]steeringEntry, 0, len(messages))
+	for _, msg := range messages {
+		entries = append(entries, steeringEntry{msg: msg, senderID: strings.TrimSpace(msg.SteeringSenderID)})
+	}
+	return entries
 }

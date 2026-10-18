@@ -133,13 +133,13 @@ type steeringDequeuer interface {
 		scope runtimeSessionScope,
 		senderID string,
 		inbound *bus.InboundContext,
-	) []providers.Message
+	) []steeringEntry
 	drainSteeringMessagesForTurn(
 		scope runtimeSessionScope,
 		senderID string,
 		inbound *bus.InboundContext,
-	) []providers.Message
-	returnSteeringMessagesForTurn(scope runtimeSessionScope, messages []providers.Message, inbound *bus.InboundContext)
+	) []steeringEntry
+	returnSteeringMessagesForTurn(scope runtimeSessionScope, messages []steeringEntry, inbound *bus.InboundContext)
 }
 
 type reasoningPublisher interface {
