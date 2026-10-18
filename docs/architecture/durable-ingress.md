@@ -20,7 +20,7 @@ bus.
 
 4. The bus publishes the message to the in-memory inbound channel.
 5. The agent loop processes or accepts the message.
-6. The agent loop calls `AckInbound`, which removes the spool entry.
+6. The agent loop calls `AckInbound`, which removes the spool entry and confirms the directory update.
 
 On gateway startup, `PendingInboundSpool` captures the unacked pending and
 processing entries before channel ingress starts. `ReplayInboundMessages` then
@@ -51,6 +51,30 @@ but it does not yet provide OpenClaw-style raw transport offset protection for
 Telegram long polling before `PublishInbound` is called. A deeper transport-level
 spool can be added later for channels whose upstream protocol needs exactly that
 offset/watermark behavior.
+
+## Filesystem Durability
+
+Spool records use the shared atomic-write helper: sync file contents before
+rename, then sync the containing directory. Claim, retry and failure renames also
+confirm directory metadata before reporting success. Acknowledgement removes both
+possible entry names and confirms the directory, including on an absent-name
+retry after an earlier sync failure. Newly created directory components are
+confirmed one at a time through the durable-directory helper before creating
+their descendants. A retry reconfirms the nearest existing component's parent
+entry before trusting it as an anchor, including when the target already exists
+after a failed creation. Existing ancestors supplied by the caller remain the
+outer durability boundary.
+
+A reported sync failure can follow a committed rename or unlink. It does not
+prove the old path still exists. Recovery retains the same message identity;
+callers must not treat unconfirmed persistence as a successful admission or
+acknowledgement. This is filesystem fault-contract evidence, not a physical
+power-loss qualification for every deployment filesystem.
+
+A successful acknowledgement is not yet a typed retirement proof. An in-memory
+bus can acknowledge without a spool, and steering can acknowledge at the
+canonical-history handoff while a turn continues. The retention owner must
+qualify the actual source and remaining obligations separately.
 
 ## Steering Caveat
 

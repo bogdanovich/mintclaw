@@ -203,6 +203,16 @@ The test creates only disposable native windows and verifies lifetime effects
 through native X11 resources and kernel handles. It does not capture existing
 window contents, use the clipboard or change accessibility settings.
 
+Longer integration stress found that an interrupted pidfd poll (`EINTR`) could
+mistakenly invalidate a live window. The liveness check now retries only signal
+interruption on the same retained process handle within its existing two-second
+budget. Process-exit readiness and all other syscall errors still invalidate the
+guard; no reconnect, replacement admission or deadline extension is introduced.
+Deterministic interruption/cancellation tests and native syscall fault injection
+cover this boundary separately from window destruction and transport loss.
+After correction, the complete desktop suite passed 1,000 native repetitions
+alongside 100 race-enabled native repetitions, with all lifetime checks unchanged.
+
 ## macOS window incarnation admission
 
 The macOS guard requires the companion's actual GUI launch identity and both

@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	mintclawmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
@@ -3848,14 +3849,28 @@ func TestInferSkillNamesFromToolCall_RemoteSelectorsIgnored(t *testing.T) {
 	}
 }
 
-func TestIsFatalMCPTransportErrorSummary(t *testing.T) {
-	if !isFatalMCPTransportErrorSummary(
-		`MCP tool execution failed: failed to call tool: connection closed: calling "tools/call": client is closing: invalid character 'ð' looking for beginning of value`,
-	) {
-		t.Fatal("expected fatal MCP transport error to match")
-	}
-	if isFatalMCPTransportErrorSummary("MCP tool returned error: rate limited, retry later") {
-		t.Fatal("expected normal MCP server error not to match fatal transport classifier")
+func TestMCPFatalDecisionDoesNotDependOnDisplayText(t *testing.T) {
+	cause := &mintclawmcp.CallTransportError{Err: errors.New("private transport details")}
+	for _, tc := range []struct {
+		name   string
+		result *toolshared.ToolResult
+		want   bool
+	}{
+		{name: "typeof", result: toolshared.ErrorResult("MCP tool execution failed: typeof failed")},
+		{name: "long prefix", result: toolshared.ErrorResult("MCP tool execution failed: " + strings.Repeat("detail ", 80) + "invalid character").WithError(cause), want: true},
+		{name: "translated display", result: toolshared.ErrorResult("The backend returned an invalid response.").WithError(fmt.Errorf("wrapped: %w", cause)), want: true},
+		{name: "untyped lookalike", result: toolshared.ErrorResult("MCP tool execution failed: unexpected EOF")},
+		{name: "canceled", result: toolshared.ErrorResult("MCP tool execution failed: connection closed: calling tools/call").WithError(context.Canceled)},
+		{name: "timeout", result: toolshared.ErrorResult("MCP tool execution failed: unexpected EOF").WithError(context.DeadlineExceeded)},
+		{name: "uncertain", result: toolshared.ErrorResult("MCP tool execution failed: unexpected EOF").WithError(&mintclawmcp.CallOutcomeUncertainError{})},
+		{name: "success", result: toolshared.NewToolResult("done").WithError(cause)},
+		{name: "nil"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isFatalMCPTransportError(tc.result); got != tc.want {
+				t.Fatalf("fatal transport decision = %t, want %t", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -4226,8 +4241,9 @@ func (t *repeatingFatalTool) Parameters() map[string]any {
 }
 
 func (t *repeatingFatalTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
-	err := `MCP tool execution failed: failed to call tool: connection closed: calling "tools/call": client is closing: invalid character 'ð' looking for beginning of value`
-	return toolshared.ErrorResult(err)
+	return toolshared.ErrorResult("MCP backend returned an invalid response.").WithError(
+		&mintclawmcp.CallTransportError{Err: errors.New("private protocol failure")},
+	)
 }
 
 func TestRunAgentLoop_AbortsRepeatedFatalToolTransportErrors(t *testing.T) {
@@ -4317,8 +4333,9 @@ func (t *fatalMCPServerTool) Parameters() map[string]any {
 }
 func (t *fatalMCPServerTool) MCPServerName() string { return "gpt_researcher" }
 func (t *fatalMCPServerTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
-	err := `MCP tool execution failed: failed to call tool: connection closed: calling "tools/call": client is closing: invalid character 'ð' looking for beginning of value`
-	return toolshared.ErrorResult(err)
+	return toolshared.ErrorResult("MCP backend returned an invalid response.").WithError(
+		&mintclawmcp.CallTransportError{Err: errors.New("private protocol failure")},
+	)
 }
 
 func TestRunAgentLoop_AbortsFatalMCPServerTransportErrorImmediately(t *testing.T) {

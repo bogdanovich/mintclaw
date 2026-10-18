@@ -21,6 +21,9 @@ type FormIntakeProposal struct {
 	ReplaceExisting    bool                     `json:"replace_existing,omitempty"`
 	CorrectionEvidence []FormIntakeLiteral      `json:"-"`
 	Resolves           []FormIntakePriorLiteral `json:"-"`
+	// Only a verified direct checkbox assertion may use a typed value. Its
+	// single exact current-message literal remains the source evidence.
+	BooleanAssertion *bool `json:"-"`
 }
 
 // A private proposal to settle exact earlier rejected evidence. The replacement
@@ -176,6 +179,9 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		); resolveErr != nil {
 			return false, resolveErr
 		}
+		consumeOlderFormIntakeGuidance(
+			source.Intake, index, request.Schema, record.Public, selection.CurrentValueIDs, pass.Outcome,
+		)
 		consumed := len(formIntakeCurrentModeFindings(source.Intake, *input)) == 0 &&
 			(input.Intent != interactions.ProtectedAnswerValue ||
 				formIntakeTextAccounted(input.Text, input.Accounted))
@@ -219,6 +225,7 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		ReplaceExisting   bool
 		Correction        []literal
 		Resolves          []priorLiteral `json:"Resolves,omitempty"`
+		BooleanAssertion  *bool          `json:"BooleanAssertion,omitempty"`
 	}
 	type output struct {
 		Mode    FormIntakeOutputMode
@@ -258,7 +265,8 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		proposals[i] = proposal{
 			FieldID: item.FieldID, Disposition: item.Disposition, Literals: convert(item.Literals),
 			SupersedesEventID: item.SupersedesEventID, ReplaceExisting: item.ReplaceExisting,
-			Correction: convert(item.CorrectionEvidence),
+			Correction:       convert(item.CorrectionEvidence),
+			BooleanAssertion: item.BooleanAssertion,
 		}
 		for _, prior := range item.Resolves {
 			resolutionCount++

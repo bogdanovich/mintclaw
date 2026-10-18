@@ -5,6 +5,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const {chromium} = require("../../../runtime/browser/playwright-library/node_modules/playwright");
 const origin = "https://approval.example.org";
+const notificationOrigin = "https://notification.example.net";
 let stage = "fixture-input";
 
 (async () => {
@@ -41,11 +42,27 @@ let stage = "fixture-input";
       deviceScaleFactor: 1, serviceWorkers: "block"});
     const apiPaths = [];
     const errors = [];
+    const navigationSites = [];
     await context.route("**/*", async route => {
       const source = route.request(), target = new URL(source.url());
+      if (target.origin === notificationOrigin && target.pathname === "/" && source.method() === "GET") {
+        await route.fulfill({contentType: "text/html", body:
+          `<a href="${config.invite}">Open setup link</a><a href="${origin}${pagePath}">Verify phone setup</a>`});
+        return;
+      }
       if (target.origin !== origin || target.hash || target.search) { await route.abort(); return; }
       if (target.pathname.startsWith(`${pagePath}api/`)) apiPaths.push(target.pathname);
-      const response = await request(target.pathname, source.method(), await source.allHeaders(), source.postDataBuffer());
+      const headersFromBrowser = await source.allHeaders();
+      // Playwright interception occurs before Chromium adds Fetch Metadata.
+      // Model those headers only for the real top-level external anchor click.
+      if (source.isNavigationRequest() && source.frame() === source.frame().page().mainFrame() &&
+          headersFromBrowser.referer === `${notificationOrigin}/`) {
+        headersFromBrowser["sec-fetch-site"] = "cross-site";
+        headersFromBrowser["sec-fetch-mode"] = "navigate";
+        headersFromBrowser["sec-fetch-dest"] = "document";
+      }
+      if (source.isNavigationRequest() && target.pathname === pagePath) navigationSites.push(headersFromBrowser["sec-fetch-site"]);
+      const response = await request(target.pathname, source.method(), headersFromBrowser, source.postDataBuffer());
       const headers = {...response.headers};
       delete headers["transfer-encoding"];
       await route.fulfill({status: response.status, headers, body: response.body});
@@ -57,13 +74,21 @@ let stage = "fixture-input";
     await cdp.send("WebAuthn.addVirtualAuthenticator", {options: {protocol: "ctap2", transport: "internal",
       hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true}});
     stage = "enrollment-page";
-    await page.goto(config.invite);
+    await page.goto(notificationOrigin);
+    await page.getByRole("link", {name: "Open setup link"}).click();
     await page.getByRole("button", {name: "Create approval passkey"}).waitFor();
     assert.equal(await page.evaluate(() => location.hash), "");
     assert.equal((await page.locator("body").innerText()).includes(config.invite.split("=")[1]), false);
     stage = "enrollment-passkey";
     await page.getByRole("button", {name: "Create approval passkey"}).click();
     await page.getByRole("status").filter({hasText: "Passkey enrolled."}).waitFor();
+    stage = "verification-passkey";
+    await page.goto(notificationOrigin);
+    await page.getByRole("link", {name: "Verify phone setup"}).click();
+    await page.getByRole("button", {name: "Verify approval passkey"}).click();
+    await page.getByRole("status").filter({hasText: "Phone approval setup is complete. No account access was granted."}).waitFor();
+    assert.equal(await page.locator("#scope").isVisible(), false);
+    assert.equal(await page.getByRole("button", {name: "Revoke access", exact: true}).isVisible(), false);
     stage = "approval-page";
     const pending = await fixture("/_fixture/request");
     const link = `${origin}${pagePath}#request=${pending.id}`;
@@ -99,8 +124,12 @@ let stage = "fixture-input";
     await page.goto(link);
     await page.getByRole("status").filter({hasText: "unavailable or expired"}).waitFor();
     assert.equal(await page.getByRole("button", {name: "Approve with passkey"}).isVisible(), false);
+    stage = "browser-errors";
     assert.deepEqual(errors, []);
-    for (const pathname of ["enroll/begin", "enroll/finish", "approve/begin", "approve/finish", "revoke/begin", "revoke/finish"])
+    stage = "external-navigation";
+    assert.equal(navigationSites.includes("cross-site"), true);
+    stage = "route-coverage";
+    for (const pathname of ["enroll/begin", "enroll/finish", "verify/begin", "verify/finish", "approve/begin", "approve/finish", "revoke/begin", "revoke/finish"])
       assert.equal(apiPaths.includes(`${pagePath}api/${pathname}`), true);
     await context.close();
   } finally { await browser.close(); }

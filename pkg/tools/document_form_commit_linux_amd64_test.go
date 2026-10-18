@@ -337,8 +337,8 @@ func testDocumentFormCommitDelivery(
 			t.Fatal(err)
 		}
 		recoveredAdmissions, recoverErr := coordinator.Recover()
-		if recoverErr != nil || len(recoveredAdmissions) != 1 || !recoveredAdmissions[0].Settle ||
-			recoveredAdmissions[0].Dispatch || recoveredAdmissions[0].Intent.ID != outboxDeliveryID {
+		if recoverErr != nil || len(recoveredAdmissions.Admissions) != 1 || !recoveredAdmissions.Admissions[0].Settle ||
+			recoveredAdmissions.Admissions[0].Dispatch || recoveredAdmissions.Admissions[0].Intent.ID != outboxDeliveryID {
 			t.Fatalf("settlement-only restart admission = %#v, %v", recoveredAdmissions, recoverErr)
 		}
 		reopened, err = document.OpenFormJobStore(options)
@@ -355,7 +355,7 @@ func testDocumentFormCommitDelivery(
 			WithDocumentStateRoot(options.StateRoot),
 		)
 		recoveryTool.SetMediaStore(mediaStore)
-		recoveredIntent = recoveredAdmissions[0].Intent
+		recoveredIntent = recoveredAdmissions.Admissions[0].Intent
 	}
 	if err = recoveryTool.SettleRecoveredDelivery(t.Context(), recoveredIntent); err != nil {
 		t.Fatal(err)
@@ -363,7 +363,8 @@ func testDocumentFormCommitDelivery(
 	if err = coordinator.MarkRecoverySettled(outboxDeliveryID); err != nil {
 		t.Fatal(err)
 	}
-	if recoveredAdmissions, recoverErr := coordinator.Recover(); recoverErr != nil || len(recoveredAdmissions) != 0 {
+	if recoveredAdmissions, recoverErr := coordinator.Recover(); recoverErr != nil ||
+		len(recoveredAdmissions.Admissions) != 0 {
 		t.Fatalf("outbox replay after recovered settlement = %#v, %v", recoveredAdmissions, recoverErr)
 	}
 	settled, err := reopened.Get(t.Context(), jobID, formOwner)

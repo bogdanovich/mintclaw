@@ -1674,7 +1674,13 @@ func TestRunLoopSuspendsAndResumesAfterReload(t *testing.T) {
 	if err := cs.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
-	defer cs.Stop()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := cs.StopAndDrain(ctx); err != nil {
+			t.Errorf("drain resumed dispatch: %v", err)
+		}
+	})
 
 	// Corrupt the authoritative store and latch the load error.
 	malformed := []byte("{not valid json")

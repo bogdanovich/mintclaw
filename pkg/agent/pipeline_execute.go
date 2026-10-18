@@ -22,6 +22,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	mintclawmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
@@ -115,16 +116,12 @@ func toolErrorSummary(result *toolshared.ToolResult) string {
 	return utils.Truncate(content, 200)
 }
 
-func isFatalMCPTransportErrorSummary(summary string) bool {
-	summary = strings.ToLower(strings.TrimSpace(summary))
-	if summary == "" || !strings.Contains(summary, "mcp tool execution failed") {
+func isFatalMCPTransportError(result *toolshared.ToolResult) bool {
+	if result == nil || !result.IsError {
 		return false
 	}
-	return strings.Contains(summary, "client is closing") ||
-		strings.Contains(summary, "connection closed: calling \"tools/call\"") ||
-		strings.Contains(summary, "invalid character") ||
-		strings.Contains(summary, "broken pipe") ||
-		strings.Contains(summary, "eof")
+	var transportErr *mintclawmcp.CallTransportError
+	return errors.As(result.Err, &transportErr)
 }
 
 func repeatedFatalToolErrorReply(toolName string) string {
@@ -1976,10 +1973,12 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	if protectedResult && toolResult.IsError {
 		errorSummary = "protected tool result omitted"
 	}
+	fatalMCPTransport := call.resultSource != toolResultHook && isFatalMCPTransportError(toolResult)
 	ts.recordToolExecution(
 		toolName,
 		!toolResult.IsError,
 		errorSummary,
+		fatalMCPTransport,
 		inferSkillNamesFromToolCall(ts, toolName, toolArgs),
 	)
 	if toolResult.Control.TaskSuspended {
@@ -1993,46 +1992,44 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		})
 	}
 
-	if call.resultSource != toolResultHook && toolResult.IsError {
+	if fatalMCPTransport {
 		errSummary := toolErrorSummary(toolResult)
-		if isFatalMCPTransportErrorSummary(errSummary) {
-			if mcpServerName != "" {
-				logger.WarnCF("agent", "Fatal MCP server transport error; aborting turn to avoid workaround loop",
-					map[string]any{
-						"agent_id":   ts.agent.ID,
-						"iteration":  iteration,
-						"tool":       toolName,
-						"mcp_server": mcpServerName,
-						"error":      errSummary,
-						"session_id": ts.sessionKey,
-					})
-				llm.toolResponseDisposition = toolResponseNeedsModel
-				exec.messages = runner.messages
-				return stopToolBatch(ToolLoopOutcome{
-					Control:      turnStepFinalize,
-					FinalContent: fatalMCPServerErrorReply(mcpServerName, toolName),
+		if mcpServerName != "" {
+			logger.WarnCF("agent", "Fatal MCP server transport error; aborting turn to avoid workaround loop",
+				map[string]any{
+					"agent_id":   ts.agent.ID,
+					"iteration":  iteration,
+					"tool":       toolName,
+					"mcp_server": mcpServerName,
+					"error":      errSummary,
+					"session_id": ts.sessionKey,
 				})
-			}
-			streak := ts.recentToolExecutionErrorStreak(toolName, func(rec ToolExecutionRecord) bool {
-				return isFatalMCPTransportErrorSummary(rec.ErrorSummary)
+			llm.toolResponseDisposition = toolResponseNeedsModel
+			exec.messages = runner.messages
+			return stopToolBatch(ToolLoopOutcome{
+				Control:      turnStepFinalize,
+				FinalContent: fatalMCPServerErrorReply(mcpServerName, toolName),
 			})
-			if streak >= repeatedFatalToolErrorStreakLimit {
-				logger.WarnCF("agent", "Repeated fatal tool transport errors; aborting turn to avoid retry loop",
-					map[string]any{
-						"agent_id":   ts.agent.ID,
-						"iteration":  iteration,
-						"tool":       toolName,
-						"error":      errSummary,
-						"streak":     streak,
-						"session_id": ts.sessionKey,
-					})
-				llm.toolResponseDisposition = toolResponseNeedsModel
-				exec.messages = runner.messages
-				return stopToolBatch(ToolLoopOutcome{
-					Control:      turnStepFinalize,
-					FinalContent: repeatedFatalToolErrorReply(toolName),
+		}
+		streak := ts.recentToolExecutionErrorStreak(toolName, func(rec ToolExecutionRecord) bool {
+			return rec.fatalMCPTransport
+		})
+		if streak >= repeatedFatalToolErrorStreakLimit {
+			logger.WarnCF("agent", "Repeated fatal tool transport errors; aborting turn to avoid retry loop",
+				map[string]any{
+					"agent_id":   ts.agent.ID,
+					"iteration":  iteration,
+					"tool":       toolName,
+					"error":      errSummary,
+					"streak":     streak,
+					"session_id": ts.sessionKey,
 				})
-			}
+			llm.toolResponseDisposition = toolResponseNeedsModel
+			exec.messages = runner.messages
+			return stopToolBatch(ToolLoopOutcome{
+				Control:      turnStepFinalize,
+				FinalContent: repeatedFatalToolErrorReply(toolName),
+			})
 		}
 	}
 	if loopDecision.Action == loopguard.ActionHalt {

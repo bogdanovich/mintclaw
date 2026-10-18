@@ -2755,6 +2755,111 @@ func TestSpawnSubTurnRepairsIncompleteResultWithoutTools(t *testing.T) {
 	}
 }
 
+type receiptRepairBrowserTool struct {
+	mu         sync.Mutex
+	executions map[string]int
+}
+
+func (*receiptRepairBrowserTool) Name() string { return "browser_act" }
+
+func (*receiptRepairBrowserTool) Description() string { return "Transfer a test image" }
+
+func (*receiptRepairBrowserTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object", "properties": map[string]any{"action": map[string]any{"type": "string"}},
+	}
+}
+
+func (tool *receiptRepairBrowserTool) Execute(
+	_ context.Context,
+	args map[string]any,
+) *toolshared.ToolResult {
+	action, _ := args["action"].(string)
+	tool.mu.Lock()
+	tool.executions[action]++
+	tool.mu.Unlock()
+	effect := "unknown"
+	if action == "submit" {
+		effect = "external_commit"
+	}
+	return toolshared.NewToolResult(fmt.Sprintf(`{"invocation_id":"inv-%s","state":"succeeded"}`, action)).
+		WithWriteAudit(toolshared.WriteAuditEntry{
+			Kind: "external_action", Target: "https://example.com", Action: action,
+			Tool: "browser_act", Success: true,
+			Metadata: map[string]string{"invocation_id": "inv-" + action, "effect": effect},
+		})
+}
+
+func TestSpawnSubTurnRepairsUnclaimedTransferReceiptsWithoutReplay(t *testing.T) {
+	initial := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":["inv-submit"]},` +
+		`{"objective_id":"objective_2","output":{"kind":"records","records":[{"uploaded":"true"}]}}],` +
+		`"missing_items":[],"result":"The test image was uploaded and verified."}` + objectiveOutcomeEnd
+	repaired := strings.Replace(initial, `["inv-submit"]`, `["inv-download","inv-upload","inv-submit"]`, 1)
+	var calls []providers.ToolCall
+	for _, action := range []string{"download", "upload", "submit"} {
+		calls = append(calls, providers.ToolCall{
+			ID: "call-" + action, Name: "browser_act", Arguments: map[string]any{"action": action},
+		})
+	}
+	provider := &objectiveRepairCaptureProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: calls},
+		{Content: initial, FinishReason: "stop"},
+		{Content: repaired, FinishReason: "stop"},
+	}}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	alphaAgent, _ := al.registry.GetAgent("alpha")
+	betaAgent, _ := al.registry.GetAgent("beta")
+	tool := &receiptRepairBrowserTool{executions: make(map[string]int)}
+	betaAgent.Tools.Register(tool)
+	parent := &turnState{
+		ctx: context.Background(), turnID: "parent-transfer-receipt-repair",
+		pendingResults: make(chan *toolshared.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{}, agent: alphaAgent,
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-transfer-receipt-repair"}}),
+	}
+	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+		TargetAgentID: "beta", TaskPrompt: "Transfer and verify the test image",
+		ObjectiveItems: []toolshared.ObjectiveSpec{
+			{Item: "Transfer the original image and submit it", Kind: taskresult.ObjectiveKindExternalAction},
+			{Item: "Report verified upload state", Kind: taskresult.ObjectiveKindResult},
+		},
+	})
+	if err != nil || result == nil || result.Deliverable == nil || result.Deliverable.ObjectiveOutcome == nil {
+		t.Fatalf("transfer receipt repair returned (%#v, %v)", result, err)
+	}
+	outcome := result.Deliverable.ObjectiveOutcome
+	output := taskresult.StandaloneResultOutput(result.Deliverable)
+	if outcome.Status != taskresult.OutcomeSucceeded || len(outcome.CompletedItems) != 2 ||
+		len(outcome.CompletedItems[0].Receipts) != 3 || output == nil ||
+		len(output.Records) != 1 || output.Records[0]["uploaded"] != "true" {
+		t.Fatalf("repaired transfer was not projected: outcome=%#v output=%#v", outcome, output)
+	}
+	if counts := provider.toolDefinitionCounts(); len(counts) != 3 || counts[0] == 0 || counts[1] == 0 ||
+		counts[2] != 0 {
+		t.Fatalf("provider tool counts = %v, want tools, tools, model-only repair", counts)
+	}
+	messages := provider.messagesForCall(2)
+	if len(messages) == 0 {
+		t.Fatal("repair request was not captured")
+	}
+	instruction := messages[len(messages)-1].Content
+	if !strings.Contains(instruction, "inv-download") || !strings.Contains(instruction, "inv-upload") ||
+		strings.Contains(instruction, "inv-submit") {
+		t.Fatalf("repair did not identify exactly the unclaimed receipts: %q", instruction)
+	}
+	tool.mu.Lock()
+	defer tool.mu.Unlock()
+	for _, action := range []string{"download", "upload", "submit"} {
+		if tool.executions[action] != 1 {
+			t.Fatalf("action %q ran %d times; repair must not replay effects", action, tool.executions[action])
+		}
+	}
+}
+
 func TestSpawnSubTurnFailsClosedAfterOneIncompleteRepair(t *testing.T) {
 	invalid := objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +

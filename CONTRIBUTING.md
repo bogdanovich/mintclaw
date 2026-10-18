@@ -70,6 +70,32 @@ make lint
 Run `make fmt` to apply formatting. The pre-push hook checks formatting and
 runs the same linter rules expected by GitHub checks.
 
+## Continuous Integration
+
+PR checks follow the changed files. Documentation-only PRs run documentation
+layout and CI selector checks; frontend-only PRs also run frontend validation.
+Go changes retain lint, unit, race, security, native macOS/Windows tests, and
+the full test compilation graph for all six supported targets. Compilation
+uses two runner jobs: Linux and desktop.
+
+PDFium qualification follows document code and its local Go dependencies,
+including test imports and platform-specific files. Integration checks select
+credential/browser, document, companion, and Docker suites separately. Shared
+Go changes run every integration suite. Dependency, workflow, build, and
+unrecognized inputs conservatively run all checks. A PR rename checks both
+the old and new paths.
+
+New commits cancel superseded runs of the same PR. Main builds run the complete
+integration suite before building binaries. The complete CI suite runs daily at
+10:17 UTC and through manual dispatch. These full runs do not apply PR path
+filtering. The existing Nightly Build release workflow is separate.
+
+Validate changes to CI selection locally with:
+
+```bash
+python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+```
+
 ## Documentation
 
 The root `README.md` is the authoritative MintClaw entry document.

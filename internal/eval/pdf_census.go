@@ -132,7 +132,8 @@ func (prepared *pdfTrial) inventoryDirectory(
 			prepared.filter != nil && prepared.filter.Replace(name) != name {
 			return ErrPrivateEvidence
 		}
-		lock := kind == "write" && name == ".write-journal.lock"
+		lock := kind == "write" && name == ".write-journal.lock" ||
+			kind == "outbox" && name == ".writer.lock"
 		id := strings.TrimSuffix(name, ".json")
 		if !lock && (name == id || !validID(id)) {
 			return errNativeEvidence

@@ -7,13 +7,7 @@ on:
 jobs:
   integration:
     name: Integration Tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Run Docker-backed integration suites
-        run: bash ./scripts/run-integration-tests.sh
+    uses: ./.github/workflows/integration.yml
 
   build:
     needs: integration
