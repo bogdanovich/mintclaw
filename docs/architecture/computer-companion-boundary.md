@@ -127,6 +127,11 @@ revoke the original authority. Disconnect fences old calls before cleanup, even
 when cleanup cannot finish in its caller's budget. An uncertain release cleanup
 is retained as unknown in the invocation ledger, not reexecuted on replay.
 
+Terminal control confirms logical revocation, while successful native status
+also requires worker and observer cleanup to be confirmed. Repeated cleanup
+failures remain unavailable; later status may retry only the original cleanup.
+Gateway finalization and shutdown cannot consume failed status as completion.
+
 Images are PNG-only, kept in a bounded private in-memory cache, transferred over
 the existing authenticated binary channel and discarded on commit, expiry, new
 observation, control transition or disconnect. Every chunk checks the original

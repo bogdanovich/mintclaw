@@ -316,7 +316,9 @@ func (host *Host) refresh(ctx context.Context, entry *sessionEntry) (computer.Se
 		session, err = entry.core.Lose(ctx, entry.initial.Binding)
 	}
 	if session.Control.Terminal() {
-		_ = host.closeEntry(entry)
+		// Revoked control alone does not confirm worker/observer destruction.
+		// Status may reconcile owned cleanup, but must retain an unresolved error.
+		err = errors.Join(err, host.closeEntry(entry))
 	}
 	if err == nil && entry.epoch != host.epoch.Load() {
 		err = computer.ErrStale

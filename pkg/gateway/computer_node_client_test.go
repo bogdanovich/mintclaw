@@ -38,6 +38,7 @@ type computerClientTestHandler struct {
 	mutateQuery     func(*nodes.InvocationRecord)
 	openCommitted   chan struct{}
 	openReply       <-chan struct{}
+	cleanupError    error
 }
 
 func (*computerClientTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
@@ -138,6 +139,11 @@ func (handler *computerClientTestHandler) Invoke(
 		}
 		result = &nodes.ComputerSessionResult{Session: handler.session, ObservedAt: now}
 	case nodes.ComputerCommandStatus:
+		if handler.cleanupError != nil {
+			return nil, true, nodes.NewInvocationDispatchError(
+				nodes.InvocationDispatchComputerUnavailable, handler.cleanupError,
+			)
+		}
 		result = &nodes.ComputerSessionResult{Session: handler.session, ObservedAt: now}
 	case nodes.ComputerCommandObserve:
 		handler.observations++
@@ -174,6 +180,9 @@ func (handler *computerClientTestHandler) Invoke(
 			return nil, true, err
 		}
 		handler.session = next
+		if plan.Command == nodes.ComputerCommandRelease && handler.cleanupError != nil {
+			return nil, true, nodes.NewInvocationDispatchError(nodes.InvocationDispatchUnknown, handler.cleanupError)
+		}
 		result = &nodes.ComputerSessionResult{Session: next, ObservedAt: now}
 	}
 	if handler.mutate != nil {
