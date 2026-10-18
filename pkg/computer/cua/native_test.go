@@ -321,10 +321,17 @@ func TestNativeQualification(t *testing.T) {
 			// cannot qualify a replacement that returns success without an effect.
 			const replacement = "Обновлено MintClaw 世界 naïve 🌿"
 			field, _ := tokens(t)
-			if _, replaceErr := writer.call(ctx, "set_value", map[string]any{
+			replacementArgs := map[string]any{
 				"pid": ready.PID, "window_id": ready.Windows[0], "element_token": field,
-				"value": replacement, "delivery_mode": "background",
-			}); replaceErr != nil {
+				"value": replacement,
+			}
+			// The pinned Mac set_value is always-background AX mutation and
+			// rejects delivery_mode as an unknown field. Linux accepts the
+			// explicit mode. Match each exact schema; never switch to foreground.
+			if runtime.GOOS == "linux" {
+				replacementArgs["delivery_mode"] = "background"
+			}
+			if _, replaceErr := writer.call(ctx, "set_value", replacementArgs); replaceErr != nil {
 				t.Fatal("fixture Unicode replacement:", replaceErr)
 			}
 			waitEvent(t, func(e fixtureEvent) bool {

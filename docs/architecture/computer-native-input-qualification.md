@@ -45,6 +45,22 @@ the native run unless explicitly staged; deterministic result-verifier tests run
 without macOS permissions. The launcher refuses a known locked/login screen;
 it does not retry after unlocking or change OS security settings automatically.
 
+## Measured fixture result
+
+On October 18, 2026, the actual installed Intel Mac companion completed this
+suite in 41.47 seconds with both worker permissions granted. Independent fixture
+events verified insertion (10.56 seconds), replacement (10.03), click (9.59) and
+scope denial (8.74). The app and original pinned driver were not rebuilt or
+reinstalled. No private fixture, worker or companion instance remained afterward;
+the unrelated existing companion remained running.
+
+The first attempt refused the locked desktop with exit 75. After unlocking, a
+second attempt exposed an invalid qualification request: Mac `set_value` is
+always-background semantic AX mutation and its pinned schema rejects the Linux
+`delivery_mode` property. Following each platform's exact schema fixed the
+request; the complete Unicode and independent guard-window assertions stayed
+unchanged. These earlier refusals/failures are not counted as passing tests.
+
 ## Limits and remaining gates
 
 This harness is macOS-only because the Linux direct fixture run already uses
