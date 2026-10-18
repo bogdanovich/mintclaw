@@ -179,8 +179,13 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		); resolveErr != nil {
 			return false, resolveErr
 		}
+		// Literal settlement above must retain the current proposal's exact
+		// proof. Delayed canonical acknowledgements settle advisory guidance only.
+		currentValueIDs := append(slices.Clone(selection.CurrentValueIDs), store.acknowledgeAccountedFormIntakeGuidance(
+			source.Intake, index, request.Schema, record.Public, pass,
+		)...)
 		consumeOlderFormIntakeGuidance(
-			source.Intake, index, request.Schema, record.Public, selection.CurrentValueIDs, pass.Outcome,
+			source.Intake, index, request.Schema, record.Public, currentValueIDs, pass.Outcome,
 		)
 		consumed := len(formIntakeCurrentModeFindings(source.Intake, *input)) == 0 &&
 			(input.Intent != interactions.ProtectedAnswerValue ||
