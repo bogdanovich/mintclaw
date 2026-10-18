@@ -155,6 +155,21 @@ func TestBrowserArtifactOriginalBodyPrivacyBeforeLossyProjection(t *testing.T) {
 	}
 }
 
+func TestBrowserArtifactNativeApprovalProfilePrivacy(t *testing.T) {
+	control := newBrowserArtifactControl(t)
+	pending := browserRun{trials: map[string]browserPendingTrial{control.trial.ID: {conversation: control.domain}}}
+	witness := pending.approvalKeyWitness(control.fixture.home)
+	result := observePrivateSurfaces(t.Context(), control.fixture.home, nil, nil, nil, witness)
+	if result.Code != "observed" || result.AuthorizedInteractionKeys != 1 {
+		t.Fatalf(
+			"native approval profile privacy incomplete: code=%s opaque=%d files=%d",
+			result.Code,
+			result.OpaqueFiles,
+			result.Files,
+		)
+	}
+}
+
 func TestBrowserArtifactNativeFinalizationRejectsChangedAuthority(t *testing.T) {
 	for _, mode := range []string{"action", "accepted-before-consumption", "trace", "unsettled", "wire-duplicate"} {
 		t.Run(mode, func(t *testing.T) {

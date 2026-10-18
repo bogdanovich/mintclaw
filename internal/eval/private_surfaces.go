@@ -19,19 +19,21 @@ const (
 )
 
 // This receipt describes files, not transport coverage, domain settlement or
-// cleanup. Authorized credential/key roots are excluded; no paths or values are
+// cleanup. Authorized credential/key roots are excluded; an exact HMAC-verified
+// native signer key can be classified separately. No paths or values are
 // exported. An opaque surface cannot establish absence of encoded private data.
 type PrivateSurfaceObservation struct {
-	Scope                 string                    `json:"scope"`
-	Code                  string                    `json:"code"`
-	Files                 int                       `json:"files"`
-	Bytes                 int64                     `json:"bytes"`
-	ExcludedDirectories   int                       `json:"excluded_directories"`
-	OpaqueFiles           int                       `json:"opaque_files"`
-	AuthorizedDocuments   int                       `json:"authorized_documents"`
-	AuthorizedSystemFiles int                       `json:"authorized_system_files,omitempty"`
-	LeakObserved          bool                      `json:"leak_observed"`
-	SQLite                *SQLiteSurfaceObservation `json:"sqlite,omitempty"`
+	Scope                     string                    `json:"scope"`
+	Code                      string                    `json:"code"`
+	Files                     int                       `json:"files"`
+	Bytes                     int64                     `json:"bytes"`
+	ExcludedDirectories       int                       `json:"excluded_directories"`
+	OpaqueFiles               int                       `json:"opaque_files"`
+	AuthorizedDocuments       int                       `json:"authorized_documents"`
+	AuthorizedSystemFiles     int                       `json:"authorized_system_files,omitempty"`
+	AuthorizedInteractionKeys int                       `json:"authorized_interaction_keys,omitempty"`
+	LeakObserved              bool                      `json:"leak_observed"`
+	SQLite                    *SQLiteSurfaceObservation `json:"sqlite,omitempty"`
 }
 
 func (observation *PrivateSurfaceObservation) valid() bool {
@@ -51,7 +53,9 @@ func (observation *PrivateSurfaceObservation) valid() bool {
 		observation.OpaqueFiles >= 0 && observation.OpaqueFiles <= observation.Files &&
 		observation.AuthorizedDocuments >= 0 && observation.AuthorizedDocuments <= observation.Files &&
 		observation.AuthorizedSystemFiles >= 0 && observation.AuthorizedSystemFiles <= observation.Files &&
-		observation.OpaqueFiles+observation.AuthorizedDocuments+observation.AuthorizedSystemFiles+qualifiedSQLite <= observation.Files &&
+		observation.AuthorizedInteractionKeys >= 0 && observation.AuthorizedInteractionKeys <= 1 &&
+		observation.OpaqueFiles+observation.AuthorizedDocuments+observation.AuthorizedSystemFiles+
+			observation.AuthorizedInteractionKeys+qualifiedSQLite <= observation.Files &&
 		observation.ExcludedDirectories >= 0 && observation.ExcludedDirectories <= 2 &&
 		(observation.Code == "leak_observed" && observation.LeakObserved ||
 			!observation.LeakObserved && (observation.Code == "unavailable" ||
@@ -109,10 +113,15 @@ func (retained *privateFactRetention) clear() {
 
 func observePrivateSurfaces(
 	ctx context.Context, home string, facts map[string]string, filter *strings.Replacer, documents map[string]bool,
+	keys ...*interactionKeyWitness,
 ) PrivateSurfaceObservation {
 	result := PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "unavailable"}
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil || ctx.Err() != nil || len(keys) > 1 {
 		return result
+	}
+	var key *interactionKeyWitness
+	if len(keys) == 1 {
+		key = keys[0]
 	}
 	root, err := os.OpenRoot(home)
 	if err != nil {
@@ -192,6 +201,16 @@ func observePrivateSurfaces(
 				result.AuthorizedDocuments++
 			} else if containsRetainedLiteral(data, facts) {
 				result.LeakObserved = true
+			} else if key.matches(home, fileName, data, info.Mode()) {
+				if scan.rawEscapes(ctx, data) {
+					if scan.uncertain {
+						result.OpaqueFiles++
+					} else {
+						result.LeakObserved = true
+					}
+				} else {
+					result.AuthorizedInteractionKeys++
+				}
 			} else if privateCompiledSystemFile(fileName, data, info.Mode()) {
 				result.AuthorizedSystemFiles++
 			} else if fileName == privateSQLitePath {
@@ -224,6 +243,9 @@ func observePrivateSurfaces(
 			}
 			clear(data)
 		}
+	}
+	if key != nil && result.AuthorizedInteractionKeys != 1 {
+		complete = false
 	}
 	if result.LeakObserved {
 		result.Code = "leak_observed"

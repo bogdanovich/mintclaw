@@ -90,8 +90,14 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		if options.StartTarget && retainedFacts.values != nil && privateSurfaces == nil {
 			scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer scanCancel()
-			observePrivateSurfaces(scanCtx, options.Home, retainedFacts.values,
-				target.config.SensitiveDataReplacer(), retainedFacts.documents)
+			observePrivateSurfaces(
+				scanCtx,
+				options.Home,
+				retainedFacts.values,
+				target.config.SensitiveDataReplacer(),
+				retainedFacts.documents,
+				pendingBrowser.approvalKeyWitness(options.Home),
+			)
 		}
 		pendingPDF.close()
 		retainedFacts.clear()
@@ -197,7 +203,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	result.BrowserFixtures = pendingBrowser.close(lifecycle)
 	if options.StartTarget && retainedFacts.values != nil {
 		scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		observation := observePrivateSurfaces(scanCtx, home, retainedFacts.values, filter, retainedFacts.documents)
+		observation := observePrivateSurfaces(scanCtx, home, retainedFacts.values, filter, retainedFacts.documents,
+			pendingBrowser.approvalKeyWitness(home))
 		scanCancel()
 		privateSurfaces = &observation
 		result.PrivateSurfaces = privateSurfaces

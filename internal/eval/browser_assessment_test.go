@@ -260,7 +260,7 @@ func TestGradeBrowserReadUsesRetainedEvidenceWithoutTargetOrBrowserFiles(t *test
 	if marshalErr != nil {
 		t.Fatal(marshalErr)
 	}
-	for _, mode := range []string{"legacy", "privacy", "lifecycle", "host", "host-origin", "host-empty", "route", "scope", "cleanup", "not-eligible"} {
+	for _, mode := range []string{"missing-browser", "legacy", "privacy", "lifecycle", "host", "host-origin", "host-empty", "route", "scope", "cleanup", "not-eligible"} {
 		t.Run(mode, func(t *testing.T) {
 			copy, decodeErr := decodeDocument[Trial](originalTrial, 8*1024*1024)
 			if decodeErr != nil {
@@ -272,6 +272,8 @@ func TestGradeBrowserReadUsesRetainedEvidenceWithoutTargetOrBrowserFiles(t *test
 			hostCopy := *host
 			changed.PrivateSurfaces, changed.TargetLifecycle, changed.BrowserFixtures = &profile, &lifecycle, &hostCopy
 			switch mode {
+			case "missing-browser":
+				copy.Browser = nil
 			case "legacy":
 				copy.Browser.Read = nil
 			case "privacy":

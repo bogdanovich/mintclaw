@@ -302,8 +302,11 @@ func TestBrowserArtifactNativeApprovalBytesWireAndPostStopJudge(t *testing.T) {
 		Content: browserArtifactJudgePass(trial), FinishReason: "stop",
 	}}
 	judge := &ModelRole{provider: provider, identity: RoleIdentity{Role: "judge"}}
+	pending := browserRun{trials: map[string]browserPendingTrial{trial.ID: {conversation: control.domain}}}
+	surfaces := observePrivateSurfaces(t.Context(), control.fixture.home, nil, nil, nil,
+		pending.approvalKeyWitness(control.fixture.home))
 	assessFinalizedBrowser(t.Context(), judge, control.item.Case, &trial, control.fixture.workspace,
-		cleanPDFLifecycle(), &PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "observed"},
+		cleanPDFLifecycle(), &surfaces,
 		browserReadHost(control.browserReadControl))
 	if trial.Verdict != Pass || !trial.EvidenceEligible || provider.calls != 1 ||
 		!validBrowserArtifactEvidence(trial, control.item.Case, control.fixture.workspace) {

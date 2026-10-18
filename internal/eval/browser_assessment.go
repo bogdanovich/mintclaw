@@ -22,7 +22,7 @@ func validBrowserReadEvidence(trial Trial, item Case, workspace string) bool {
 }
 
 func validBrowserConversation(trial Trial, item Case, workspace string) bool {
-	if item.Browser == nil || len(item.Driver.Facts) != 0 ||
+	if item.Browser == nil || trial.Browser == nil || len(item.Driver.Facts) != 0 ||
 		trial.PDF != nil || trial.Cancellation != nil ||
 		trial.Browser.Version != Version || trial.Browser.Scope != "owned_fixture_execution_v1" ||
 		trial.Browser.NativeAuthority != "observed" || trial.Browser.NativeCleanup != "observed" ||

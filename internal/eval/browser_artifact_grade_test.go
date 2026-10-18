@@ -100,7 +100,7 @@ func TestGradeBrowserArtifactRequiresActualRetainedFileWithoutTargetWork(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"missing", "hash", "alias", "mode", "prompt", "metadata-only"} {
+	for _, mode := range []string{"missing", "hash", "alias", "mode", "prompt", "metadata-only", "missing-browser"} {
 		t.Run(mode, func(t *testing.T) {
 			copy, err := decodeDocument[Trial](original, 8*1024*1024)
 			if err != nil {
@@ -139,6 +139,9 @@ func TestGradeBrowserArtifactRequiresActualRetainedFileWithoutTargetWork(t *test
 			}
 			if mode == "metadata-only" {
 				copy.Browser.Artifact.Code = "native_metadata_observed"
+			}
+			if mode == "missing-browser" {
+				copy.Browser = nil
 			}
 			writeAdmissionJSON(t, filepath.Join(writer.dir, name), copy)
 			before := calls.Load()

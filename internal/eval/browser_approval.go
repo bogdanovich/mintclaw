@@ -41,6 +41,7 @@ type browserApprovalObservation struct {
 	prompt      Event
 	record      interactions.Record
 	action      browser.PreparedAction
+	keySHA256   string
 	requestID   string
 	requestedAt time.Time
 }
@@ -174,7 +175,7 @@ func (domain *browserConversation) readApproval(prompt Event) (*browserApprovalO
 	if err != nil || !verified {
 		return nil, errBrowserEvidence
 	}
-	return &browserApprovalObservation{prompt: prompt, record: record, action: *selected}, nil
+	return &browserApprovalObservation{prompt: prompt, record: record, action: *selected, keySHA256: digest(key)}, nil
 }
 
 func (domain *browserConversation) approveDownload(prompt Event) (protocol.MintClawMessage, error) {

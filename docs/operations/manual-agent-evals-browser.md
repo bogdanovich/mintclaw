@@ -243,6 +243,11 @@ prepared action. It verifies the original native argument HMAC using the same pa
 A changed action/record, foreign route/prompt or repeated grant is refused. Finalization requires that native
 approval was actually consumed for that same input before the download invocation was accepted.
 
+That verified HMAC also supplies one exact native signer-file identity for the post-stop raw-profile scan. Only
+the unchanged, owner-only 32-byte key at its bound path can be classified as cryptographic state. Literal and
+known JSON-escape leak guards run first; missing/changed/foreign keys and other opaque files remain unavailable.
+The receipt exports only an authorized-key count, not key bytes or paths. No generic binary whitelist is added.
+
 After the client reader joins, collection admits exactly one routed CSV media message. It never fetches a wire
 URL: an authenticated, bounded GET uses the configured owned gateway and a strict native media reference, without
 redirects, proxies or retries. Original response bytes are scanned before metadata checks/clearing, including the
