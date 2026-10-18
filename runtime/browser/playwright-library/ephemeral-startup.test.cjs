@@ -16,6 +16,7 @@ const bootstrap = `
   const mode = process.argv[1];
   const root = process.env.TMPDIR;
   const initial = process.cwd();
+  const originalEnvironment = JSON.stringify(process.env);
   const page = { on() {} };
   const context = { route() {}, routeWebSocket() {}, on() {}, pages: () => [page], close() {} };
   let launches = 0;
@@ -26,6 +27,11 @@ const bootstrap = `
       child_tmpdir: options.env?.TMPDIR, child_tmp: options.env?.TMP, child_temp: options.env?.TEMP,
       executable: options.executablePath, private_cwd: process.cwd() === root,
       original_cwd: process.cwd() === initial, parent_tmpdir_unchanged: process.env.TMPDIR === root,
+      parent_environment_unchanged: JSON.stringify(process.env) === originalEnvironment,
+      private_home: options.env?.HOME === root,
+      private_user_directories: ['CACHE', 'CONFIG', 'DATA', 'STATE'].every(kind =>
+        options.env?.['XDG_' + kind + '_HOME'] === path.join(root, '.' + kind.toLowerCase())),
+      private_runtime_directory: options.env?.XDG_RUNTIME_DIR === root,
     };
     return { newContext: () => context, close() {} };
   };
@@ -87,7 +93,9 @@ function probe(t, mode) {
   if (mode === 'missing') temporary = path.join(root, 'missing');
   if (mode === 'relative') temporary = '.';
   if (mode === 'dot-alias') temporary = root + '/.';
-  const env = { PATH: process.env.PATH, HOME: parent, TMPDIR: temporary };
+  const env = { PATH: process.env.PATH, HOME: parent, TMPDIR: temporary,
+    XDG_CACHE_HOME: parent, XDG_CONFIG_HOME: parent, XDG_DATA_HOME: parent, XDG_STATE_HOME: parent,
+    XDG_RUNTIME_DIR: parent };
   if (mode !== 'unmarked') env.PWTEST_SOCKETS_DIR = mode === 'mismatched' ? parent : temporary;
   const result = spawnSync(process.execPath, ['-e', bootstrap, mode], {
     cwd: __dirname, env, encoding: 'utf8', timeout: 10000,
@@ -118,28 +126,51 @@ test('Linux native owner contract follows effective UID rather than real UID',
     assert.equal(result.child_tmpdir, '.');
   });
 
+for (const mode of ['valid', 'firefox']) {
+  test('Unix isolated ' + mode + ' keeps browser user state in its native session lease',
+    { skip: !['linux', 'darwin'].includes(process.platform) }, t => {
+      const result = probe(t, mode);
+      assert.equal(result.started, true);
+      assert.equal(result.private_home, true);
+      assert.equal(result.private_user_directories, true);
+      assert.equal(result.private_runtime_directory, true);
+      assert.equal(result.parent_environment_unchanged, true);
+    });
+}
+
 for (const mode of ['public', 'symlink', 'parent-symlink', 'file', 'missing', 'relative', 'dot-alias',
   'mismatched', 'foreign-owner', 'different-effective-uid', 'replaced-directory']) {
-  test('Linux private startup refuses ' + mode + ' before launching a browser',
-    { skip: process.platform !== 'linux' }, t => {
+  test('Unix private startup refuses ' + mode + ' before launching a browser',
+    { skip: !['linux', 'darwin'].includes(process.platform) }, t => {
       const result = probe(t, mode);
       assert.equal(result.started, false);
       assert.equal(result.launches, 0);
     });
 }
 
-for (const mode of ['managed', 'unmarked', 'firefox']) {
+for (const mode of ['managed', 'unmarked']) {
   test('private-cwd handling leaves ' + mode + ' startup unchanged', t => {
     const result = probe(t, mode);
     assert.equal(result.started, true);
     assert.equal(result.original_cwd, true);
     assert.equal(result.child_tmpdir, undefined);
+    assert.equal(result.private_home, false);
+    assert.equal(result.private_user_directories, false);
+    assert.equal(result.parent_environment_unchanged, true);
   });
 }
 
-test('non-Linux ephemeral startup is unchanged', { skip: process.platform === 'linux' }, t => {
+test('Firefox retains its original cwd and absolute scratch spelling', t => {
+  const result = probe(t, 'firefox');
+  assert.equal(result.started, true);
+  assert.equal(result.original_cwd, true);
+  assert.equal(result.child_tmpdir === '.', false);
+});
+
+test('non-Linux ephemeral startup retains its cwd and absolute scratch spelling',
+  { skip: process.platform === 'linux' }, t => {
   const result = probe(t, 'valid');
   assert.equal(result.started, true);
   assert.equal(result.original_cwd, true);
-  assert.equal(result.child_tmpdir, undefined);
+  assert.equal(result.child_tmpdir === '.', false);
 });
