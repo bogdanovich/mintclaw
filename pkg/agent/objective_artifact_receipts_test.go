@@ -149,6 +149,7 @@ func (tool *artifactReceiptBrowserTool) Execute(_ context.Context, _ map[string]
 	return toolshared.NewToolResult(fmt.Sprintf(`{"artifact":{"ref":%q}}`, ref)).
 		WithWriteAudit(toolshared.WriteAuditEntry{
 			Kind: "external_action", Tool: "browser_act", Action: "download", Success: true,
+			Target: "https://fixture.invalid/original-image",
 			Metadata: map[string]string{
 				"invocation_id": fmt.Sprintf("inv_photo_%d", count), "effect": "unknown", "artifact_ref": ref,
 			},
