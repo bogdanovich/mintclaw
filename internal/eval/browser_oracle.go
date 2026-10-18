@@ -17,7 +17,7 @@ type browserFixtureOracle struct {
 	Downloads       int     `json:"downloads"`
 	Submissions     int     `json:"submissions"`
 	Removals        int     `json:"removals"`
-	FixtureClosed   bool    `json:"fixture_closed"`
+	FixtureClosed   bool    `json:"fixture_closed"` // Sealed trial, not listener release or native quiescence.
 	Effects         Verdict `json:"effects"`
 	EffectsCode     string  `json:"effects_code"`
 	Read            Verdict `json:"read"`

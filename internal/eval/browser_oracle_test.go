@@ -83,9 +83,7 @@ func TestBrowserFixtureOracleChecksEveryFrozenScenarioWithoutNativeClaims(t *tes
 			case "artifact":
 				artifact = browserOracleGet(t, fixture, "report.csv")
 			}
-			if err := fixture.close(); err != nil {
-				t.Fatal(err)
-			}
+			fixture.seal()
 			events := []Event{{ID: "event-1", Kind: "final", Content: "Reference: " + fixture.code}}
 			result, err := inspectBrowserFixture(item, fixture, events, artifact)
 			if err != nil || result.Version != Version || result.Scope != "local_fixture_only" ||
@@ -152,8 +150,8 @@ func TestBrowserFixtureOracleRetainsWrongOrDuplicateEffects(t *testing.T) {
 func TestBrowserFixtureOracleCannotPassMissingUnsettledOrOverflowedWitnesses(t *testing.T) {
 	for _, mutate := range []func(*browserFixture){
 		func(*browserFixture) {},
-		func(f *browserFixture) { _ = f.close(); f.mu.Lock(); f.state.failed = true; f.mu.Unlock() },
-		func(f *browserFixture) { _ = f.close(); f.mu.Lock(); f.state.overflow = true; f.mu.Unlock() },
+		func(f *browserFixture) { f.seal(); f.mu.Lock(); f.state.failed = true; f.mu.Unlock() },
+		func(f *browserFixture) { f.seal(); f.mu.Lock(); f.state.overflow = true; f.mu.Unlock() },
 	} {
 		fixture := newBrowserFixtureForTest(t)
 		mutate(fixture)
@@ -163,9 +161,7 @@ func TestBrowserFixtureOracleCannotPassMissingUnsettledOrOverflowedWitnesses(t *
 		}
 	}
 	fixture := newBrowserFixtureForTest(t)
-	if err := fixture.close(); err != nil {
-		t.Fatal(err)
-	}
+	fixture.seal()
 	result, err := inspectBrowserFixture(browserOracleCase(t, "submit"), fixture, nil, nil)
 	if err != nil || result.Effects != Fail || result.EffectsCode != "fixture_effect_missing" {
 		t.Fatal("required missing submission passed", err)

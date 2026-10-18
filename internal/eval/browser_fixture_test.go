@@ -20,16 +20,26 @@ import (
 
 func newBrowserFixtureForTest(t *testing.T) *browserFixture {
 	t.Helper()
-	fixture, err := newBrowserFixture(uuid.NewString(), "127.0.0.1:0")
+	host := newBrowserFixtureHostForTest(t)
+	fixture, err := host.newTrial(uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
+func newBrowserFixtureHostForTest(t *testing.T) *browserFixtureHost {
+	t.Helper()
+	host, err := newBrowserFixtureHost("127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := fixture.close(); err != nil {
+		if err := host.close(); err != nil {
 			t.Error(err)
 		}
 	})
-	return fixture
+	return host
 }
 
 func browserFixtureForm(fixture *browserFixture) url.Values {
@@ -51,14 +61,17 @@ func TestBrowserFixtureRejectsUnsafeBindAndOccupiedPort(t *testing.T) {
 	for _, address := range []string{
 		"", ":0", "0.0.0.0:0", "[::]:0", "192.0.2.1:0", "localhost:0", "example.test:0",
 		"127.0.0.1:-1", "127.0.0.1:65536", "127.0.0.1:http", "127.0.0.1:0,0.0.0.0:0",
+		"127.0.0.1:80", "127.0.0.1:1023", "127.0.0.1:00", "127.0.0.1:034567",
+		"127.0.0.2:0", "[::ffff:127.0.0.1]:0", "[0:0:0:0:0:0:0:1]:0",
 	} {
-		fixture, err := newBrowserFixture(uuid.NewString(), address)
-		if fixture != nil || !errors.Is(err, ErrBrowserFixture) {
+		host, err := newBrowserFixtureHost(address)
+		if host != nil || !errors.Is(err, ErrBrowserFixture) {
 			t.Fatal("unsafe or ambiguous listener admitted")
 		}
 	}
+	host := newBrowserFixtureHostForTest(t)
 	for _, identity := range []string{"", "../private", strings.ToUpper(uuid.NewString()), uuid.NewString() + "/"} {
-		fixture, err := newBrowserFixture(identity, "127.0.0.1:0")
+		fixture, err := host.newTrial(identity)
 		if fixture != nil || !errors.Is(err, ErrBrowserFixture) {
 			t.Fatal("noncanonical trial identity admitted")
 		}
@@ -68,8 +81,8 @@ func TestBrowserFixtureRejectsUnsafeBindAndOccupiedPort(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = listener.Close() }()
-	fixture, err := newBrowserFixture(uuid.NewString(), listener.Addr().String())
-	if fixture != nil || !errors.Is(err, ErrBrowserFixture) {
+	occupied, err := newBrowserFixtureHost(listener.Addr().String())
+	if occupied != nil || !errors.Is(err, ErrBrowserFixture) {
 		t.Fatal("fixture attached to or replaced an occupied listener")
 	}
 }
@@ -229,8 +242,12 @@ func TestBrowserFixtureRejectsForeignMalformedOrOversizedMutation(t *testing.T) 
 	}
 }
 
-func TestBrowserFixtureWitnessBoundsAndConcurrentClosure(t *testing.T) {
-	fixture := newBrowserFixtureForTest(t)
+func TestBrowserFixtureWitnessBoundsAndConcurrentSealing(t *testing.T) {
+	host := newBrowserFixtureHostForTest(t)
+	fixture, err := host.newTrial(uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
 	var workers sync.WaitGroup
 	for range 20 {
 		workers.Go(func() {
@@ -261,26 +278,28 @@ func TestBrowserFixtureWitnessBoundsAndConcurrentClosure(t *testing.T) {
 	if response.Code != http.StatusTooManyRequests || fixture.snapshot().visits != 256 {
 		t.Fatal("read witness overflow was unbounded or unreported")
 	}
-	closed := make(chan error, 4)
 	for range 4 {
-		workers.Go(func() { closed <- fixture.close() })
+		workers.Go(fixture.seal)
 	}
 	workers.Wait()
-	close(closed)
-	for err := range closed {
-		if err != nil {
-			t.Fatal("concurrent fixture shutdown failed")
-		}
-	}
-	if fixture.close() != nil || !fixture.snapshot().closed || fixture.snapshot().failed {
-		t.Fatal("fixture shutdown was not settled and idempotent")
+	fixture.seal()
+	if !fixture.snapshot().closed || fixture.snapshot().failed {
+		t.Fatal("fixture sealing was not settled and idempotent")
 	}
 	response = httptest.NewRecorder()
 	fixture.ServeHTTP(response, browserFixtureRequest(fixture, "submit", browserFixtureForm(fixture)))
 	if response.Code != http.StatusGone || len(fixture.snapshot().submissions) != maxBrowserFixtureSubmissions {
 		t.Fatal("closed fixture admitted a late mutation")
 	}
-	listener, err := net.Listen("tcp", strings.TrimPrefix(fixture.origin, "http://"))
+	address := strings.TrimPrefix(fixture.origin, "http://")
+	if listener, listenErr := net.Listen("tcp", address); listenErr == nil {
+		_ = listener.Close()
+		t.Fatal("trial sealing released the run's listener")
+	}
+	if err = host.close(); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		t.Fatal("fixture retained its owned listener after closure")
 	}
