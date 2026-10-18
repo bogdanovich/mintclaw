@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/document"
 )
 
 var ErrPreparation = errors.New("eval: isolated profile preparation failed; inspect any reported private home")
@@ -35,6 +36,7 @@ type Preparation struct {
 	PublicConfigSHA256 string `json:"public_config_sha256,omitempty"`
 	WorkspaceFileCount int    `json:"workspace_file_count"`
 	RuntimeRun         bool   `json:"runtime_run"`
+	PDFJournalPrepared bool   `json:"pdf_journal_prepared,omitempty"`
 }
 
 // PrepareProfile copies only an admitted isolated seed, never production state.
@@ -172,10 +174,22 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 		return result, ErrPreparation
 	}
 	saved, err := config.NewRepository(result.ConfigPath).Save(clone)
-	if err != nil || validateConversationProfile(saved.Config, prepared, result.Workspace) != nil ||
-		validateFreshOwnedProfile(
-			preparedProfile{config: saved.Config, home: newHome, workspace: result.Workspace},
-		) != nil {
+	if err != nil || validateConversationProfile(saved.Config, prepared, result.Workspace) != nil {
+		return result, ErrPreparation
+	}
+	if saved.Config.Tools.IsToolEnabled("document") {
+		// Provision a new empty native store, never a seed's journal or a
+		// synthetic observer baseline. No operation or lock is acquired.
+		if _, err = document.NewWriteJournal(
+			filepath.Join(newHome, "state", "document-writes", "journal"),
+		); err != nil {
+			return result, ErrPreparation
+		}
+		result.PDFJournalPrepared = true
+	}
+	if validateFreshOwnedProfile(
+		preparedProfile{config: saved.Config, home: newHome, workspace: result.Workspace},
+	) != nil {
 		return result, ErrPreparation
 	}
 	if _, _, err = inspectProfileFiles(prepared, newHome); err != nil {

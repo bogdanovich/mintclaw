@@ -27,6 +27,7 @@ type Coordinator struct {
 	receipts   map[string]*admissionReceipt
 	now        func() time.Time
 	closed     bool
+	lockFile   *os.File
 }
 
 type terminalResult struct {
@@ -69,6 +70,9 @@ var coordinatorRoots = struct {
 	active map[string]bool
 }{active: make(map[string]bool)}
 
+// ErrCoordinatorOwned means another cooperating coordinator owns this root.
+var ErrCoordinatorOwned = errors.New("outbox coordinator is already owned")
+
 var dispatchLeaseSequence atomic.Uint64
 
 // DispatchLease identifies one in-process owner of publication. Its fields are
@@ -105,7 +109,7 @@ func OpenCoordinator(instanceRoot string) (*Coordinator, error) {
 	coordinatorRoots.Lock()
 	if coordinatorRoots.active[root] {
 		coordinatorRoots.Unlock()
-		return nil, fmt.Errorf("outbox coordinator for %q is already open", root)
+		return nil, fmt.Errorf("%w: %q", ErrCoordinatorOwned, root)
 	}
 	coordinatorRoots.active[root] = true
 	coordinatorRoots.Unlock()
@@ -117,7 +121,15 @@ func OpenCoordinator(instanceRoot string) (*Coordinator, error) {
 		coordinatorRoots.Unlock()
 		return nil, err
 	}
+	lock, err := acquireCoordinatorLock(filepath.Join(store.dir, ".writer.lock"))
+	if err != nil {
+		coordinatorRoots.Lock()
+		delete(coordinatorRoots.active, root)
+		coordinatorRoots.Unlock()
+		return nil, err
+	}
 	coordinator := newCoordinator(store)
+	coordinator.lockFile = lock
 	coordinator.root = root
 	return coordinator, nil
 }
@@ -317,22 +329,23 @@ func (c *Coordinator) AwaitTerminal(ctx context.Context, admission Admission) (I
 }
 
 // Recover classifies persisted crash states and claims every intent that is
-// safe for this process to publish again.
-func (c *Coordinator) Recover() ([]Admission, error) {
+// safe for this process to publish again. Isolated issues accompany successful
+// independent admissions in the report; fatal errors transfer no claims.
+func (c *Coordinator) Recover() (AdmissionRecoveryReport, error) {
 	if c == nil || c.store == nil {
-		return nil, errors.New("outbox coordinator is unavailable")
+		return AdmissionRecoveryReport{}, errors.New("outbox coordinator is unavailable")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.validateOpenLocked(); err != nil {
-		return nil, err
+		return AdmissionRecoveryReport{}, err
 	}
-	intents, err := c.store.Recover()
+	report, err := c.store.Recover()
 	if err != nil {
-		return nil, err
+		return AdmissionRecoveryReport{}, err
 	}
-	admissions := make([]Admission, 0, len(intents))
-	for _, intent := range intents {
+	admissions := make([]Admission, 0, len(report.Intents))
+	for _, intent := range report.Intents {
 		if intent.RecoverySettlementPending() || intent.TranscriptProjectionPending() {
 			admissions = append(admissions, Admission{Intent: intent, Settle: true})
 			continue
@@ -342,7 +355,7 @@ func (c *Coordinator) Recover() ([]Admission, error) {
 			admissions = append(admissions, admission)
 		}
 	}
-	return admissions, nil
+	return AdmissionRecoveryReport{Admissions: admissions, Issues: report.Issues}, nil
 }
 
 // MarkRecoverySettled records successful idempotent domain settlement for one
@@ -418,7 +431,7 @@ func (c *Coordinator) transitionPublished(
 	return nil
 }
 
-// Close releases the process-wide ownership fence for this instance root.
+// Close releases the in-process and operating-system ownership fences for this root.
 func (c *Coordinator) Close() error {
 	if c == nil {
 		return nil
@@ -434,12 +447,17 @@ func (c *Coordinator) Close() error {
 			err: errors.New("outbox coordinator is closed"),
 		})
 	}
+	var closeErr error
+	if c.lockFile != nil {
+		closeErr = c.lockFile.Close()
+		c.lockFile = nil
+	}
 	if c.root != "" {
 		coordinatorRoots.Lock()
 		delete(coordinatorRoots.active, c.root)
 		coordinatorRoots.Unlock()
 	}
-	return nil
+	return closeErr
 }
 
 // AdmitMessage persists a text intent before transferring publication ownership.

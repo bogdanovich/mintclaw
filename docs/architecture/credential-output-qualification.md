@@ -49,7 +49,8 @@ output, including after browser cleanup releases session guards.
 | Opaque artifacts | Credential-bearing screenshot/download/unrestricted-execution admission denies | Enabling an artifact path requires its own qualification |
 | Phone/grant lifetime | Actual virtual passkey approval/revoke and signed lease/component tests | Physical Android enrollment, notification delivery and personal-account pilot remain required |
 | MFA/unconfirmed submission | Actual provider-backed turns, fixed outcomes, single-submit assertion and browser cleanup; two actual traces and four bundles per scenario | MFA continuation/private operator interaction remains unqualified |
-| Cancel/expiry/restart | Existing focused component tests | The complete serialized-output scenario matrix remains incomplete |
+| Credential runtime recreation | Two actual provider-backed browser turns for each qualified adapter, with the credential runtime closed/recreated from its owner store between turns; retained passkey, denied old lease/grant, fresh notification/assertion before another retrieval; inspect both traces/history/exports | Exercises component recreation inside the fixture, not an OS process crash |
+| Cancel/expiry | Existing focused component tests | The complete serialized-output scenario matrix remains incomplete |
 
 The tests report fixed stages and boolean assertions. They do not print a
 detected canary, HTTP request body, vault error or child-process output.

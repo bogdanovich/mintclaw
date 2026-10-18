@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/document"
 )
 
 func TestPrivateFactRetentionOutlivesOriginalMapAndBoundsMemory(t *testing.T) {
@@ -131,6 +133,11 @@ func TestPrivateSurfaceObservationSeparatesExclusionsOpaqueAndUnavailable(t *tes
 func TestOwnedPDFRunInspectsFactsWrittenOnlyDuringNativeStop(t *testing.T) {
 	fixture := newOwnedGatewayFixture(t, "normal")
 	enableAdmissionPDF(t, fixture)
+	if _, err := document.NewWriteJournal(
+		filepath.Join(fixture.home, "state", "document-writes", "journal"),
+	); err != nil {
+		t.Fatal(err)
+	}
 	corpus, err := LoadCorpus("../../evals")
 	if err != nil {
 		t.Fatal(err)

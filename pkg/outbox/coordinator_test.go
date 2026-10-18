@@ -86,13 +86,14 @@ func TestCoordinatorRecoversTerminalFormDeliveryAsSettlementOnly(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = third.Close() })
 	recovered, err := third.Recover()
-	if err != nil || len(recovered) != 1 || !recovered[0].Settle || recovered[0].Dispatch {
+	if err != nil || len(recovered.Admissions) != 1 || !recovered.Admissions[0].Settle ||
+		recovered.Admissions[0].Dispatch {
 		t.Fatalf("Recover() = %#v, %v", recovered, err)
 	}
 	if err = third.MarkRecoverySettled(admission.Intent.ID); err != nil {
 		t.Fatal(err)
 	}
-	if recovered, err = third.Recover(); err != nil || len(recovered) != 0 {
+	if recovered, err = third.Recover(); err != nil || len(recovered.Admissions) != 0 {
 		t.Fatalf("Recover() after settlement = %#v, %v", recovered, err)
 	}
 }
@@ -136,8 +137,9 @@ func TestCoordinatorRecoversDeliveredTranscriptUntilProjectionIsAcknowledged(t *
 	}
 	t.Cleanup(func() { _ = second.Close() })
 	recovered, err := second.Recover()
-	if err != nil || len(recovered) != 1 || !recovered[0].Settle || recovered[0].Dispatch ||
-		!recovered[0].Intent.TranscriptProjectionPending() {
+	if err != nil || len(recovered.Admissions) != 1 || !recovered.Admissions[0].Settle ||
+		recovered.Admissions[0].Dispatch ||
+		!recovered.Admissions[0].Intent.TranscriptProjectionPending() {
 		t.Fatalf("Recover() = %#v, %v", recovered, err)
 	}
 	if err = second.MarkTranscriptProjected(admission.Intent.ID); err != nil {
@@ -146,7 +148,7 @@ func TestCoordinatorRecoversDeliveredTranscriptUntilProjectionIsAcknowledged(t *
 	if err = second.MarkTranscriptProjected(admission.Intent.ID); err != nil {
 		t.Fatalf("idempotent MarkTranscriptProjected() error = %v", err)
 	}
-	if recovered, err = second.Recover(); err != nil || len(recovered) != 0 {
+	if recovered, err = second.Recover(); err != nil || len(recovered.Admissions) != 0 {
 		t.Fatalf("Recover() after projection = %#v, %v", recovered, err)
 	}
 }
@@ -677,7 +679,7 @@ func TestCoordinatorDefinitelyFailedOutcomeStopsAfterRetryBudget(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
 	recovered, err := reopened.Recover()
-	if err != nil || len(recovered) != 0 {
+	if err != nil || len(recovered.Admissions) != 0 {
 		t.Fatalf("Recover() = %+v, %v, want no exhausted intent", recovered, err)
 	}
 }
@@ -713,7 +715,7 @@ func TestCoordinatorMarksExactUnpublishedAdmissionUnrecoverable(t *testing.T) {
 		t.Fatal("MarkAdmissionUnrecoverable() accepted a consumed lease")
 	}
 	recovered, err := coordinator.Recover()
-	if err != nil || len(recovered) != 0 {
+	if err != nil || len(recovered.Admissions) != 0 {
 		t.Fatalf("Recover() = %+v, %v", recovered, err)
 	}
 }
@@ -749,7 +751,7 @@ func TestCoordinatorAbandonsUnsentIntentAndConsumesRecoveryLease(t *testing.T) {
 	if abandoned, err = coordinator.Abandon(admission.Intent.ID, Outcome{}); err != nil || abandoned {
 		t.Fatalf("second Abandon() = %t, %v", abandoned, err)
 	}
-	if recovered, recoverErr := coordinator.Recover(); recoverErr != nil || len(recovered) != 0 {
+	if recovered, recoverErr := coordinator.Recover(); recoverErr != nil || len(recovered.Admissions) != 0 {
 		t.Fatalf("Recover() = %+v, %v", recovered, recoverErr)
 	}
 }
@@ -950,12 +952,12 @@ func TestCoordinatorRecoverClaimsOnlyReplaySafeCanonicalIntents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recover() error = %v", err)
 	}
-	if len(recovered) != 2 || !recovered[0].Dispatch || !recovered[1].Dispatch {
+	if len(recovered.Admissions) != 2 || !recovered.Admissions[0].Dispatch || !recovered.Admissions[1].Dispatch {
 		t.Fatalf("Recover() = %#v, want two dispatch claims", recovered)
 	}
 	recoveredByID := map[string]Admission{
-		recovered[0].Intent.ID: recovered[0],
-		recovered[1].Intent.ID: recovered[1],
+		recovered.Admissions[0].Intent.ID: recovered.Admissions[0],
+		recovered.Admissions[1].Intent.ID: recovered.Admissions[1],
 	}
 	recoveredPending := recoveredByID[pending.Intent.ID]
 	if recoveredPending.Intent.Message == nil || recoveredPending.Intent.Message.Content != "canonical pending" {
@@ -971,12 +973,12 @@ func TestCoordinatorRecoverClaimsOnlyReplaySafeCanonicalIntents(t *testing.T) {
 		t.Fatalf("interrupted intent = %#v, %v", interruptedIntent, err)
 	}
 	recoveredAgain, err := second.Recover()
-	if err != nil || len(recoveredAgain) != 0 {
+	if err != nil || len(recoveredAgain.Admissions) != 0 {
 		t.Fatalf("second Recover() = %#v, %v, want no duplicate claims", recoveredAgain, err)
 	}
 }
 
-func TestCoordinatorRecoverFailsClosedOnCorruptRecord(t *testing.T) {
+func TestCoordinatorRecoverReportsBlockedCorruptRecord(t *testing.T) {
 	instanceRoot := t.TempDir()
 	first, err := OpenCoordinator(instanceRoot)
 	if err != nil {
@@ -1003,8 +1005,17 @@ func TestCoordinatorRecoverFailsClosedOnCorruptRecord(t *testing.T) {
 		t.Fatalf("OpenCoordinator(second) error = %v", err)
 	}
 	t.Cleanup(func() { _ = second.Close() })
-	if recovered, err := second.Recover(); err == nil || len(recovered) != 0 {
-		t.Fatalf("Recover() = %#v, %v, want fail-closed error", recovered, err)
+	recovered, err := second.Recover()
+	if err != nil || len(recovered.Admissions) != 0 || len(recovered.Issues) != 1 ||
+		recovered.Issues[0] != (RecoveryIssue{DeliveryID: admission.Intent.ID, Code: RecoveryIssueInvalidJSON}) {
+		t.Fatalf("Recover() = %#v, %v, want blocked delivery diagnostic without admission", recovered, err)
+	}
+	if _, err := second.AdmitMessage(
+		"/agents/main",
+		testIdentity(),
+		bus.OutboundMessage{Content: "retry"},
+	); err == nil {
+		t.Fatal("AdmitMessage() replaced a corrupt canonical delivery record")
 	}
 }
 

@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -84,6 +85,46 @@ func TestEnrollmentRejectsUnavailableTerminalBeforeRequest(t *testing.T) {
 	command.SetArgs([]string{"enroll"})
 	if command.Execute() == nil || requested {
 		t.Fatal("setup without a terminal issued an enrollment request")
+	}
+}
+
+func TestEnrollmentAcceptsLocalhostWithoutDNSResolution(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Credentials.Origin = "https://approval.example.org"
+	expected := cfg.Credentials.Origin + "/credentials/#enroll=" + strings.Repeat("a", 64)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/credentials/operator/enrollment" ||
+			request.Header.Get("Authorization") != "Bearer synthetic-operator-token" ||
+			!strings.HasPrefix(request.Host, "127.0.0.1:") {
+			t.Error("enrollment lost numeric loopback destination or authentication")
+			writer.WriteHeader(http.StatusForbidden)
+			return
+		}
+		_, _ = io.WriteString(writer, expected)
+	}))
+	defer server.Close()
+	_, rawPort, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal("fixture address unavailable")
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil {
+		t.Fatal("fixture port unavailable")
+	}
+	for _, host := range []string{"127.0.0.1", "localhost", "LOCALHOST"} {
+		invite, err := requestEnrollment(context.Background(), cfg,
+			&pid.PidFileData{Host: host, Port: port, Token: "synthetic-operator-token"})
+		if err != nil || !bytes.Equal(invite, []byte(expected)) {
+			t.Fatal("supported local PID hostname rejected enrollment")
+		}
+		clear(invite)
+	}
+	for _, host := range []string{"localhost.attacker.example", "localhost.", "0.0.0.0", "https://127.0.0.1"} {
+		invite, err := requestEnrollment(context.Background(), cfg,
+			&pid.PidFileData{Host: host, Port: port, Token: "synthetic-operator-token"})
+		if err == nil || len(invite) != 0 {
+			t.Fatal("unsupported hostname escaped the numeric loopback boundary")
+		}
 	}
 }
 

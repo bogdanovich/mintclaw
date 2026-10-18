@@ -28,6 +28,14 @@ and must not promise an editable draft or silently flatten a request to finish r
 generic editable-hybrid derivative capability, not an I-134-specific special case. No XFA/backend expansion is added
 to this milestone. All other privacy, recovery, channel, validation, and completion criteria remain mandatory.
 
+### Operator-Approved Quoted Boolean Assertions
+
+On 2026-10-17 the operator approved mapping a direct natural-language assertion to its corresponding checkbox
+without another literal yes/no question. This is limited to an exact protected source quote, verified field/person
+meaning and the existing native identity/validation/correction gates. Ambiguous statements still need clarification;
+legal/financial implications, unstated opposites and another person's status must not be inferred. Other value kinds
+retain their literal contract. See the [bounded protocol checkpoint](pdf-agentic-intake-pdfi4-boolean-assertions-checkpoint.md).
+
 ## Verified Motivating Incident
 
 The live main gateway on revision `63804ea1f2652338861e224fbbe0b391504514c9` received a form-completion request on
