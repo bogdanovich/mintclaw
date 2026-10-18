@@ -95,6 +95,37 @@ async function prepareWebsiteStep(page, request) {
   }
 }
 
+// Both login paths use the same private field/event/recheck/submit operation.
+async function submitCredentialForm(capsule, values) {
+  return capsule.evaluate((state, values) => {
+    if (!state?.ready()) return false;
+    const fill = [];
+    if (['credentials', 'username'].includes(state.step)) fill.push([state.elements.username_ref, values.username]);
+    if (['credentials', 'password'].includes(state.step)) fill.push([state.elements.password_ref, values.password]);
+    if (state.step === 'totp') fill.push([state.elements.otp_ref, values.password]);
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    for (const [element, value] of fill) {
+      // Sites may clear dependent fields when the username changes. Finish
+      // one field's events before filling the next, rechecking native refs
+      // and the destination before exposing another value to the page.
+      set.call(element, value);
+      element.dispatchEvent(new Event('input', {bubbles: true}));
+      element.dispatchEvent(new Event('change', {bubbles: true}));
+      if (!state.ready() || element.value !== value) {
+        for (const [target] of fill) set.call(target, '');
+        return false;
+      }
+    }
+    if (!state.ready() || fill.some(([element, value]) => element.value !== value)) {
+      for (const [element] of fill) set.call(element, '');
+      return false;
+    }
+    if (state.submit.type === 'submit') HTMLFormElement.prototype.requestSubmit.call(state.form, state.submit);
+    else HTMLElement.prototype.click.call(state.submit);
+    return true;
+  }, values);
+}
+
 async function performWebsiteStep(page, capsule, request) {
   let attempted = false;
   try {
@@ -111,33 +142,7 @@ async function performWebsiteStep(page, capsule, request) {
     const navigation = page.waitForURL(url => url.href !== entryURL,
       {timeout, waitUntil: 'domcontentloaded'}).catch(() => null);
     attempted = true;
-    const dispatched = await capsule.evaluate((state, values) => {
-      if (!state?.ready()) return false;
-      const fill = [];
-      if (['credentials', 'username'].includes(state.step)) fill.push([state.elements.username_ref, values.username]);
-      if (['credentials', 'password'].includes(state.step)) fill.push([state.elements.password_ref, values.password]);
-      if (state.step === 'totp') fill.push([state.elements.otp_ref, values.password]);
-      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      for (const [element, value] of fill) {
-        // Sites may clear dependent fields when the username changes. Finish
-        // one field's events before filling the next, rechecking native refs
-        // and the destination before exposing another value to the page.
-        set.call(element, value);
-        element.dispatchEvent(new Event('input', {bubbles: true}));
-        element.dispatchEvent(new Event('change', {bubbles: true}));
-        if (!state.ready() || element.value !== value) {
-          for (const [target] of fill) set.call(target, '');
-          return false;
-        }
-      }
-      if (!state.ready() || fill.some(([element, value]) => element.value !== value)) {
-        for (const [element] of fill) set.call(element, '');
-        return false;
-      }
-      if (state.submit.type === 'submit') HTMLFormElement.prototype.requestSubmit.call(state.form, state.submit);
-      else HTMLElement.prototype.click.call(state.submit);
-      return true;
-    }, {username: request.username, password: request.password});
+    const dispatched = await submitCredentialForm(capsule, {username: request.username, password: request.password});
     if (!dispatched) throw new Error();
     await navigation;
     if (!sameWebsite(new URL(page.url()), request)) throw new Error();
@@ -151,4 +156,4 @@ async function performWebsiteStep(page, capsule, request) {
   }
 }
 
-module.exports = {prepareWebsiteStep, performWebsiteStep};
+module.exports = {prepareWebsiteStep, performWebsiteStep, submitCredentialForm};
