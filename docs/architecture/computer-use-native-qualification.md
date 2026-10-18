@@ -1,7 +1,8 @@
 # Computer use native qualification
 
 MintClaw's desktop contracts, read-only host, and private Cua adapter are opt-in
-infrastructure. Public computer tools and companion commands remain disabled.
+infrastructure. Public computer tools and companion commands remain disabled
+by default and require separate explicit grants.
 Native qualification tests a real driver against disposable applications before
 any desktop input route is exposed to agents.
 
@@ -82,7 +83,7 @@ vendor frame, then requires the public adapter to return no pixels or text.
 The fixture application remains alive after refusal. Run that case explicitly
 with `scripts/computer-native-qualification.sh --driver /absolute/pinned/cua-driver --case ScopeProjection`.
 
-## Native results
+## Historical private-driver results
 
 These are capability-specific observations from October 10, 2026, not a general
 qualification of every desktop environment or application.
@@ -237,17 +238,46 @@ drains are bounded; a stopped loop or notification flood invalidates admission.
 On October 17, macOS 26.6.2 native tests passed exact-symbol and AX-handle/timeout
 ABI checks, kernel process exit and same-PID `exec` detection, callback cleanup,
 and bounded run-loop tests. These tests neither capture nor enumerate personal
-windows. Native GUI-window destruction, capture and handoff/resume qualification
-remain separate integration gates requiring the actual app's grants; the
-permission-denied readiness result is not a capture pass.
+windows. They do not independently establish GUI-window destruction, capture or
+handoff/resume qualification; the actual-app integration below supplies that
+separate evidence.
+
+## Read-only integration results
+
+On October 18, the real companion and public gateway smoke suites pass on macOS
+26.6.2 using an unlocked current-user GUI and the installed companion app's own
+manually approved Accessibility and Screen Recording permissions. The current
+GUI launcher runs the disposable fixture in the same GUI context and checks the
+actual test child's exit receipt; launch success alone cannot report a pass.
+
+The companion suite passes in 18.31 seconds with 880 by 544 native pixels,
+same-session/worker/window handoff and fresh resume, original-window destruction
+during human control, and release/companion exit preserving independently
+attested application windows. The public gateway suite passes in 27.44 seconds
+with protected native PNG transfer, localized handoff, refusal to observe during
+human control, fresh changed resumed pixels, the same original binding and
+release/exit preserving both fixture windows. The same pinned-runner public
+gateway path passes on Linux GNOME X11 in 56.76 seconds.
+
+The app executable remains unchanged throughout permission approval and these
+runs (SHA256 `42c4e05b7aaaffb961f1697ee7252a31210cf0743fc577e1aae1ba03442cd510`).
+Earlier permission-denied, post-login stale-admission and locked-GUI attempts
+remain failed or refused attempts, not partial qualification. These positive
+runs qualify only this unlocked read-only path; they do not qualify locked
+desktops, input, general accessibility-root capture or arbitrary applications.
+See the [companion boundary](computer-companion-boundary.md) and
+[public gateway tools](computer-gateway-tools.md) for reproduction and grants.
 
 ## Integration gates
 
-- Qualify the Mac companion's real launch identity and permission lifecycle.
-- Qualify macOS GUI window-incarnation admission and integrate native guards into
-  companion capture/session ownership.
+- Requalify the Mac companion's real launch identity and grants after app
+  replacement, signing changes or macOS upgrades; ad-hoc development grants do
+  not establish persistence across rebuilds.
+- Requalify exact native window admission, capture and same-resource lifecycle
+  for each additional GUI environment or application family.
 - Requalify Unicode insertion on a corrected pinned driver or another backend.
 - Add input contracts with fresh evidence, bounded actions, and independent
-  effect verification before registering public tools or companion commands.
+  effect verification before exposing public input tools or companion input
+  commands.
 - Qualify additional environments separately, including Wayland and managed
   Linux desktops; attached and managed operation remain independent choices.

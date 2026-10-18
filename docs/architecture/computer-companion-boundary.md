@@ -170,10 +170,18 @@ alive, companion exit preserving remaining windows, and protected on-disk
 observation receipts. The fixture's nonce-correlated own-state responses prove
 window lifetime independently of a driver's success report.
 
-The October 17 Linux GNOME X11 real-companion runs pass these cases. The macOS
-app's own preflight confirms the correct bundle/GUI identity but reports both OS
-grants missing; positive macOS qualification is still pending. Development
-ad-hoc signatures do not establish permission persistence across rebuilds.
+The October 17 Linux GNOME X11 real-companion runs pass these cases. On October
+18, the current-GUI runner also passes with the actual macOS 26.6.2 companion
+app and its manually approved Accessibility and Screen Recording grants:
+the companion suite takes 18.31 seconds and the public gateway suite takes
+27.44 seconds. These runs use only disposable fixture windows and retain all
+identity, fresh-pixel, native-loss and independent-lifetime assertions.
+
+The passing Mac runs require an unlocked GUI. Earlier permission-denied,
+post-login stale-admission and locked-GUI attempts are not counted as passes;
+permission readiness alone does not establish window admission. The installed
+app was not rebuilt or granted permissions by the test. Development ad-hoc
+signatures do not establish permission persistence across rebuilds.
 Public gateway computer tools and their live-resource interaction integration
 require the [separate gateway grant](computer-gateway-tools.md); enabling this
 native node host does not register them.

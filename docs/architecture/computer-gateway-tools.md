@@ -138,5 +138,11 @@ control, protected ledger replay and retained application lifetime.
 
 Read-only Linux and positive macOS qualification must be tracked separately.
 Neither fixture-backed tests nor a successful Linux run establish macOS
-permission readiness. Public input and Linux Unicode insertion remediation
-remain subsequent bounded-input work.
+permission readiness. On October 18, the pinned-driver public-tool smoke passes
+on Linux GNOME X11 in 56.76 seconds and on macOS 26.6.2 in 27.44 seconds. The Mac
+run uses the actual companion app, its own manually approved permissions and an
+unlocked current-user GUI. The separate Mac companion suite passes in 18.31
+seconds, including native target loss during human control. All targets are
+disposable owned fixtures; these results do not qualify locked desktops,
+arbitrary applications or input. Public input and Linux Unicode insertion
+remediation remain subsequent bounded-input work.
