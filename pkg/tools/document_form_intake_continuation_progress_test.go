@@ -195,6 +195,21 @@ func TestDocumentFormIntakeAcceptedClarificationAndExhaustedOlderInputHaveSepara
 			if reviewProjection.Review != nil && reviewProjection.Review.Ready {
 				t.Fatal("filtered presentation advice granted review despite unaccounted input")
 			}
+			retryCtx := toolshared.WithToolExecutionIdentity(ctx, "workspace", "explicit-exhausted-receipt-retry")
+			retried := decodeWorkflowResult(t, tool.Execute(retryCtx, map[string]any{
+				"action": "form", "form_action": "continue", "answer_ref": old,
+			}).ForLLM)
+			if retried.Intake == nil || retried.Intake.Failure == nil ||
+				retried.Intake.Failure.Reason != "capacity_exceeded" || retried.Intake.AcceptedCount != 0 ||
+				retried.Intake.ReceivedInputState != "retained" || retried.Intake.Progress.PendingInputs != 1 ||
+				len(retried.Intake.Findings) != wantFindings {
+				t.Fatal("explicit old-receipt retry repeated superseded advice or hid a genuine conflict")
+			}
+			afterRetry, readErr := tool.formJobs.ReadFormIntakeInput(ctx, old, owner)
+			if readErr != nil || afterRetry.Consumed || afterRetry.Text != original ||
+				afterRetry.Passes != document.MaxFormIntakeExtractionPasses {
+				t.Fatal("explicit retry changed exhausted native accounting or lost input")
+			}
 		})
 	}
 }
