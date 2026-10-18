@@ -22,14 +22,15 @@ const (
 // cleanup. Authorized credential/key roots are excluded; no paths or values are
 // exported. An opaque surface cannot establish absence of encoded private data.
 type PrivateSurfaceObservation struct {
-	Scope               string `json:"scope"`
-	Code                string `json:"code"`
-	Files               int    `json:"files"`
-	Bytes               int64  `json:"bytes"`
-	ExcludedDirectories int    `json:"excluded_directories"`
-	OpaqueFiles         int    `json:"opaque_files"`
-	AuthorizedDocuments int    `json:"authorized_documents"`
-	LeakObserved        bool   `json:"leak_observed"`
+	Scope                 string `json:"scope"`
+	Code                  string `json:"code"`
+	Files                 int    `json:"files"`
+	Bytes                 int64  `json:"bytes"`
+	ExcludedDirectories   int    `json:"excluded_directories"`
+	OpaqueFiles           int    `json:"opaque_files"`
+	AuthorizedDocuments   int    `json:"authorized_documents"`
+	AuthorizedSystemFiles int    `json:"authorized_system_files,omitempty"`
+	LeakObserved          bool   `json:"leak_observed"`
 }
 
 func (observation *PrivateSurfaceObservation) valid() bool {
@@ -41,7 +42,8 @@ func (observation *PrivateSurfaceObservation) valid() bool {
 		observation.Bytes >= 0 && observation.Bytes <= maxPrivateScanBytes &&
 		observation.OpaqueFiles >= 0 && observation.OpaqueFiles <= observation.Files &&
 		observation.AuthorizedDocuments >= 0 && observation.AuthorizedDocuments <= observation.Files &&
-		observation.OpaqueFiles+observation.AuthorizedDocuments <= observation.Files &&
+		observation.AuthorizedSystemFiles >= 0 && observation.AuthorizedSystemFiles <= observation.Files &&
+		observation.OpaqueFiles+observation.AuthorizedDocuments+observation.AuthorizedSystemFiles <= observation.Files &&
 		observation.ExcludedDirectories >= 0 && observation.ExcludedDirectories <= 2 &&
 		(observation.Code == "leak_observed" && observation.LeakObserved ||
 			!observation.LeakObserved && (observation.Code == "unavailable" ||
@@ -177,6 +179,8 @@ func observePrivateSurfaces(
 				result.AuthorizedDocuments++
 			} else if containsRetainedLiteral(data, facts) {
 				result.LeakObserved = true
+			} else if privateCompiledSystemFile(fileName, data, info.Mode()) {
+				result.AuthorizedSystemFiles++
 			} else if bytes.HasPrefix(data, []byte("%PDF-")) {
 				result.OpaqueFiles++
 			} else if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {

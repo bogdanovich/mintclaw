@@ -70,6 +70,8 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    private facts until scanning and fails known leaks, but is not whole-runtime or per-trial privacy/idle proof.
    PDF preparation supplies only a new empty native write journal; owned child temp stays inside its private home.
    These isolation prerequisites do not grant positive checks or complete the post-settlement work.
+   Exact compiled public-system-file witnesses can explain unchanged bundled text, not active loaded catalogs or
+   SQLite and other opaque surfaces; known literal guards still run before that identity check.
    The bounded client-media witness binds actual requestless messages to native settlement, and owned raw-frame
    inspection includes earlier trials' retained facts. Neither grants future delivery uniqueness or full privacy.
    Owned PDF finalization now retains bounded native baselines through shutdown and raw scan, publishes canonical
