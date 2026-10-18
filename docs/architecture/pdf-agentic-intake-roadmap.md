@@ -172,11 +172,14 @@ Include complete applicable filling of the motivating I-134 with synthetic data,
 transactions on an unrelated ordinary AcroForm, and actual Telegram reply/standalone ingress. An admission document,
 prompt-only change, or first-question smoke is not completion.
 
-The fresh 2026-10-18 qualification additionally left a retained-clarification defect open: four new explicit checkbox
+The fresh 2026-10-18 qualification exposed a retained-clarification defect: four new explicit checkbox
 answers were accepted, but older input exhausted its 32-pass budget and the reply asked for resolved facts again.
-Before another official-form attempt, qualify generic no-progress handling, timely clarification and truthful
-accepted-versus-retained reporting on unrelated fixtures. Preserve limits and exhausted jobs; do not substitute a
-new job or a counter reset for recovery. This repair is distinct from the separately deferred XFA backend stage.
+The [bounded repair checkpoint](pdf-intake-clarification-checkpoint.md) records merged/deployed #1730/#1736,
+generic small/large regressions and same-job synthetic runtime clarification across a real deployment/restart.
+New acceptance is distinguished from retained failure, and completed unrelated extraction windows are not
+automatically repeated. Exact native chronology, not confirmation alone, gates omission of superseded advice.
+Limits and both historical jobs remain unchanged; a new test is not exhausted-input recovery. Actual Telegram,
+full I-134/PDFI4 and the separately deferred XFA backend stage remain open.
 
 ### Deferred Follow-Up: Editable Hybrid Derivatives
 
