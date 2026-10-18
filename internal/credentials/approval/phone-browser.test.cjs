@@ -94,7 +94,10 @@ let stage = "fixture-input";
     const link = `${origin}${pagePath}#request=${pending.id}`;
     await page.goto(link);
     await page.getByRole("button", {name: "Approve with passkey"}).waitFor();
-    assert.equal(await page.locator("#accounts").innerText(), "facebook");
+    if (config.discovery === "true") {
+      assert.match(await page.locator("#accounts").innerText(), /All website-matching Login items/);
+      assert.match(await page.locator("#accounts").innerText(), /including stored one-time codes/);
+    } else assert.equal(await page.locator("#accounts").innerText(), "facebook");
     assert.equal(await page.locator("#agent").innerText(), "agent");
     assert.equal(await page.locator("#host").innerText(), "host");
     assert.equal(await page.locator("#duration").innerText(), "20 hours");

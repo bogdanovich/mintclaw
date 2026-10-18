@@ -85,6 +85,37 @@ starts in the owner's normal authenticated MintClaw chat; operator CLI identity
 must not be substituted. Phone approval and external website challenges may
 require the owner's participation; implementation and review proceed first.
 
+### Vault-scope configuration
+
+D1 introduces an explicit policy rule rather than per-site account bindings:
+
+```json
+{
+  "alias": "vault-logins",
+  "vault_id": "DEDICATED_VAULT_ID",
+  "discover_logins": true,
+  "principals": [
+    {
+      "owner_id": "OWNER",
+      "actor_id": "AUTHENTICATED_ACTOR",
+      "agent_id": "browser",
+      "host_id": "GATEWAY_HOST"
+    }
+  ]
+}
+```
+
+This rule must not contain an item ID, origins, a fixed login flow or a
+connector scope. Ordinary fixed rules keep their existing exact-item behavior.
+The phone displays the broader Login and stored-code access. An unbound
+vault-wide lease cannot return an item binding; only the trusted runtime can
+narrow it after fresh website matching. A narrowed lease cannot be rebound or
+used on another registrable domain, including another private-suffix tenant.
+The existing grant timer and revocation signal remain the lifetime owner.
+
+D1 alone does not enable the new browser path or migrate deployed configuration.
+D2 supplies the browser consumer; D3 qualifies and deploys the composed feature.
+
 ## Related evidence
 
 The [previous roadmap](credential-access-roadmap.md) records the delivered

@@ -16,6 +16,32 @@ type discoveryItems struct {
 	calls int
 }
 
+func (*discoveryItems) Get(context.Context, string, string) (onepassword.Item, error) {
+	panic("metadata discovery must not read full items")
+}
+
+func TestLiveDiscoveryUsesSharedClientWithoutCachingOrReadingFields(t *testing.T) {
+	items := &discoveryItems{items: []onepassword.ItemOverview{
+		discoveryOverview("one", "First Login", "https://example.com"),
+	}}
+	provider := newProvider(items)
+	query := DiscoveryQuery{Website: "https://www.example.com"}
+	result, err := provider.FindLogins(t.Context(), "vault", query)
+	if err != nil || len(result) != 1 || result[0].ItemID != "one" {
+		t.Fatal("live discovery failed")
+	}
+	items.items = append(items.items, discoveryOverview("two", "New Login", "https://example.com"))
+	result, err = provider.FindLogins(t.Context(), "vault", query)
+	if err != nil || len(result) != 2 || items.calls != 2 {
+		t.Fatal("new vault item required restart or stale inventory refresh")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err = provider.FindLogins(ctx, "vault", query); err == nil || items.calls != 2 {
+		t.Fatal("canceled discovery reached the provider")
+	}
+}
+
 func (items *discoveryItems) List(ctx context.Context, vaultID string,
 	_ ...onepassword.ItemListFilter,
 ) ([]onepassword.ItemOverview, error) {
@@ -58,6 +84,7 @@ func TestDiscoveryInvalidQueryDoesNotList(t *testing.T) {
 		{},
 		{Website: "https://user:password@example.com"},
 		{Website: "file:///private/path"},
+		{Website: "https://8.8.8.8"},
 		{Name: "bad\nname"},
 		{Name: strings.Repeat("x", 257)},
 	} {

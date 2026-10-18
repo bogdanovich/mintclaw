@@ -34,13 +34,28 @@ func TestPhoneBrowserFixture(t *testing.T) {
 		t.Skip("synthetic browser fixture only")
 	}
 	for _, pagePath := range []string{"/", "/credentials/"} {
-		t.Run(pagePath, func(t *testing.T) { testPhoneBrowserFixture(t, pagePath) })
+		for _, discovery := range []bool{false, true} {
+			name := pagePath + "fixed"
+			if discovery {
+				name = pagePath + "discovery"
+			}
+			t.Run(name, func(t *testing.T) { testPhoneBrowserFixture(t, pagePath, discovery) })
+		}
 	}
 }
 
-func testPhoneBrowserFixture(t *testing.T, pagePath string) {
+func testPhoneBrowserFixture(t *testing.T, pagePath string, discovery bool) {
 	t.Helper()
 	fixture := newFixture(t)
+	if discovery {
+		rules := []credentialbroker.AccountRule{{
+			Alias: "facebook", VaultID: "private-vault", DiscoverLogins: true,
+			Principals: []credentialbroker.Principal{testPrincipal},
+		}}
+		if fixture.controller.ReplacePolicy(t.Context(), rules) != nil {
+			t.Fatal("discovery policy fixture unavailable")
+		}
+	}
 	fixture.controller.pagePath = pagePath
 	enrollment, err := NewEnrollment(fixture.setup)
 	if err != nil {
@@ -111,6 +126,9 @@ func testPhoneBrowserFixture(t *testing.T, pagePath string) {
 		"invite":             string(invite),
 		"page_path":          pagePath,
 		"artifact_directory": os.Getenv("MINTCLAW_PHONE_BROWSER_ARTIFACT_DIR"),
+	}
+	if discovery {
+		config["discovery"] = "true"
 	}
 	input := marshalFixture(t, config)
 	defer clear(input)

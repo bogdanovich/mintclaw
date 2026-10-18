@@ -40,8 +40,9 @@ type Principal struct {
 }
 
 // AccountRule is operator configuration. Provider IDs are immutable bindings,
-// not model-visible secret references. All origins must be exact public HTTPS
-// origins; live DNS and browser/frame authority still require separate checks.
+// not model-visible secret references. Fixed bindings use exact public HTTPS
+// origins. DiscoverLogins explicitly approves a vault instead; the consumer must
+// match and narrow each use. Live DNS and browser/frame checks remain required.
 type AccountRule struct {
 	Alias      string           `json:"alias"`
 	VaultID    string           `json:"vault_id"`
@@ -50,6 +51,9 @@ type AccountRule struct {
 	Principals []Principal      `json:"principals"`
 	Login      *LoginFlow       `json:"login,omitempty"`
 	GitHub     *GitHubReadScope `json:"github_read,omitempty"`
+	// DiscoverLogins authorizes website-matched Login use in this vault. It
+	// deliberately has no prebound item, origins or site-specific login flow.
+	DiscoverLogins bool `json:"discover_logins,omitempty"`
 }
 
 // Request describes one credential use or authenticated browser operation.
@@ -69,10 +73,11 @@ type Policy struct {
 }
 
 type accountPolicy struct {
-	origins    []string
-	principals map[Principal]struct{}
-	login      *LoginFlow
-	github     *GitHubReadScope
+	origins        []string
+	principals     map[Principal]struct{}
+	login          *LoginFlow
+	github         *GitHubReadScope
+	discoverLogins bool
 }
 
 // NewPolicy constructs a defensively copied, default-deny policy. Empty policy
@@ -85,9 +90,15 @@ func NewPolicy(rules []AccountRule) (*Policy, error) {
 	policy := &Policy{accounts: make(map[string]accountPolicy, len(rules))}
 	normalized := make([]AccountRule, 0, len(rules))
 	for _, rule := range rules {
-		if !validIdentifier(rule.Alias) || !validIdentifier(rule.VaultID) || !validIdentifier(rule.ItemID) ||
-			len(rule.Origins) == 0 || len(rule.Origins) > MaxOriginsPerAccount ||
+		if !validIdentifier(rule.Alias) || !validIdentifier(rule.VaultID) ||
 			len(rule.Principals) == 0 || len(rule.Principals) > MaxPrincipalsPerAccount {
+			return nil, ErrInvalidPolicy
+		}
+		if rule.DiscoverLogins {
+			if rule.ItemID != "" || len(rule.Origins) != 0 || rule.Login != nil || rule.GitHub != nil {
+				return nil, ErrInvalidPolicy
+			}
+		} else if !validIdentifier(rule.ItemID) || len(rule.Origins) == 0 || len(rule.Origins) > MaxOriginsPerAccount {
 			return nil, ErrInvalidPolicy
 		}
 		if _, exists := policy.accounts[rule.Alias]; exists {
@@ -136,6 +147,7 @@ func NewPolicy(rules []AccountRule) (*Policy, error) {
 		normalized = append(normalized, canonical)
 		policy.accounts[rule.Alias] = accountPolicy{
 			origins: origins, principals: principals, login: canonical.Login, github: canonical.GitHub,
+			discoverLogins: rule.DiscoverLogins,
 		}
 	}
 	slices.SortFunc(normalized, func(left, right AccountRule) int { return cmp.Compare(left.Alias, right.Alias) })
@@ -168,7 +180,22 @@ func (policy *Policy) permits(request Request) bool {
 		return false
 	}
 	origin, err := credentialOrigin(request.Origin)
-	return err == nil && slices.Contains(account.origins, origin)
+	return err == nil && (account.discoverLogins || slices.Contains(account.origins, origin))
+}
+
+// AllowsPrincipal checks configured scope without inventing a browser origin.
+// It grants no value access: consumers still require a signed live grant and
+// must narrow discovered use to an exact item and its matched website domain.
+func (policy *Policy) AllowsPrincipal(principal Principal, alias string) bool {
+	if policy == nil || !validPrincipal(principal) || !validIdentifier(alias) {
+		return false
+	}
+	account, exists := policy.accounts[alias]
+	if !exists {
+		return false
+	}
+	_, allowed := account.principals[principal]
+	return allowed
 }
 
 func credentialOrigin(raw string) (string, error) {
