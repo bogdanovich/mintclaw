@@ -124,6 +124,64 @@ func TestPDFTrialCleanupDoesNotRecursivelyRemoveUnexpectedFiles(t *testing.T) {
 	if _, err = os.Stat(filepath.Join(trial.workspace, ".eval-trials", trial.directory, "unexpected")); err != nil {
 		t.Fatal("unexpected file was recursively removed")
 	}
+	if _, err = os.Stat(filepath.Join(trial.workspace, ".eval-trials", trial.directory, "source.pdf")); err != nil {
+		t.Fatal("incomplete cleanup deleted evidence before reporting uncertainty")
+	}
+}
+
+func TestPDFTrialCleanupRequiresOriginalSourceAndDirectoryIdentity(t *testing.T) {
+	for _, mode := range []string{"source-replaced", "source-changed", "directory-replaced", "parent-replaced"} {
+		t.Run(mode, func(t *testing.T) {
+			prepared := newPDFTrialFixture(t)
+			directory := filepath.Join(prepared.workspace, ".eval-trials", prepared.directory)
+			source := filepath.Join(directory, "source.pdf")
+			original := append([]byte(nil), prepared.source...)
+			switch mode {
+			case "source-replaced":
+				replacement := filepath.Join(prepared.home, "replacement.pdf")
+				if err := os.WriteFile(replacement, original, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(replacement, source); err != nil {
+					t.Fatal(err)
+				}
+			case "source-changed":
+				if err := os.WriteFile(source, []byte("changed-source-control"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "directory-replaced":
+				if err := os.Rename(directory, directory+"-retained"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(directory, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			case "parent-replaced":
+				parent := filepath.Dir(directory)
+				if err := os.Rename(parent, parent+"-retained"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(directory, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !errors.Is(prepared.release(true), ErrPDFTrial) {
+				t.Fatal("cleanup accepted a replaced or modified fixture")
+			}
+			if _, err := os.Stat(directory); err != nil {
+				t.Fatal("cleanup removed an unverified directory", err)
+			}
+			switch mode {
+			case "directory-replaced":
+				source = filepath.Join(directory+"-retained", "source.pdf")
+			case "parent-replaced":
+				source = filepath.Join(filepath.Dir(directory)+"-retained", prepared.directory, "source.pdf")
+			}
+			if _, err := os.Stat(source); err != nil {
+				t.Fatal("cleanup deleted unverified source evidence", err)
+			}
+		})
+	}
 }
 
 func TestPDFTrialRechecksFixtureAndRefusesUnsafeRoot(t *testing.T) {

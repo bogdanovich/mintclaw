@@ -116,23 +116,25 @@ func (p *Pipeline) scheduleBackgroundCompaction(
 	)
 }
 
-func (p *Pipeline) dequeueSteeringMessagesForTurn(ts *turnState) []providers.Message {
+func (p *Pipeline) dequeueSteeringMessagesForTurn(ts *turnState) []steeringEntry {
 	if p == nil || p.Context.Steering == nil || ts == nil {
 		return nil
 	}
 	return p.Context.Steering.dequeueSteeringMessagesForTurn(
 		ts.runtimeSessionScope(),
 		ts.opts.Dispatch.SenderID(),
+		ts.opts.Dispatch.InboundContext,
 	)
 }
 
-func (p *Pipeline) drainSteeringMessagesForTurn(ts *turnState) []providers.Message {
+func (p *Pipeline) drainSteeringMessagesForTurn(ts *turnState) []steeringEntry {
 	if p == nil || p.Context.Steering == nil || ts == nil {
 		return nil
 	}
 	return p.Context.Steering.drainSteeringMessagesForTurn(
 		ts.runtimeSessionScope(),
 		ts.opts.Dispatch.SenderID(),
+		ts.opts.Dispatch.InboundContext,
 	)
 }
 
@@ -140,7 +142,7 @@ func (p *Pipeline) drainSteeringMessagesForTurn(ts *turnState) []providers.Messa
 // the same turn-owned gate used by active coding steering admission. Once it
 // returns no messages, a concurrent coding steer must fail instead of being
 // acknowledged after the turn has lost its last opportunity to consume it.
-func (p *Pipeline) dequeueOrSealSteeringForTerminal(ts *turnState) []providers.Message {
+func (p *Pipeline) dequeueOrSealSteeringForTerminal(ts *turnState) []steeringEntry {
 	return p.dequeueOrSealSteeringAtExit(ts, false)
 }
 
@@ -149,7 +151,7 @@ func (p *Pipeline) dequeueOrSealSteeringForTerminal(ts *turnState) []providers.M
 func (p *Pipeline) dequeueOrSealSteeringAtExit(
 	ts *turnState,
 	hasAdmittedSteering bool,
-) []providers.Message {
+) []steeringEntry {
 	if ts == nil {
 		return nil
 	}
@@ -191,7 +193,7 @@ func (p *Pipeline) sealSteeringAdmission(ts *turnState) {
 // drainAndSealSteeringAdmission is the fatal pending-input boundary. It moves
 // every steer that was acknowledged before the gate closed into turn-owned
 // settlement state and prevents any later acknowledgement.
-func (p *Pipeline) drainAndSealSteeringAdmission(ts *turnState) []providers.Message {
+func (p *Pipeline) drainAndSealSteeringAdmission(ts *turnState) []steeringEntry {
 	if ts == nil {
 		return nil
 	}
@@ -206,7 +208,7 @@ func (p *Pipeline) drainAndSealSteeringAdmission(ts *turnState) []providers.Mess
 // over creating durable human-interaction ownership. When no guidance is
 // queued, admission closes before the suspension manager can commit, so a
 // later steer cannot be acknowledged against a suspended turn.
-func (p *Pipeline) dequeueOrSealSteeringForSuspension(ts *turnState) ([]providers.Message, bool) {
+func (p *Pipeline) dequeueOrSealSteeringForSuspension(ts *turnState) ([]steeringEntry, bool) {
 	if ts == nil || ts.opts.mode != turnModeCoding {
 		return nil, false
 	}
@@ -221,11 +223,15 @@ func (p *Pipeline) dequeueOrSealSteeringForSuspension(ts *turnState) ([]provider
 	return nil, true
 }
 
-func (p *Pipeline) returnSteeringMessagesForTurn(ts *turnState, messages []providers.Message) {
+func (p *Pipeline) returnSteeringMessagesForTurn(ts *turnState, messages []steeringEntry) {
 	if p == nil || p.Context.Steering == nil || ts == nil || len(messages) == 0 {
 		return
 	}
-	p.Context.Steering.returnSteeringMessagesForTurn(ts.runtimeSessionScope(), messages)
+	p.Context.Steering.returnSteeringMessagesForTurn(
+		ts.runtimeSessionScope(),
+		messages,
+		ts.opts.Dispatch.InboundContext,
+	)
 }
 
 func (p *Pipeline) updateAutoFallbackSelection(

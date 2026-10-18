@@ -703,7 +703,7 @@ func TestDocumentWorkerHelperProcess(t *testing.T) {
 		if err := os.WriteFile(os.Args[separator+2]+".checksum", []byte(strconv.Itoa(checksum)), 0o600); err != nil {
 			os.Exit(113)
 		}
-		if err := os.WriteFile(os.Args[separator+2], []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		if err := publishTestWorkerPID(os.Args[separator+2], os.Getpid()); err != nil {
 			os.Exit(114)
 		}
 		time.Sleep(time.Minute)
@@ -716,7 +716,7 @@ func TestDocumentWorkerHelperProcess(t *testing.T) {
 		if err := child.Start(); err != nil {
 			os.Exit(96)
 		}
-		if err := os.WriteFile(os.Args[separator+2], []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
+		if err := publishTestWorkerPID(os.Args[separator+2], child.Process.Pid); err != nil {
 			os.Exit(97)
 		}
 		time.Sleep(time.Minute)
@@ -728,7 +728,7 @@ func TestDocumentWorkerHelperProcess(t *testing.T) {
 		if err := child.Start(); err != nil {
 			os.Exit(100)
 		}
-		if err := os.WriteFile(os.Args[separator+2], []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
+		if err := publishTestWorkerPID(os.Args[separator+2], child.Process.Pid); err != nil {
 			os.Exit(101)
 		}
 		input := os.NewFile(WorkerInputFileDescriptor(), "document-snapshot")

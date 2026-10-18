@@ -8,8 +8,9 @@ isolated profile, using protected facts and owned fixtures. The write-intent pac
 confirmation and exact fixture-scoped approval. Read-only native receipts bind consumed approval to a completed
 form job, delivered write operation, and recovered outbox intent. Authenticated artifact collection retains the exact
 downloaded PDF for independent field/structure/appearance checks. Delivery uniqueness, complete private-surface
-coverage, and owned-resource cleanup remain pending.
-Required PDF checks therefore remain inconclusive; a first question, caption, or oracle control is not qualification.
+coverage, and complete owned-resource cleanup remain pending. Owned post-stop census can establish a scoped no-write
+check and remove a verified settled source fixture. Required missing evidence still prevents a passing trial;
+a first question, caption, or oracle control is not qualification.
 
 The cases cover loan filling, correction/Back, own-request conditional intent, empty required values, cancel/no-write,
 and a bounded large-form section. Four use an adaptive user. The large case requests two Safety findings in an editable
@@ -71,6 +72,39 @@ do not independently establish file type or artifact correctness. A complete bou
 Those require separate native activity/settlement and independent artifact witnesses. This packet is not E3 exit
 or real-model PDF qualification.
 
+## Owned Post-Stop Finalization
+
+Owned PDF trials keep private `pending-trial-<id>.json` checkpoints until the admitted gateway stops and the raw
+profile scan runs. Only then is the immutable canonical `trial-<id>.json` written. A complete `run.json` references
+the final verdicts and coverage, not the earlier checkpoint. Attach mode cannot claim this post-stop observation.
+Report failure retains private partial evidence; it never restarts a target or replays a task.
+
+The runner retains source handles and native baselines within a 128 MiB run-wide budget, refusing the next PDF task
+before sending it if retention cannot fit. Artifact-oracle source byte caches are cleared after use. Finalization
+has a separate 30-second budget and reuses one bounded final native inventory; limits do not become empty counts.
+The original conversation census remains in `pdf.census`; `pdf.post_stop` records the distinct later observation.
+
+Only a verified clean owned-child exit, complete owner-bound census, unchanged source, zero pending operations and
+no unexplained foreign changes can establish `native_post_stop_observed`. For a canceled forbidden-output case,
+the current native interaction and, when present, protected form job must still match the cancellation witness.
+Zero owned writes, media intents and document deliveries, plus a complete client window with no observed media,
+can then pass `pdf_no_write` for a successfully executed cancellation. Exit zero or final prose
+alone cannot. Late forbidden writes and changed sources fail even if the earlier conversation looked safe.
+
+Batch finalization explains only known cohort effects: an unchanged write hash previously bound to that trial's
+native settlement, or a terminal native outbox record whose route and platform IDs match actual observed messages.
+Unknown routes/IDs, pending records, unexplained changes and disappeared records remain non-passing uncertainty.
+Records are still decoded and raw-scanned before this filtering; cohort membership is not a blanket ignore rule.
+
+Source removal additionally requires current logical settlement, a completed raw profile scan, original workspace,
+parent/directory/file identities, pinned source bytes and a directory containing only that source. Unexpected files,
+replacement objects and incomplete scans are retained rather than recursively removed. The receipt reports only
+this owned fixture cleanup, not deletion of native history, protected state, outputs or all temporary resources.
+
+`pdf.post_stop` never grants whole-runtime privacy, positive PDF delivery qualification or PDF judge/regrade eligibility.
+Those witnesses and real-model qualification remain mandatory. These deterministic controls use native stores and
+an owned protocol child stub; they are not evidence of a live model/backend scenario passing.
+
 ## Post-Stop Raw File Observation
 
 An owned `eval run --start-target` retains bounded, ephemeral copies of resolved PDF facts until its gateway has
@@ -83,6 +117,42 @@ directories are authorized credential/key stores and are excluded. Symlinks, spe
 opaque binaries and unscannable escaped content leave coverage unavailable. Known literal facts in unexpected binary
 files still fail. Source PDFs and independently retained, native-settled output PDFs are exempted from fact matching
 by exact SHA-256, since those are intended document contents; credential literals remain forbidden there.
+
+Raw `.jsonl`, `.ndjson` and the native `logs/gateway.log` are inspected as strict JSON records, one value per line,
+including duplicate keys and decoded strings. A file is bounded to 8,192 lines and 64 KiB per line under the shared
+token budget. Malformed/trailing/opaque content and exhausted bounds remain unavailable; a later observed leak
+still fails after an earlier uncertain record. This does not relax model-context admission, exempt built-in skill
+text or decode SQLite. Other raw escaped formats retain their existing conservative behavior.
+
+For native `skills/.system/generations` files, the scan can separately count `authorized_system_files`: exact bytes,
+relative path, generation grammar and platform permissions must match public assets compiled into the runner's
+binary. The native comparison API is pure and never installs, repairs or trusts an on-disk manifest as authority.
+Known literal facts/credentials still fail before this check. Changed, extra, symlinked, wrong-generation or
+workspace-local copies do not acquire that identity and undergo the ordinary raw scan. This is a public-byte
+witness, not whole-bundle integrity, active/loaded catalog identity or a SQLite/other binary exemption.
+
+The exact native `workspace/sessions/seahorse.db` can additionally carry a `sqlite` receipt with scope
+`seahorse_text_and_raw_json_escapes_v1`. Original bytes are inspected first, including contiguous deleted payloads;
+valid JSON escape spans are decoded with the standard JSON parser for up to eight layers under the shared token,
+byte and time limits. This detects mixed/nested Unicode escapes without requiring surviving JSON framing. It does
+not change model-context admission or interpret arbitrary binary bytes as a valid JSON document.
+
+The native Seahorse owner decodes a private in-memory copy and compares its schema with the current native schema
+created separately in memory. Neither constructor, migration, checkpoint, repair nor vacuum opens the original
+store. Header adaptation for in-memory decoding changes only the private copy. Temporary SQL structures are forced
+to memory; no SQL spill files are admitted by the decoder. Canonical text and native FTS shadow BLOB values are
+inspected; unexpected BLOB types, schema changes, corruption and limits remain unavailable.
+Connection-local SQLite value/query length limits are applied before decoding untrusted images.
+Limits: 8 MiB image/logical values, 8,192 total rows, 64 KiB per value and 256 schema entries. File identity, size,
+mode and mtime must remain stable, with WAL/SHM/rollback sidecars absent before and after observation. Even an empty
+sidecar refuses complete coverage. Other SQLite paths remain opaque rather than acquiring native identity.
+
+This bounded scope does not reconstruct historical overflow fragments or decode arbitrary compressed/custom
+representations. It is not a secure-erasure, whole-runtime or all-role privacy guarantee. The
+[encoded-residual control](manual-agent-evals-sqlite-probe-20261018.md) must fail from original bytes after native
+`ClearSession`, even when current message/FTS rows are empty; current-row-only inspection is never sufficient.
+Old unavailable receipts do not gain this coverage retroactively. Required domain privacy checks still need their
+complete admitted role/transport/output witnesses.
 
 The value-free `private_surfaces` receipt contains only scope, counts and an observation code. A known leak is a
 run-level hard failure; unavailable coverage prevents a passing run. Regrading refuses known-leak sources and
@@ -177,6 +247,33 @@ proof that another outbox intent did not duplicate delivery, that PDF bytes matc
 surfaces/resources are private and closed. No required PDF check becomes passing from metadata alone. A one-shot
 observation that races unfinished native settlement remains inconclusive; it never replays input or cancels a job.
 The test controls drive the native registry/store/journal/outbox state machines but do not run a PDF worker or model.
+
+## Client Media Observation
+
+The shared client can observe decoded messages in its sole reader after raw privacy inspection and before queueing
+or heartbeat discard. PDF runs capture a bounded projection of attachments even when the message has no request ID.
+The observer never retains captions, filenames or complete protocol maps. `Close` joins the reader before the PDF
+adapter examines the projection, including a message admitted beside a final reply or during local closure.
+
+`pdf.wire` binds the observed platform message ID, delivery ID, session/agent/route and exact native artifact download
+path to `pdf.settlement`. Its `native_bound_client_media_v1` scope covers only that client connection through local
+closure. A matching artifact in two different logical message IDs fails; an identical repeated message ID is one
+logical observation. Conflicting metadata for the bound message or a witnessed binding mismatch is a hard failure.
+Limits are 16 unique media messages, 16 distinct metadata variants per ID and 16 attachments per variant, with bounded
+identity/URL/type fields. Identical retries do not consume the variant budget. All retained variants contribute to
+duplicate detection; conflicting repeats cannot hide an already observed delivery. Malformed,
+missing, unbound, limited or incomplete evidence remains unavailable; a known duplicate still fails despite a limit.
+
+The receipt exports only scope, completion, counts, code and a native-bound message ID. It never follows a URL from
+the wire: authenticated download still uses only the admitted gateway and native artifact reference below.
+No native receipt or downloaded PDF can substitute for the actual wire message. Conversely, one observed message
+does not establish no future duplicate delivery, PDF content, whole-runtime privacy or cleanup; required checks and
+PDF regrade eligibility remain pending until the other independent witnesses are complete.
+
+Owned runs inspect every admitted raw frame against the retained union of all resolved PDF trial facts, including
+values from earlier trials and discarded pongs. The serial run adds facts only after the previous client's reader
+has joined. A later general trial therefore cannot hide an earlier PDF canary in an ignored frame. This is a raw
+client-frame guard, not a claim that all role inputs or every runtime surface have complete privacy coverage.
 
 ## Authenticated Artifact Checks
 

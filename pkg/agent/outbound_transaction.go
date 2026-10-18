@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -278,6 +279,7 @@ func (al *AgentLoop) admitDurableMessage(
 	ctx context.Context,
 	workspace string,
 	msg bus.OutboundMessage,
+	callbackFree bool,
 ) (durableMessageAdmission, error) {
 	result := durableMessageAdmission{message: msg}
 	transaction := outboundTransactionFromContext(ctx)
@@ -296,10 +298,37 @@ func (al *AgentLoop) admitDurableMessage(
 		transaction.fail(err)
 		return result, err
 	}
+	// Offline retirement cannot race an open coordinator's OS ownership.
+	// Check an existing retired receipt before a replay can bind a new domain.
+	if transaction.bindDelivery != nil || transaction.validate != nil {
+		existing, inspectErr := coordinator.Get(deliveryID)
+		if inspectErr != nil && !errors.Is(inspectErr, os.ErrNotExist) {
+			transaction.fail(inspectErr)
+			return result, inspectErr
+		}
+		if inspectErr == nil && existing.PayloadRetired {
+			retiredErr := &outbox.RetiredPayloadError{Receipt: existing}
+			transaction.fail(retiredErr)
+			return result, retiredErr
+		}
+		if inspectErr == nil && existing.RetentionClass != "" {
+			if protectErr := coordinator.ProtectPayload(deliveryID); protectErr != nil {
+				transaction.fail(protectErr)
+				return result, protectErr
+			}
+		}
+	}
 	if err = transaction.bind(deliveryID); err != nil {
 		return result, err
 	}
-	admission, err := coordinator.AdmitMessage(
+	allowsRetiredReplay := callbackFree && transaction.bindDelivery == nil && transaction.validate == nil
+	nativeFinalAdmission := allowsRetiredReplay && nativeFinalPublicationMatches(ctx, workspace, msg) &&
+		outbox.PlainMessageRetirementAllowed(msg)
+	admit := coordinator.AdmitMessage
+	if nativeFinalAdmission {
+		admit = coordinator.AdmitNativeFinalMessage
+	}
+	admission, err := admit(
 		workspace,
 		identity,
 		msg,
@@ -307,6 +336,18 @@ func (al *AgentLoop) admitDurableMessage(
 	if err != nil {
 		transaction.fail(err)
 		return result, err
+	}
+	if admission.Intent.PayloadRetired {
+		if !allowsRetiredReplay {
+			retiredErr := &outbox.RetiredPayloadError{Receipt: admission.Intent}
+			transaction.fail(retiredErr)
+			return result, retiredErr
+		}
+		result.message = bus.OutboundMessage{}
+		result.coordinator = coordinator
+		result.admission = admission
+		result.durable = true
+		return result, nil
 	}
 	if admission.Intent.Message == nil {
 		err = errors.New("durable outbound intent has no message payload")
@@ -419,7 +460,7 @@ func (al *AgentLoop) publishTransactionMessageReceiptAtBoundary(
 	msg bus.OutboundMessage,
 	commit func(context.Context) error,
 ) (outboundPublication, error) {
-	admission, err := al.admitDurableMessage(ctx, workspace, msg)
+	admission, err := al.admitDurableMessage(ctx, workspace, msg, commit == nil)
 	if err != nil {
 		return outboundPublication{}, err
 	}
@@ -428,10 +469,16 @@ func (al *AgentLoop) publishTransactionMessageReceiptAtBoundary(
 		coordinator: admission.coordinator,
 		admission:   admission.admission,
 	}
+	if admission.durable {
+		receipt.deliveryID = admission.admission.Intent.ID
+	}
 	if transaction := outboundTransactionFromContext(ctx); transaction != nil {
 		transaction.record(receipt)
 	}
 	if admission.durable && !admission.dispatch {
+		if admission.admission.Intent.PayloadRetired {
+			return receipt, nil
+		}
 		if commit != nil {
 			commitCtx := toolshared.WithToolOutboundDeliveryID(ctx, receipt.deliveryID)
 			if err = commit(commitCtx); err != nil {

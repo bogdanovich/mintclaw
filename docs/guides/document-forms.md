@@ -162,10 +162,15 @@ a partial or corrupt generation becomes `uncertain`; MintClaw does not silently 
 ## Agent workflow and delivery
 
 For an attachment or an authorized current-message local path, an ordinary request such as “Help me fill this form”
-uses the durable protected conversational workflow. The agent inspects the exact source, asks for one missing value at
-a time through native channel controls or free text, keeps submitted values out of ordinary model context, shows a
-bounded review, obtains the configured approval, verifies the output, and delivers one PDF. The operator does not need
-tool action names, field IDs, interaction IDs, or `/answer` syntax.
+uses the durable protected conversational workflow. When grouped intake is advertised, the agent explains the exact
+document and relevant roles, groups the needed information, and accepts several facts in one ordinary-looking
+protected paragraph or successive messages in the same job. It asks only for missing, ambiguous, invalid or
+conflicting facts. Legacy runtimes without this surface retain one-field protected questions. Submitted values stay
+out of ordinary model context; both routes require bounded review, a separate finish request, configured approval,
+verified output and one logical PDF delivery. The operator does not need tool action names, field IDs, interaction
+IDs, or `/answer` syntax. See the [free-text operator test](../operations/pdfi4-free-text-form-test.md) and its
+[current qualification limits](../architecture/pdf-agentic-intake-pdfi4-qualification.md); deployed implementation
+alone is not proof that PDFI4 qualification is complete.
 
 The direct one-shot route remains available for an expert request that already has a complete, unambiguous stable-ID
 assignment map for the exact source. That route performs:

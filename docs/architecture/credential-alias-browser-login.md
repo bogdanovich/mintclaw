@@ -28,6 +28,13 @@ them from the canonical policy changes its revision and requires fresh approval.
 Only the selected alias and a fixed outcome reach the model. Unexpected source
 outcomes are replaced with a fixed denial. Retrieval remains lazy: an approved
 lease and the browser's live form/document preparation precede SDK access.
+Confirmed `logged_in` additionally records an alias-only native action audit.
+The existing outcome verifier accepts its opaque receipt when login is a
+declared external action; ordinary receipt recovery supplies the ID without
+another submission. Preparatory authentication for a read-only result needs no
+additional action objective; other unexpected external commits remain blocked.
+Pending approval, MFA handoff and uncertain submission
+produce no successful-login receipt. The public login result remains unchanged.
 The login tool owns the distinct `browser.login` runtime capability; ordinary
 browser actions retain `browser.act`, so both can compose in one enabled catalog.
 Revocation, expiry, policy changes and browser retirement retain their existing

@@ -29,6 +29,11 @@ The [prepared general v1 pilot](../operations/manual-agent-evals-prepared-genera
 code head. A single regrade retained two passes and two provider-unavailable judge errors; comparison preserved all
 trials without attributing those errors to target quality. This is not complete E5 or domain qualification.
 
+The [PDF post-stop v1 pilot](../operations/manual-agent-evals-pdf-post-stop-v1-pilot-20261018.md) exercised merged
+#1706 once: scoped cancellation/no-write passed after native shutdown, but the trial remained inconclusive because
+seven opaque private-profile files prevented privacy qualification and source cleanup. No protected PDF job,
+positive artifact delivery or judge call was observed. This does not qualify the six-case PDF suite.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 
@@ -65,6 +70,23 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    private facts until scanning and fails known leaks, but is not whole-runtime or per-trial privacy/idle proof.
    PDF preparation supplies only a new empty native write journal; owned child temp stays inside its private home.
    These isolation prerequisites do not grant positive checks or complete the post-settlement work.
+   Exact compiled public-system-file witnesses can explain unchanged bundled text, not active loaded catalogs or
+   SQLite and other opaque surfaces; known literal guards still run before that identity check.
+   A [synthetic SQLite probe](../operations/manual-agent-evals-sqlite-probe-20261018.md) retained a full encoded
+   canary after native session clearing despite zero current message/FTS rows. Current-row-only SQL plus literal
+   matching cannot replace raw privacy coverage; this negative control must survive the native witness work.
+   The bounded native SQLite witness combines current schema/value decoding with original contiguous raw JSON-
+   escape matching, never row-only promotion or original-store mutation. Its explicit encoding/overflow limits do
+   not establish whole-runtime/all-role privacy or complete E3 qualification.
+   Typed LLM-user/judge argument and response guards cover reasoning/discarded tool fields and the run's retained
+   earlier-trial facts, with explicit bounded receipts before hashing/projection. Unknowns and leaks survive
+   regrade/comparison; this is not raw transport/provider-internal coverage or PDF judge/regrade admission.
+   The bounded client-media witness binds actual requestless messages to native settlement, and owned raw-frame
+   inspection includes earlier trials' retained facts. Neither grants future delivery uniqueness or full privacy.
+   Owned PDF finalization now retains bounded native baselines through shutdown and raw scan, publishes canonical
+   trial reports afterward, checks scoped no-write evidence and removes only verified settled source fixtures.
+   Full private-surface/temporary-resource coverage, positive delivery qualification and PDF judge/regrade eligibility
+   still require completion; deterministic post-stop controls are not live PDF qualification.
    Preserve earlier failures and unknowns.
 3. E4: integrate native browser admission, fixture execution, approval/artifact/context correlation and owned
    cleanup; qualify all six cases, including adaptive and denied-action evidence. Browser cases still skip today.

@@ -109,6 +109,7 @@ type continuationTarget struct {
 	Channel                string
 	ChatID                 string
 	Workspace              string
+	inbound                *bus.InboundContext
 	holdSteeringSettlement bool
 }
 

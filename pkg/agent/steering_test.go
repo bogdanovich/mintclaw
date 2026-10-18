@@ -219,7 +219,7 @@ func TestSteerActiveCodingTurnLinearizesWithTerminalSeal(t *testing.T) {
 
 		start := make(chan struct{})
 		steerResult := make(chan error, 1)
-		terminalResult := make(chan []providers.Message, 1)
+		terminalResult := make(chan []steeringEntry, 1)
 		go func() {
 			<-start
 			steerResult <- al.SteerActiveCodingTurn(
@@ -237,7 +237,7 @@ func TestSteerActiveCodingTurnLinearizesWithTerminalSeal(t *testing.T) {
 		steerErr := <-steerResult
 		messages := <-terminalResult
 		switch {
-		case steerErr == nil && len(messages) == 1 && messages[0].Content == "race guidance":
+		case steerErr == nil && len(messages) == 1 && messages[0].msg.Content == "race guidance":
 		case errors.Is(steerErr, ErrNoActiveSteerableTurn) && len(messages) == 0:
 		default:
 			t.Fatalf(
@@ -1344,7 +1344,7 @@ func TestSteeringQueue_ReturnForTurnPreservesSenderScope(t *testing.T) {
 	if len(dequeued) != 1 {
 		t.Fatalf("dequeued messages = %#v, want one", dequeued)
 	}
-	sq.returnSteeringMessagesForTurn(scope, dequeued)
+	sq.returnSteeringMessagesForTurn(scope, steeringEntriesFromMessages(dequeued), nil)
 	if leaked := sq.dequeueScopeForTurn(scope, "user-b"); len(leaked) != 0 {
 		t.Fatalf("sender-scoped steering leaked to user-b: %#v", leaked)
 	}
@@ -2026,7 +2026,7 @@ type recordingMessageBus struct {
 	releasedIDs []string
 }
 
-func (b *recordingMessageBus) AckInbound(ctx context.Context, msg bus.InboundMessage) error {
+func (b *recordingMessageBus) AckInbound(ctx context.Context, msg bus.InboundMessage) (bus.InboundAckReceipt, error) {
 	b.mu.Lock()
 	b.ackedIDs = append(b.ackedIDs, msg.SpoolID)
 	b.mu.Unlock()

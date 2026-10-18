@@ -199,7 +199,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 			trial.CaseSHA256 != summary.CaseSHA256 || trial.Repetition != summary.Repetition ||
 			trial.Code != summary.Code || trial.Verdict != summary.Verdict || trial.DurationMS != summary.DurationMS ||
 			!validID(trial.SessionID) || sessions[trial.SessionID] || !validID(trial.AgentID) ||
-			!consistentComparisonVerdict(trial) {
+			!consistentComparisonVerdict(trial) || !validTrialRoleBoundaries(trial) {
 			return result, ErrCompare
 		}
 		calls := trial.DriverCalls
@@ -259,6 +259,22 @@ func validComparisonVerdict(verdict Verdict) bool {
 
 func consistentComparisonVerdict(trial Trial) bool {
 	verdicts := []Verdict{trial.Verdict}
+	addBoundary := func(call *RoleCall) {
+		if call == nil || call.Boundary == nil {
+			return
+		}
+		if call.Boundary.Input == "leak_observed" || call.Boundary.Output == "leak_observed" {
+			verdicts = append(verdicts, Fail)
+		} else if !roleBoundaryEligible(call) {
+			verdicts = append(verdicts, Inconclusive)
+		}
+	}
+	for index := range trial.DriverCalls {
+		addBoundary(&trial.DriverCalls[index])
+	}
+	if trial.Judge != nil {
+		addBoundary(trial.Judge.Call)
+	}
 	if trial.ExecutionVerdict != "" {
 		if !validComparisonVerdict(trial.ExecutionVerdict) {
 			return false

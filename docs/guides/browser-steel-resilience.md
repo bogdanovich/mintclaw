@@ -91,12 +91,15 @@ never refunded, including failed or interrupted creations. The private ledger
 is stored beside provider state as `<provider_state_file>.usage.json`. Corruption
 or unavailable storage refuses new paid sessions.
 
-USD settings are **reported-cost stop and admission thresholds**, not hard Steel
-billing caps. MintClaw checks Steel's exact session cost every five seconds,
-stops a session when the threshold is reached, and stops on missing cost
-evidence. Reporting delay, in-flight traffic, and remote release latency can
-cause overshoot. Failed release retains cleanup ownership and is retried.
-Steel's provider timeout remains an independent hard lifetime limit.
+USD settings reserve an **admission allowance**, not a hard Steel billing cap.
+Steel Cloud currently returns HTTP 409 for session cost while a session is live;
+final usage is available after release. MintClaw treats that response as pending
+metering and keeps the session open, bounded by its provider timeout and the
+reserved session/seconds limits. It cannot enforce a live USD stop from a final
+invoice. The monitor checks every five seconds and still stops on an unexpected
+cost error, an invalid report, or a reported amount at the threshold if the
+provider makes it available. Reporting and release delays can cause overshoot.
+Failed release retains cleanup ownership and is retried.
 If a budget stop cannot capture the live profile revision, billing is stopped
 but the profile remains fenced for explicit recovery; a stale READY snapshot
 cannot prove that the latest cookies were persisted.

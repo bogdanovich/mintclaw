@@ -26,6 +26,15 @@ async function driver() {
       assert.equal(++submissions, 1);
       const fields = new URLSearchParams(request.postData());
       assert.equal(fields.get('username') === username && fields.get('password') === password, true);
+      const prefix = '--fixture-submission-checkpoint=';
+      const checkpointArgument = process.argv.find(value => value.startsWith(prefix));
+      if (checkpointArgument) {
+        const backend = new URL(checkpointArgument.slice(prefix.length));
+        assert.equal(backend.hostname, '127.0.0.1');
+        const checkpoint = await fetch(`${backend.origin}/_fixture/submitted`, { method: 'POST' });
+        assert.equal(checkpoint.status, 200);
+        if ((await checkpoint.json()).hold) await new Promise(() => {});
+      }
       const destination = outcome === 'logged_in' ? '/home' : outcome === 'handoff_required' ? '/challenge' : '/unconfirmed';
       await route.fulfill({ contentType: 'text/html',
         headers: { 'set-cookie': `session=${cookie}; Secure; HttpOnly; Path=/` },
@@ -96,37 +105,49 @@ async function phone() {
     await page.goto(pending.link);
     await page.getByRole('button', { name: 'Approve with passkey' }).waitFor();
     assert.equal(await page.locator('#accounts').innerText(), 'fixture-account');
-    assert.equal(await page.locator('#duration').innerText(), '20 hours');
+    const duration = config.lifetime === 'expiry' ? `${10 / 60} minutes` : '20 hours';
+    assert.equal(await page.locator('#duration').innerText(), duration);
     await page.getByRole('button', { name: 'Approve with passkey' }).click();
     await page.getByRole('status').filter({ hasText: 'Approved until' }).waitFor();
     stage = 'login-result';
-    assert.equal((await fixture('/_fixture/result')).outcome, config.outcome || 'logged_in');
-    if (config.restart) {
-      stage = 'restart';
-      const restarted = await fixture('/_fixture/restart');
-      assert.deepEqual(restarted, { passkey_retained: true, grant_denied: true, old_lease_denied: true, no_retrieval: true });
-      stage = 'restart-request';
+    const firstOutcome = config.lifetime === 'cancel' ? 'caller_canceled' : config.outcome || 'logged_in';
+    assert.equal((await fixture('/_fixture/result')).outcome, firstOutcome);
+    if (config.restart || config.lifetime === 'expiry') {
+      if (config.lifetime === 'expiry') {
+        stage = 'expiry';
+        assert.equal((await fixture('/_fixture/expired')).retired, true);
+      }
+      if (config.restart) {
+        stage = 'restart';
+        const restarted = await fixture('/_fixture/restart');
+        assert.deepEqual(restarted, { passkey_retained: true, grant_denied: true, old_lease_denied: true, no_retrieval: true });
+      }
+      stage = config.restart ? 'restart-request' : 'expiry-request';
       const fresh = await fixture('/_fixture/login');
       assert.notEqual(fresh.link, pending.link);
-      stage = 'restart-approve';
+      stage = config.restart ? 'restart-approve' : 'expiry-approve';
       await page.goto(fresh.link);
       await page.getByRole('button', { name: 'Approve with passkey' }).waitFor();
       assert.equal(await page.locator('#accounts').innerText(), 'fixture-account');
-      assert.equal(await page.locator('#duration').innerText(), '20 hours');
+      assert.equal(await page.locator('#duration').innerText(), duration);
       await page.getByRole('button', { name: 'Approve with passkey' }).click();
       await page.getByRole('status').filter({ hasText: 'Approved until' }).waitFor();
-      stage = 'restart-result';
+      stage = config.restart ? 'restart-result' : 'expiry-result';
       assert.equal((await fixture('/_fixture/result')).outcome, config.outcome || 'logged_in');
     } else {
       stage = 'reuse';
       assert.equal((await fixture('/_fixture/reuse')).outcome, config.outcome || 'logged_in');
     }
-    stage = 'revoke';
-    if (config.inflight) assert.equal((await fixture('/_fixture/inflight')).started, true);
-    await page.getByRole('button', { name: 'Revoke access' }).click();
-    await page.getByRole('button', { name: 'Revoke with passkey' }).click();
-    await page.getByRole('status').filter({ hasText: 'Access revoked.' }).waitFor();
-    assert.equal((await fixture('/_fixture/revoked')).retired, true);
+    if (config.lifetime === 'expiry') {
+      assert.equal((await fixture('/_fixture/expired')).retired, true);
+    } else {
+      stage = 'revoke';
+      if (config.inflight) assert.equal((await fixture('/_fixture/inflight')).started, true);
+      await page.getByRole('button', { name: 'Revoke access' }).click();
+      await page.getByRole('button', { name: 'Revoke with passkey' }).click();
+      await page.getByRole('status').filter({ hasText: 'Access revoked.' }).waitFor();
+      assert.equal((await fixture('/_fixture/revoked')).retired, true);
+    }
   } finally {
     await browser.close();
   }

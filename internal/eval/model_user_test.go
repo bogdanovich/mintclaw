@@ -18,7 +18,7 @@ func TestUserDecisionRetainsOnlyValidatedActionKind(t *testing.T) {
 		{"protected", `{"kind":"protected_answer","fact":"test-fact"}`, "protected_answer", "user_action_received"},
 		{"stop", `{"kind":"stop"}`, "stop", "user_action_received"},
 		{"unknown", `{"kind":"unknown-action-canary"}`, "", "invalid_user_action"},
-		{"private", `{"kind":"message","text":"private-fact-canary"}`, "", "invalid_user_action"},
+		{"private", `{"kind":"message","text":"private-fact-canary"}`, "", "user_call_failed"},
 		{"credential", `{"kind":"message","text":"private-credential-canary"}`, "", "user_call_failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

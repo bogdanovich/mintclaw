@@ -83,10 +83,16 @@ func (s *inboundSpool) persistContext(ctx context.Context, msg bus.InboundMessag
 }
 
 func (s *inboundSpool) ack(ctx context.Context, msg bus.InboundMessage) error {
+	_, err := s.ackReceipt(ctx, msg)
+	return err
+}
+
+func (s *inboundSpool) ackReceipt(ctx context.Context, msg bus.InboundMessage) (bus.InboundAckReceipt, error) {
 	if msg.SpoolID == "" || s == nil || s.bus == nil {
-		return nil
+		return bus.InboundAckReceipt{}, nil
 	}
-	if err := s.bus.AckInbound(ctx, msg); err != nil {
+	receipt, err := s.bus.AckInbound(ctx, msg)
+	if err != nil {
 		logger.WarnCF("agent", "Failed to ack inbound spool entry",
 			map[string]any{
 				"spool_id":    msg.SpoolID,
@@ -95,9 +101,9 @@ func (s *inboundSpool) ack(ctx context.Context, msg bus.InboundMessage) error {
 				"session_key": msg.SessionKey,
 				"error":       err.Error(),
 			})
-		return err
+		return bus.InboundAckReceipt{}, err
 	}
-	return nil
+	return receipt, nil
 }
 
 func (s *inboundSpool) release(
@@ -145,6 +151,7 @@ func (al *AgentLoop) runTurnAndDrainSteering(
 	process func() (string, error),
 	target *continuationTarget,
 ) finalResponseAdmission {
+	target.inbound = steeringContextForSender(&initialMsg.Context, initialMsg.Context.SenderID)
 	response, err := process()
 	initialAdmission := finalResponseAdmission{status: finalResponseAdmissionNotRequired}
 	initialResponsePublished := false
@@ -218,8 +225,12 @@ func (al *AgentLoop) runTurnAndDrainSteering(
 		target.responseMetadata = target.responseMetadata.Merge(bus.OutboundMetadata{
 			MessageKind: bus.OutboundMessageKindFinalReply,
 		})
+		publicationCtx := ctx
+		if initialRequiresAggregate && !initialResponsePublished {
+			publicationCtx = al.withNativeFinalPublication(ctx, initialMsg, target)
+		}
 		aggregateAdmission = al.publishResponseWithMetadataAndScopes(
-			ctx,
+			publicationCtx,
 			target.Workspace,
 			target.AgentID,
 			target.Channel,

@@ -223,7 +223,7 @@ func TestPublishInbound_WithSpoolWritesAndAckRemovesEntry(t *testing.T) {
 	if len(pending) != 1 || !pending[0].Context.ReceivedAt.Equal(got.Context.ReceivedAt) {
 		t.Fatalf("pending received_at = %#v, want %v", pending, got.Context.ReceivedAt)
 	}
-	if err := mb.AckInbound(context.Background(), got); err != nil {
+	if _, err := mb.AckInbound(context.Background(), got); err != nil {
 		t.Fatalf("AckInbound failed: %v", err)
 	}
 	if _, err := os.Stat(spool.processingPath(got.SpoolID)); !os.IsNotExist(err) {
@@ -322,7 +322,7 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 		*got.Context.Interaction.OptionIndex != 0 || got.Context.Interaction.ResponseMessageID != "message-2" {
 		t.Fatalf("interaction = %#v, want durable callback projection", got.Context.Interaction)
 	}
-	if err := second.AckInbound(context.Background(), got); err != nil {
+	if _, err := second.AckInbound(context.Background(), got); err != nil {
 		t.Fatalf("AckInbound failed: %v", err)
 	}
 	if _, err := os.Stat(secondSpool.processingPath(got.SpoolID)); !os.IsNotExist(err) {

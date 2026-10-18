@@ -66,6 +66,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	var lifecycle *TargetLifecycle
 	var retainedFacts privateFactRetention
+	var pendingPDF pdfRunFinalization
 	var privateSurfaces *PrivateSurfaceObservation
 	stopTarget := func() {
 		if child == nil || lifecycle != nil {
@@ -86,6 +87,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			observePrivateSurfaces(scanCtx, options.Home, retainedFacts.values,
 				target.config.SensitiveDataReplacer(), retainedFacts.documents)
 		}
+		pendingPDF.close()
 		retainedFacts.clear()
 	}()
 	if err != nil {
@@ -118,6 +120,11 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		Before: observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter),
 	}
 	roles := prepareConversationRoles(target, cases)
+	for _, role := range []*ModelRole{roles.user, roles.judge} {
+		if role != nil {
+			role.retained = &retainedFacts
+		}
+	}
 	if roles.user != nil {
 		defer roles.user.Close()
 	}
@@ -141,9 +148,11 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		case suiteCtx.Err() != nil:
 			trial.Verdict, trial.Code = Inconclusive, "suite_interrupted"
 		default:
-			trial = runAdmittedTrial(suiteCtx, target, item, trial.SessionID, roles, options, writer, &retainedFacts)
+			trial = runAdmittedTrial(suiteCtx, target, item, trial.SessionID, roles, options, writer,
+				&retainedFacts, &pendingPDF)
 		}
 		trial.Repetition = ordinal%options.Repeat + 1
+		pendingPDF.observeTrial(trial)
 		name := "trial-" + trial.ID + ".json"
 		roleCalls = append(roleCalls, trial.DriverCalls...)
 		if trial.Judge != nil && trial.Judge.Call != nil {
@@ -157,7 +166,11 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		})
 		result.Coverage[trial.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, trial.Verdict)
-		if writer.write(name, trial) != nil {
+		checkpoint := name
+		if _, pending := pendingPDF.trials[trial.ID]; pending {
+			checkpoint = "pending-trial-" + trial.ID + ".json"
+		}
+		if writer.write(checkpoint, trial) != nil {
 			result.Trials[len(result.Trials)-1].File = ""
 			result.Verdict = combineVerdicts(result.Verdict, Error)
 			result.DurationMS = time.Since(result.StartedAt).Milliseconds()
@@ -185,6 +198,20 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			result.Verdict = combineVerdicts(result.Verdict, Inconclusive)
 			result.Cleanup = "owned_gateway_cleanup_uncertain"
 		}
+	}
+	finalCtx, finalCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	err = pendingPDF.finish(finalCtx, writer, &result, lifecycle, retainedFacts.values, filter, privateSurfaces)
+	finalCancel()
+	if err != nil {
+		result.Verdict = combineVerdicts(result.Verdict, Error)
+		result.DurationMS = time.Since(result.StartedAt).Milliseconds()
+		return result, ErrReport
+	}
+	result.Coverage = map[Verdict]int{}
+	result.Verdict = combineVerdicts(result.TargetLifecycle.verdict(), result.PrivateSurfaces.verdict())
+	for _, summary := range result.Trials {
+		result.Coverage[summary.Verdict]++
+		result.Verdict = combineVerdicts(result.Verdict, summary.Verdict)
 	}
 	result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 	result.Complete = true
@@ -229,6 +256,7 @@ func runAdmittedTrial(
 	ctx context.Context, target admittedTarget, item LoadedCase, sessionID string, roles conversationRoles,
 	runOptions RunOptions, report *privateReport,
 	retainedFacts *privateFactRetention,
+	pendingPDF *pdfRunFinalization,
 ) (trial Trial) {
 	trial = newUnattemptedTrial(item, target.preset.ExpectedAgent)
 	trial.SessionID = sessionID
@@ -248,7 +276,9 @@ func runAdmittedTrial(
 	}
 	var domain *pdfConversation
 	options := gatewayclient.Options{InspectFrame: func(data []byte) error {
-		return inspectNativeJSON(data, item.Case.Driver.Facts, roles.filter)
+		// The previous client's Close joins its inspector before the serial run
+		// adds new facts. Late frames must also respect earlier trial canaries.
+		return inspectNativeJSON(data, retainedFacts.values, roles.filter)
 	}}
 	if item.Case.PDF != nil {
 		prepared, prepareErr := preparePDFTrial(item, target.preset.IsolationRoot,
@@ -259,9 +289,10 @@ func runAdmittedTrial(
 		}
 		domain = &pdfConversation{prepared: prepared, artifacts: &pdfArtifactCollector{
 			config: target.config, python: runOptions.PDFOraclePython, retain: report.retainPDFArtifact,
-		}}
+		}, wire: &pdfWireObservation{workspace: target.preset.ExpectedWorkspace}}
+		options.ObserveMessage = domain.wire.observe
 		prepared.filter = roles.filter
-		if runOptions.StartTarget && !retainedFacts.add(prepared.item.Case.Driver.Facts) {
+		if !retainedFacts.add(prepared.item.Case.Driver.Facts) {
 			_ = prepared.release(true)
 			trial.Verdict, trial.Code = Inconclusive, "private_fact_retention_limit"
 			return trial
@@ -275,6 +306,11 @@ func runAdmittedTrial(
 		if censusErr := prepared.beginNativeCensus(caseCtx); errors.Is(censusErr, ErrPrivateEvidence) {
 			_ = prepared.release(true)
 			trial.Verdict, trial.Code = Fail, "private_native_census"
+			return trial
+		}
+		if runOptions.StartTarget && !pendingPDF.canRetain(prepared) {
+			_ = prepared.release(true)
+			trial.Verdict, trial.Code = Inconclusive, "pdf_finalization_limit"
 			return trial
 		}
 		item = prepared.item
@@ -291,11 +327,16 @@ func runAdmittedTrial(
 	if domain != nil {
 		trial = runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, domain)
+		// Conversation return has joined the reader, including in-flight media
+		// observations that need not have entered the conversation queue.
+		domain.concludeWire(&trial, client.Failure() == nil)
 		if runOptions.StartTarget && trial.PDF != nil && trial.PDF.Settlement != nil &&
 			trial.PDF.Artifact != nil && trial.PDF.Artifact.File != "" {
 			retainedFacts.documents[trial.PDF.Settlement.ArtifactSHA256] = true
 		}
-		if domain.prepared.release(false) != nil {
+		if runOptions.StartTarget {
+			pendingPDF.retain(domain, trial)
+		} else if domain.prepared.release(false) != nil {
 			trial.Verdict = combineVerdicts(trial.Verdict, Inconclusive)
 			trial.Code = "pdf_local_cleanup_failed"
 		}

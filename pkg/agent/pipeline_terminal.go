@@ -142,7 +142,7 @@ func (p *Pipeline) continueWithSteeringAtExit(
 	cancelConfiguredStreamingLLM(turnCtx, llm)
 	if len(steerMessages) > 0 {
 		exec.markSteeringObserved()
-		exec.pendingInputs.AppendSteering(steerMessages...)
+		exec.pendingInputs.AppendSteeringEntries(steerMessages...)
 	}
 	logger.InfoCF(
 		"agent",

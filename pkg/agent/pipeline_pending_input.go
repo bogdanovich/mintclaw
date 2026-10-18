@@ -102,7 +102,7 @@ func (p *Pipeline) settlePendingTurnInputsAfterFailure(ts *turnState, exec *turn
 	if ts == nil || exec == nil {
 		return
 	}
-	exec.pendingInputs.AppendSteering(p.drainAndSealSteeringAdmission(ts)...)
+	exec.pendingInputs.AppendSteeringEntries(p.drainAndSealSteeringAdmission(ts)...)
 	for _, input := range exec.pendingInputs.Drain() {
 		if input.kind != turnPendingSteering || !exec.shouldTrackTurnOwnedSteering(input.message) {
 			continue

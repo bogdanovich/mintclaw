@@ -2,9 +2,9 @@
 
 The operator selected Craigslist as the first account. This is the setup and
 acceptance sequence for the [integrated alias login](credential-alias-browser-login.md).
-It is not a record of a completed personal-account login. Keep
-`credentials.browser_login_enabled` false until the applicable rollout gates
-below have passed.
+The first personal-account login is recorded below; grant reuse and revocation
+still need physical acceptance. Keep `credentials.browser_login_enabled` false
+until the applicable preparation gates below have passed.
 
 ## Prepare the existing application
 
@@ -91,9 +91,12 @@ the completed grant. An `outcome_unknown` must not silently replay submission.
 
 Confirm the real account is logged in through the qualified private flow. A
 subsequent explicit login within the same scope should reuse the grant without
-another approval. Use **Revoke access** on the phone page and confirm that the
-grant ends and MintClaw retires its authenticated browser. A new request then
-requires fresh approval. Complete any MFA only through a qualified private
+another approval. After the task ends, use **Revoke access** on the phone page
+and confirm that another login requires fresh approval. The headless ephemeral
+profile must be closed before task finalization; it cannot remain open as a
+human handoff. Revocation while a browser is active needs a separate in-progress
+task check; leaving a headless browser open after a completed task cannot
+establish that behavior. Complete any MFA only through a qualified private
 interaction; never send passwords, one-time codes or seeds through chat.
 
 Record fixed outcomes and qualification results, without capturing credentials,
@@ -111,8 +114,47 @@ for that verified owner. This setup check issued no account grant and retrieved
 no Craigslist credential.
 
 The existing HTTPS phone route and merged phone-page update are deployed.
-Browser login remains disabled. At the latest setup check the private service
-token was absent; dedicated-vault read scope and protected token entry remain
-operator steps. The site's exact success URL/marker, real approval notification,
-login, grant reuse and revocation are still unverified. Keep this pilot
-incomplete until those checks pass.
+The private CLI's localhost repair and website/name discovery are also installed;
+the operator need not copy item UUIDs to create subsequent alias bindings.
+All thirteen synthetic browser/provider/connector scenarios passed with the
+race detector after adding credential-runtime recreation, actual caller
+cancellation and signed-grant expiry. These results establish the listed
+synthetic paths, not a personal-account login or OS process-crash recovery.
+
+The operator subsequently provisioned the service-account token through the
+private terminal command and confirmed **Read Items** access only to the
+dedicated vault. Metadata-only website and name discovery each found the
+configured Login item without requesting password fields. The gateway was
+restarted to load the protected token and retained the verified owner key.
+
+A read-only inspection of the operator's signed-in browser established the
+query-free success URL `https://accounts.craigslist.org/login/home` and visible
+logout control within `span#ef`; no password field was visible. This metadata
+was saved in the account's local flow configuration. No personal vault/item
+identifier or site-specific behavior was added to Go code.
+
+Browser login was enabled for the selected account and principal on qualified
+runtime commit `694d716db119e14044faffbe4cd68fb1567cba25`. Only the browser
+agent's model fallbacks changed: its existing OpenAI OAuth primary and fallback
+use the qualified Codex adapter; unqualified provider fallbacks were excluded.
+All five profile configurations loaded with unchanged existing doctor findings.
+The restarted gateway retained its passkey, all ten expected services were
+active, and a harmless live request produced a completed diagnostic trace.
+
+On 2026-10-18 UTC the owner requested login through the usual MintClaw chat,
+received the generic approval link and reported approving it on Android. The
+actual `browser_login` result contained only `alias: craigslist` and
+`outcome: logged_in`. The agent reported a subsequent authenticated observation
+of the configured account page and logout control, then closed its session.
+This is the first real account login, not a synthetic website result.
+
+That `gateway/ephemeral` profile runs headless on the gateway host. It creates
+no desktop window for RustDesk to show. Closing the temporary browser discards
+its local website session state; the separate access grant permits another
+scoped login until revocation or its deadline, at most 20 hours. Grant reuse
+does not preserve website cookies after the browser is closed.
+
+Actual same-scope grant reuse and phone revocation retiring an open,
+authenticated MintClaw browser remain unverified. Keep the overall pilot
+incomplete until those checks pass. The synthetic output inventory retains its
+stated provider, recovery and MFA limits.

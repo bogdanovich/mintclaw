@@ -25,10 +25,11 @@ func TestLegacyCronGroupReminderSurvivesRestartInRecipientPrompt(t *testing.T) {
 			cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
 			messageBus := bus.NewMessageBus()
 			al := NewAgentLoop(cfg, messageBus, &recordingProvider{})
-			al.SetChannelManager(newStartedTestChannelManagerWithConfig(
+			manager := newStartedTestChannelManagerWithConfig(
 				t, cfg, messageBus, media.NewFileMediaStore(), "telegram", &fakeChannel{id: "telegram"},
 				channels.WithDeliveredTranscriptProjector(al),
-			))
+			)
+			al.SetChannelManager(manager)
 			tool, err := tools.NewCronTool(nil, al, messageBus, cfg.WorkspacePath(), true, 0, cfg)
 			if err != nil {
 				t.Fatal(err)
@@ -51,6 +52,11 @@ func TestLegacyCronGroupReminderSurvivesRestartInRecipientPrompt(t *testing.T) {
 			history := agent.Sessions.GetHistory(projection.SessionKey)
 			if len(history) != 1 || history[0].Content != reminder {
 				t.Fatalf("recipient history = %#v", history)
+			}
+			// History append can be visible before transcript reconciliation
+			// returns. Drain the producer before closing its database owner.
+			if err = manager.StopAll(t.Context()); err != nil {
+				t.Fatal(err)
 			}
 			al.Stop()
 			al.Close()

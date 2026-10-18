@@ -74,10 +74,26 @@ scripts/browser-capability-smoke.sh --target companion --profile managed \
   --suite image-transfer --json-output /tmp/companion-image-transfer.json
 ```
 
+Also run both placements with `--suite image-transfer-freeform`. That variant
+asks the browser agent to copy the original photo into the form and submit it,
+without naming the acquisition action or prescribing `artifact_ref`. It tests
+capability discovery and autonomous tool selection, rather than only execution
+of a supplied tool recipe. The self-test rejects acquisition-action hints in
+the delegated task. Both variants require the independent original-byte/hash
+oracle, canonical first-party execution evidence, confirmed closure, and
+immediate profile reuse. The free-form variant admits no expected tool errors;
+the guided variant separately checks one intentional preflight rejection.
+
+Current target actions/features and effective profile policy are the capability
+authority. A prior failed invocation, an old learned note, or the absence of a
+website's Save image control does not establish that first-party original-image
+retrieval is unavailable. Conversely, an advertised capability does not grant
+permission, guarantee a retained artifact, or make every image source supported.
+
 Run the gateway command on the gateway host. For the companion command,
 advertise a fixture address reachable by both endpoints. The fixture sets
 only its own scoped test cookie and accepts only a small test image. Its
-independent receipt checks uploaded bytes and SHA-256, authenticated reads,
+independent receipt checks uploaded bytes, SHA-256 and MIME, authenticated reads,
 and the absence of unintended clicks. Claimed success with different image
 bytes must fail the smoke runner's self-test. Trace evidence must show the
 first-party operations, and cleanup must close the session and immediately

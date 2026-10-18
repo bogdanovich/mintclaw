@@ -16,8 +16,11 @@ rollback of its routing evidence.
 PDFI2 is complete; its implementation, deployment, and live evidence are recorded in the
 [PDFI2 exit report](pdf-agentic-intake-pdfi2-exit.md). PDFI3 is complete for its admitted bounded scope; its
 [exit report](pdf-agentic-intake-pdfi3-exit.md) records implementation, qualification, fixes, and channel limits.
-PDFI4 is admitted under its [free-text intake implementation goal](pdf-agentic-intake-pdfi4-goal.md);
-implementation and large-form/channel qualification remain outstanding.
+PDFI4 is admitted under its [free-text intake implementation goal](pdf-agentic-intake-pdfi4-goal.md).
+Implementation is merged and deployed; [qualification is in progress](pdf-agentic-intake-pdfi4-qualification.md).
+Complete official-large-form and actual Telegram gates remain outstanding; PDFI4 is not complete.
+The fresh I-134 test additionally established a conditional/calculated XFA capability boundary; the operator
+deferred that backend work to its [separate roadmap](pdf-conditional-calculated-fields-roadmap.md).
 PDFI5 remains conditional on a second accepted non-PDF protected-input consumer.
 
 ## Operator outcome
@@ -139,7 +142,8 @@ Completion gate:
 
 ### PDFI4: Coherent sections and large-form qualification
 
-**Status:** Admitted; implementation and qualification outstanding. The
+**Status:** Implementation merged and deployed; qualification in progress, not complete. See the
+[dated qualification checkpoint](pdf-agentic-intake-pdfi4-qualification.md). The
 [PDFI4 implementation goal](pdf-agentic-intake-pdfi4-goal.md) fixes the operator contract, protected extraction boundary,
 PR sequence, acceptance evidence, and completion gates.
 
@@ -168,6 +172,12 @@ Include complete applicable filling of the motivating I-134 with synthetic data,
 transactions on an unrelated ordinary AcroForm, and actual Telegram reply/standalone ingress. An admission document,
 prompt-only change, or first-question smoke is not completion.
 
+The fresh 2026-10-18 qualification additionally left a retained-clarification defect open: four new explicit checkbox
+answers were accepted, but older input exhausted its 32-pass budget and the reply asked for resolved facts again.
+Before another official-form attempt, qualify generic no-progress handling, timely clarification and truthful
+accepted-versus-retained reporting on unrelated fixtures. Preserve limits and exhausted jobs; do not substitute a
+new job or a counter reset for recovery. This repair is distinct from the separately deferred XFA backend stage.
+
 ### Deferred Follow-Up: Editable Hybrid Derivatives
 
 **Status:** Deferred by the operator on 2026-10-10; not a PDFI4 completion gate.
@@ -177,6 +187,19 @@ including I-134 with synthetic data. Preserve source immutability and permission
 without executing it, report lost signatures/usage rights truthfully, and verify both accepted values and still-editable
 deferred fields with independent structural/visible oracles. Never specialize production behavior to one agency or form.
 Until that backend exists, explain the limitation rather than silently returning a flattened partial form.
+
+### Deferred Follow-Up: Conditional And Calculated Form Semantics
+
+**Status:** Deferred by the operator on 2026-10-18; implementation not started.
+
+The fresh I-134 source has applicable fields whose XFA scripts change writability or calculate totals. Current
+hybrid support deliberately does not execute those scripts. Complete intake and a verified static subset are
+therefore not proof of complete applicable filling. Preserve the original oracle and keep that qualification open.
+
+The [separate backend roadmap](pdf-conditional-calculated-fields-roadmap.md) orders feasibility/admission,
+conditional branches, calculations and full public-form requalification. It reuses the document worker, protected
+ledger, approval, writer and outbox; no form-specific production rules or general script engine are admitted here.
+This capability is separate from editable hybrid derivatives and from PDFI5's conditional substrate extraction.
 
 ### PDFI5: Conditional protected-input extraction
 

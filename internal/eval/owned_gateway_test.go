@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,9 +30,12 @@ import (
 )
 
 type ownedGatewayControl struct {
-	Mode      string `json:"mode"`
-	ParentPID int    `json:"parent_pid"`
-	LateValue string `json:"late_value,omitempty"`
+	Mode              string `json:"mode"`
+	ParentPID         int    `json:"parent_pid"`
+	LateValue         string `json:"late_value,omitempty"`
+	CrossTrialValue   string `json:"cross_trial_value,omitempty"`
+	UncorrelatedMedia bool   `json:"uncorrelated_media,omitempty"`
+	LateSourceChange  bool   `json:"late_source_change,omitempty"`
 }
 
 // The test binary accepts the same literal gateway command as the product.
@@ -111,6 +115,9 @@ func runOwnedGatewayTestChild() int {
 		GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
 	}
 	var first atomic.Bool
+	var mediaSent atomic.Bool
+	var sessionMu sync.Mutex
+	firstSession := ""
 	upgrader := websocket.Upgrader{}
 	server := &http.Server{
 		ReadHeaderTimeout: time.Second,
@@ -147,6 +154,39 @@ func runOwnedGatewayTestChild() int {
 						_ = os.Mkdir(filepath.Join(home, "reports", entries[0].Name(), "summary.md"), 0o700)
 					}
 				}
+				sessionMu.Lock()
+				if firstSession == "" {
+					firstSession = request.SessionID
+				}
+				crossTrial := firstSession != request.SessionID
+				sessionMu.Unlock()
+				if crossTrial && control.CrossTrialValue != "" {
+					if connection.WriteJSON(protocol.MintClawMessage{
+						Type:    protocol.TypePong,
+						Payload: map[string]any{"auxiliary": control.CrossTrialValue},
+					}) != nil {
+						return
+					}
+				}
+				if control.UncorrelatedMedia && mediaSent.CompareAndSwap(false, true) {
+					if connection.WriteJSON(protocol.MintClawMessage{
+						Type: protocol.TypeMessageCreate, SessionID: request.SessionID,
+						Payload: map[string]any{
+							protocol.PayloadKeyMessageID: "synthetic-media-message",
+							protocol.PayloadKeyAgentID:   "main", protocol.PayloadKeySessionKey: "eval-session-key",
+							protocol.PayloadKeyDeliveryID: "unsettled-delivery",
+							"attachments": []any{
+								map[string]any{
+									"type":         "file",
+									"content_type": "application/pdf",
+									"url":          "/mintclaw/media/unbound-control",
+								},
+							},
+						},
+					}) != nil {
+						return
+					}
+				}
 				response := testResponse(request, 1)
 				response.Payload[protocol.PayloadKeyTraceScopes] = []events.TraceScope{{
 					Workspace: cfg.WorkspacePath(), TurnID: request.ID,
@@ -175,6 +215,29 @@ func runOwnedGatewayTestChild() int {
 	defer cancel()
 	if server.Shutdown(ctx) != nil {
 		return 8
+	}
+	if control.LateSourceChange {
+		entries, readErr := os.ReadDir(filepath.Join(home, "reports"))
+		if readErr != nil || len(entries) != 1 {
+			return 8
+		}
+		files, readErr := os.ReadDir(filepath.Join(home, "reports", entries[0].Name()))
+		pending := false
+		for _, file := range files {
+			if strings.HasPrefix(file.Name(), "trial-") {
+				return 8
+			}
+			pending = pending || strings.HasPrefix(file.Name(), "pending-trial-")
+		}
+		if readErr != nil || !pending {
+			return 8
+		}
+		sessionMu.Lock()
+		source := filepath.Join(cfg.WorkspacePath(), ".eval-trials", firstSession, "source.pdf")
+		sessionMu.Unlock()
+		if os.WriteFile(source, []byte("%PDF-1.7\nlate-owned-source-change\n"), 0o600) != nil {
+			return 8
+		}
 	}
 	if control.LateValue != "" {
 		data, err := json.Marshal(map[string]string{"value": control.LateValue})

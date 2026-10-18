@@ -221,6 +221,70 @@ func TestObjectiveOutcomeRetainsVerifiedReceiptSummaryForMixedActionAndResult(t 
 	}
 }
 
+func TestObjectiveOutcomeAcceptsConfirmedAliasLoginReceipt(t *testing.T) {
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "log in using the saved account", Kind: taskresult.ObjectiveKindExternalAction,
+	}})
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+		`"receipt_ids":["login_receipt_fixture"]}],"missing_items":[],"result":"Login confirmed."}` +
+		objectiveOutcomeEnd
+	for _, outcome := range []string{"logged_in", "approval_required", "handoff_required", "outcome_unknown"} {
+		t.Run(outcome, func(t *testing.T) {
+			audits := []toolshared.WriteAuditEntry{{
+				Kind: taskresult.ObjectiveKindExternalAction, Target: "account:fixture-account",
+				Action: "login", Tool: "browser_login", Success: true, Summary: "Account login confirmed.",
+				Metadata: map[string]string{"invocation_id": "login_receipt_fixture", "outcome": outcome},
+			}}
+			if outcome == "logged_in" {
+				missingReceipt := strings.Replace(content, `["login_receipt_fixture"]`, `[]`, 1)
+				instruction, repair := objectiveOutcomeRepairInstruction(missingReceipt, audits, checklist)
+				if !repair || !strings.Contains(instruction, "login_receipt_fixture") {
+					t.Fatal("runtime could not recover the confirmed login receipt without repeating login")
+				}
+			}
+			_, actual := extractObjectiveOutcome(content, audits, true, checklist)
+			if outcome == "logged_in" {
+				if actual.Status != taskresult.OutcomeSucceeded || len(actual.CompletedItems) != 1 ||
+					len(actual.CompletedItems[0].Receipts) != 1 ||
+					actual.CompletedItems[0].Receipts[0].Tool != "browser_login" {
+					t.Fatal("confirmed alias login could not satisfy its declared action objective")
+				}
+			} else if actual.Status == taskresult.OutcomeSucceeded || len(actual.CompletedItems) != 0 {
+				t.Fatal("unconfirmed login satisfied an action objective")
+			}
+		})
+	}
+}
+
+func TestObjectiveOutcomeAllowsPreparatoryLoginWithoutIgnoringOtherActions(t *testing.T) {
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "read the account page", Kind: taskresult.ObjectiveKindResult,
+	}})
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+		`"output":{"kind":"text","text":"Account page inspected."}}],` +
+		`"missing_items":[],"result":"Account page inspected."}` + objectiveOutcomeEnd
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: taskresult.ObjectiveKindExternalAction, Target: "account:fixture-account",
+		Action: "login", Tool: "browser_login", Success: true,
+		Metadata: map[string]string{"invocation_id": "login_receipt_fixture", "outcome": "logged_in"},
+	}}
+	_, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+	if outcome.Status != taskresult.OutcomeSucceeded {
+		t.Fatal("preparatory login required an extra external-action objective")
+	}
+	audits = append(audits, toolshared.WriteAuditEntry{
+		Kind: taskresult.ObjectiveKindExternalAction, Target: "https://example.com", Action: "click",
+		Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "publish_fixture", "effect": "external_commit"},
+	})
+	_, outcome = extractObjectiveOutcome(content, audits, true, checklist)
+	if outcome.Status == taskresult.OutcomeSucceeded {
+		t.Fatal("preparatory login hid an unclaimed external commit")
+	}
+}
+
 func TestTerminalObjectiveResultSelectsOneExactJSONReportFromSupportingResults(t *testing.T) {
 	const exactJSON = `{"initial_url":"https://example.com/","handoff_started":true,"final_url":"https://example.org/","close_state":"closed","safe_error":null}`
 	outcome := &taskresult.Outcome{
