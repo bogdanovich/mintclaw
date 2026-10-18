@@ -64,24 +64,12 @@ func (store *FormJobStore) StartFormIntake(
 		if record.Public.Revision != request.ExpectedRevision {
 			return false, ErrFormJobConflict
 		}
-		ownerDigest := record.Public.OwnerDigest
-		for otherID, other := range snapshot.Records {
-			if otherID == record.Public.JobID || other.Public.State.terminal() ||
-				other.Public.OwnerDigest != ownerDigest {
-				continue
-			}
-			otherKey, keyErr := unwrapFormJobKey(store.profileKey, *other.WrappedKey)
-			if keyErr != nil {
-				return false, keyErr
-			}
-			otherSource, sourceErr := readFormIntakeSource(other, otherKey)
-			clear(otherKey)
-			if sourceErr != nil {
-				return false, sourceErr
-			}
-			if otherSource.Intake != nil && otherSource.Intake.State != FormIntakeClosed {
-				return false, ErrFormJobConflict
-			}
+		if err = store.requireExclusiveFormIntake(
+			snapshot,
+			record.Public.JobID,
+			record.Public.OwnerDigest,
+		); err != nil {
+			return false, err
 		}
 		payload := formIntakeBindingPayload{
 			Version: FormIntakeVersion, JobID: record.Public.JobID, ModeID: id,
@@ -144,7 +132,7 @@ func (store *FormJobStore) FindFormIntake(ctx context.Context, owner FormJobOwne
 			if err != nil {
 				return false, err
 			}
-			if source.Intake == nil || source.Intake.State == FormIntakeClosed {
+			if !formIntakeCapturesRoute(source.Intake) {
 				continue
 			}
 			if result != nil {
@@ -184,7 +172,7 @@ func (store *FormJobStore) AdmitFormIntakeMessage(
 			Version: FormIntakeVersion, JobID: record.Public.JobID, ModeID: mode.ID,
 			SchemaDigest: mode.SchemaDigest, ExpectedRevision: request.ExpectedRevision, Context: mode.Context,
 		}, nil
-	}, request.MessageIdentity, interactions.ProtectedAnswerValue, request.Text, "", false)
+	}, request.MessageIdentity, interactions.ProtectedAnswerValue, request.Text, "", false, request.RoutingReference)
 }
 
 type formIntakeOriginResolver func(formJobStoredRecord, *formIntakeStoredMode) (formIntakeBindingPayload, error)
@@ -192,6 +180,7 @@ type formIntakeOriginResolver func(formJobStoredRecord, *formIntakeStoredMode) (
 func (store *FormJobStore) admitFormIntake(
 	ctx context.Context, owner FormJobOwner, jobID string, originResolver formIntakeOriginResolver,
 	identity string, intent interactions.ProtectedAnswerIntent, text, interactionID string, staged bool,
+	routingReference ...string,
 ) (FormIntakeAdmission, error) {
 	var result FormIntakeAdmission
 	err := store.update(ctx, func(snapshot *formJobStoreDocument, now time.Time) (bool, error) {
@@ -208,6 +197,24 @@ func (store *FormJobStore) admitFormIntake(
 			return false, ErrFormJobConflict
 		}
 		mode := source.Intake
+		if len(routingReference) > 1 {
+			return false, ErrFormJobAnswerConflict
+		}
+		routed := ""
+		if len(routingReference) == 1 {
+			routed = routingReference[0]
+		}
+		if err = store.validateRoutedFormAdmission(
+			record.Public,
+			mode,
+			routed,
+			identity,
+			text,
+			intent,
+			staged,
+		); err != nil {
+			return false, err
+		}
 		origin, err := originResolver(record, mode)
 		if err != nil {
 			return false, err
@@ -267,6 +274,9 @@ func (store *FormJobStore) admitFormIntake(
 			input.State, input.CommittedAt = formIntakeInputCommitted, now.UnixMilli()
 		}
 		mode.Inputs = append(mode.Inputs, input)
+		if routed != "" {
+			linkRoutedFormInput(record.Public.JobID, mode, routed, input.ID)
+		}
 		if err := store.writeFormIntakeSource(&record, key, source, now); err != nil {
 			return false, err
 		}
@@ -501,6 +511,12 @@ func formIntakeProgress(record FormJobRecord, mode *formIntakeStoredMode) FormIn
 			progress.RetainedBytes += len(input.Text)
 		}
 	}
+	for _, route := range mode.TaskRoutes {
+		progress.TaskBytes += len(route.Text)
+		if formTaskRoutePending(route) {
+			progress.PendingTasks++
+		}
+	}
 	return progress
 }
 
@@ -665,13 +681,17 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 	if mode.Version != FormIntakeVersion || !validFormIntakeJobID(mode.ID) ||
 		!strings.HasPrefix(mode.ID, "form_intake_") || mode.SchemaDigest != record.FieldSchemaDigest ||
 		!validDocumentDigest(mode.StartDigest) || mode.StartRevision <= 0 || mode.StartRevision > record.Revision ||
-		(mode.State != FormIntakeActive && mode.State != FormIntakePaused && mode.State != FormIntakeClosed) ||
+		(mode.State != FormIntakeActive && mode.State != FormIntakePaused && mode.State != FormIntakeClosed &&
+			mode.State != FormIntakeSuspended) ||
 		!validFormIntakeContext(mode.Context) || mode.InitialBinding.Namespace != FormProtectedAnswerNamespace ||
 		mode.InitialBinding.Token == "" || len(mode.InitialBinding.Token) > 2*maxFormProtectedBindingBytes ||
 		!slices.Equal(mode.InitialBinding.Actions, []interactions.ProtectedAnswerAction{
 			interactions.ProtectedAnswerActionClarify, interactions.ProtectedAnswerActionBack,
 		}) || len(mode.Inputs) > MaxFormIntakeReceipts {
 		return ErrFormJobRecordCorrupt
+	}
+	if err := validateStoredFormTaskRoutes(record, mode); err != nil {
+		return err
 	}
 	envelope, err := decodeFormProtectedBindingEnvelope(mode.InitialBinding.Token)
 	if err != nil || envelope.Kind != formIntakeBindingKind || envelope.JobID != record.JobID ||
@@ -766,8 +786,11 @@ func requireSettledFormIntake(record formJobStoredRecord, key []byte) error {
 	if err != nil {
 		return err
 	}
-	if source.Intake != nil && formIntakeProgress(record.Public, source.Intake).PendingInputs != 0 {
-		return ErrFormJobConflict
+	if source.Intake != nil {
+		progress := formIntakeProgress(record.Public, source.Intake)
+		if progress.PendingInputs != 0 || progress.PendingTasks != 0 {
+			return ErrFormJobConflict
+		}
 	}
 	return nil
 }
