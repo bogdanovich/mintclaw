@@ -26,7 +26,12 @@ On Linux, supply the intended X11 session's `DISPLAY`, `XAUTHORITY`, and, when
 needed, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`. Python 3 with GTK 3
 PyGObject is required. On macOS, `swiftc` builds the AppKit fixture; the process
 launching the worker needs actual OS Accessibility and Screen Recording grants.
-macOS process ancestry alone does not prove TCC attribution.
+macOS process ancestry alone does not prove TCC attribution. For the actual-app
+input-mechanism route, use the
+[companion input qualification harness](computer-native-input-qualification.md).
+The [private Linux Unicode build](computer-linux-unicode-build.md) has a separate
+explicit manifest selector; the ordinary default artifact pins below do not
+silently change.
 
 `--case ObservationLifecycle` or another named test isolates a diagnostic case.
 A partial pass never qualifies omitted capabilities. An optional absolute
@@ -102,8 +107,9 @@ Linux insertion of `MintClaw Привет 世界 café 😀` produced
 `MintClaw Привет 世`. The pinned AT-SPI implementation passes a character count
 to an insertion API that expects a
 [UTF-8 byte length](https://docs.gtk.org/atk/method.EditableText.insert_text.html).
-The native assertion remains
-strict and fails; replacement is a separate capability, not a silent workaround.
+The native assertion remains strict and still fails for that original artifact;
+the corrected private candidate below passes. Replacement remains a separate
+capability, not a silent workaround.
 See the pinned
 [AT-SPI implementation](https://github.com/trycua/cua/blob/0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs).
 
@@ -268,6 +274,34 @@ desktops, input, general accessibility-root capture or arbitrary applications.
 See the [companion boundary](computer-companion-boundary.md) and
 [public gateway tools](computer-gateway-tools.md) for reproduction and grants.
 
+## Private semantic-input results, October 18
+
+The corrected Linux candidate in merged
+[#1769](https://github.com/bogdanovich/mintclaw/pull/1769) passes complete Unicode
+insertion, seven nonempty prefix/caret/suffix cases, distinct replacement,
+button effect, scope denial and read-only lifecycle in 4.57 seconds on the actual
+selected GNOME X11 desktop. Its separately selected transient-overlap refusal
+passes in 4.74 seconds. Exact artifact provenance and the earlier failed original
+artifact/build are recorded in the
+[private build qualification](computer-linux-unicode-build.md).
+
+The unchanged original Mac driver passes insertion, replacement, button effect
+and scope denial through the actual installed companion app with both worker
+TCC grants true. The fixture harness in merged
+[#1774](https://github.com/bogdanovich/mintclaw/pull/1774) passes in 41.47 seconds
+and repeats from the final reviewed head in 47.83 seconds. The initial locked
+refusal and invalid Mac `delivery_mode` test request remain recorded failures;
+following the exact platform schema corrected the test without changing effect
+assertions, driver, app, timeouts or production configuration. See the
+[actual-app input qualification](computer-native-input-qualification.md).
+
+These are owned immutable-fixture mechanism results, not admission of general
+application input. The public host still cannot dispatch input. Generic Linux
+accessibility-root identity, OS-wide arbitration, cancellation/held-state
+cleanup, pixel/key/scroll/drag operations, provider/model tasks and the full
+repeated safety suite remain unqualified. No private worker/fixture remains and
+the Linux screen reader remains off.
+
 ## Integration gates
 
 - Requalify the Mac companion's real launch identity and grants after app
@@ -275,9 +309,15 @@ See the [companion boundary](computer-companion-boundary.md) and
   not establish persistence across rebuilds.
 - Requalify exact native window admission, capture and same-resource lifecycle
   for each additional GUI environment or application family.
-- Requalify Unicode insertion on a corrected pinned driver or another backend.
-- Add input contracts with fresh evidence, bounded actions, and independent
-  effect verification before exposing public input tools or companion input
-  commands.
+- Preserve and extend the corrected private Unicode qualification; select a
+  production backend only after the complete targeting/cancellation/effect suite.
+- The [bounded input contracts](computer-input-contract.md) are merged in
+  [#1771](https://github.com/bogdanovich/mintclaw/pull/1771). Before exposing any
+  input host/tool/command, implement host-owned fresh evidence, OS-wide
+  arbitration, protected ephemeral invocation binding, durable no-replay
+  outcomes, cancellation/held-state cleanup and independent verification.
+- Implement and evaluate the frozen
+  [20-task pack](computer-evaluation-pack.md) separately on both platforms;
+  native mechanism passes are not model-task completion scores.
 - Qualify additional environments separately, including Wayland and managed
   Linux desktops; attached and managed operation remain independent choices.

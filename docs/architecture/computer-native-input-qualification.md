@@ -54,6 +54,15 @@ scope denial (8.74). The app and original pinned driver were not rebuilt or
 reinstalled. No private fixture, worker or companion instance remained afterward;
 the unrelated existing companion remained running.
 
+The final reviewed head in merged
+[#1774](https://github.com/bogdanovich/mintclaw/pull/1774) repeated all four checks
+in 47.83 seconds using newly compiled controller/helper executables: insertion
+13.33 seconds, replacement 13.34, click 10.07 and scope denial 8.48. All 14 CI
+checks and automated review passed. These are complete fixture-run timings, not
+per-action model latency or a full representative-task score. The original
+Linux artifact separately passed replacement/click/denial in 2.00 seconds after
+the platform-schema correction; that run does not qualify Linux insertion.
+
 The first attempt refused the locked desktop with exit 75. After unlocking, a
 second attempt exposed an invalid qualification request: Mac `set_value` is
 always-background semantic AX mutation and its pinned schema rejects the Linux
@@ -68,7 +77,9 @@ the explicitly selected GUI session, whereas macOS needs the actual app's TCC
 responsibility context. It does not qualify Linux input, a rebuilt companion
 identity, arbitrary native applications, pixel actions, hotkeys, scrolling,
 dragging, cancellation, held-state cleanup, desktop-wide arbitration or model
-tasks. It does not repair Cua's insertion-to-replacement fallback or establish
+tasks. The Mac insertion case begins in an empty field; it does not yet qualify
+the nonempty-caret/prefix/suffix corpus exercised separately on Linux. It does
+not repair Cua's insertion-to-replacement fallback or establish
 generic Linux accessibility-root/window identity.
 
 Keep native effect results distinct from the full

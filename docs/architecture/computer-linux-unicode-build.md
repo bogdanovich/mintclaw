@@ -1,6 +1,6 @@
 # Private Linux Unicode driver qualification
 
-Status: implementation in progress; no patched native result is claimed yet.
+Status: the private patched artifact passes the selected GNOME X11 fixture.
 This is an explicit private build/fixture path, not production installation or
 an input grant. The existing read-only artifact pins and default configuration
 are unchanged.
@@ -84,3 +84,36 @@ must still qualify the actual selected Linux desktop. Neither qualifies general
 AT-SPI/native-window root identity, pixel input, cancellation, macOS input or a
 public input surface. Those remain gates in the
 [computer-use roadmap](computer-use-roadmap.md).
+
+## Measured October 18 result
+
+Merged [#1769](https://github.com/bogdanovich/mintclaw/pull/1769) qualifies this
+private mechanism candidate, not production input. Exact-head Actions run
+[39174713256](https://github.com/bogdanovich/mintclaw/actions/runs/39174713256)
+passed all 15 checks, including the pinned Rust unit/build and isolated Xvfb
+Unicode fixture. The downloaded artifact's metadata and binary were verified
+locally and again on Linux; its source digests were independently checked
+against the official locked dependency file and a strict local patch application.
+
+| Receipt | SHA256 |
+| --- | --- |
+| Candidate executable | `fbba114405d759ca62b3fae6d53bdf858b5d34c562d771c34e7b56bb8c932ee8` |
+| Exact patch | `7202574110de8e5027c3fc0bf510c09559e1f2765d0360ed85a76de8e668bdc3` |
+| Patched native source | `bc0860ce004c5d16612bba08f349cfbd0e116e02ffc336e536e7fe4fd1d35451` |
+| Official pinned Cargo.lock | `a36ac042e8f9426c28fac1119a4b06cdb34b36b221b2e85fb9c4fbeb094b1cfe` |
+
+The actual selected GNOME X11 fixture passed in 4.57 seconds: complete original
+mixed-language insertion, all seven preserved-prefix/caret/suffix cases, distinct
+replacement, button effect, scope denial and read-only observe/handoff/resume/
+release with app lifetime preserved. A separately selected transient-overlay
+projection passed in 4.74 seconds, refusing composited popup pixels/text. The
+screen-reader setting remained false and no private worker/fixture remained.
+
+The original unmodified artifact still fails insertion with independently
+observed truncation. The first private CI build also failed its final source
+whitespace check after successful compilation; the patch's extra EOF blank line
+was removed and strict pre-build whitespace rejection added. Neither earlier
+failure is counted as a native pass. These results do not qualify existing
+fallbacks, generic AT-SPI/native-root identity, cancellation, held-state cleanup,
+pixel/key/scroll/drag operations or model tasks. Default production driver pins
+and desktop grants remain unchanged.
