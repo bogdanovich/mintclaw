@@ -129,12 +129,13 @@ qualification and physical-device acceptance are recorded separately below.
   [integrated alias operation](credential-alias-browser-login.md), merged in
   [#1654](https://github.com/bogdanovich/mintclaw/pull/1654). Browser login remains
   disabled in the pilot profile until the remaining acceptance gates pass.
-- TR2 setup: generic website/name lookup and private selection of an existing
-  alias's exact item reference are awaiting review in
-  [#1679](https://github.com/bogdanovich/mintclaw/pull/1679). Lookup uses Login
-  overview metadata in the dedicated vault, without retrieving password fields.
-  Website matching does not expand runtime origins. Personal item identifiers
-  and site-specific behavior do not belong in production Go code.
+- TR2 setup: [private item discovery](credential-item-discovery.md) in
+  [#1679](https://github.com/bogdanovich/mintclaw/pull/1679) searches the dedicated
+  vault's Login overviews by website or item name. The operator chooses a
+  candidate and saves its exact reference for an existing alias, without copying
+  UUIDs or retrieving password fields. Website matching does not expand runtime
+  origins; site flow and actor scope stay in local configuration. Personal item
+  identifiers and site-specific behavior do not belong in production Go code.
 - TR3: gateway-owned enrollment/approval/revocation is merged in
   [#1631](https://github.com/bogdanovich/mintclaw/pull/1631). Synthetic signed and
   virtual-authenticator tests cover the component. The alias operation queues

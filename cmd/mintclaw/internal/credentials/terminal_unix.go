@@ -10,7 +10,7 @@ import (
 )
 
 func openPrivateTerminal() (io.WriteCloser, error) {
-	terminal, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+	terminal, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return nil, errSetupUnavailable
 	}
