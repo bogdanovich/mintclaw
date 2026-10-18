@@ -21,6 +21,7 @@ async function driver() {
   const computedCode = '19482673';
   const instance = new Driver({ browser: 'chromium', headless: true });
   await instance.start();
+  if (discovery) await instance.context.addCookies([{name: 'ui_flag', value: '1', url: siteOrigin}]);
   let submissions = 0;
   await instance.context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url());
@@ -60,10 +61,16 @@ async function driver() {
       await route.fulfill({ contentType: 'text/html',
         body: `<title>${cookie}</title><div id="${marker}">Ready</div><p>${username} ${password} ${cookie}</p>${challenge}${logout}` });
     } else {
+      const submit = discovery ?
+        '<div role="button" tabindex="0" onclick="this.closest(\'form\').requestSubmit()">Sign in</div>' :
+        '<button type="submit">Sign in</button>';
+      const resetPassword = discovery ? '<script>const user = document.querySelector("input[name=username]");' +
+        'for (const event of ["input", "change"]) user.addEventListener(event, () => {' +
+        'document.querySelector("input[type=password]").value = "";});</script>' : '';
       await route.fulfill({ contentType: 'text/html', body: '<form method="post" action="/session">' +
         '<input name="username" type="email" aria-label="Account">' +
         '<input name="password" type="password" aria-label="Password">' +
-        '<button type="submit">Sign in</button></form>' });
+        submit + '</form>' + resetPassword });
     }
   });
   await instance.page.goto(siteOrigin + '/login');

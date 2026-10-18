@@ -64,8 +64,12 @@ the generic path; it is retained for existing configured fixed consumers.
 For example, navigate to the intended login page, observe it, discover the Login,
 then submit its current form refs. The runtime prepares exact native elements,
 checks the grant again after retrieval and fills/submits without an intervening
-model turn. Native submit forms require same-origin HTTPS POST with no target
-override. JavaScript buttons are admitted on the trusted same-origin document.
+model turn. Each field is filled and its input/change events finish before
+the next field is filled; live targets and the destination are rechecked in
+between. This supports sites that clear a dependent password when the username
+changes without rebinding replaced controls. Native submit forms require
+same-origin HTTPS POST with no target override. JavaScript buttons are admitted
+on the trusted same-origin document.
 After submission, HTTPS redirects may stay within the matched registrable
 website domain. The Go broker derives that domain using the Public Suffix List;
 model arguments cannot widen it. An unrelated redirect retires the session.
@@ -101,10 +105,21 @@ device also need an explicit user handoff; this feature does not fetch messages
 or bypass challenges. Site-rejected credentials/codes require a fresh observation
 and an honest report, not guesses or blind repeated submissions.
 
+A user may explicitly choose to provide an SMS code in ordinary chat for an
+approved ordinary browser fill. That code is then provider/history-visible input,
+outside the private stored-code guarantee. This does not authorize requesting
+vault passwords or service-account tokens in chat. The existing grant, origin,
+session, challenge and action checks still apply.
+
 The password, username, computed code and private cookies are registered for
-output protection before injection or later observation. They remain protected
-until browser cleanup acknowledges closure. Screenshots, unrestricted browser
-code and downloads remain unavailable in credential-bearing sessions. Retrieval,
+output protection before injection or later observation. Cookie inventories
+stay in the private envelope. Their known boolean literals (`0`, `1`, `true`,
+`false`) are not registered as process-wide secret substrings: those public
+constants would corrupt ordinary references and structural numbers. Other
+cookie values, including numeric tokens, retain echo protection. This exception
+does not apply to vault credentials or computed codes. Registered values remain
+protected until browser cleanup acknowledges closure. Screenshots, unrestricted
+browser code and downloads remain unavailable in credential-bearing sessions. Retrieval,
 private transport, errors and ordinary model/durable output retain their existing
 separation. This does not promise erasure of SDK/browser/string copies in RAM.
 
