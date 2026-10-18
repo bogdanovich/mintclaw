@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
@@ -45,6 +46,7 @@ var retiredInboundInteractionRawKeys = [...]string{
 // platform updates are normalized first, then this spool preserves the common
 // bus.InboundMessage contract.
 type InboundSpool struct {
+	mu            sync.Mutex
 	dir           string
 	writeAtomic   func(string, []byte, os.FileMode) error
 	syncDirectory func(string) error
@@ -64,8 +66,17 @@ func NewInboundSpool(dir string) (*InboundSpool, error) {
 	if dir == "" {
 		return nil, errors.New("inbound spool dir is required")
 	}
-	if err := createInboundSpoolDirectory(dir); err != nil {
+	var err error
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err = createInboundSpoolDirectory(dir); err != nil {
 		return nil, fmt.Errorf("create inbound spool dir: %w", err)
+	}
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil, err
 	}
 	return &InboundSpool{dir: dir, writeAtomic: fileutil.WriteFileAtomic, syncDirectory: fileutil.SyncDirectory}, nil
 }
@@ -88,6 +99,11 @@ func (s *InboundSpool) Prepare(ctx context.Context, msg InboundMessage) (Inbound
 		return msg, err
 	}
 	if err := validateCurrentInboundSpoolContext(msg.Context); err != nil {
+		return msg, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
 		return msg, err
 	}
 
@@ -121,6 +137,11 @@ func (s *InboundSpool) Pending(ctx context.Context, limit int) ([]InboundMessage
 	if s == nil {
 		return nil, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -198,6 +219,8 @@ func (s *InboundSpool) PersistContext(msg InboundMessage) error {
 	if s == nil || msg.SpoolID == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	path := s.processingPath(msg.SpoolID)
 	rec, err := s.readRecord(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -233,6 +256,12 @@ func (s *InboundSpool) Ack(id string) error {
 	if s == nil || id == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ackLocked(id)
+}
+
+func (s *InboundSpool) ackLocked(id string) error {
 	// Reconfirm the namespace even when a retry finds both names absent:
 	// an earlier unlink may have succeeded before directory sync failed.
 	var removeErr error
@@ -248,6 +277,8 @@ func (s *InboundSpool) Release(id string, cause error) error {
 	if s == nil || id == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	rec, err := s.readRecord(s.processingPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -269,6 +300,8 @@ func (s *InboundSpool) Fail(id string, cause error) error {
 	if s == nil || id == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	rec, err := s.readRecord(s.processingPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

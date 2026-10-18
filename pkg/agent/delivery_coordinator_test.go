@@ -690,8 +690,8 @@ func (failingMessageBus) PublishInbound(context.Context, bus.InboundMessage) err
 	return errors.New("publish failed")
 }
 
-func (failingMessageBus) AckInbound(context.Context, bus.InboundMessage) error {
-	return nil
+func (failingMessageBus) AckInbound(context.Context, bus.InboundMessage) (bus.InboundAckReceipt, error) {
+	return bus.InboundAckReceipt{}, nil
 }
 
 func (failingMessageBus) PersistInboundContext(context.Context, bus.InboundMessage) error {

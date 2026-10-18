@@ -695,7 +695,10 @@ func (b *interactionOwnershipBus) PersistInboundContext(
 	return b.MessageBus.PersistInboundContext(ctx, msg)
 }
 
-func (b *interactionOwnershipBus) AckInbound(ctx context.Context, msg bus.InboundMessage) error {
+func (b *interactionOwnershipBus) AckInbound(
+	ctx context.Context,
+	msg bus.InboundMessage,
+) (bus.InboundAckReceipt, error) {
 	b.mu.Lock()
 	b.acked = append(b.acked, msg.SpoolID)
 	b.mu.Unlock()

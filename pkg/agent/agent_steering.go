@@ -86,7 +86,7 @@ func (s *inboundSpool) ack(ctx context.Context, msg bus.InboundMessage) error {
 	if msg.SpoolID == "" || s == nil || s.bus == nil {
 		return nil
 	}
-	if err := s.bus.AckInbound(ctx, msg); err != nil {
+	if _, err := s.bus.AckInbound(ctx, msg); err != nil {
 		logger.WarnCF("agent", "Failed to ack inbound spool entry",
 			map[string]any{
 				"spool_id":    msg.SpoolID,

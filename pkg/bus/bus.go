@@ -274,11 +274,11 @@ func (mb *MessageBus) SetInboundSpool(spool *InboundSpool) {
 	mb.inboundSpool.Store(spool)
 }
 
-func (mb *MessageBus) AckInbound(_ context.Context, msg InboundMessage) error {
+func (mb *MessageBus) AckInbound(_ context.Context, msg InboundMessage) (InboundAckReceipt, error) {
 	if spool := mb.getInboundSpool(); spool != nil {
-		return spool.Ack(msg.SpoolID)
+		return spool.acknowledge(msg.SpoolID)
 	}
-	return nil
+	return InboundAckReceipt{}, nil
 }
 
 func (mb *MessageBus) ReleaseInbound(_ context.Context, msg InboundMessage, cause error) error {
