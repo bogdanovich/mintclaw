@@ -7,7 +7,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/document"
 )
 
-const pdfNoWriteAssessmentScope = "owned_post_stop_no_write_v1"
+const (
+	pdfNoWriteAssessmentScope = "owned_post_stop_no_write_v1"
+	pdfOutputAssessmentScope  = "owned_post_stop_pdf_output_v1"
+)
 
 func observedRoleBoundaries(trial Trial) bool {
 	for index := range trial.DriverCalls {
@@ -74,13 +77,25 @@ func validPDFNoWriteEvidence(trial Trial, item Case, workspace string) bool {
 func gradeFinalizedPDFChecks(item Case, trial Trial) []CheckResult {
 	checks := gradeConversation(item.Checks, trial.Events, lastOutcome(trial.Events))
 	if trial.PDF == nil || trial.PDF.PostStop == nil ||
-		trial.PDF.PostStop.AssessmentScope != pdfNoWriteAssessmentScope {
+		trial.PDF.PostStop.AssessmentScope != pdfNoWriteAssessmentScope &&
+			trial.PDF.PostStop.AssessmentScope != pdfOutputAssessmentScope {
 		return checks
 	}
 	for index, check := range item.Checks {
 		switch check.Kind {
 		case "pdf_no_write":
-			checks[index] = booleanCheck(check.ID, true, []string{"pdf.post_stop"})
+			if trial.PDF.PostStop.AssessmentScope == pdfNoWriteAssessmentScope {
+				checks[index] = booleanCheck(check.ID, true, []string{"pdf.post_stop"})
+			}
+		case "pdf_fields", "pdf_structure":
+			if trial.PDF.PostStop.AssessmentScope == pdfOutputAssessmentScope {
+				checks[index] = booleanCheck(check.ID, true, []string{trial.PDF.Artifact.File})
+			}
+		case "pdf_delivery":
+			if trial.PDF.PostStop.AssessmentScope == pdfOutputAssessmentScope {
+				checks[index] = booleanCheck(check.ID, true,
+					[]string{"pdf.settlement", "pdf.post_stop", "pdf.wire"})
+			}
 		case "private_surfaces":
 			checks[index] = booleanCheck(check.ID, true,
 				[]string{"run.private_surfaces", "pdf.post_stop", "pdf.wire"})
@@ -89,24 +104,33 @@ func gradeFinalizedPDFChecks(item Case, trial Trial) []CheckResult {
 	return checks
 }
 
-func assessFinalizedPDFNoWrite(
-	ctx context.Context, judge *ModelRole, item Case, trial *Trial,
+func assessFinalizedPDF(
+	ctx context.Context, judge *ModelRole, item Case, trial *Trial, workspace string,
 	lifecycle *TargetLifecycle, surfaces *PrivateSurfaceObservation,
+	report *privateReport,
 ) {
-	workspace := ""
-	if trial.Cancellation != nil {
-		workspace = trial.Cancellation.Workspace
-	} else if trial.PDF != nil && trial.PDF.Cancellation != nil {
-		workspace = trial.PDF.Cancellation.Question.Workspace
+	if !observedPDFProfile(lifecycle, surfaces) {
+		return
 	}
-	if !observedPDFProfile(lifecycle, surfaces) || !validPDFNoWriteEvidence(*trial, item, workspace) {
+	var scope string
+	switch {
+	case validPDFNoWriteEvidence(*trial, item, workspace):
+		scope = pdfNoWriteAssessmentScope
+	case validPDFOutputEvidence(*trial, item, workspace):
+		if !report.observeFinalPDFArtifact(trial) {
+			return
+		}
+		scope = pdfOutputAssessmentScope
+	default:
 		return
 	}
 	started := time.Now()
 	defer func() { trial.DurationMS += time.Since(started).Milliseconds() }()
-	trial.PDF.PostStop.AssessmentScope = pdfNoWriteAssessmentScope
+	trial.PDF.PostStop.AssessmentScope = scope
 	trial.Checks = gradeFinalizedPDFChecks(item, *trial)
-	trial.EvidenceEligible = true
+	// Output judging uses the still-retained private fact guard. Offline regrade
+	// has no such guard yet and must not inherit eligibility from a live pass.
+	trial.EvidenceEligible = scope == pdfNoWriteAssessmentScope
 	trial.Verdict, trial.Code = trial.ExecutionVerdict, trial.ExecutionCode
 	for _, check := range trial.Checks {
 		if combined := combineVerdicts(trial.Verdict, check.Verdict); combined != trial.Verdict {
@@ -138,7 +162,8 @@ func assessFinalizedPDFNoWrite(
 
 func retainPDFJudgePrivacy(item Case, trial *Trial) {
 	if trial.PDF == nil || trial.PDF.PostStop == nil ||
-		trial.PDF.PostStop.AssessmentScope != pdfNoWriteAssessmentScope || trial.Judge == nil ||
+		trial.PDF.PostStop.AssessmentScope != pdfNoWriteAssessmentScope &&
+			trial.PDF.PostStop.AssessmentScope != pdfOutputAssessmentScope || trial.Judge == nil ||
 		roleBoundaryEligible(trial.Judge.Call) && trial.Judge.Code != "private_judge_output" {
 		return
 	}

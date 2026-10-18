@@ -10,7 +10,9 @@ form job, delivered write operation, and recovered outbox intent. Authenticated 
 downloaded PDF for independent field/structure/appearance checks. Delivery uniqueness, complete private-surface
 coverage, and complete owned-resource cleanup remain pending. Owned post-stop census can establish a scoped no-write
 check and remove a verified settled source fixture. The finalized cancellation/no-write contract below
-can additionally admit judging/regrading without private facts or output artifacts. Other PDF cases remain gated.
+can additionally admit judging/regrading without private facts or output artifacts. The distinct finalized-output
+contract below admits live judging only after all of its independent witnesses; output/private-value regrade and
+the complete six-case qualification remain pending.
 Required missing evidence still prevents a passing trial;
 a first question, caption, or oracle control is not qualification.
 
@@ -140,6 +142,30 @@ cancellation and native counts before any billable call. It recomputes the no-wr
 operator-owned retained receipts without opening the deleted source or current native stores, rerunning an oracle,
 connecting to a gateway or executing tools. Evidence is not cryptographically signed. Old inconclusive reports,
 private fact cases and filled/output PDFs are not upgraded by this contract.
+
+### Finalized Output Assessment
+
+`owned_post_stop_pdf_output_v1` admits a distinct live assessment while the run still retains its private fact guard.
+It requires a completed owner-bound form job, previously verified review/confirmation/consumed approval, unchanged
+terminal native operation/delivery snapshots, one write/media intent/document delivery and no pending/foreign
+effects after clean shutdown. The joined client must observe exactly one native-bound PDF message with the same
+logical delivery/platform identity. Missing or conflicting evidence cannot pass from a caption or final assertion.
+
+The independent pinned oracle must match the source/output digests, every expected field, editable structure,
+appearance and preserved background, with complete page/field counts. The private retained artifact is read again
+under the existing binary bound and checked against native size/digest before a judge call. A known mismatch fails;
+unavailable retention stays inconclusive. No source, gateway, PDF worker or oracle is restarted during this step.
+
+Only a valid completed scoped raw-profile observation, joined raw-frame inspection, observed typed role boundaries,
+unchanged source and owned-source removal permit the output scope. Hard artifact/delivery/privacy checks remain
+authoritative. The tools-disabled judge receives only the permitted conversation/rubric, never PDF bytes, private
+answers or hidden field expectations. Private or uninspectable judge output revokes the scope/privacy claim.
+
+This scope can produce a live trial verdict but deliberately leaves `evidence_eligible: false`: private-value and
+output offline-regrade admission is still pending. `grade` refuses such sources before model billing rather than
+reusing a live privacy claim without its private guard. Older no-write receipts and incomplete output pilots are
+not upgraded. Deterministic controls with stubbed oracle/profile/process receipts are not real-worker qualification;
+the required first live output attempt and remaining PDF/browser cases stay part of the active goal.
 Offline controls do not establish a real-model cancellation result or qualify the remaining five PDF cases.
 
 ## Post-Stop Raw File Observation

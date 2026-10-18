@@ -197,7 +197,16 @@ func TestProtectedPDFCancellationRequiresBothNativeTerminalRecords(t *testing.T)
 						Content: adaptiveJudgePass, FinishReason: "stop",
 					}}
 					judge := &ModelRole{provider: provider, identity: RoleIdentity{Role: "judge"}}
-					assessFinalizedPDFNoWrite(t.Context(), judge, item, &trial, cleanPDFLifecycle(), &surfaces)
+					assessFinalizedPDF(
+						t.Context(),
+						judge,
+						item,
+						&trial,
+						prepared.workspace,
+						cleanPDFLifecycle(),
+						&surfaces,
+						nil,
+					)
 					if trial.Verdict != Pass || !trial.EvidenceEligible || provider.calls != 1 ||
 						!validPDFNoWriteEvidence(trial, item, prepared.workspace) {
 						t.Fatal("bound native protected cancellation could not be judged", trial.Code, surfaces.Code)
