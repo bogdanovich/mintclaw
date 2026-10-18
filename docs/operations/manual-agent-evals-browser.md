@@ -8,8 +8,9 @@ and action-bound cases remain visible skips. The offline controls use no model o
 
 The [first owned read pilot](manual-agent-evals-browser-read-v1-pilot-20261018.md) retained an inconclusive result
 with zero fixture visits and a native driver startup failure. Separate model-free controls identified Chrome's
-Unix-socket path limit under deep private temporary roots. Native temporary-path handling remains a prerequisite;
-the report is not a passing browser result.
+Unix-socket path limit under deep private temporary roots. The native Linux library driver now uses a checked
+private working directory and a relative Chrome temp-path spelling; no external temp alias is added. This startup
+fix does not upgrade the historical report or qualify native browser grading.
 
 ## Corpus Contracts
 
