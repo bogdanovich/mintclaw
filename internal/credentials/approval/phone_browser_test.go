@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,14 +40,17 @@ func TestPhoneBrowserFixture(t *testing.T) {
 			if discovery {
 				name = pagePath + "discovery"
 			}
-			t.Run(name, func(t *testing.T) { testPhoneBrowserFixture(t, pagePath, discovery) })
+			t.Run(name, func(t *testing.T) { testPhoneBrowserFixture(t, pagePath, discovery, false) })
 		}
 	}
+	t.Run("idle-approval", func(t *testing.T) { testPhoneBrowserFixture(t, "/credentials/", true, true) })
 }
 
-func testPhoneBrowserFixture(t *testing.T, pagePath string, discovery bool) {
+func testPhoneBrowserFixture(t *testing.T, pagePath string, discovery, idle bool) {
 	t.Helper()
 	fixture := newFixture(t)
+	var elapsed atomic.Int64
+	fixture.controller.now = func() time.Time { return time.Now().Add(time.Duration(elapsed.Load())) }
 	if discovery {
 		rules := []credentialbroker.AccountRule{{
 			Alias: "facebook", VaultID: "private-vault", DiscoverLogins: true,
@@ -72,6 +76,9 @@ func testPhoneBrowserFixture(t *testing.T, pagePath string, discovery bool) {
 	defer clear(invite)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
+		case "/_fixture/idle":
+			elapsed.Store(int64(PendingLifetime + time.Minute))
+			writePhoneResponse(writer, phoneResponse{Status: "pending"})
 		case "/_fixture/request":
 			id, requestErr := fixture.controller.Request(
 				request.Context(),
@@ -129,6 +136,9 @@ func testPhoneBrowserFixture(t *testing.T, pagePath string, discovery bool) {
 	}
 	if discovery {
 		config["discovery"] = "true"
+	}
+	if idle {
+		config["idle"] = "true"
 	}
 	input := marshalFixture(t, config)
 	defer clear(input)

@@ -69,6 +69,8 @@ The approval controller retains its single bounded in-memory request map.
 `RequestLifetime` is two hours; `PendingLifetime` remains five minutes for
 WebAuthn ceremonies and private setup. Reopening an unattempted expired ceremony
 creates a fresh challenge without renewing the original request deadline.
+The phone page refreshes that challenge on the approval click as well, so a page
+left open past five minutes can still approve its live two-hour request.
 Finishing a challenge checks that deadline again after durable owner persistence.
 
 The browser source returns immediately with a JSON-excluded wait descriptor.
