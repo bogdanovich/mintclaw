@@ -124,3 +124,6 @@ canonical history, local logging, diagnostic traces and both export modes for
 the qualified OpenAI-compatible and Codex paths. These tests use no real vault,
 phone or account. The owner's Facebook pilot and deployment are separate gates;
 passing a synthetic flow does not claim that Facebook has been logged into.
+
+The [rollout evidence](credential-website-login-rollout.md) records the merged
+deployment, successful real metadata lookup and still-pending owner pilot.

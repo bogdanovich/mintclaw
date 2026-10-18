@@ -1,9 +1,10 @@
 # Website-discovered browser credentials
 
-Status: implementation plan, 2026-10-18. This replaces the requirement to
+Status: D0–D3 delivered on 2026-10-18; owner's Facebook pilot D4 pending.
+This replaces the requirement to
 preconfigure each browser account's item UUID, allowed origins and site-specific
-success markers. The existing implementation remains in service until the new
-path is reviewed, qualified and deployed.
+success markers. The new path is reviewed, qualified and deployed; see the
+[rollout evidence and remaining pilot gate](credential-website-login-rollout.md).
 
 ## Product contract
 
