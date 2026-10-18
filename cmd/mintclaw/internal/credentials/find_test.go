@@ -17,9 +17,17 @@ import (
 type discoveryTerminal struct {
 	input  *strings.Reader
 	output bytes.Buffer
+	onRead func()
 }
 
-func (terminal *discoveryTerminal) Read(p []byte) (int, error)  { return terminal.input.Read(p) }
+func (terminal *discoveryTerminal) Read(p []byte) (int, error) {
+	n, err := terminal.input.Read(p)
+	if terminal.onRead != nil {
+		terminal.onRead()
+	}
+	return n, err
+}
+
 func (terminal *discoveryTerminal) Write(p []byte) (int, error) { return terminal.output.Write(p) }
 func (*discoveryTerminal) Close() error                         { return nil }
 
@@ -127,6 +135,40 @@ func TestFindBindingDeniesLiveGatewayBeforeReadingVault(t *testing.T) {
 	command.SetArgs([]string{"find", "--name", "example", "--bind", "example"})
 	if command.Execute() == nil || listed {
 		t.Fatal("live runtime binding update reached the vault")
+	}
+}
+
+func TestFindBindingRejectsGatewayStartingDuringSelection(t *testing.T) {
+	cfg := discoveryConfig(t)
+	running, attempted, saved := false, false, false
+	terminal := &discoveryTerminal{
+		input:  strings.NewReader("1\n"),
+		onRead: func() { running = true },
+	}
+	command := newCredentialsCommand(commandDeps{
+		loadConfig:   func() (*config.Config, error) { return cfg, nil },
+		openTerminal: func() (io.WriteCloser, error) { return terminal, nil },
+		readGateway: func() *pid.PidFileData {
+			if running {
+				return &pid.PidFileData{}
+			}
+			return nil
+		},
+		findLogins: func(context.Context, string, string, vault.DiscoveryQuery) ([]vault.Candidate, error) {
+			return []vault.Candidate{{Binding: vault.Binding{VaultID: "vault", ItemID: "chosen"}}}, nil
+		},
+		updateConfig: func(mutate func(*config.Config) error) error {
+			attempted = true
+			err := mutate(cfg)
+			saved = err == nil
+			return err
+		},
+	})
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	command.SetArgs([]string{"find", "--name", "example", "--bind", "example"})
+	if command.Execute() == nil || !running || !attempted || saved || cfg.Credentials.Accounts[0].ItemID != "old" {
+		t.Fatal("gateway startup during private selection did not reject the binding save")
 	}
 }
 

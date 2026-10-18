@@ -115,7 +115,8 @@ func newFindCommand(deps commandDeps) *cobra.Command {
 			}
 			selected := candidates[selection-1]
 			err = deps.updateConfig(func(current *config.Config) error {
-				if current == nil || !reflect.DeepEqual(current.Credentials, cfg.Credentials) {
+				if deps.readGateway() != nil || current == nil ||
+					!reflect.DeepEqual(current.Credentials, cfg.Credentials) {
 					return errSetupUnavailable
 				}
 				current.Credentials.Accounts[index].ItemID = selected.ItemID
