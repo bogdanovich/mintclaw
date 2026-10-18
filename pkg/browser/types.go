@@ -28,6 +28,13 @@ func OpaqueActorID(actorID string) string {
 	return "actor_" + hex.EncodeToString(digest[:16])
 }
 
+// OpaqueSessionKey maps a routed conversation onto its persisted browser scope.
+// This is an identity projection, not permission to control another execution.
+func OpaqueSessionKey(sessionKey string) string {
+	digest := sha256.Sum256([]byte("session\x00" + strings.TrimSpace(sessionKey)))
+	return "session_" + hex.EncodeToString(digest[:16])
+}
+
 const (
 	initialBlankOrigin    = "about:blank"
 	MaxIdentifierBytes    = browseraction.MaxIdentifierBytes

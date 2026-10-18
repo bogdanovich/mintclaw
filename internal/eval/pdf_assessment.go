@@ -23,7 +23,7 @@ func observedRoleBoundaries(trial Trial) bool {
 		trial.Judge.Call.Boundary != nil && roleBoundaryEligible(trial.Judge.Call)
 }
 
-func observedPDFProfile(lifecycle *TargetLifecycle, surfaces *PrivateSurfaceObservation) bool {
+func observedOwnedProfile(lifecycle *TargetLifecycle, surfaces *PrivateSurfaceObservation) bool {
 	return lifecycle != nil && lifecycle.valid() && lifecycle.Code == "native_exit_zero" &&
 		!lifecycle.LogTruncated && surfaces != nil && surfaces.valid() && surfaces.Code == "observed"
 }
@@ -109,7 +109,7 @@ func assessFinalizedPDF(
 	lifecycle *TargetLifecycle, surfaces *PrivateSurfaceObservation,
 	report *privateReport,
 ) {
-	if !observedPDFProfile(lifecycle, surfaces) {
+	if !observedOwnedProfile(lifecycle, surfaces) {
 		return
 	}
 	var scope string

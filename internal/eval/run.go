@@ -233,7 +233,17 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			}
 		})
 	finalCancel()
-	if pendingBrowser.finish(writer, &result, retainedFacts.values, filter) != nil {
+	browserCtx, browserCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	browserErr := pendingBrowser.finish(browserCtx, target, writer, &result, retainedFacts.values, filter,
+		func(item Case, trial *Trial) {
+			assessFinalizedBrowserRead(suiteCtx, roles.judge, item, trial, preset.ExpectedWorkspace,
+				lifecycle, privateSurfaces, result.BrowserFixtures)
+			if trial.Judge != nil && trial.Judge.Call != nil {
+				roleCalls = append(roleCalls, *trial.Judge.Call)
+			}
+		})
+	browserCancel()
+	if browserErr != nil {
 		err = ErrReport
 	}
 	result.RoleUsage = []RoleUsage{summarizeRoleCalls("user", roleCalls), summarizeRoleCalls("judge", roleCalls)}

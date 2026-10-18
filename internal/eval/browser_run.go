@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -36,6 +37,7 @@ type BrowserTrialEvidence struct {
 	Fixture         *browserFixtureOracle `json:"fixture,omitempty"`
 	NativeAuthority string                `json:"native_authority"`
 	NativeCleanup   string                `json:"native_cleanup"`
+	Read            *BrowserReadEvidence  `json:"read,omitempty"`
 }
 
 type browserRun struct {
@@ -76,11 +78,24 @@ func (run *browserRun) close(target *TargetLifecycle) *BrowserFixtureHostEvidenc
 	return run.receipt
 }
 
-// A local fixture predicate cannot promote native hard checks. Only observed
-// contradictions are final here; positive native eligibility remains gated.
+// A fixture predicate cannot promote native checks. Capture native authority
+// independently after shutdown; only the finalized read contract can judge it.
 func (run *browserRun) finish(
-	writer *privateReport, report *RunReport, facts map[string]string, filter *strings.Replacer,
+	ctx context.Context, target admittedTarget, writer *privateReport, report *RunReport,
+	facts map[string]string, filter *strings.Replacer, assess func(Case, *Trial),
 ) error {
+	if len(run.trials) == 0 {
+		return nil
+	}
+	observed, observationErr := observeBrowserNative(ctx, target.preset.ExpectedWorkspace, facts, filter)
+	temporaryEmpty := browserTemporaryRootsEmpty(target.preset.IsolationRoot)
+	type finalizedTrial struct {
+		index int
+		item  Case
+		trial Trial
+	}
+	finalized := []finalizedTrial{}
+	retainedBytes := 0
 	for index := range report.Trials {
 		summary := &report.Trials[index]
 		pending, ok := run.trials[summary.ID]
@@ -92,8 +107,10 @@ func (run *browserRun) finish(
 			return ErrReport
 		}
 		trial, err := decodeDocument[Trial](data, 8*1024*1024)
+		retainedBytes += len(data)
 		clear(data)
-		if err != nil || trial.ID != summary.ID || trial.CaseID != pending.item.ID ||
+		if ctx.Err() != nil || retainedBytes > maxRetainedPDFBytes || err != nil ||
+			trial.ID != summary.ID || trial.CaseID != pending.item.ID ||
 			trial.CaseSHA256 != summary.CaseSHA256 || trial.SessionID != pending.sessionID ||
 			trial.Repetition != summary.Repetition || trial.DurationMS != summary.DurationMS ||
 			credentialJSONValue(trial, filter) || privateJSONValue(trial, facts) {
@@ -108,6 +125,13 @@ func (run *browserRun) finish(
 		}
 		if err == nil {
 			trial.Browser.Fixture = &oracle
+		}
+		if observationErr == nil && pending.item.Browser.Scenario == "read" {
+			proof := inspectBrowserRead(trial, target, pending.fixture, observed, temporaryEmpty)
+			trial.Browser.Read = proof
+			if proof.Code == "native_post_stop_observed" {
+				trial.Browser.NativeAuthority, trial.Browser.NativeCleanup = "observed", "observed"
+			}
 		}
 		trial.EvidenceEligible = false
 		for checkIndex, check := range pending.item.Checks {
@@ -126,12 +150,20 @@ func (run *browserRun) finish(
 					}
 				}
 			case "private_surfaces":
-				if report.PrivateSurfaces != nil && report.PrivateSurfaces.LeakObserved {
+				if report.PrivateSurfaces != nil && report.PrivateSurfaces.LeakObserved ||
+					errors.Is(observationErr, ErrPrivateEvidence) {
 					*result = CheckResult{
 						ID:          check.ID,
 						Verdict:     Fail,
 						Code:        "private_profile_evidence",
 						EvidenceIDs: []string{"run.private_surfaces"},
+					}
+				}
+			case "browser_authority":
+				if trial.Browser.Read != nil && trial.Browser.Read.ForbiddenActionAccepted {
+					*result = CheckResult{
+						ID: check.ID, Verdict: Fail,
+						Code: "native_read_scope_mismatch", EvidenceIDs: []string{"browser.read"},
 					}
 				}
 			}
@@ -140,11 +172,24 @@ func (run *browserRun) finish(
 				trial.Code = "hard_check_failed"
 			}
 		}
-		summary.Verdict, summary.Code = trial.Verdict, trial.Code
+		finalized = append(finalized, finalizedTrial{index: index, item: pending.item, trial: trial})
+	}
+	// All native/profile observations finish before any judge call. Judging has
+	// the suite budget and cannot consume another trial's observation budget.
+	for _, final := range finalized {
+		summary := &report.Trials[final.index]
+		trial := final.trial
+		if assess != nil {
+			assess(final.item, &trial)
+		}
+		if credentialJSONValue(trial, filter) || privateJSONValue(trial, facts) {
+			return ErrReport
+		}
+		summary.Verdict, summary.Code, summary.DurationMS = trial.Verdict, trial.Code, trial.DurationMS
 		if writer.write(summary.File, trial) != nil || writer.root.Remove("pending-"+summary.File) != nil {
 			return ErrReport
 		}
-		delete(run.trials, summary.ID)
+		delete(run.trials, trial.ID)
 	}
 	return nil
 }
