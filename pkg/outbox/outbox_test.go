@@ -184,10 +184,13 @@ func TestRecoverRetriesSafeIntentsAndMarksInterruptedAttemptAmbiguous(t *testing
 	if err != nil {
 		t.Fatalf("Recover() error = %v", err)
 	}
-	if len(recovered) != 2 {
+	if len(recovered.Intents) != 2 {
 		t.Fatalf("Recover() = %#v, want pending and definitely failed", recovered)
 	}
-	recoveredByID := map[string]Intent{recovered[0].ID: recovered[0], recovered[1].ID: recovered[1]}
+	recoveredByID := map[string]Intent{
+		recovered.Intents[0].ID: recovered.Intents[0],
+		recovered.Intents[1].ID: recovered.Intents[1],
+	}
 	if recoveredByID[pending.ID].Status != StatusPending ||
 		recoveredByID[definitelyFailed.ID].RetryAfter != retryAt ||
 		recoveredByID[definitelyFailed.ID].LastError != "rate limited" {
@@ -209,12 +212,12 @@ func TestRecoverRetriesSafeIntentsAndMarksInterruptedAttemptAmbiguous(t *testing
 	if err != nil {
 		t.Fatalf("Recover() second error = %v", err)
 	}
-	if len(recoveredAgain) != 2 {
+	if len(recoveredAgain.Intents) != 2 {
 		t.Fatalf("Recover() second = %#v, want pending and definitely failed", recoveredAgain)
 	}
 	recoveredAgainByID := map[string]Intent{
-		recoveredAgain[0].ID: recoveredAgain[0],
-		recoveredAgain[1].ID: recoveredAgain[1],
+		recoveredAgain.Intents[0].ID: recoveredAgain.Intents[0],
+		recoveredAgain.Intents[1].ID: recoveredAgain.Intents[1],
 	}
 	if recoveredAgainByID[pending.ID].Status != StatusPending ||
 		recoveredAgainByID[definitelyFailed.ID].Status != StatusDefinitelyFailed {
@@ -232,15 +235,15 @@ func TestRecoverReturnsOnlyDomainSettlementAfterTerminalFormDelivery(t *testing.
 		t.Fatal(err)
 	}
 	recovered, err := store.Recover()
-	if err != nil || len(recovered) != 1 || !recovered[0].RecoverySettlementPending() ||
-		recovered[0].Status != StatusDelivered {
+	if err != nil || len(recovered.Intents) != 1 || !recovered.Intents[0].RecoverySettlementPending() ||
+		recovered.Intents[0].Status != StatusDelivered {
 		t.Fatalf("Recover() = %#v, %v", recovered, err)
 	}
 	settled, err := store.MarkRecoverySettled(intent.ID)
 	if err != nil || !settled.RecoverySettled {
 		t.Fatalf("MarkRecoverySettled() = %#v, %v", settled, err)
 	}
-	if recovered, err = store.Recover(); err != nil || len(recovered) != 0 {
+	if recovered, err = store.Recover(); err != nil || len(recovered.Intents) != 0 {
 		t.Fatalf("Recover() after settlement = %#v, %v", recovered, err)
 	}
 }
@@ -252,8 +255,8 @@ func TestRecoverReturnsInterruptedFormDeliveryForSettlementWithoutRedispatch(t *
 		t.Fatal(err)
 	}
 	recovered, err := store.Recover()
-	if err != nil || len(recovered) != 1 || recovered[0].Status != StatusAmbiguous ||
-		!recovered[0].RecoverySettlementPending() || recovered[0].LastError != interruptedAttemptError {
+	if err != nil || len(recovered.Intents) != 1 || recovered.Intents[0].Status != StatusAmbiguous ||
+		!recovered.Intents[0].RecoverySettlementPending() || recovered.Intents[0].LastError != interruptedAttemptError {
 		t.Fatalf("Recover() = %#v, %v", recovered, err)
 	}
 }
@@ -318,7 +321,7 @@ func TestUnrecoverableIntentIsTerminalAcrossRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recover() error = %v", err)
 	}
-	if len(recovered) != 0 {
+	if len(recovered.Intents) != 0 {
 		t.Fatalf("Recover() = %#v, want no terminal intent", recovered)
 	}
 }
@@ -439,7 +442,7 @@ func TestRecoverReconfirmsCommittedAmbiguousWrite(t *testing.T) {
 	}
 	if recovered, err := store.Recover(); err != nil {
 		t.Fatalf("Recover() reconfirm error = %v", err)
-	} else if len(recovered) != 0 {
+	} else if len(recovered.Intents) != 0 {
 		t.Fatalf("Recover() reconfirm returned pending intents: %#v", recovered)
 	}
 	if writes != 2 {

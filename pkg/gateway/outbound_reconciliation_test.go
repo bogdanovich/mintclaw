@@ -132,7 +132,7 @@ func TestGatewayOutboundReconcilerPublishesCanonicalTextAndMedia(t *testing.T) {
 	}
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
-	reconciler, err := startGatewayOutboundReconciler(t.Context(), second, msgBus, admissions, nil, "", nil)
+	reconciler, err := startGatewayOutboundReconciler(t.Context(), second, msgBus, admissions.Admissions, nil, "", nil)
 	if err != nil {
 		t.Fatalf("startGatewayOutboundReconciler() error = %v", err)
 	}
@@ -259,7 +259,7 @@ func TestGatewayOutboundReconcilerHonorsPersistedRetryDeadline(t *testing.T) {
 	t.Cleanup(msgBus.Close)
 	settled := make(chan outbox.Intent, 1)
 	reconciler, err := startGatewayOutboundReconciler(
-		t.Context(), second, msgBus, admissions, nil, "",
+		t.Context(), second, msgBus, admissions.Admissions, nil, "",
 		&recoveredOutboundCallbacks{settle: func(ctx context.Context, recovered outbox.Admission) error {
 			intent, awaitErr := second.AwaitTerminal(ctx, recovered)
 			if awaitErr == nil {
@@ -340,7 +340,7 @@ func TestGatewayOutboundReconcilerRevalidatesDelayedAdmissionBeforePublication(t
 	}
 	reconciled := make(chan reconciliationResult, 1)
 	reconciler, err := startGatewayOutboundReconciler(
-		t.Context(), second, msgBus, admissions, nil, "",
+		t.Context(), second, msgBus, admissions.Admissions, nil, "",
 		&recoveredOutboundCallbacks{reconcile: func(recovered outbox.Admission, now time.Time) (bool, error) {
 			_, abandonErr := second.Abandon(recovered.Intent.ID, outbox.Outcome{
 				Error: "interaction prompt is no longer active",
@@ -401,7 +401,15 @@ func TestGatewayOutboundReconcilerReleasesUnpublishedAdmission(t *testing.T) {
 	}
 	msgBus := bus.NewMessageBus()
 	msgBus.Close()
-	if _, err := startGatewayOutboundReconciler(t.Context(), second, msgBus, admissions, nil, "", nil); err == nil {
+	if _, err := startGatewayOutboundReconciler(
+		t.Context(),
+		second,
+		msgBus,
+		admissions.Admissions,
+		nil,
+		"",
+		nil,
+	); err == nil {
 		t.Fatal("startGatewayOutboundReconciler() succeeded with a closed bus")
 	}
 	closeGatewayRecoveryCoordinator(t, second)
@@ -412,7 +420,7 @@ func TestGatewayOutboundReconcilerReleasesUnpublishedAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recover() after publication failure error = %v", err)
 	}
-	if len(recovered) != 1 || recovered[0].Intent.ID != admission.Intent.ID {
+	if len(recovered.Admissions) != 1 || recovered.Admissions[0].Intent.ID != admission.Intent.ID {
 		t.Fatalf("Recover() after publication failure = %#v", recovered)
 	}
 }
@@ -447,7 +455,15 @@ func TestGatewayOutboundReconcilerShutdownReleasesDelayedAdmission(t *testing.T)
 	}
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
-	reconciler, err := startGatewayOutboundReconciler(context.Background(), second, msgBus, admissions, nil, "", nil)
+	reconciler, err := startGatewayOutboundReconciler(
+		context.Background(),
+		second,
+		msgBus,
+		admissions.Admissions,
+		nil,
+		"",
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("startGatewayOutboundReconciler() error = %v", err)
 	}
@@ -460,7 +476,7 @@ func TestGatewayOutboundReconcilerShutdownReleasesDelayedAdmission(t *testing.T)
 	if err != nil {
 		t.Fatalf("Recover() after shutdown error = %v", err)
 	}
-	if len(recovered) != 1 || recovered[0].Intent.ID != admission.Intent.ID {
+	if len(recovered.Admissions) != 1 || recovered.Admissions[0].Intent.ID != admission.Intent.ID {
 		t.Fatalf("Recover() after shutdown = %#v", recovered)
 	}
 }
@@ -512,7 +528,7 @@ func TestGatewayOutboundReconcilerTerminalizesMissingBrowserArtifact(t *testing.
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
 	reconciler, err := startGatewayOutboundReconciler(
-		t.Context(), second, msgBus, admissions, runtime, workspace, nil,
+		t.Context(), second, msgBus, admissions.Admissions, runtime, workspace, nil,
 	)
 	if err != nil {
 		t.Fatalf("startGatewayOutboundReconciler() error = %v", err)
@@ -533,7 +549,7 @@ func TestGatewayOutboundReconcilerTerminalizesMissingBrowserArtifact(t *testing.
 	third := openGatewayRecoveryCoordinator(t, root)
 	t.Cleanup(func() { _ = third.Close() })
 	recovered, err := third.Recover()
-	if err != nil || len(recovered) != 0 {
+	if err != nil || len(recovered.Admissions) != 0 {
 		t.Fatalf("Recover() after terminalization = %#v, %v", recovered, err)
 	}
 }
@@ -575,7 +591,7 @@ func TestGatewayOutboundReconcilerPreservesDownloadSpoolFailure(t *testing.T) {
 	}
 	msgBus := bus.NewMessageBus()
 	if _, err = startGatewayOutboundReconciler(
-		t.Context(), second, msgBus, admissions, runtime, workspace, nil,
+		t.Context(), second, msgBus, admissions.Admissions, runtime, workspace, nil,
 	); !errors.Is(err, nodes.ErrTransferSpoolClosed) {
 		t.Fatalf("startGatewayOutboundReconciler() error = %v, want closed spool", err)
 	}
@@ -589,7 +605,7 @@ func TestGatewayOutboundReconcilerPreservesDownloadSpoolFailure(t *testing.T) {
 	third := openGatewayRecoveryCoordinator(t, root)
 	t.Cleanup(func() { _ = third.Close() })
 	recovered, err := third.Recover()
-	if err != nil || len(recovered) != 1 || recovered[0].Intent.ID != admission.Intent.ID {
+	if err != nil || len(recovered.Admissions) != 1 || recovered.Admissions[0].Intent.ID != admission.Intent.ID {
 		t.Fatalf("Recover() after spool failure = %#v, %v", recovered, err)
 	}
 }
