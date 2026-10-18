@@ -137,15 +137,12 @@ async function performWebsiteStep(page, capsule, request) {
       }
       const deadline = Date.now() + values.timeout;
       while (true) {
-        if (!state.ready(false) || fill.some(([element, value]) => element.value !== value)) {
+        if (Date.now() >= deadline || !state.ready(false) ||
+            fill.some(([element, value]) => element.value !== value)) {
           for (const [element] of fill) set.call(element, '');
           return false;
         }
         if (state.ready()) break;
-        if (Date.now() >= deadline) {
-          for (const [element] of fill) set.call(element, '');
-          return false;
-        }
         await new Promise(resolve => setTimeout(resolve, 16));
       }
       if (state.submit.type === 'submit') HTMLFormElement.prototype.requestSubmit.call(state.form, state.submit);

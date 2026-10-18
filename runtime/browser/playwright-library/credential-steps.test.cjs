@@ -196,6 +196,26 @@ test('combined fields may jointly enable submission but disabled inputs remain d
   }
 });
 
+test('late enablement after a delayed browser callback cannot submit past the deadline', async t => {
+  const f = await fixture(t);
+  await f.page.setContent('<form method="post" action="/code">' +
+    '<input name="code" aria-label="Authenticator code"><button disabled>Continue</button></form>');
+  await f.page.locator('input').evaluate(input => {
+    input.addEventListener('input', () => setTimeout(() => {
+      // Model delayed browser work: validation finishes while the next poll
+      // is waiting on the same event loop, after its 100 ms deadline.
+      const until = performance.now() + 160;
+      while (performance.now() < until) { /* delayed site callback */ }
+      input.form.querySelector('button').disabled = false;
+    }, 0));
+  });
+  const request = await values(f.page, 'totp', {otp_ref: 'Authenticator code', submit_ref: 'Continue'});
+  request.timeout_ms = 100;
+  assert.equal(await perform(f.page, request), 'outcome_unknown');
+  assert.equal(f.posts.length, 0);
+  assert.equal(f.page.isClosed(), true);
+});
+
 test('post-login redirects admit sibling hosts only within the trusted registrable domain', async t => {
   for (const destination of ['https://accounts.example.org/home', 'https://other.example.net/home']) {
     const context = await browser.newContext();
