@@ -119,3 +119,9 @@ CI caught a 32-bit ARM overflow in an untyped test fixture; explicit `int64` fix
 and final CI succeeded; this is not ARM execution. Two follow-up macOS binaries were sampled at `_dyld_start` before
 Go main and terminated after 299.301 / 341.809 seconds, not counted as passes. Final-head macOS CI passed. No test,
 deadline, assertion, approval or CI gate was weakened.
+
+## Subsequent Follow-Up
+
+The [v2 pilot](manual-agent-evals-target-usage-v2-pilot-20261018.md) after merged #1772 separately qualified actual
+returned-final wire collection for one new context trial, plus judge-only regrade and comparison. The original v1
+result, its unknown target counts and three judge errors remain unchanged; no old receipt was backfilled or rejudged again.

@@ -315,6 +315,10 @@ The [target usage v1 pilot](manual-agent-evals-target-usage-v1-pilot-20261018.md
 no target usage blocks on the non-streaming wire. Native outbox counters demonstrated a channel projection gap;
 the original receipt stays unknown. Its one regrade retained three judge errors instead of retrying them away.
 
+The [v2 pilot](manual-agent-evals-target-usage-v2-pilot-20261018.md) after the reviewed channel fix then passed one
+fresh Linux context case and one judge-only regrade. Both final events returned usage; JSON retained 4,770 input /
+27 output tokens and Markdown displayed `4.7k in, 27 out`. All-call coverage remains unknown; old receipts stay unchanged.
+
 `pass`, `fail`, `error`, `inconclusive`, and `skipped` are distinct. Any required unknown or unavailable case prevents
 a passing run. A hard failure remains a failure even if reporting also fails. A final response ends a turn, not
 the entire case. Driver stop, lost route identity, changed runtime, limits, timeout, or disconnection cannot pass.
