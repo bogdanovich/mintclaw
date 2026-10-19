@@ -136,25 +136,7 @@ func TestOwnedModelMetadataScansPostStopFilesWithoutPrivateFacts(t *testing.T) {
 	for _, mode := range []string{"metadata_safe", "metadata_leak", "metadata_early_exit", "metadata_startup_leak"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := newOwnedGatewayFixture(t, mode)
-			fixture.preset.CaptureModelMetadata = true
-			fixture.cfg.Diagnostics.TraceCapture = evalModelMetadataCapture()
-			if err := os.WriteFile(filepath.Join(fixture.home, ".security", "metadata-key"),
-				[]byte(preparationTestKey), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			fixture.cfg.ModelList[0].APIKeys = config.SimpleSecureStrings("file://.security/metadata-key")
-			settings, err := fixture.cfg.Channels.GetByType(config.ChannelMintClaw).GetDecoded()
-			if err != nil {
-				t.Fatal(err)
-			}
-			settings.(*config.MintClawSettings).SetToken("file://.security/metadata-channel-token")
-			if err = os.WriteFile(filepath.Join(fixture.home, ".security", "metadata-channel-token"),
-				[]byte("test-channel-token"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := config.NewRepository(fixture.preset.ConfigPath).Save(fixture.cfg); err != nil {
-				t.Fatal(err)
-			}
+			enableTestModelMetadata(t, fixture)
 			result, err := Run(
 				t.Context(),
 				fixture.preset,
@@ -201,5 +183,28 @@ func TestOwnedModelMetadataScansPostStopFilesWithoutPrivateFacts(t *testing.T) {
 				t.Fatal("raw trace credential entered report", err)
 			}
 		})
+	}
+}
+
+func enableTestModelMetadata(t *testing.T, fixture *admissionFixture) {
+	t.Helper()
+	fixture.preset.CaptureModelMetadata = true
+	fixture.cfg.Diagnostics.TraceCapture = evalModelMetadataCapture()
+	if err := os.WriteFile(filepath.Join(fixture.home, ".security", "metadata-key"),
+		[]byte(preparationTestKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture.cfg.ModelList[0].APIKeys = config.SimpleSecureStrings("file://.security/metadata-key")
+	settings, err := fixture.cfg.Channels.GetByType(config.ChannelMintClaw).GetDecoded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.(*config.MintClawSettings).SetToken("file://.security/metadata-channel-token")
+	if err = os.WriteFile(filepath.Join(fixture.home, ".security", "metadata-channel-token"),
+		[]byte("test-channel-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.NewRepository(fixture.preset.ConfigPath).Save(fixture.cfg); err != nil {
+		t.Fatal(err)
 	}
 }

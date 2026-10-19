@@ -212,16 +212,18 @@ Fresh owned admission still refuses any existing workspace state, including an o
 After stopping/reaping the owned child, the existing bounded raw-profile privacy observation includes these files,
 even for general cases without private facts or when the launched child fails readiness/admission. Inspection uses
 the validated owned profile, not a successfully admitted runtime. Failed startup remains unpublished/incomplete;
-a known leak additionally returns the static private-evidence error, never the value. No trace is decoded, projected
-into judge context or exempted from
-privacy inspection by this opt-in. Known leaks fail; incomplete raw inspection remains inconclusive. Retain private
+a known leak additionally returns the static private-evidence error, never the value. Traces are never projected
+into judge context or exempted from privacy inspection by this opt-in. Known leaks fail; incomplete raw inspection
+remains inconclusive. Retain private
 files under the same evidence policy and never restart the used profile.
 
-This is a capture prerequisite, not an eval trace collector. Native capture can truncate/drop/prune records or fail
-to persist them. Returned-final usage remains separately scoped; all-call coverage and effective loaded-input
-identity remain unknown until a collector validates exact native turn/agent/session/source joins, completeness and
-provider-usage presence. Metadata hashes describe provider-neutral effective requests, not provider wire bytes or
-individually attested skill revisions. Capture presence alone cannot establish any of those stronger claims.
+The [routed native model observer](manual-agent-evals-native-models.md) can validate exact native source/turn/agent/
+filtered-session joins after stop/reap and raw privacy inspection. It retains scoped request hashes and every
+available native response's input/output usage, without treating capture presence as completeness. Native capture
+can truncate/drop/prune records or fail to persist them. Returned-final usage remains separately scoped; all-call
+coverage and individually attested loaded skill versions remain unknown. Provider-neutral request hashes are not
+provider wire bytes or a full loaded catalog certificate. Offline grade/compare preserve and validate the frozen
+projection without target work; old reports are not backfilled.
 
 The [admission validation record](manual-agent-evals-model-metadata-validation-20261019.md) retains actual
 review/merge evidence, positive Linux/macOS controls, the corrected startup-leak regression and earlier non-passes.

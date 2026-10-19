@@ -23,6 +23,7 @@ import (
 	"github.com/bogdanovich/mintclaw/internal/gatewayclient"
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	"github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/health"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -133,6 +134,9 @@ func runOwnedGatewayTestChild() int {
 		ConfigPathSHA256: admissionHash(filepath.Join(home, "config.json")), LogLevel: "warn",
 		GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
 	}
+	if control.Mode == "native_models" {
+		probe.GitCommit, probe.BuildVersion = nativeModelTestCommit, "native-test"
+	}
 	var first atomic.Bool
 	var mediaSent atomic.Bool
 	var sessionMu sync.Mutex
@@ -214,6 +218,20 @@ func runOwnedGatewayTestChild() int {
 				response.Payload[protocol.PayloadKeyTraceScopes] = []events.TraceScope{{
 					Workspace: cfg.WorkspacePath(), TurnID: request.ID,
 				}}
+				if control.Mode == "native_models" {
+					binding := nativeModelTestBinding(cfg.WorkspacePath())
+					binding.TraceScope.TurnID = request.ID
+					binding.SessionKey = payloadString(response.Payload, protocol.PayloadKeySessionKey)
+					trace, traceErr := makeNativeModelTestTrace(binding)
+					trace.TraceID = "trace-turn-" + request.ID
+					store := diagnostictrace.Store{Root: diagnostictrace.ResolveStoreRoot("", cfg.WorkspacePath())}
+					if traceErr != nil {
+						return
+					}
+					if _, traceErr = store.Save(trace); traceErr != nil {
+						return
+					}
+				}
 				if strings.HasPrefix(control.Mode, "browser_") {
 					sessionMu.Lock()
 					previous := browserURLs[request.SessionID]

@@ -273,9 +273,24 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 		return result, ErrReport
 	}
+	if preset.CaptureModelMetadata {
+		bindings, bindingErr := readRunModelBindings(writer, result, preset.ExpectedWorkspace)
+		if errors.Is(bindingErr, ErrReport) {
+			result.Verdict = combineVerdicts(result.Verdict, Error)
+			return result, ErrReport
+		}
+		if bindingErr != nil {
+			result.NativeModels = unavailableNativeModels("native_evidence_unavailable")
+		} else {
+			modelCtx, modelCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			result.NativeModels = observeNativeModels(modelCtx, target, lifecycle, privateSurfaces, bindings,
+				retainedFacts.values, filter)
+			modelCancel()
+		}
+	}
 	result.Coverage = map[Verdict]int{}
 	result.Verdict = combineVerdicts(result.TargetLifecycle.verdict(), result.PrivateSurfaces.verdict(),
-		result.BrowserFixtures.verdict())
+		result.BrowserFixtures.verdict(), result.NativeModels.verdict())
 	for _, summary := range result.Trials {
 		result.Coverage[summary.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, summary.Verdict)

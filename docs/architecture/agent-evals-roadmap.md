@@ -121,8 +121,10 @@ It is described in the
 [operator guide](../operations/manual-agent-evals.md#opt-in-model-metadata-capture): fixed native metadata-only
 limits, no attached targets/content previews/alternate roots, fresh preparation without old traces, and post-stop
 raw privacy inspection even without private facts. Capture alone does not provide an effective-input witness or
-all-call census. A later collector must join native identities, reject missing/truncated/ambiguous observations,
-retain provider-usage presence and preserve unknown internal attempts; per-trial isolation and domain cases remain
+all-call census. The [routed native observer](../operations/manual-agent-evals-native-models.md) adds explicit
+source/turn/agent/filtered-session joins, bounded raw-before-projection reads, native request fingerprints and
+available response usage across tool loops. It preserves missing/truncated/ambiguous observations, legacy usage
+presence and unknown internal attempts; per-trial isolation, loaded skill-version proof and domain cases remain
 mandatory. No historical run is backfilled or newly qualified by this prerequisite.
 
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
