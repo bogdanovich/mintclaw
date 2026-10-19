@@ -223,6 +223,10 @@ identity remain unknown until a collector validates exact native turn/agent/sess
 provider-usage presence. Metadata hashes describe provider-neutral effective requests, not provider wire bytes or
 individually attested skill revisions. Capture presence alone cannot establish any of those stronger claims.
 
+The [admission validation record](manual-agent-evals-model-metadata-validation-20261019.md) retains actual
+review/merge evidence, positive Linux/macOS controls, the corrected startup-leak regression and earlier non-passes.
+It is not a live model or all-call/effective-input qualification record.
+
 Use a new private profile, not the production profile or a copy of its sessions, memory, ledgers, or auth store.
 Both runner and gateway must use the same explicit `MINTCLAW_HOME`. Keep configuration and profile files immutable
 for the run. Admission is an operator-prepared profile check, not protection from a hostile concurrent filesystem
