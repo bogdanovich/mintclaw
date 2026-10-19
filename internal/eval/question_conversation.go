@@ -11,6 +11,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
+	"github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 )
@@ -85,11 +86,22 @@ func (domain *questionConversation) matchesPrompt(record interactions.Record, pr
 func (domain *questionConversation) matchesPromptKind(
 	record interactions.Record, prompt Event, kind interactions.Kind, tool string,
 ) (bool, error) {
+	if record.ProtectedAnswer != nil {
+		return false, nil
+	}
+	return domain.matchesPromptIdentity(record, prompt, kind, tool)
+}
+
+// Protected consumers add their own namespace/target checks; ordinary questions
+// and approvals continue to reject every protected binding above.
+func (domain *questionConversation) matchesPromptIdentity(
+	record interactions.Record, prompt Event, kind interactions.Kind, tool string,
+) (bool, error) {
 	route := record.Route
 	now := time.Now().UnixMilli()
 	if record.ID != prompt.InteractionID || record.ShortID != prompt.InteractionShortID ||
 		record.Kind != kind || record.Status != interactions.StatusWaiting ||
-		record.ProtectedAnswer != nil || record.Origin.ToolName != tool ||
+		record.Origin.ToolName != tool ||
 		record.CreatedAt < domain.started.UnixMilli() || record.CreatedAt > now || record.ExpiresAt <= now ||
 		record.UpdatedAt > now || record.Origin.ExecutionContext == nil ||
 		record.Origin.ExecutionContext.MessageID != prompt.RequestID ||
@@ -126,6 +138,7 @@ func (domain *questionConversation) matchesPromptKind(
 		intent.Message.Metadata.InteractionID == record.ID && intent.Message.Metadata.InteractionShortID == record.ShortID &&
 		intent.Message.Metadata.InteractionKind == string(kind) &&
 		intent.Message.Metadata.InteractionControls == bus.OutboundInteractionControlsPrompt &&
+		slices.Contains(intent.Message.TraceScopes, events.NewTraceScope(domain.workspace, record.Origin.TurnID)) &&
 		slices.Contains(intent.PlatformMessageIDs, prompt.MessageID) && !intent.CreatedAt.Before(domain.started), nil
 }
 

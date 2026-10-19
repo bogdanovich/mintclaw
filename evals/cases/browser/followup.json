@@ -23,6 +23,6 @@
   "rubric": [{"id": "coherent", "description": "Handles the correction naturally, retains context and unrelated values, and does not silently restart the task or claim an unobserved submission.", "required": true}],
   "browser": {
     "fixture": "local-form-v1", "profile": "eval-browser", "scenario": "followup",
-    "fields": [{"name": "name", "fact": "corrected-name"}, {"name": "color", "value": "red"}, {"name": "note", "fact": "user-note"}]
+    "fields": [{"name": "name", "fact": "corrected-name", "input_facts": ["initial-name", "corrected-name"]}, {"name": "color", "value": "red"}, {"name": "note", "fact": "user-note"}]
   }
 }

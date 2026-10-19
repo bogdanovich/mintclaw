@@ -64,16 +64,25 @@ func TestBrowserCaseRequiresIndependentEvidenceAndBoundedKnownFixture(t *testing
 		"duplicate-placeholder": func(c *Case) {
 			c.Task += " {{fixture}}"
 		},
-		"missing-field":   func(c *Case) { c.Browser.Fields = c.Browser.Fields[:2] },
-		"duplicate-field": func(c *Case) { c.Browser.Fields[2] = c.Browser.Fields[0] },
-		"unknown-field":   func(c *Case) { c.Browser.Fields[0].Name = "password" },
-		"unknown-fact":    func(c *Case) { c.Browser.Fields[0].Fact = "missing" },
-		"two-values":      func(c *Case) { c.Browser.Fields[0].Value = "other" },
-		"empty-name":      func(c *Case) { c.Browser.Fields[0].Fact = "" },
-		"invalid-color":   func(c *Case) { c.Browser.Fields[1].Value = "other" },
-		"private-color":   func(c *Case) { c.Browser.Fields[1] = BrowserField{Name: "color", Fact: "name"} },
-		"oversized-name":  func(c *Case) { c.Driver.Facts["name"] = strings.Repeat("x", 129) },
-		"oversized-note":  func(c *Case) { c.Driver.Facts["note"] = strings.Repeat("x", 1025) },
+		"missing-field":       func(c *Case) { c.Browser.Fields = c.Browser.Fields[:2] },
+		"duplicate-field":     func(c *Case) { c.Browser.Fields[2] = c.Browser.Fields[0] },
+		"unknown-field":       func(c *Case) { c.Browser.Fields[0].Name = "password" },
+		"unknown-fact":        func(c *Case) { c.Browser.Fields[0].Fact = "missing" },
+		"two-values":          func(c *Case) { c.Browser.Fields[0].Value = "other" },
+		"empty-name":          func(c *Case) { c.Browser.Fields[0].Fact = "" },
+		"invalid-color":       func(c *Case) { c.Browser.Fields[1].Value = "other" },
+		"private-color":       func(c *Case) { c.Browser.Fields[1] = BrowserField{Name: "color", Fact: "name"} },
+		"oversized-name":      func(c *Case) { c.Driver.Facts["name"] = strings.Repeat("x", 129) },
+		"oversized-note":      func(c *Case) { c.Driver.Facts["note"] = strings.Repeat("x", 1025) },
+		"missing-final-input": func(c *Case) { c.Browser.Fields[0].InputFacts = []string{"note"} },
+		"unknown-input":       func(c *Case) { c.Browser.Fields[0].InputFacts = []string{"name", "missing"} },
+		"duplicate-input":     func(c *Case) { c.Browser.Fields[0].InputFacts = []string{"name", "name"} },
+		"cross-field-input":   func(c *Case) { c.Browser.Fields[0].InputFacts = []string{"name", "note"} },
+		"static-input":        func(c *Case) { c.Browser.Fields[1].InputFacts = []string{"name"} },
+		"oversized-input": func(c *Case) {
+			c.Driver.Facts["initial"] = strings.Repeat("x", 129)
+			c.Browser.Fields[0].InputFacts = []string{"name", "initial"}
+		},
 		"unexpected-account": func(c *Case) {
 			c.Browser.Account = "south"
 		},

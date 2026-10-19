@@ -266,8 +266,11 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    The [private-input prerequisite](agent-evals-browser-private-input.md) separates the missing native ingress from
    already protected model-produced fill. B1 adds only generation-bound, value-free broker target bindings and
    transient staging through existing preparation; it adds no question, sink, dispatch bypass, eval admission or
-   live qualification. B2 must connect native protected questions/claims/resource retention/resume; B3 must add the
+   live qualification. B2 connects native protected questions/claims/resource retention/resume; B3 must add the
    eval private-fact consumer and independent mutation/context evidence before enabling either required case.
+   B3 now adds pre-answer native question/trace/current-session joins and explicit per-field initial/corrected
+   fact-handle mapping. This admission component does not enable trials: fresh cohort generation, native
+   mutation/approval/context and post-stop assessment remain mandatory, as do the actual private-form experiments.
    Ordinary chat substitution and a new value/vault/approval engine remain forbidden.
    Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a
    read-only native transfer inspection API rather than constructing/reconciling a store. This receipt does not
