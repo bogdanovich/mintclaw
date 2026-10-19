@@ -12,6 +12,7 @@ import (
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
 
@@ -20,6 +21,9 @@ func (domain *browserConversation) confirmForm(ctx context.Context, prompt Event
 		return protocol.MintClawMessage{}, errBrowserEvidence
 	}
 	if err := domain.questions.observe(ctx, prompt); err != nil {
+		return protocol.MintClawMessage{}, err
+	}
+	if err := domain.formPromptMatches(prompt, domain.questions.waiting); err != nil {
 		return protocol.MintClawMessage{}, err
 	}
 	inputs, state, err := domain.readFormInputState()
@@ -50,6 +54,27 @@ func (domain *browserConversation) confirmForm(ctx context.Context, prompt Event
 		inputSetSHA256: browserFormInputSet(inputs), requestID: request.ID, requestedAt: now,
 	}
 	return request, nil
+}
+
+func (domain *browserConversation) formPromptMatches(prompt Event, record interactions.Record) error {
+	raw, err := domain.questions.read(
+		domain.questions.workspace,
+		"state/outbox/"+record.PromptDeliveryID+".json",
+		outbox.MaxInspectionBytes,
+	)
+	if err != nil {
+		return err
+	}
+	defer clear(raw)
+	intent, err := outbox.InspectIntent(raw, record.PromptDeliveryID)
+	if err != nil || intent.OwnerWorkspace != domain.questions.workspace || intent.Status != outbox.StatusDelivered ||
+		intent.Identity.SessionKey != record.Route.SessionKey || intent.Identity.Channel != record.Route.Channel ||
+		intent.Identity.ChatID != record.Route.ChatID || intent.Message == nil || intent.Message.AgentID != record.Route.AgentID ||
+		intent.Message.SessionKey != record.Route.SessionKey ||
+		!observedBrowserQuestionPrompt(prompt, record.ID, record.ShortID, intent, domain.target) {
+		return errBrowserEvidence
+	}
+	return nil
 }
 
 // Check only passive native records. This is not a new browser engine or grant;
@@ -191,6 +216,8 @@ func projectBrowserFormConfirmation(
 	return &BrowserFormConfirmationEvidence{
 		Scope:                "native_fixture_form_confirmation_v1",
 		InteractionID:        current.ID,
+		ShortID:              current.ShortID,
+		PromptSHA256:         digest([]byte(before.prompt.Content)),
 		PromptMessageID:      before.prompt.MessageID,
 		PromptRequestID:      before.prompt.RequestID,
 		PromptDeliveryID:     current.PromptDeliveryID,

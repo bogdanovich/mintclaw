@@ -63,7 +63,7 @@ func inspectBrowserTaskWithForm(
 		proof.Scope = browserFormAssessmentScope
 		if download != nil || denial != nil || trial.Browser == nil || trial.Browser.FormInputs == nil ||
 			len(trial.Browser.FormInputs.Fills) == 0 ||
-			form.Approval == nil || form.Approval.Scope != browserFormApprovalScope {
+			form.Confirmation == nil || form.Approval == nil || form.Approval.Scope != browserFormApprovalScope {
 			return proof
 		}
 	}
@@ -250,6 +250,14 @@ func inspectBrowserTaskWithForm(
 			}
 			proof.PermissionPromptDeliveries++
 		}
+		if form != nil && intent.ID == form.Confirmation.PromptDeliveryID {
+			prompt, found := browserFormConfirmationPrompt(trial, form.Confirmation)
+			if !found || !observedBrowserQuestionPrompt(prompt, form.Confirmation.InteractionID,
+				form.Confirmation.ShortID, intent, target) {
+				return proof
+			}
+			proof.PermissionPromptDeliveries++
+		}
 		if !message.Metadata.IsFinalReply() && !message.Metadata.IsFinal() {
 			continue
 		}
@@ -274,7 +282,9 @@ func inspectBrowserTaskWithForm(
 	}
 	proof.FinalDeliveries = len(seen)
 	if len(finals) == 0 || len(seen) != len(finals) ||
-		denial != nil && denial.Scope == browserQuestionDenialAssessmentScope && proof.PermissionPromptDeliveries != 1 {
+		denial != nil && denial.Scope == browserQuestionDenialAssessmentScope &&
+			proof.PermissionPromptDeliveries != 1 ||
+		form != nil && proof.PermissionPromptDeliveries != 1 {
 		return proof
 	}
 	proof.LogicalSettled = settled

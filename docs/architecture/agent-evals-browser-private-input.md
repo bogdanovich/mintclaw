@@ -192,6 +192,11 @@ input set, route, action or prompt is refused rather than retargeted. Confirmati
 native interactions; neither private input nor the LLM-user's prose grants permission. Existing native HMAC and
 broker dispatch remain the authority, and uncertain sends are never replayed.
 
+The confirmation question's wire text, request and trace scope must match its actual delivered native outbox
+message through the shared native footer projection before confirmation. Its value-free text digest and short ID
+are frozen in the receipt; post-stop assessment requires exactly one matching native confirmation delivery again.
+Matching an interaction/message ID alone is insufficient, and no footer suffix is stripped heuristically.
+
 After owned shutdown, the runner rejoins resolved inputs and confirmation, the consumed exact approval, successful
 fill/select/submit invocations, original native policy/owner records, delivered final replies and empty temporary
 roots. Exactly one independently matched fixture submission and no account removal are required. Only this complete

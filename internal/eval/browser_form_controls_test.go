@@ -180,7 +180,10 @@ func TestBrowserFormHardEvidenceDominatesPositiveJudge(t *testing.T) {
 	if !validBrowserFormEvidence(complete, c.item.Case, c.domain.questions.workspace) {
 		t.Fatal("positive form unavailable")
 	}
-	for _, mode := range []string{"controller", "tab", "execution", "frame", "unknown", "missing-final", "foreign-submit", "wrong-origin", "duplicate-invocation", "temporary"} {
+	for _, mode := range []string{
+		"controller", "tab", "execution", "frame", "unknown", "missing-final", "foreign-submit", "wrong-origin", "duplicate-invocation", "temporary",
+		"prompt-content", "prompt-request", "prompt-scope", "missing-prompt",
+	} {
 		t.Run("native/"+mode, func(t *testing.T) {
 			native := observed
 			native.state = cloneBrowserFormControlValue(t, observed.state)
@@ -214,6 +217,23 @@ func TestBrowserFormHardEvidenceDominatesPositiveJudge(t *testing.T) {
 				native.state.Invocations[inv.ID] = inv
 			case "temporary":
 				empty = false
+			case "prompt-content", "prompt-request", "prompt-scope", "missing-prompt":
+				for index, intent := range native.intents {
+					if intent.ID != form.Confirmation.PromptDeliveryID {
+						continue
+					}
+					switch mode {
+					case "prompt-content":
+						intent.Message.Content = "An unrelated native question."
+					case "prompt-request":
+						intent.Message.Context.MessageID = "foreign"
+					case "prompt-scope":
+						intent.Message.TraceScopes = nil
+					case "missing-prompt":
+						intent.ID = "delivery_foreign"
+					}
+					native.intents[index] = intent
+				}
 			}
 			native.state.Sessions[session.ID] = session
 			native.state.PreparedActions[action.ID] = action
@@ -331,6 +351,16 @@ func TestBrowserFormApprovalRefusesMissingConfirmationAndChangedPage(t *testing.
 	}
 	if c.domain.formApprovalMatches(record, browser.PreparedAction{}, state) {
 		t.Fatal("unconfirmed form became a grant")
+	}
+	wrongPrompt := prompt
+	wrongPrompt.Content = "A different question with the same native identity."
+	if request, _, err := c.domain.request(
+		t.Context(),
+		Action{Kind: "confirm"},
+		wrongPrompt,
+	); err == nil ||
+		request.ID != "" {
+		t.Fatal("wire/native confirmation text mismatch admitted")
 	}
 	c.confirm(t, record, prompt)
 	if _, _, err = c.domain.request(t.Context(), Action{Kind: "confirm"}, prompt); err == nil {

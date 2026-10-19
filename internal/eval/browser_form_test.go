@@ -137,6 +137,7 @@ func (c *browserFormControl) recordQuestion(
 		SessionKey:  route.SessionKey,
 		Content:     description,
 		TraceScopes: []events.TraceScope{scope},
+		Context:     bus.InboundContext{MessageID: c.requestID},
 		Metadata: bus.OutboundMetadata{
 			InteractionID: record.ID, InteractionShortID: record.ShortID,
 			InteractionKind: kind, InteractionControls: bus.OutboundInteractionControlsPrompt,

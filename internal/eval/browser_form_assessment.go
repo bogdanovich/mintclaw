@@ -33,7 +33,10 @@ func validBrowserFormEvidence(trial Trial, item Case, workspace string) bool {
 	confirmation, approval := form.Confirmation, form.Approval
 	now := time.Now().UnixMilli()
 	if confirmation == nil || confirmation.Scope != "native_fixture_form_confirmation_v1" ||
-		!validID(confirmation.InteractionID) || !validID(confirmation.PromptDeliveryID) ||
+		!validID(
+			confirmation.InteractionID,
+		) || !validID(confirmation.ShortID) || !validDigest(confirmation.PromptSHA256) ||
+		!validID(confirmation.PromptDeliveryID) ||
 		!boundedIdentity(confirmation.PromptMessageID, 128) || !validID(confirmation.PromptRequestID) ||
 		!validID(confirmation.RequestID) || confirmation.InputSetSHA256 != browserFormInputSet(inputs) ||
 		!validDigest(confirmation.PageStateSHA256) || confirmation.SessionID != sessionID ||
@@ -86,6 +89,9 @@ func validBrowserFormEvidence(trial Trial, item Case, workspace string) bool {
 }
 
 func browserFormConfirmationEventsMatch(trial Trial, confirmation *BrowserFormConfirmationEvidence) bool {
+	if _, found := browserFormConfirmationPrompt(trial, confirmation); !found {
+		return false
+	}
 	for index, event := range trial.Events {
 		if event.Kind == "question" && event.InteractionID == confirmation.InteractionID {
 			return event.MessageID == confirmation.PromptMessageID && event.RequestID == confirmation.PromptRequestID &&
@@ -95,6 +101,22 @@ func browserFormConfirmationEventsMatch(trial Trial, confirmation *BrowserFormCo
 		}
 	}
 	return false
+}
+
+func browserFormConfirmationPrompt(trial Trial, confirmation *BrowserFormConfirmationEvidence) (Event, bool) {
+	var selected Event
+	for _, event := range trial.Events {
+		if event.Kind != "question" || event.InteractionID != confirmation.InteractionID {
+			continue
+		}
+		if selected.ID != "" || event.MessageID != confirmation.PromptMessageID || event.RequestID != confirmation.PromptRequestID ||
+			event.InteractionShortID != confirmation.ShortID ||
+			digest([]byte(event.Content)) != confirmation.PromptSHA256 {
+			return Event{}, false
+		}
+		selected = event
+	}
+	return selected, selected.ID != ""
 }
 
 func browserFormFillEventsMatch(trial Trial, fill BrowserInputFillEvidence) bool {

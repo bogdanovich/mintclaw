@@ -47,8 +47,9 @@ func validBrowserTaskProof(trial Trial, proof *BrowserTaskEvidence, scope string
 		proof.Navigations < 1 || proof.Navigations > proof.Invocations || !proof.LogicalSettled || !proof.TemporaryEmpty {
 		return false
 	}
-	if scope == browserQuestionDenialAssessmentScope && proof.PermissionPromptDeliveries != 1 ||
-		scope != browserQuestionDenialAssessmentScope && proof.PermissionPromptDeliveries != 0 {
+	permissionPrompt := scope == browserQuestionDenialAssessmentScope || scope == browserFormAssessmentScope
+	if permissionPrompt && proof.PermissionPromptDeliveries != 1 ||
+		!permissionPrompt && proof.PermissionPromptDeliveries != 0 {
 		return false
 	}
 	finals := 0

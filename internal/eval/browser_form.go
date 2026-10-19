@@ -18,6 +18,8 @@ const (
 type BrowserFormConfirmationEvidence struct {
 	Scope                string `json:"scope"`
 	InteractionID        string `json:"interaction_id"`
+	ShortID              string `json:"short_id"`
+	PromptSHA256         string `json:"prompt_sha256"`
 	PromptMessageID      string `json:"prompt_message_id"`
 	PromptRequestID      string `json:"prompt_request_id"`
 	PromptDeliveryID     string `json:"prompt_delivery_id"`
