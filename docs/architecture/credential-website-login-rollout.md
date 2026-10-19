@@ -387,6 +387,43 @@ unchanged. Tool regressions require exact public/audit ID equality, and the
 actual OpenAI-compatible/Codex website fixtures require a visible ID after
 fresh verification, including delayed phone continuation.
 
-At this stage the receipt correction still requires reviewed merge, deployment
-and a fresh normal-chat task that completes its formal report. The successful
-real authentication above does not by itself qualify that reporting fix.
+[PR #1808](https://github.com/bogdanovich/mintclaw/pull/1808), merge
+`1f5b2a9990758821260947807c678cfb4496c21b`, delivers the receipt projection.
+The red alias and generic verification regressions failed without the public
+ID. Full tools, objective outcome regressions, targeted race tests and native
+discovered/delayed provider fixtures passed, as did formatting, unchanged-rule
+full lint and documentation validation. The final head
+`1cdd43f4b4c344bb5545ba55c4060b7c837e478a` had ten successful CI checks,
+two intentional skips, clean exact-head review, no unresolved threads and
+owner PR-level rocket approval. All five private credential qualification
+steps passed in integration job `117880175400`.
+
+The merged correction was installed and verified on 2026-10-19 UTC. Core,
+node and launcher candidates had clean matching VCS provenance. The previous
+runtime `4439ac067b2edc9132c2b49e8a7f2f3efbb70729`, including another
+operator's updates, was preserved in the merged target and backup. All five
+configurations loaded with unchanged doctor findings; configuration hashes
+and protected token/owner-key identities were preserved. Registered owner
+tasks were idle immediately before stopping only main. The timestamped backup
+`mintclaw-credential-continuation-upgrade-20261019T040450Z` has 33 verified
+checksums and instructions for rollback of binaries only. No mutable task,
+conversation, browser, grant or credential state was restored.
+
+All ten services were active, with zero failed units, legacy processes and
+error-level journal entries in the checked ten-minute window. The public
+approval root returned HTML/HTTP 200, its script matched the exact deployed
+source, and external operator enrollment remained denied/HTTP 403. Stateless
+no-tool smoke trace `trace-turn-26997063f01ff2a704eb54e9` has schema
+`mintclaw.diagnostic_trace.v1`, matching source, `redacted_content` /
+`mintclaw.config_filter.v1`, completed status, six records, zero tools,
+no truncation and exact input/reply hashes.
+
+The physical discovery/password/TOTP/authentication/closure gate is satisfied
+by the owner pilot on `77c79cd5`. The small subsequent receipt projection is
+qualified by exact public/audit ID equality, actual provider output fixtures
+and existing trusted objective validation, including rejection of unconfirmed
+effects and preservation of honest partial reports. These composed checks do
+not claim a new real Facebook task on `1f5b2a99`. Repeating real submissions
+solely to test the non-secret evidence field is unnecessary; the next ordinary
+owner login can exercise the complete formal report. Restart invalidated
+earlier grants, so that next login may need fresh phone approval.

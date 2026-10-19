@@ -156,5 +156,9 @@ stored TOTP submission, fresh authentication and browser closure. Its formal
 task report remained partial because the model could not see the confirmed
 login's runtime receipt ID. The tool projection now returns that opaque ID
 alongside `logged_in`, matching the trusted audit; unconfirmed outcomes carry
-no receipt. See the [rollout evidence](credential-website-login-rollout.md)
-for the remaining release and complete-task qualification gates.
+no receipt. The correction is reviewed, deployed and qualified through the tool,
+actual provider requests and objective validation tests. D0-D4 are delivered:
+the real authentication evidence is from the owner pilot, while the later
+receipt projection has synthetic qualification. See the
+[rollout evidence](credential-website-login-rollout.md) for the exact sources,
+release checks and evidence limits.
