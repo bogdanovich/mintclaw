@@ -3,6 +3,12 @@ diff --git a/libs/cua-driver/rust/crates/platform-linux/Cargo.toml b/libs/cua-dr
 +++ b/libs/cua-driver/rust/crates/platform-linux/Cargo.toml
 @@ -130,0 +131 @@
 +mintclaw-native-keyboard = ["mintclaw-window-keys"]
+@@ -177,0 +179,5 @@
++
++[[bin]]
++name = "mintclaw-private-keyboard"
++path = "src/input/mintclaw_native_keyboard_worker.rs"
++required-features = ["mintclaw-native-keyboard"]
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
 --- a/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs

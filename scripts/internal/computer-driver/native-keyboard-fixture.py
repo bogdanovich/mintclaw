@@ -24,6 +24,9 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repetitions", type=int, choices=range(1, 21), default=20)
     parser.add_argument("--gtk", action="store_true")
+    parser.add_argument("--process-worker", type=Path)
+    parser.add_argument("--process-worker-sha256")
+    parser.add_argument("--process-modes", nargs="+", default=["normal"])
     args = parser.parse_args()
     for path, expected in [(args.xvfb, args.xvfb_sha256), (args.probe, args.probe_sha256)]:
         if not path.is_absolute() or path.is_symlink() or not path.is_file() or digest(path) != expected:
@@ -83,9 +86,14 @@ def main():
                                        DBUS_SESSION_BUS_ADDRESS=f"unix:path={work}/no-session-bus",
                                        XDG_CONFIG_HOME=str(work / "config"), XDG_CACHE_HOME=str(work / "cache"),
                                        XDG_DATA_HOME=str(work / "data"))
-                    subprocess.run(["/usr/bin/python3", str(Path(__file__).with_name("native-keyboard-gtk-fixture.py")),
-                                    "--probe", str(args.probe), "--output", str(work / "gtk")], env=environment,
-                                   stdin=subprocess.DEVNULL, timeout=20, check=True)
+                    modes = [None] + args.process_modes if args.process_worker else [None]
+                    for mode in modes:
+                        command = ["/usr/bin/python3", str(Path(__file__).with_name("native-keyboard-gtk-fixture.py")),
+                                   "--probe", str(args.probe), "--output", str(work / ("gtk" if mode is None else mode))]
+                        if mode is not None:
+                            command.extend(["--process-worker", str(args.process_worker), "--process-mode", mode,
+                                            "--process-worker-sha256", args.process_worker_sha256])
+                        subprocess.run(command, env=environment, stdin=subprocess.DEVNULL, timeout=25, check=True)
                 print(f"native-keyboard fixture round {attempt}: ten cases PASS", flush=True)
             finally:
                 server.stdout.close()

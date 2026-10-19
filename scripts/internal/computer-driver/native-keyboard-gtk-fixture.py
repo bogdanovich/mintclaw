@@ -2,6 +2,7 @@
 """Independent GTK state oracle for the actual private native keyboard engine."""
 import argparse
 import ctypes as C
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--process-worker", type=Path)
+    parser.add_argument("--process-worker-sha256")
+    parser.add_argument("--process-mode", default="normal")
     args = parser.parse_args()
     args.output.mkdir(mode=0o700, exist_ok=False)
     x = C.CDLL("libX11.so.6")
@@ -139,6 +143,49 @@ def main():
                 for digit in format(ord(character), "x"):
                     keys(ord(digit))
                 keys(0xff0d)
+            if args.process_worker:
+                executable = args.process_worker
+                if (not executable.is_absolute() or executable.is_symlink() or not executable.is_file()
+                        or hashlib.sha256(executable.read_bytes()).hexdigest() != args.process_worker_sha256):
+                    raise RuntimeError("explicit private process artifact identity mismatch")
+                from native_keyboard_process_fixture import run
+
+                def process_ready(keyboard):
+                    known = Gdk.Display.get_default().get_device_manager().list_devices(Gdk.DeviceType.MASTER)
+                    if not any(device.get_property("device-id") == keyboard for device in known):
+                        return False
+                    if (entries[0].get_position() != len(prefix) or entries[0].get_selection_bounds()
+                            or entries[0].get_text() != prefix + suffix):
+                        raise RuntimeError("process admission changed the original fixture caret")
+                    return True
+
+                def process_observed():
+                    return (entries[0].get_text().encode() == (prefix + text + suffix).encode()
+                            and entries[1].get_text() == "GUARD_UNCHANGED")
+
+                outcome = run(executable, args.process_mode,
+                              {"socket": f"/tmp/.X11-unix/X{os.environ['MINTCLAW_PRIVATE_X_DISPLAY_NUMBER']}",
+                               "screen": 0, "auth": list(bytes.fromhex(os.environ["MINTCLAW_PRIVATE_X_COOKIE"])),
+                               "server": {"pid": int(os.environ["MINTCLAW_PRIVATE_XVFB_PID"]),
+                                          "uid": os.getuid(), "root": root}},
+                              {"window": target, "pid": os.getpid(), "lease_window": token,
+                               "lease_pid": os.getpid()}, chords, pump, process_ready, process_observed)
+                pump()
+                focus, revert = window(), integer()
+                get_focus(opened, C.byref(focus), C.byref(revert))
+                normal = args.process_mode in {"normal", "foreign_stop", "duplicate_permit"}
+                expected = prefix + (text if normal else "a") + suffix
+                checks = {"original_caret_effect": entries[0].get_text().encode() == expected.encode(),
+                          "guard_unchanged": entries[1].get_text() == "GUARD_UNCHANGED",
+                          "core_focus_unchanged": focus.value == guard,
+                          "original_windows_live": all(app.get_visible() for app in windows),
+                          "original_devices_preserved_and_pair_absent": devices() == original}
+                with (args.output / "process-result.json").open("x") as handle:
+                    json.dump({"checks": checks, "outcome": outcome}, handle, sort_keys=True)
+                if not all(checks.values()):
+                    raise RuntimeError("independent process GTK state/cleanup check failed")
+                print(f"Native process {args.process_mode}: PASS", flush=True)
+                return
             job = args.output / "fixture-job.json"
             with job.open("x") as handle:
                 os.chmod(job, 0o600)

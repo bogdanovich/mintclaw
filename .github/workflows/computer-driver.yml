@@ -86,7 +86,10 @@ jobs:
             --xvfb /usr/bin/Xvfb --xvfb-sha256 "$(sha256sum /usr/bin/Xvfb | cut -d ' ' -f 1)" \
             --probe "$RUNNER_TEMP/mintclaw-window-keys/window-keys.test" \
             --probe-sha256 "$(sha256sum "$RUNNER_TEMP/mintclaw-window-keys/window-keys.test" | cut -d ' ' -f 1)" \
-            --output "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-fixture" --gtk
+            --output "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-fixture" --gtk \
+            --process-worker "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-worker" \
+            --process-worker-sha256 "$(sha256sum "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-worker" | cut -d ' ' -f 1)" \
+            --process-modes normal cancel_held blocked_stop crash_held foreign_stop duplicate_permit wire_loss
 
       - name: Preserve private probe and build receipt, not an admitted driver
         if: ${{ always() && steps.window_key_probe.outcome == 'success' }}

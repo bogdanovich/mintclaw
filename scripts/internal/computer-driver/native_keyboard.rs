@@ -11,6 +11,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
+use zeroize::Zeroize;
 
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::res::ConnectionExt as _;
@@ -27,6 +28,7 @@ type Result<T> = io::Result<T>;
 const PREFIX: &[u8] = b"MintClaw private input ";
 const SELECTION: &[u8] = b"_MINTCLAW_COMPUTER_INPUT_CONTROL";
 const TRANSACTION: Duration = Duration::from_millis(250);
+#[cfg(test)]
 const MAX_CHORDS: usize = 256;
 
 fn unavailable() -> io::Error {
@@ -123,7 +125,8 @@ impl Process {
 
 /// Native witnesses, not a model-chosen title, geometry, PID label or alias.
 /// The selected host's existing binding/admission remains a separate gate.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Binding {
     pub(super) window: u32,
     pub(super) pid: u32,
@@ -421,262 +424,349 @@ fn observer(endpoint: &Endpoint) -> Result<u32> {
     Ok(window)
 }
 
-/// One-shot action; cancellation can never be rebound to another action/socket.
-/// This is a native mechanism, not an RPC entrypoint or a host grant.
-pub(super) struct NativeKeyboard {
+/// No pair or key authority exists during preparation. The host must fence
+/// its already-retained original WindowGuard/lease generation after these
+/// subscriptions, and before calling grant(). Fresh numeric IDs are not that
+/// original-host epoch proof.
+pub(super) struct PreparedKeeper {
     control: Endpoint,
+    authority: Authority,
+}
+
+pub(super) struct PreparedInput {
     input: Endpoint,
     authority: Authority,
-    input_authority: Authority,
-    pair: Pair,
     input_token: u32,
-    control_watch: Watch,
-    input_watch: Watch,
-    cleanup_result: Option<bool>,
-    action_attempted: bool,
 }
 
-#[derive(Debug)]
-pub(super) struct Receipt {
-    pub(super) dispatched: bool,
-    pub(super) acknowledged: bool,
-    pub(super) cleanup_confirmed: bool,
-    // A separate application-state oracle must supply effect evidence.
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ServerIdentity {
+    pid: i32,
+    uid: u32,
+    root: u32,
 }
 
-#[derive(Clone)]
-pub(super) struct StopHandle(IoBoundary);
-
-impl StopHandle {
-    pub(super) fn stop(&self) {
-        self.0.stop();
+impl ServerIdentity {
+    /// Attest the original server peer before sending authentication bytes.
+    pub(super) fn matches_peer(&self, socket: &UnixStream) -> bool {
+        let mut peer: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut length = std::mem::size_of_val(&peer) as libc::socklen_t;
+        let status = unsafe {
+            libc::getsockopt(
+                socket.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut peer as *mut libc::ucred).cast(),
+                &mut length,
+            )
+        };
+        status == 0 && length as usize == std::mem::size_of_val(&peer) && (peer.pid, peer.uid) == (self.pid, self.uid)
     }
 }
 
-impl NativeKeyboard {
-    pub(super) fn admit(control: Endpoint, input: Endpoint, binding: Binding, deadline: Instant) -> Result<Self> {
-        if control.peer != input.peer
-            || control.root != input.root
-            || control.connection.setup().resource_id_base == input.connection.setup().resource_id_base
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct InputIdentity {
+    server: ServerIdentity,
+    pid: u32,
+    input_token: u32,
+    client_base: u32,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PairWitness {
+    name: Vec<u8>,
+    keyboard: u8,
+    slave: u8,
+    pointer: u16,
+    devices: Vec<DeviceWitness>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeviceWitness {
+    id: u16,
+    kind: u16,
+    attachment: u16,
+    name: Vec<u8>,
+}
+
+impl Endpoint {
+    pub(super) fn server(&self) -> ServerIdentity {
+        ServerIdentity { pid: self.peer.0, uid: self.peer.1, root: self.root }
+    }
+}
+
+impl Pair {
+    fn witness(&self) -> PairWitness {
+        PairWitness {
+            name: self.name.clone(),
+            keyboard: self.keyboard,
+            slave: self.slave,
+            pointer: self.pointer,
+            devices: self
+                .devices
+                .iter()
+                .map(|device| DeviceWitness {
+                    id: device.deviceid,
+                    kind: device.type_.into(),
+                    attachment: device.attachment,
+                    name: device.name.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    fn from_witness(witness: PairWitness) -> Result<Self> {
+        if witness.name.len() != PREFIX.len() + 32
+            || !witness.name.starts_with(PREFIX)
+            || !witness.name[PREFIX.len()..].iter().all(u8::is_ascii_hexdigit)
+            || witness.devices.len() != 4
+            || !(2..128).contains(&witness.keyboard)
+            || !(2..128).contains(&witness.slave)
+            || witness.pointer <= 1
         {
             return Err(unavailable());
         }
+        let expected = [
+            (witness.pointer, 1u16, u16::from(witness.keyboard), b" pointer".as_slice()),
+            (u16::from(witness.keyboard), 2, witness.pointer, b" keyboard".as_slice()),
+            (u16::from(witness.slave), 4, u16::from(witness.keyboard), b" XTEST keyboard".as_slice()),
+        ];
+        for (id, kind, attachment, suffix) in expected {
+            if witness
+                .devices
+                .iter()
+                .filter(|device| {
+                    device.id == id
+                        && device.kind == kind
+                        && device.attachment == attachment
+                        && device.name == [witness.name.as_slice(), suffix].concat()
+                })
+                .count()
+                != 1
+            {
+                return Err(unavailable());
+            }
+        }
+        let pointer_name = [witness.name.as_slice(), b" XTEST pointer"].concat();
+        if witness
+            .devices
+            .iter()
+            .filter(|device| device.kind == 3 && device.attachment == witness.pointer && device.name == pointer_name)
+            .count()
+            != 1
+            || witness
+                .devices
+                .iter()
+                .enumerate()
+                .any(|(index, device)| device.id <= 1 || witness.devices[..index].iter().any(|old| old.id == device.id))
+        {
+            return Err(unavailable());
+        }
+        Ok(Self {
+            name: witness.name,
+            keyboard: witness.keyboard,
+            slave: witness.slave,
+            pointer: witness.pointer,
+            devices: witness
+                .devices
+                .into_iter()
+                .map(|device| xinput::XIDeviceInfo {
+                    deviceid: device.id,
+                    type_: device.kind.into(),
+                    attachment: device.attachment,
+                    enabled: true,
+                    name: device.name,
+                    classes: Vec::new(),
+                })
+                .collect(),
+        })
+    }
+}
+
+impl PreparedKeeper {
+    pub(super) fn prepare(control: Endpoint, binding: Binding, deadline: Instant) -> Result<Self> {
         let authority = at(
-            "native control admission",
+            "native control preparation",
             control.transaction(deadline, || {
                 let observer = observer(&control)?;
                 Authority::subscribe(&control, binding, observer)
             }),
         )?;
-        let (input_token, input_authority) = at(
-            "native input admission",
-            input.transaction(deadline, || {
-                let token = observer(&input)?;
-                Ok((token, Authority::subscribe(&input, binding, token)?))
-            }),
-        )?;
-        let pair = at(
-            "native pair admission",
-            control.transaction(deadline, || {
-                authority.check(&control)?;
-                checked(
-                    checked(control.connection.change_window_attributes(
-                        input_token,
-                        &xproto::ChangeWindowAttributesAux::new().event_mask(xproto::EventMask::STRUCTURE_NOTIFY),
-                    ))?
-                    .check(),
-                )?;
-                let pair = Pair::create(&control)?;
-                checked(
-                    checked(control.connection.xinput_set_device_focus(
-                        binding.window,
-                        x11rb::CURRENT_TIME,
-                        xproto::InputFocus::NONE,
-                        pair.keyboard,
-                    ))?
-                    .check(),
-                )?;
-                Ok(pair)
-            }),
-        )?;
-        let mut session = Self {
-            control,
-            input,
-            authority,
-            input_authority,
+        Ok(Self { control, authority })
+    }
+
+    /// The trusted host must have checked its original epoch after prepare().
+    /// expected_worker_pid comes from the retained spawned child, not its wire.
+    /// Uncertain admission errors NEVER attest cleanup or authorize a replay.
+    pub(super) fn grant(self, identity: InputIdentity, expected_worker_pid: u32, deadline: Instant) -> Result<Keeper> {
+        if self.control.server() != identity.server
+            || identity.pid != expected_worker_pid
+            || identity.input_token <= 1
+            || identity.client_base == 0
+            || identity.client_base == self.control.connection.setup().resource_id_base
+            || identity.input_token & !self.control.connection.setup().resource_id_mask != identity.client_base
+        {
+            return Err(unavailable());
+        }
+        let input_process = Process::retain(expected_worker_pid)?;
+        let pair = self.control.transaction(deadline, || {
+            self.authority.check(&self.control)?;
+            let owner = checked(
+                checked(self.control.connection.res_query_client_ids(&[res::ClientIdSpec {
+                    client: identity.input_token,
+                    mask: res::ClientIdMask::LOCAL_CLIENT_PID,
+                }]))?
+                .reply(),
+            )?;
+            if owner.ids.len() != 1
+                || owner.ids[0].spec.mask != res::ClientIdMask::LOCAL_CLIENT_PID
+                || owner.ids[0].value != [expected_worker_pid]
+                || !input_process.alive()
+            {
+                return Err(unavailable());
+            }
+            checked(
+                checked(self.control.connection.change_window_attributes(
+                    identity.input_token,
+                    &xproto::ChangeWindowAttributesAux::new().event_mask(xproto::EventMask::STRUCTURE_NOTIFY),
+                ))?
+                .check(),
+            )?;
+            Pair::create(&self.control)
+        })?;
+        // Construct the owner before focus: any later failure uses the same
+        // independent cleanup path instead of losing an allocated pair.
+        let mut keeper = Keeper {
+            control: self.control,
+            authority: self.authority,
             pair,
-            input_token,
-            control_watch: Watch { target_good: true, pair_good: true, input_gone: false },
-            input_watch: Watch { target_good: true, pair_good: true, input_gone: false },
+            input_token: identity.input_token,
+            _input_process: input_process,
+            watch: Watch { target_good: true, pair_good: true, input_gone: false },
             cleanup_result: None,
-            action_attempted: false,
         };
-        // Both observers were subscribed before creation. A remove/recreate
-        // cannot disappear behind equal numeric IDs or equal current names.
-        let admitted = session.input.transaction(deadline, || {
-            session.input_authority.check(&session.input)?;
-            session.pair.check(&session.input)?;
-            session.input_watch.drain(
-                &session.input,
-                &session.input_authority,
-                &session.pair,
-                session.input_token,
-                true,
-            )?;
-            if !session.input_watch.target_good || !session.input_watch.pair_good {
+        keeper.control.transaction(deadline, || {
+            keeper.authority.check(&keeper.control)?;
+            keeper.pair.check(&keeper.control)?;
+            keeper.watch.drain(&keeper.control, &keeper.authority, &keeper.pair, keeper.input_token, true)?;
+            if !keeper.watch.target_good || !keeper.watch.pair_good {
+                return Err(unavailable());
+            }
+            checked(
+                checked(keeper.control.connection.xinput_set_device_focus(
+                    keeper.authority.binding.window,
+                    x11rb::CURRENT_TIME,
+                    xproto::InputFocus::NONE,
+                    keeper.pair.keyboard,
+                ))?
+                .check(),
+            )
+        })?;
+        Ok(keeper)
+    }
+}
+
+impl PreparedInput {
+    pub(super) fn prepare(input: Endpoint, binding: Binding, deadline: Instant) -> Result<Self> {
+        let (input_token, authority) = input.transaction(deadline, || {
+            let token = observer(&input)?;
+            Ok((token, Authority::subscribe(&input, binding, token)?))
+        })?;
+        Ok(Self { input, authority, input_token })
+    }
+
+    pub(super) fn identity(&self) -> InputIdentity {
+        InputIdentity {
+            server: self.input.server(),
+            pid: std::process::id(),
+            input_token: self.input_token,
+            client_base: self.input.connection.setup().resource_id_base,
+        }
+    }
+
+    pub(super) fn bind(self, witness: PairWitness, deadline: Instant) -> Result<InputWorker> {
+        let pair = Pair::from_witness(witness)?;
+        let mut watch = Watch { target_good: true, pair_good: true, input_gone: false };
+        let event_base = self.input.transaction(deadline, || {
+            self.authority.check(&self.input)?;
+            pair.check(&self.input)?;
+            watch.drain(&self.input, &self.authority, &pair, self.input_token, true)?;
+            if !watch.target_good || !watch.pair_good {
+                return Err(unavailable());
+            }
+            let extension = checked(self.input.connection.extension_information(xinput::X11_EXTENSION_NAME))?
+                .ok_or_else(unavailable)?;
+            extension.first_event.checked_add(xinput::DEVICE_KEY_RELEASE_EVENT).ok_or_else(unavailable)?;
+            Ok(extension.first_event)
+        })?;
+        Ok(InputWorker {
+            input: self.input,
+            input_authority: self.authority,
+            pair,
+            input_token: self.input_token,
+            input_watch: watch,
+            phase: InputPhase::Fresh,
+            attempted: false,
+            event_base,
+        })
+    }
+}
+
+/// This owner must remain outside the killable input process and keep the host
+/// desktop lease alive until cleanup is independently confirmed. It never types.
+pub(super) struct Keeper {
+    control: Endpoint,
+    authority: Authority,
+    pair: Pair,
+    input_token: u32,
+    _input_process: Process,
+    watch: Watch,
+    cleanup_result: Option<bool>,
+}
+
+impl Keeper {
+    pub(super) fn witness(&self) -> PairWitness {
+        self.pair.witness()
+    }
+    pub(super) fn keyboard(&self) -> u8 {
+        self.pair.keyboard
+    }
+
+    pub(super) fn check(&mut self, deadline: Instant) -> Result<()> {
+        self.control.transaction(deadline, || {
+            self.authority.check(&self.control)?;
+            self.pair.check(&self.control)?;
+            self.watch.drain(&self.control, &self.authority, &self.pair, self.input_token, false)?;
+            if !self.watch.target_good || !self.watch.pair_good || self.watch.input_gone {
                 return Err(unavailable());
             }
             Ok(())
-        });
-        // Drain the expected creation events before enabling the action. Later
-        // hierarchy changes are never accepted as a new incarnation.
-        let control_admitted = session.control.transaction(deadline, || {
-            session.pair.check(&session.control)?;
-            session.control_watch.drain(
-                &session.control,
-                &session.authority,
-                &session.pair,
-                session.input_token,
-                true,
-            )?;
-            if !session.control_watch.target_good || !session.control_watch.pair_good {
-                return Err(unavailable());
-            }
-            Ok(())
-        });
-        if let Err(error) = admitted.and(control_admitted) {
-            session.cleanup();
-            return at("native final admission fence", Err(error));
-        }
-        Ok(session)
+        })
     }
 
-    pub(super) fn stop_handle(&self) -> StopHandle {
-        StopHandle(self.input.boundary.clone())
-    }
-
-    /// Keycodes are native physical keys, never remapped or sent through core
-    /// XTest. A future text adapter must use a separately qualified input mode.
-    pub(super) fn dispatch(&mut self, chords: &[Vec<u8>], deadline: Instant) -> Receipt {
-        let mut receipt = Receipt { dispatched: false, acknowledged: false, cleanup_confirmed: false };
-        if self.action_attempted || self.cleanup_result.is_some() {
-            return receipt;
-        }
-        self.action_attempted = true;
-        let deadline = deadline.min(Instant::now() + Duration::from_secs(10));
-        let setup = self.input.connection.setup();
-        let valid = !chords.is_empty()
-            && chords.len() <= MAX_CHORDS
-            && chords.iter().all(|keys| {
-                !keys.is_empty()
-                    && keys.len() <= 8
-                    && keys.iter().enumerate().all(|(index, key)| {
-                        *key >= setup.min_keycode && *key <= setup.max_keycode && !keys[..index].contains(key)
-                    })
-            });
-        if valid {
-            let result = (|| {
-                let phase = self.input.boundary.begin(deadline.min(Instant::now() + TRANSACTION))?;
-                let extension = checked(self.input.connection.extension_information(xinput::X11_EXTENSION_NAME))?
-                    .ok_or_else(unavailable)?;
-                phase.finish()?;
-                for keys in chords {
-                    self.input.transaction(deadline, || {
-                        self.input_authority.check(&self.input)?;
-                        self.pair.check(&self.input)?;
-                        let focus = checked(
-                            checked(self.input.connection.xinput_get_device_focus(self.pair.keyboard))?.reply(),
-                        )?;
-                        self.input_watch.drain(
-                            &self.input,
-                            &self.input_authority,
-                            &self.pair,
-                            self.input_token,
-                            false,
-                        )?;
-                        if !self.input_watch.target_good
-                            || !self.input_watch.pair_good
-                            || focus.focus != self.authority.binding.window
-                            || focus.revert_to != xproto::InputFocus::NONE
-                        {
-                            return Err(unavailable());
-                        }
-                        for (press, codes) in [(true, keys.clone()), (false, keys.iter().rev().copied().collect())] {
-                            for code in codes {
-                                // This obligation precedes an uncertain write.
-                                receipt.dispatched = true;
-                                let kind = extension.first_event
-                                    + if press {
-                                        xinput::DEVICE_KEY_PRESS_EVENT
-                                    } else {
-                                        xinput::DEVICE_KEY_RELEASE_EVENT
-                                    };
-                                checked(
-                                    checked(self.input.connection.xtest_fake_input(
-                                        kind,
-                                        code,
-                                        x11rb::CURRENT_TIME,
-                                        self.input.root,
-                                        0,
-                                        0,
-                                        self.pair.slave,
-                                    ))?
-                                    .check(),
-                                )?;
-                            }
-                        }
-                        Ok(())
-                    })?;
-                }
-                Ok::<(), io::Error>(())
-            })();
-            receipt.acknowledged = result.is_ok();
-        }
-        receipt
-    }
-
-    /// Keep the original pair alive while the trusted supervisor obtains fresh
-    /// independent application evidence. Dispatch acknowledgement is NOT that
-    /// evidence; an asynchronous client may not have consumed the events yet.
-    /// No key is intentionally held during this observer phase. Cancellation
-    /// still stops the original input client and demands independent cleanup.
-    pub(super) fn finish(mut self) -> bool {
-        self.cleanup()
-    }
-
-    // Protocol fixtures have no asynchronous toolkit device-discovery loop.
-    // Real application qualification explicitly observes before finish().
-    #[cfg(test)]
-    fn run(mut self, chords: &[Vec<u8>], deadline: Instant) -> Receipt {
-        let mut receipt = self.dispatch(chords, deadline);
-        receipt.cleanup_confirmed = self.cleanup();
-        receipt
-    }
-
-    fn cleanup(&mut self) -> bool {
+    pub(super) fn cleanup(&mut self) -> bool {
         if let Some(result) = self.cleanup_result {
             return result;
         }
         self.cleanup_result = Some(false);
-        // Input stop alone is insufficient: also kill only its original X11
-        // client under the independent connection's bounded server fence.
-        self.input.boundary.stop();
         let deadline = Instant::now() + TRANSACTION;
         let result = self
             .control
             .transaction(deadline, || {
                 self.pair.check(&self.control)?;
-                self.control_watch.drain(&self.control, &self.authority, &self.pair, self.input_token, false)?;
-                if !self.control_watch.pair_good {
+                self.watch.drain(&self.control, &self.authority, &self.pair, self.input_token, false)?;
+                if !self.watch.pair_good {
                     return Err(unavailable());
                 }
-                if !self.control_watch.input_gone {
-                    // This private input client never destroys its token itself.
-                    // Continuous DestroyNotify + the server grab fence XID reuse.
+                if !self.watch.input_gone {
                     let killed = checked(self.control.connection.kill_client(self.input_token))?.check();
                     checked(checked(self.control.connection.get_input_focus())?.reply())?;
-                    self.control_watch.drain(&self.control, &self.authority, &self.pair, self.input_token, false)?;
-                    if !self.control_watch.input_gone {
+                    self.watch.drain(&self.control, &self.authority, &self.pair, self.input_token, false)?;
+                    if !self.watch.input_gone {
                         checked(killed)?;
                         return Err(unavailable());
                     }
@@ -715,6 +805,246 @@ impl NativeKeyboard {
     }
 }
 
+impl Drop for Keeper {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
+struct ActiveInput {
+    deadline: Instant,
+    next: u32,
+    held: Vec<u8>,
+}
+
+impl Drop for ActiveInput {
+    fn drop(&mut self) {
+        self.held.zeroize();
+    }
+}
+
+enum InputPhase {
+    Fresh,
+    Active(ActiveInput),
+    Finished,
+    Failed,
+}
+
+/// The worker borrows native pair witnesses, never the pair's removal authority.
+/// Each private edge is backpressured by the keeper/host's current original
+/// scope fence. Holding between edges is bounded by the sole action's deadline;
+/// public callers still supply bounded, balanced chords, not raw hold commands.
+pub(super) struct InputWorker {
+    input: Endpoint,
+    input_authority: Authority,
+    pair: Pair,
+    input_token: u32,
+    input_watch: Watch,
+    phase: InputPhase,
+    attempted: bool,
+    event_base: u8,
+}
+
+#[derive(Debug)]
+#[cfg(test)]
+pub(super) struct Receipt {
+    pub(super) dispatched: bool,
+    pub(super) acknowledged: bool,
+    pub(super) cleanup_confirmed: bool,
+}
+
+#[derive(Clone)]
+#[cfg(test)]
+pub(super) struct StopHandle(IoBoundary);
+
+#[cfg(test)]
+impl StopHandle {
+    pub(super) fn stop(&self) {
+        self.0.stop();
+    }
+}
+
+impl InputWorker {
+    #[cfg(test)]
+    pub(super) fn stop_handle(&self) -> StopHandle {
+        StopHandle(self.input.boundary.clone())
+    }
+
+    pub(super) fn begin(&mut self, deadline: Instant) -> Result<()> {
+        if !matches!(self.phase, InputPhase::Fresh) || self.input.boundary.stopped() || deadline <= Instant::now() {
+            return Err(unavailable());
+        }
+        self.phase = InputPhase::Active(ActiveInput {
+            deadline: deadline.min(Instant::now() + Duration::from_secs(10)),
+            next: 0,
+            held: Vec::new(),
+        });
+        Ok(())
+    }
+
+    pub(super) fn edge(&mut self, ordinal: u32, code: u8, press: bool) -> Result<()> {
+        let valid = match &self.phase {
+            InputPhase::Active(action) => {
+                ordinal == action.next
+                    && ordinal < 4096
+                    && Instant::now() < action.deadline
+                    && code >= self.input.connection.setup().min_keycode
+                    && code <= self.input.connection.setup().max_keycode
+                    && if press {
+                        action.held.len() < 8 && !action.held.contains(&code)
+                    } else {
+                        action.held.last() == Some(&code)
+                    }
+            }
+            _ => false,
+        };
+        if !valid {
+            self.phase = InputPhase::Failed;
+            self.input.boundary.stop();
+            return Err(unavailable());
+        }
+        let InputPhase::Active(action) = &mut self.phase else { unreachable!() };
+        let deadline = action.deadline;
+        // Advance before an uncertain native write. No ordinal is retryable.
+        action.next += 1;
+        if press {
+            action.held.push(code);
+        } else {
+            action.held.pop();
+        }
+        let result = self.input.transaction(deadline, || {
+            self.input_authority.check(&self.input)?;
+            self.pair.check(&self.input)?;
+            let focus = checked(checked(self.input.connection.xinput_get_device_focus(self.pair.keyboard))?.reply())?;
+            self.input_watch.drain(&self.input, &self.input_authority, &self.pair, self.input_token, false)?;
+            if !self.input_watch.target_good
+                || !self.input_watch.pair_good
+                || focus.focus != self.input_authority.binding.window
+                || focus.revert_to != xproto::InputFocus::NONE
+            {
+                return Err(unavailable());
+            }
+            self.attempted = true;
+            let kind =
+                self.event_base + if press { xinput::DEVICE_KEY_PRESS_EVENT } else { xinput::DEVICE_KEY_RELEASE_EVENT };
+            checked(
+                checked(self.input.connection.xtest_fake_input(
+                    kind,
+                    code,
+                    x11rb::CURRENT_TIME,
+                    self.input.root,
+                    0,
+                    0,
+                    self.pair.slave,
+                ))?
+                .check(),
+            )
+        });
+        if result.is_err() {
+            self.phase = InputPhase::Failed;
+            self.input.boundary.stop();
+        }
+        result
+    }
+
+    pub(super) fn end(&mut self) -> Result<()> {
+        if !matches!(&self.phase, InputPhase::Active(action)
+            if action.held.is_empty() && Instant::now() < action.deadline)
+        {
+            self.phase = InputPhase::Failed;
+            self.input.boundary.stop();
+            return Err(unavailable());
+        }
+        self.phase = InputPhase::Finished;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn dispatch(&mut self, chords: &[Vec<u8>], deadline: Instant) -> Receipt {
+        let mut receipt = Receipt { dispatched: false, acknowledged: false, cleanup_confirmed: false };
+        if self.begin(deadline).is_err() {
+            return receipt;
+        }
+        let setup = self.input.connection.setup();
+        let valid = !chords.is_empty()
+            && chords.len() <= MAX_CHORDS
+            && chords.iter().all(|keys| {
+                !keys.is_empty()
+                    && keys.len() <= 8
+                    && keys.iter().enumerate().all(|(index, key)| {
+                        *key >= setup.min_keycode && *key <= setup.max_keycode && !keys[..index].contains(key)
+                    })
+            });
+        let result = (|| {
+            if !valid {
+                return Err(unavailable());
+            }
+            let mut ordinal = 0;
+            for keys in chords {
+                for (press, codes) in [(true, keys.clone()), (false, keys.iter().rev().copied().collect())] {
+                    for code in codes {
+                        self.edge(ordinal, code, press)?;
+                        ordinal += 1;
+                    }
+                }
+            }
+            self.end()
+        })();
+        receipt.dispatched = self.attempted;
+        receipt.acknowledged = result.is_ok();
+        receipt
+    }
+}
+
+/// Same-process composition for the older mechanism fixtures only. Actual
+/// process qualification must use the separately owned keeper and worker.
+#[cfg(test)]
+pub(super) struct NativeKeyboard {
+    keeper: Keeper,
+    worker: InputWorker,
+}
+
+#[cfg(test)]
+impl std::ops::Deref for NativeKeyboard {
+    type Target = InputWorker;
+    fn deref(&self) -> &InputWorker {
+        &self.worker
+    }
+}
+
+#[cfg(test)]
+impl NativeKeyboard {
+    pub(super) fn admit(control: Endpoint, input: Endpoint, binding: Binding, deadline: Instant) -> Result<Self> {
+        let keeper = PreparedKeeper::prepare(control, binding, deadline)?;
+        let input = PreparedInput::prepare(input, binding, deadline)?;
+        let keeper = keeper.grant(input.identity(), std::process::id(), deadline)?;
+        let worker = input.bind(keeper.witness(), deadline)?;
+        Ok(Self { keeper, worker })
+    }
+
+    pub(super) fn stop_handle(&self) -> StopHandle {
+        self.worker.stop_handle()
+    }
+    pub(super) fn dispatch(&mut self, chords: &[Vec<u8>], deadline: Instant) -> Receipt {
+        self.worker.dispatch(chords, deadline)
+    }
+    pub(super) fn finish(mut self) -> bool {
+        self.cleanup()
+    }
+
+    fn cleanup(&mut self) -> bool {
+        self.worker.input.boundary.stop();
+        self.keeper.cleanup()
+    }
+
+    fn run(mut self, chords: &[Vec<u8>], deadline: Instant) -> Receipt {
+        let mut receipt = self.dispatch(chords, deadline);
+        receipt.cleanup_confirmed = self.cleanup();
+        receipt
+    }
+}
+
+#[cfg(test)]
 impl Drop for NativeKeyboard {
     fn drop(&mut self) {
         self.cleanup();
