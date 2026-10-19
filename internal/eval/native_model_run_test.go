@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 )
 
 func TestNativeModelsRunGradeAndCompareWithoutRereadingRuntime(t *testing.T) {
@@ -159,5 +160,89 @@ func TestNativeModelComparisonDoesNotTreatUnknownAsEmptyModelSet(t *testing.T) {
 	if len(comparison.EnvironmentChanges) != 0 ||
 		!slices.Contains(comparison.EnvironmentUnknowns, "baseline_native_record_coverage") {
 		t.Fatal("missing observation was treated as observed empty inputs", comparison)
+	}
+}
+
+func nativeModelComparisonReport(t *testing.T, status string) RunReport {
+	t.Helper()
+	binding := nativeModelTestBinding("/private/workspace")
+	trace := nativeModelTestTrace(t, binding)
+	if status == "error" || status == "aborted" {
+		trace.Outcome.Status = status
+		// Keep the second request but remove its response, as a failed call can.
+		trace.Records = append(trace.Records[:4], trace.Records[5:]...)
+		trace.Records[4].Data, _ = json.Marshal(diagnostictrace.TurnPayload{Status: status})
+		rehashNativeModelTestTrace(t, &trace)
+	}
+	turn := projectNativeModelTrace(trace, binding, digest([]byte("raw")), nil)
+	if turn.Code != "observed" {
+		t.Fatal("comparison fixture did not qualify", status, turn.Code)
+	}
+	if status == "unknown_model" {
+		turn.Calls[1].ResponseModel = ""
+	}
+	return RunReport{
+		Trials: []TrialSummary{{ID: binding.TrialID, CaseSHA256: binding.CaseSHA256}},
+		NativeModels: &NativeModelObservation{
+			Code: "observed", Turns: []NativeModelTurn{turn}, Totals: summarizeNativeModels([]NativeModelTurn{turn}),
+		},
+	}
+}
+
+func TestNativeModelComparisonReportsRequestedDriftWithoutKnownResponses(t *testing.T) {
+	for _, status := range []string{"error", "aborted", "unknown_model"} {
+		for _, field := range []string{"provider", "model"} {
+			t.Run(status+"/"+field, func(t *testing.T) {
+				baseline := nativeModelComparisonReport(t, status)
+				current := nativeModelComparisonReport(t, status)
+				call := &current.NativeModels.Turns[0].Calls[1]
+				if field == "provider" {
+					call.RequestProvider = "anthropic"
+				} else {
+					call.RequestModel = "another-requested-model"
+				}
+				comparison := Comparison{}
+				compareNativeModels(&comparison, baseline, current)
+				if !slices.Contains(comparison.EnvironmentChanges, "native_requested_or_response_models") ||
+					slices.Contains(comparison.EnvironmentChanges, "native_effective_requests") ||
+					!slices.Contains(comparison.EnvironmentUnknowns, "baseline_native_response_models") ||
+					!slices.Contains(comparison.EnvironmentUnknowns, "current_native_response_models") {
+					t.Fatal("known requested drift was hidden by response unknowns", comparison)
+				}
+			})
+		}
+	}
+}
+
+func TestNativeModelComparisonSeparatesResponseCoverageFromModelDrift(t *testing.T) {
+	for _, status := range []string{"error", "aborted", "unknown_model", "completed"} {
+		t.Run(status, func(t *testing.T) {
+			baseline := nativeModelComparisonReport(t, status)
+			current := nativeModelComparisonReport(t, "completed")
+			current.NativeModels.Turns[0].Calls[1].ResponseModel = "another-response-model"
+			comparison := Comparison{}
+			compareNativeModels(&comparison, baseline, current)
+			changed := slices.Contains(comparison.EnvironmentChanges, "native_requested_or_response_models")
+			unknown := slices.Contains(comparison.EnvironmentUnknowns, "baseline_native_response_models")
+			if changed != (status == "completed") || unknown != (status != "completed") {
+				t.Fatal("response coverage was treated as a known model identity", comparison)
+			}
+		})
+	}
+}
+
+func TestNativeModelComparisonRetainsKnownRequestResponsePairs(t *testing.T) {
+	baseline := nativeModelComparisonReport(t, "completed")
+	current := nativeModelComparisonReport(t, "completed")
+	for index := range 2 {
+		baseline.NativeModels.Turns[0].Calls[index].RequestModel = []string{"request-one", "request-two"}[index]
+		current.NativeModels.Turns[0].Calls[index].RequestModel = []string{"request-one", "request-two"}[index]
+		baseline.NativeModels.Turns[0].Calls[index].ResponseModel = []string{"response-one", "response-two"}[index]
+		current.NativeModels.Turns[0].Calls[index].ResponseModel = []string{"response-two", "response-one"}[index]
+	}
+	comparison := Comparison{}
+	compareNativeModels(&comparison, baseline, current)
+	if !slices.Contains(comparison.EnvironmentChanges, "native_requested_or_response_models") {
+		t.Fatal("known request-response pair changes disappeared", comparison)
 	}
 }

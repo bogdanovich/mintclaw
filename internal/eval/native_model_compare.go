@@ -29,10 +29,11 @@ func compareNativeModels(result *Comparison, baseline, current RunReport) {
 		baseline.NativeModels.Code != "observed" || current.NativeModels.Code != "observed" {
 		return
 	}
-	aModels, aInputs := nativeModelComparisonInputs(baseline)
-	bModels, bInputs := nativeModelComparisonInputs(current)
-	if nativeResponseModelsKnown(baseline.NativeModels) && nativeResponseModelsKnown(current.NativeModels) &&
-		!slices.Equal(aModels, bModels) {
+	aRequested, aResponses, aInputs := nativeModelComparisonInputs(baseline)
+	bRequested, bResponses, bInputs := nativeModelComparisonInputs(current)
+	if !slices.Equal(aRequested, bRequested) ||
+		nativeResponseModelsKnown(baseline.NativeModels) && nativeResponseModelsKnown(current.NativeModels) &&
+			!slices.Equal(aResponses, bResponses) {
 		result.EnvironmentChanges = append(result.EnvironmentChanges, "native_requested_or_response_models")
 	}
 	if !slices.Equal(aInputs, bInputs) {
@@ -56,10 +57,10 @@ func nativeResponseModelsKnown(observation *NativeModelObservation) bool {
 
 // Actual request shapes can change because of paths, time, different responses
 // or tool loops. This records drift, not normalized inputs or causal attribution.
-func nativeModelComparisonInputs(report RunReport) ([]string, []string) {
-	models, inputs := []string{}, []string{}
+func nativeModelComparisonInputs(report RunReport) ([]string, []string, []string) {
+	requested, responses, inputs := []string{}, []string{}, []string{}
 	if report.NativeModels == nil {
-		return models, inputs
+		return requested, responses, inputs
 	}
 	cases := map[string]string{}
 	for _, summary := range report.Trials {
@@ -67,7 +68,10 @@ func nativeModelComparisonInputs(report RunReport) ([]string, []string) {
 	}
 	for _, turn := range report.NativeModels.Turns {
 		for _, call := range turn.Calls {
-			model, _ := json.Marshal([]string{
+			request, _ := json.Marshal([]string{
+				cases[turn.TrialID], call.RequestProvider, call.RequestModel,
+			})
+			response, _ := json.Marshal([]string{
 				cases[turn.TrialID], call.RequestProvider, call.RequestModel,
 				call.ResponseProvider, call.ResponseModel,
 			})
@@ -75,10 +79,13 @@ func nativeModelComparisonInputs(report RunReport) ([]string, []string) {
 				Case   string            `json:"case"`
 				Inputs NativeModelInputs `json:"inputs"`
 			}{cases[turn.TrialID], call.Inputs})
-			models, inputs = append(models, string(model)), append(inputs, string(input))
+			requested = append(requested, string(request))
+			responses = append(responses, string(response))
+			inputs = append(inputs, string(input))
 		}
 	}
-	slices.Sort(models)
+	slices.Sort(requested)
+	slices.Sort(responses)
 	slices.Sort(inputs)
-	return models, inputs
+	return requested, responses, inputs
 }
