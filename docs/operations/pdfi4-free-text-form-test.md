@@ -207,6 +207,50 @@ The same chronology rule applies when `/retry_form` selects the old receipt:
 receipt selection must not make superseded advice into a missing-field
 question again. It still cannot extend an exhausted extraction budget.
 
+### Natural task changes without canceling the form
+
+Use a new disposable Telegram chat/topic, the generated medium fixture and the
+independent one-page `pkg/document/testdata/text.pdf` from your checkout. Upload
+both from your computer when instructed; server paths are not Telegram uploads.
+This is a bounded routing check, not complete PDFI4 qualification.
+
+1. Attach the medium form and perform steps 1–3 of the bounded clarification
+   check above. Keep the draft active; do not create a PDF or cancel it.
+2. Send: “Новая задача вместо заполнения формы: сколько будет 17 + 25?
+   Ответь только MINTCLAW_TASK_SWITCH_OK:42”. Expect the answer without a
+   cancellation command. The previous source and accepted facts must survive.
+3. Send: “Вернёмся к прежней форме займа оборудования. Продолжи тот же
+   сохранённый черновик. PDF пока не создавай”. Expect the same draft, not a
+   replacement job or another request for the accepted names/borrower phone.
+4. Upload `text.pdf` without saying what to do with it. Expect a task-scope
+   question with predefined choices, a free-text answer and cancellation.
+   The attachment must not silently replace the old form.
+5. Answer with ordinary standalone text, without `/answer`, a reply-to ID or
+   another upload: “Это новая задача: прочитай приложенный второй PDF через
+   document. Назови маркер первой страницы и номер страницы. Старый черновик
+   сохрани”. Expect `MintClaw text fixture`, page 1, from that already selected
+   file. The request must survive tool discovery and subsequent model steps.
+6. Return to the old draft again, then explicitly cancel only this disposable
+   test form when finished. Expect no signature, final PDF or submission.
+
+Keep the replies and approximate times. An operator must verify the same
+native job/source, four exact accepted facts, unchanged contact telephone,
+actual second-file extraction and absence of protected values in ordinary
+history/traces. A plausible marker alone is not sufficient evidence.
+Qualify the question's buttons separately if needed; forwarding a new message
+does not prove exact transport replay safety. Do not blindly repeat an
+uncertain handoff, retry a historical job or reset its budgets.
+
+This task-suspended draft is distinct from an explicit `/pause_form` control;
+the explicit pause/retry requirements above still apply. Actual Telegram
+acceptance requires real uploads and inspected replies/traces, not only an
+authenticated WebSocket/local-path test.
+The [routing checkpoint](../architecture/pdf-intake-task-routing-checkpoint.md)
+records the automated evidence and remaining limits: a successful native
+return can still produce generic `/retry_form` advice, and an older incomplete
+handoff was not recovered through chat. Do not treat that advice as permission
+to loop retries, reset budgets or repair historical jobs.
+
 ## Large Public Form And Unsupported Output
 
 The official I-134 is a separate required complete-applicable transaction, not a substitute for the unrelated form.
