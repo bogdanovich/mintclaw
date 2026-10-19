@@ -338,6 +338,16 @@ jobs:
             -o "$fixture_text_self_test"
           "$fixture_text_self_test"
 
+      - name: Check Mac native ownership without GUI permissions, twenty repetitions
+        run: >-
+          go test -race -count=20 -tags goolm,stdjson -timeout=2m
+          -run '^TestDarwinInput' ./pkg/computer/desktop
+
+      - name: Check independent native input and ownership proof verifiers
+        run: >-
+          go test -count=1 -tags goolm,stdjson,integration
+          -run '^TestNative(Input|Ownership)ChildVerification' ./cmd/mintclaw-node
+
       - name: Run workspace identity recovery tests
         shell: bash
         run: |
