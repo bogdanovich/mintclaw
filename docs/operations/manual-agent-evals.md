@@ -6,9 +6,11 @@
 on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,
 bootstrap skills, deploy a binary, restart a gateway, grant broad approval, or retry uncertain task admission.
 
-The [browser guide](manual-agent-evals-browser.md) adds owned-profile read/artifact task execution with local fixture
-witnesses, not native browser grading. Protected browser inputs, action/delivery/context binding, effective-input
-witnesses and complete domain qualification remain later packets.
+The [browser guide](manual-agent-evals-browser.md) describes owned-profile read/artifact/denied task execution,
+scoped native action/delivery/privacy/cleanup grading, and the protected submit/followup workflow. One read path is
+live-qualified; other domain/effective-input qualification remains incomplete. The
+[private form v1 pilot](manual-agent-evals-browser-private-v1-pilot-20261019.md) preserves two failures, not a passing
+private browser suite.
 Offline `compare` reports all retained trial counts, case compatibility and observed environment changes; it does
 not execute tasks, regrade evidence, or establish causal quality drift.
 Missing capabilities/drivers/domain evidence produce explicit non-passing coverage. A text response never proves
@@ -23,7 +25,7 @@ The E2 integration adds tools-disabled user/judge roles to `run`, a judge-only `
 strict typed actions/findings, and [six manually labelled calibration examples](../../evals/calibration/judge-v2.json).
 Model context excludes runtime authority, hidden hard-check expectations, simulator
 persona from judge input, and private fact values; fact handles alone are available to the user role. Protected
-answers require PDF-specific native admission, not arbitrary case facts. Private values observed in raw events, even an
+answers require domain-specific native admission, not arbitrary case facts. Private values observed in raw events, even an
 excluded streaming revision, refuse model projection. Known credentials from native configuration are checked before
 wire/model input and report retention; unsafe output is withheld, not sanitized into a passing assessment.
 JSON escaping is not treated as redaction. When private facts or a credential filter exist, escape-bearing content
@@ -48,7 +50,7 @@ cancellation. The bounded walk does not invoke custom marshaling methods; cycles
 limits remain unavailable. Limits are 4,096 visited nodes, depth 24, and 64 KiB total strings/bytes per boundary.
 This is not a claim about raw HTTP bytes, provider-internal attempts, arbitrary encodings, or whole-runtime privacy.
 
-During a serial run, both roles guard against private values retained from all prepared PDF trials, even after an
+During a serial run, both roles guard against private values retained from all prepared PDF/browser trials, even after an
 earlier trial releases its fixture. A direct role call guards only its supplied facts and configured credentials;
 the receipt distinguishes `run_retained_facts`, `call_facts`, and `credentials_only`. Fact values never enter the
 receipt or the user role's fact-handle catalog. Known leaks fail; unavailable boundary inspection cannot qualify
