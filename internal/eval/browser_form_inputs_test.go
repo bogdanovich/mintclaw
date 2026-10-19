@@ -100,6 +100,15 @@ func TestBrowserFormInputProofRequiresActualNativeFill(t *testing.T) {
 }
 
 func TestBrowserFormInputProofRefusesMissingOrForeignNativeJoins(t *testing.T) {
+	original := newBrowserFillControl(t)
+	type projectionSnapshot struct {
+		Current interactions.Record
+		State   browser.StateSnapshot
+	}
+	frozen, err := json.Marshal(projectionSnapshot{Current: original.current, State: original.state})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, mode := range []string{
 		"waiting", "claimed-only", "failed", "foreign-message", "foreign-prompt", "foreign-route", "changed-origin",
 		"changed-binding", "changed-question", "replayed-revision", "late-answer", "plaintext", "receipt", "receipt-state",
@@ -108,8 +117,12 @@ func TestBrowserFormInputProofRefusesMissingOrForeignNativeJoins(t *testing.T) {
 		"trace-source", "trace-hash", "trace-turn", "generation",
 	} {
 		t.Run(mode, func(t *testing.T) {
-			c := newBrowserFillControl(t)
-			current, state := c.current, c.state
+			var snapshot projectionSnapshot
+			if err := json.Unmarshal(frozen, &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			c := *original
+			current, state := snapshot.Current, snapshot.State
 			preparedID := ""
 			for id, action := range state.PreparedActions {
 				if action.Action.Kind == browser.ActionFill {
