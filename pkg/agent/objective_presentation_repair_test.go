@@ -75,6 +75,59 @@ func TestObjectivePresentationRepairLeavesExactJSONAndValidAnswersAlone(t *testi
 	require.Nil(t, newVerifiedPresentationRepair(terminalContent{content: content}, nil, nil, checklist))
 }
 
+func TestVerifiedPresentationRepairPreservesIncompleteProofAndBlocker(t *testing.T) {
+	for _, status := range []taskresult.OutcomeStatus{taskresult.OutcomePartial, taskresult.OutcomeBlocked} {
+		t.Run(string(status), func(t *testing.T) {
+			reported, audits, checklist := artifactObjectiveFixture()
+			blocker := "Only three of the six requested originals were available."
+			complete := strings.Replace(reported.Result, "\n\nBrowser", " "+blocker+"\n\nBrowser", 1)
+			reported.Status, reported.Explanation = string(status), blocker
+			reported.Result = "The available files were obtained."
+			original := terminalContent{content: encodePresentationReport(t, reported), protected: true}
+			_, before := extractObjectiveOutcome(original.content, audits, true, checklist)
+			require.Equal(t, status, before.Status)
+			require.Empty(t, before.UserSummary)
+			repair := newVerifiedPresentationRepair(original, audits, nil, checklist)
+			require.NotNil(t, repair, "incomplete outcomes need the same presentation-only boundary")
+			require.Contains(t, repair.instruction(), blocker)
+
+			for _, rejected := range []string{
+				strings.Replace(complete, blocker, "", 1),
+				strings.Replace(complete, "transfer-artifact://photo_2", "transfer-artifact://invented", 1),
+				encodePresentationReport(t, reported),
+			} {
+				require.Equal(t, original, repair.accept(terminalContent{content: rejected}))
+			}
+			accepted := repair.accept(terminalContent{content: complete})
+			_, after := extractObjectiveOutcome(accepted.content, audits, true, checklist)
+			require.Equal(t, complete, after.UserSummary)
+			require.Equal(t, 3, len(strings.Split(after.UserSummary, "\n\n")))
+			require.True(t, strings.HasSuffix(after.UserSummary, "END-OF-REPORT"))
+			after.UserSummary = ""
+			require.Equal(t, before, after, "formatting cannot change status, missing items, outputs, or receipts")
+			require.True(t, accepted.protected)
+
+			reported.Result = complete
+			require.Nil(t, newVerifiedPresentationRepair(
+				terminalContent{content: encodePresentationReport(t, reported)}, audits, nil, checklist,
+			), "valid incomplete answers must not incur another model call")
+		})
+	}
+}
+
+func TestVerifiedPresentationRepairRejectsUnreportedOrMalformedOutcomes(t *testing.T) {
+	_, _, checklist := artifactObjectiveFixture()
+	for _, content := range []string{
+		"", "No report.", "<task_outcome>{invalid}</task_outcome>",
+		`<task_outcome>{"status":"blocked","unknown":true}</task_outcome>`,
+		`<task_outcome>{"status":"blocked"} {}</task_outcome>`,
+	} {
+		require.NotPanics(t, func() {
+			require.Nil(t, newVerifiedPresentationRepair(terminalContent{content: content}, nil, nil, checklist))
+		})
+	}
+}
+
 type presentationCloseTool struct{ calls atomic.Int32 }
 
 func (*presentationCloseTool) Name() string        { return "browser_session" }
@@ -100,6 +153,7 @@ func TestSpawnSubTurnRepairsPresentationAfterAcquisitionAndClosureWithoutReplay(
 		failure         bool
 		canonicalRepair bool
 		initial         string
+		status          taskresult.OutcomeStatus
 	}{
 		{name: "complete answer", corrected: true},
 		{name: "bounded fallback"},
@@ -110,6 +164,10 @@ func TestSpawnSubTurnRepairsPresentationAfterAcquisitionAndClosureWithoutReplay(
 		{name: "serialized tool projection", raw: new(`[tool_use: browser_act, args: {"photo":1}]`)},
 		{name: "changed verified output", change: true},
 		{name: "transient provider failure", failure: true},
+		{name: "partial complete answer", status: taskresult.OutcomePartial, corrected: true},
+		{name: "blocked complete answer", status: taskresult.OutcomeBlocked, corrected: true},
+		{name: "partial bounded fallback", status: taskresult.OutcomePartial},
+		{name: "blocked bounded fallback", status: taskresult.OutcomeBlocked},
 		{
 			name: "missing report then presentation", canonicalRepair: true,
 			initial: "Three originals obtained. Browser closed.", corrected: true,
@@ -131,6 +189,13 @@ func TestSpawnSubTurnRepairsPresentationAfterAcquisitionAndClosureWithoutReplay(
 		t.Run(test.name, func(t *testing.T) {
 			reported, _, _ := artifactObjectiveFixture()
 			complete := reported.Result
+			expectedStatus := taskresult.OutcomeSucceeded
+			if test.status != "" {
+				expectedStatus = test.status
+				reported.Status = string(test.status)
+				reported.Explanation = "Only three of the six requested originals were available."
+				complete = strings.Replace(complete, "\n\nBrowser", " "+reported.Explanation+"\n\nBrowser", 1)
+			}
 			reported.Result = "Three originals were obtained, and the session is closed. END-OF-REPORT"
 			incomplete := encodePresentationReport(t, reported)
 			repairResponse := &providers.LLMResponse{Content: incomplete, FinishReason: "stop"}
@@ -208,7 +273,11 @@ func TestSpawnSubTurnRepairsPresentationAfterAcquisitionAndClosureWithoutReplay(
 			require.NoError(t, err)
 			require.NotNil(t, result.Deliverable)
 			outcome := result.Deliverable.ObjectiveOutcome
-			require.Equal(t, taskresult.OutcomeSucceeded, outcome.Status, "execution proof remains successful")
+			require.Equal(t, expectedStatus, outcome.Status, "presentation cannot change execution status")
+			if test.status != "" {
+				require.Equal(t, reported.Explanation, outcome.Explanation)
+				require.Contains(t, result.ForUser, reported.Explanation)
+			}
 			require.Len(t, outcome.CompletedItems[1].Receipts, 3)
 			require.Equal(t, int32(3), acquisition.calls.Load())
 			require.Equal(t, int32(1), closure.calls.Load())
