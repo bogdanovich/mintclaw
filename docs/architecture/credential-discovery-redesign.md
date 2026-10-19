@@ -5,7 +5,9 @@ found the Login but ended unknown. The reviewed continuation fix is merged;
 D4 still requires fresh authentication evidence.
 The owner's two-hour, automatically resumed phone wait is also reviewed and
 deployed. The [composition](credential-approval-wait.md) resumed the fresh D4
-attempt automatically; that attempt stopped at the TOTP step.
+attempt automatically; that attempt stopped at the TOTP step. The generic
+readiness correction for initially disabled submit controls is reviewed and
+deployed; a fresh Facebook authentication check remains required.
 This replaces the requirement to
 preconfigure each browser account's item UUID, allowed origins and site-specific
 success markers. The new path is reviewed, qualified and deployed; see the
