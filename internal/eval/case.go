@@ -172,7 +172,7 @@ func (c Case) Validate() error {
 			if check.Expected != "" {
 				return ErrInvalidCase
 			}
-		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write":
+		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write", "pdf_source_fields":
 			if c.PDF == nil || check.Expected != "" {
 				return ErrInvalidCase
 			}

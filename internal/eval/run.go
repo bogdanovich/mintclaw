@@ -52,6 +52,10 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		if item.Case.Validate() != nil || !validDigest(item.Digest) || seen[item.Case.ID] {
 			return RunReport{}, ErrInvalidCase
 		}
+		if item.Case.PDF != nil && item.Case.PDF.SourceFields != nil &&
+			containsAll(preset.Capabilities, item.Case.Requires) && !preset.CaptureModelMetadata {
+			return RunReport{}, ErrUnsafeTarget
+		}
 		seen[item.Case.ID] = true
 	}
 	suiteCtx, cancel := context.WithTimeout(ctx, options.SuiteTimeout)
@@ -239,6 +243,15 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	finalCtx, finalCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	err = pendingPDF.finish(finalCtx, writer, &result, lifecycle, retainedFacts.values, filter, privateSurfaces,
 		func(item Case, trial *Trial) {
+			if item.PDF != nil && item.PDF.SourceFields != nil {
+				readCtx, readCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				trial.PDF.SourceFields = observePDFSourceFields(readCtx, target, lifecycle, privateSurfaces,
+					*trial, retainedFacts.values, filter)
+				readCancel()
+				if trial.PDF.SourceFields.Code == "leak_observed" {
+					failPDFArtifact(trial, Fail, "private_native_evidence")
+				}
+			}
 			assessFinalizedPDF(
 				suiteCtx,
 				roles.judge,

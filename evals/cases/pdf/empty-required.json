@@ -50,6 +50,10 @@
     {
       "id": "pdf-no-write",
       "kind": "pdf_no_write"
+    },
+    {
+      "id": "pdf-source-fields",
+      "kind": "pdf_source_fields"
     }
   ],
   "rubric": [
@@ -64,6 +68,12 @@
     "output": "forbidden",
     "pages": 2,
     "field_count": 5,
+    "source_fields": {
+      "min_returned_fields": 5,
+      "required_fields": 3,
+      "values_present": 2,
+      "defaults_present": 4
+    },
     "fields": [
       {
         "name": "borrower_name",
