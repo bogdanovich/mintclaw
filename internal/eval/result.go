@@ -103,6 +103,7 @@ type PDFTrialEvidence struct {
 	Cancellation *PDFCancellationEvidence `json:"cancellation,omitempty"`
 	Wire         *MediaWireEvidence       `json:"wire,omitempty"`
 	PostStop     *PDFPostStopEvidence     `json:"post_stop,omitempty"`
+	SourceFields *PDFSourceFieldsEvidence `json:"source_fields,omitempty"`
 }
 
 // Post-stop evidence is scoped to the admitted owned runtime and native stores,

@@ -104,6 +104,8 @@ func Grade(
 		}
 		trial, decodeErr := decodeDocument[Trial](data, 8*1024*1024)
 		if decodeErr != nil || !gradeEligible(trial, item, summary, preset, workspace) ||
+			item.Case.PDF != nil && item.Case.PDF.SourceFields != nil &&
+				!pdfSourceFieldsRuntimeMatches(trial.PDF.SourceFields, original.Runtime) ||
 			(item.Case.PDF != nil || item.Case.Browser != nil) &&
 				!observedOwnedProfile(original.TargetLifecycle, original.PrivateSurfaces) ||
 			item.Case.Browser != nil &&

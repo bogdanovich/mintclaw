@@ -280,10 +280,43 @@ The transient observation is excluded from canonical tool results and ordinary r
 existing diagnostic projector emits the bounded metadata when capture is explicitly enabled. Capture defaults,
 source authorization, document execution, delivery and question handling are unchanged.
 
-The eval consumer must still validate the native trace's source, complete routed trial/turn/call scope, integrity,
-limits and privacy before checking the exact fixture SHA and applicable read facts. Missing old metadata must not
-be treated as success. This producer alone does not repair the empty-fields case contract or qualify a new live
-PDF run; the retained v1 coverage false positive remains unchanged.
+The producer alone does not qualify a live PDF run. The retained v1 coverage false positive remains unchanged.
+
+## Source-Use Hard Check
+
+`pdf_source_fields`, paired with a PDF `source_fields` expectation, checks the exact fixture SHA, total field count,
+minimum returned window, required fields, saved-value presence and default presence. This first contract supports
+public no-output cancellation cases and reads on the native turn that asked the canceled question. It does not
+claim all earlier/later turns, private-value handling, model comprehension or successful PDF output. Other PDF
+cases keep their existing independent checks. A PDF-capable run selecting this check requires explicit
+`capture_model_metadata: true` and an owned target; it refuses before startup/report allocation without opt-in.
+It does not silently enable capture, and capability-unavailable cases remain skipped.
+
+After native stop, the raw profile privacy scan and PDF resource settlement/cleanup, but before the judge, the
+consumer reuses the existing rooted, bounded native-trace reader. Raw privacy inspection precedes native decode
+and continues past malformed files. Native source/build, exact metadata-only capture policy, permissions,
+same-file snapshots, codec/digests and unique trace identity must qualify. The complete non-truncated question
+turn must match the retained request/agent/session/workspace scope and native filtered session hash. Document
+call/result IDs and generations must pair uniquely, within that turn and before its terminal record. Only typed
+successful field-read observations qualify; claims, arguments, arbitrary successful tools and preview text do not.
+
+A complete bound trace with no document invocation fails even if the LLM judge passes. Missing, ambiguous,
+foreign, truncated, malformed or old successful document metadata remains inconclusive. A known wrong-source or
+insufficient/mismatched read cannot pass; unclassified successful document results can leave that outcome unknown.
+Errors are not reads. A valid matching observation can prove the requested read despite other non-reading document
+operations. Raw private-value leaks fail and never become retained content.
+
+The frozen, value-free proof retains native source/trace hashes, routed binding, call identities/sequences and
+bounded counts. Offline regrade validates its case/route/build/shape and recomputes the hard check without opening
+runtime traces, restoring a deleted fixture or sending a target task. The existing strict JSON schema rejects
+omitted counts rather than treating absence as observed zero. Operator-owned edited reports are not authenticated.
+
+The `pdf.empty.required` manifest now has a new case hash with this hard check; task, driver and rubric are
+unchanged. An independent pypdf 6.20.0 inspection of its exact source SHA found 5 fields, 3 required flags, 2 saved
+values and 4 default entries. The borrower has an empty saved string despite a default; unchecked `Off` is an
+explicit saved button value. `schema_fields` and `returned_fields` must both cover all 5 for this case. Do not infer
+zero values from the filename. This contract change does not upgrade the original v1 report or authorize replay
+of its used profile. A new versioned experiment on reviewed, merged code is still required.
 
 ## Question Cancellation Receipts
 

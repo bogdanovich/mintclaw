@@ -75,6 +75,13 @@ verdict: a follow-up consumer must reuse native trace privacy/integrity/routed-s
 hard check and no-document negatives, then run a new versioned empty-fields experiment. Do not upgrade the old
 pass, replay its used profile, or substitute successful `capabilities`/inspect-only calls for field use.
 
+The consumer adds an explicit `pdf_source_fields` no-output/question-turn hard check and uses the same bounded,
+raw-first native-trace reader as model observations. It freezes exact fixture/route/build/call bindings and counts
+before judge work; offline regrade recomputes the check without runtime access. The empty-required case's task,
+driver and rubric stay unchanged, but its manifest hash now includes independently inspected fixture counts and
+requires opted-in metadata capture. Known no-document evidence fails regardless of a positive judge; unknown
+legacy/incomplete evidence cannot pass. Consumer merge/tests alone are not a v2 experiment or E3 qualification.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 

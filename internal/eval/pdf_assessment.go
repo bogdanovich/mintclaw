@@ -42,6 +42,9 @@ func validPDFNoWriteEvidence(trial Trial, item Case, workspace string) bool {
 		lastOutcome(trial.Events).Kind != "canceled" {
 		return false
 	}
+	if item.PDF.SourceFields != nil && !pdf.SourceFields.valid(trial, workspace) {
+		return false
+	}
 	conversation := trial
 	if pdf.JobID != "" {
 		cancellation := pdf.Cancellation
@@ -83,6 +86,8 @@ func gradeFinalizedPDFChecks(item Case, trial Trial) []CheckResult {
 	}
 	for index, check := range item.Checks {
 		switch check.Kind {
+		case "pdf_source_fields":
+			checks[index] = gradePDFSourceFields(check.ID, item, trial)
 		case "pdf_no_write":
 			if trial.PDF.PostStop.AssessmentScope == pdfNoWriteAssessmentScope {
 				checks[index] = booleanCheck(check.ID, true, []string{"pdf.post_stop"})

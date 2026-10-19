@@ -223,8 +223,34 @@ func TestPDFAllNativeCleanupPrecedesJudgingAndKeepsCaseHandlesSeparate(t *testin
 }
 
 func TestGradeFinalizedPDFNoWriteWithoutSourceFixtureOrTargetWork(t *testing.T) {
+	for _, sourceFields := range []bool{false, true} {
+		name := "no-read-check"
+		if sourceFields {
+			name = "native-read-check"
+		}
+		t.Run(name, func(t *testing.T) { testGradeFinalizedPDFNoWrite(t, sourceFields) })
+	}
+}
+
+func testGradeFinalizedPDFNoWrite(t *testing.T, sourceFields bool) {
+	t.Helper()
 	fixture, _, _, calls := gradeFixture(t, false)
 	trial, item, prepared, surfaces := finalizedNoWriteFixture(t)
+	if sourceFields {
+		item.Case.PDF.SourceFields = &PDFSourceFieldsExpectation{
+			MinReturnedFields: 5, RequiredFields: 3, ValuesPresent: 3, DefaultsPresent: 4,
+		}
+		item.Case.Checks = append(item.Case.Checks, Check{ID: "source-fields", Kind: "pdf_source_fields"})
+		data, _ := json.Marshal(item.Case)
+		item.Digest, trial.CaseSHA256 = digest(data), digest(data)
+		binding, valid := pdfSourceBinding(trial, prepared.workspace)
+		if !valid {
+			t.Fatal("source turn binding unavailable")
+		}
+		trial.PDF.SourceFields = projectPDFSourceFields(sourceFieldsTrace(t, binding, item.Case, true),
+			binding, digest([]byte("native-source-bytes")), nil)
+		fixture.probe.GitCommit, fixture.probe.BuildVersion = nativeModelTestCommit, "native-test"
+	}
 	assessFinalizedPDF(t.Context(), nil, item.Case, &trial, prepared.workspace, cleanPDFLifecycle(), surfaces, nil)
 	if !trial.EvidenceEligible || trial.Verdict != Inconclusive {
 		t.Fatal("unjudged finalized source is not eligible", trial.Code)
@@ -295,9 +321,13 @@ func TestGradeFinalizedPDFNoWriteWithoutSourceFixtureOrTargetWork(t *testing.T) 
 	if _, err = Compare(result.ReportDir, result.ReportDir); err != nil {
 		t.Fatal("finalized PDF regrade could not be compared", err)
 	}
-	for _, mode := range []string{
+	modes := []string{
 		"legacy", "scope", "profile", "lifecycle", "counts", "terminal", "source", "role", "not-eligible",
-	} {
+	}
+	if sourceFields {
+		modes = append(modes, "read-missing", "read-binding", "read-build", "read-sequence", "read-overflow")
+	}
+	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			copy := comparisonTrial(t, RunReport{ReportDir: report.dir, Trials: source.Trials}, 0)
 			changed := source
@@ -323,6 +353,16 @@ func TestGradeFinalizedPDFNoWriteWithoutSourceFixtureOrTargetWork(t *testing.T) 
 				copy.DriverCalls = []RoleCall{{Attempted: true}}
 			case "not-eligible":
 				copy.EvidenceEligible = false
+			case "read-missing":
+				copy.PDF.SourceFields = nil
+			case "read-binding":
+				copy.PDF.SourceFields.BindingSHA256 = strings.Repeat("e", 64)
+			case "read-build":
+				copy.PDF.SourceFields.Source.Commit = strings.Repeat("e", 40)
+			case "read-sequence":
+				copy.PDF.SourceFields.Reads[0].ResultSequence = copy.PDF.SourceFields.TerminalSequence
+			case "read-overflow":
+				copy.PDF.SourceFields.UnknownResults = int(^uint(0) >> 1)
 			}
 			writeAdmissionJSON(t, filepath.Join(report.dir, name), copy)
 			writeAdmissionJSON(t, filepath.Join(report.dir, "run.json"), changed)
