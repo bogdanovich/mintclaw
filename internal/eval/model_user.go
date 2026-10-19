@@ -20,6 +20,9 @@ func nextModelAction(
 	if item.PDF != nil && item.PDF.Output == "required" {
 		system, version, parse = pdfUserSystemPrompt, PDFUserPromptVersion, parsePDFUserAction
 	}
+	if isBrowserForm(item) {
+		system, version, parse = browserFormUserSystemPrompt, BrowserFormUserPromptVersion, parseBrowserFormUserAction
+	}
 	input, err := userInputWithPrompt(item, events, pendingKind, remaining, system)
 	if err != nil {
 		result.Code = "ineligible_user_evidence"

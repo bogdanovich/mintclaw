@@ -42,6 +42,7 @@ type BrowserTrialEvidence struct {
 	Artifact        *BrowserArtifactEvidence   `json:"artifact,omitempty"`
 	Denial          *BrowserDenialEvidence     `json:"denial,omitempty"`
 	FormInputs      *BrowserFormInputsEvidence `json:"form_inputs,omitempty"`
+	Form            *BrowserFormEvidence       `json:"form,omitempty"`
 }
 
 type browserRun struct {
@@ -140,10 +141,12 @@ func (run *browserRun) finish(
 		var artifact *BrowserArtifactEvidence
 		var denial *BrowserDenialEvidence
 		var formInputs *BrowserFormInputsEvidence
+		var form *BrowserFormEvidence
 		if trial.Browser != nil {
 			artifact = trial.Browser.Artifact
 			denial = trial.Browser.Denial
 			formInputs = trial.Browser.FormInputs
+			form = trial.Browser.Form
 		}
 		trial.Browser = &BrowserTrialEvidence{
 			Version:         Version,
@@ -153,6 +156,7 @@ func (run *browserRun) finish(
 			Artifact:        artifact,
 			Denial:          denial,
 			FormInputs:      formInputs,
+			Form:            form,
 		}
 		if err == nil {
 			trial.Browser.Fixture = &oracle
@@ -183,6 +187,10 @@ func (run *browserRun) finish(
 		if observationErr == nil && pending.item.Browser.Scenario == "denied" {
 			denialErr = finalizeBrowserDenial(&trial, pending, target, observed, temporaryEmpty)
 		}
+		var formErr error
+		if observationErr == nil && isBrowserForm(pending.item) {
+			formErr = finalizeBrowserForm(&trial, pending, target, observed, temporaryEmpty)
+		}
 		trial.EvidenceEligible = false
 		for checkIndex, check := range pending.item.Checks {
 			if checkIndex >= len(trial.Checks) {
@@ -202,7 +210,7 @@ func (run *browserRun) finish(
 			case "private_surfaces":
 				if report.PrivateSurfaces != nil && report.PrivateSurfaces.LeakObserved ||
 					errors.Is(observationErr, ErrPrivateEvidence) || errors.Is(transferErr, ErrPrivateEvidence) ||
-					errors.Is(denialErr, ErrPrivateEvidence) ||
+					errors.Is(denialErr, ErrPrivateEvidence) || errors.Is(formErr, ErrPrivateEvidence) ||
 					trial.Browser.Artifact != nil && trial.Browser.Artifact.Code == "private_media_evidence" {
 					*result = CheckResult{
 						ID:          check.ID,
@@ -218,6 +226,9 @@ func (run *browserRun) finish(
 				}
 				if trial.Browser.Denial != nil {
 					proof, source = trial.Browser.Denial.Native, "browser.denial"
+				}
+				if trial.Browser.Form != nil {
+					proof, source = trial.Browser.Form.Native, "browser.form"
 				}
 				if proof != nil && proof.ForbiddenActionAccepted {
 					*result = CheckResult{

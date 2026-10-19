@@ -20,6 +20,7 @@ type browserConversation struct {
 	wire          *mediaWireObservation
 	input         *browserInputObservation
 	inputAttempts []browserInputAttempt
+	review        *browserFormReview
 }
 
 func newBrowserConversation(
@@ -42,6 +43,14 @@ func (domain *browserConversation) initialTask() string { return domain.question
 func (domain *browserConversation) request(
 	ctx context.Context, action Action, prompt Event,
 ) (protocol.MintClawMessage, bool, error) {
+	if isBrowserForm(domain.item) && action.Kind == "confirm" {
+		request, err := domain.confirmForm(ctx, prompt)
+		return request, true, err
+	}
+	if isBrowserForm(domain.item) && action.Kind == "allow_once" {
+		request, err := domain.allowReviewedBrowserAction(prompt, "Allow this confirmed fixture form submission once.")
+		return request, true, err
+	}
 	if action.Kind == "protected_answer" {
 		request, err := domain.protectedInputRequest(ctx, prompt, action.Fact)
 		return request, true, err

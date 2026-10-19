@@ -56,6 +56,10 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			containsAll(preset.Capabilities, item.Case.Requires) && !preset.CaptureModelMetadata {
 			return RunReport{}, ErrUnsafeTarget
 		}
+		if isBrowserForm(item.Case) && containsAll(preset.Capabilities, item.Case.Requires) &&
+			(!preset.CaptureModelMetadata || !options.StartTarget) {
+			return RunReport{}, ErrUnsafeTarget
+		}
 		seen[item.Case.ID] = true
 	}
 	suiteCtx, cancel := context.WithTimeout(ctx, options.SuiteTimeout)
@@ -173,16 +177,17 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		switch {
 		case item.Case.Browser != nil && fixtures == nil:
 			trial.Verdict, trial.Code = Skipped, "browser_evidence_unavailable"
-		case item.Case.Browser != nil && len(item.Case.Driver.Facts) != 0:
+		case item.Case.Browser != nil && len(item.Case.Driver.Facts) != 0 && !isBrowserForm(item.Case):
 			trial.Verdict, trial.Code = Skipped, "browser_private_input_unavailable"
 		case item.Case.Browser != nil && item.Case.Browser.Scenario != "read" &&
-			item.Case.Browser.Scenario != "artifact" && item.Case.Browser.Scenario != "denied":
+			item.Case.Browser.Scenario != "artifact" && item.Case.Browser.Scenario != "denied" && !isBrowserForm(item.Case):
 			trial.Verdict, trial.Code = Skipped, "browser_action_evidence_unavailable"
 		case !containsAll(preset.Capabilities, item.Case.Requires):
 			trial.Verdict, trial.Code = Skipped, "capability_unavailable"
 		case item.Case.Driver.Mode == "llm_user" && roles.user == nil:
 			trial.Verdict, trial.Code = Skipped, "driver_unavailable"
-		case item.Case.PDF == nil && (len(item.Case.Fixtures) != 0 || len(item.Case.Driver.Facts) != 0):
+		case item.Case.PDF == nil && item.Case.Browser == nil &&
+			(len(item.Case.Fixtures) != 0 || len(item.Case.Driver.Facts) != 0):
 			trial.Verdict, trial.Code = Skipped, "domain_evidence_unavailable"
 		case suiteCtx.Err() != nil:
 			trial.Verdict, trial.Code = Inconclusive, "suite_interrupted"
@@ -380,8 +385,14 @@ func runAdmittedTrial(
 	if item.Case.Browser != nil {
 		name, _ := browserEvalProfile(target.config)
 		if pendingBrowser.host == nil || name != item.Case.Browser.Profile ||
-			!browserFixtureMatches(target.config, pendingBrowser.host) || !retainedFacts.add(nil) {
+			!browserFixtureMatches(target.config, pendingBrowser.host) {
 			trial.Verdict, trial.Code = Inconclusive, "browser_preparation_unavailable"
+			return trial
+		}
+		item.Case.Driver.Facts, err = materializePrivateFacts(item.Case.Driver.Facts)
+		if err != nil || !retainedFacts.add(item.Case.Driver.Facts) {
+			clear(item.Case.Driver.Facts)
+			trial.Verdict, trial.Code = Inconclusive, "private_fact_retention_limit"
 			return trial
 		}
 		fixture, fixtureErr := pendingBrowser.host.newTrial(sessionID)

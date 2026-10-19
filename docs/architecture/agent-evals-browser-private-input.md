@@ -3,9 +3,9 @@
 ## Scope And Current Gap
 
 The [manual eval goal](agent-evals-goal.md) requires private fact handles for browser submit and multi-turn cases.
-Those cases currently stop before execution with `browser_private_input_unavailable`. This gate is intentional:
-ordinary `request_user_input` answers enter durable input/history. B1/B2 now provide native protected browser
-input, but the eval consumer still requires the B3 evidence bindings below before expanding private facts.
+Those cases originally stopped before execution with `browser_private_input_unavailable` because ordinary
+`request_user_input` answers enter durable input/history. B1/B2 provide native protected browser input; the B3
+workflow below now connects that input to scoped submission evidence. Live qualification remains separate.
 Protecting model-produced browser arguments or transient driver input alone does not turn an ordinary chat answer
 into protected ingress.
 
@@ -150,7 +150,7 @@ and private-census gates; sharing its bounded snapshot reader does not qualify l
 Deterministic tests use real broker/registry/outbox producers with a synthetic worker/trace. They prove admission
 and refusal contracts, not browser effects, retained context, accepted claims or cleanup.
 
-The runner's private submit/followup gates remain closed. Native mutation/approval/context evidence, fresh fact
+At this pre-answer component's boundary the runner gates remained closed. Native mutation/approval/context evidence, fresh fact
 generation/cohort retention and post-stop privacy/cleanup assessment must be connected before any live private
 trial is admitted. No production deployment or successful live private-form result follows from this packet.
 
@@ -171,8 +171,44 @@ A successful fill can precede final interaction delivery, so the checkpoint expl
 native record is still resuming or resolved. Neither status proves overall settlement. This checkpoint does not
 prove field readback, correct final submitted values, confirmation, action permission, retained context, delivery,
 privacy census or cleanup, and never admits a judge or makes a trial pass. Read/artifact/denial contracts reject
-a mixed-in form checkpoint. Private submit/followup runner gates remain closed until their complete independent
-contracts and bounded live experiments are connected.
+a mixed-in form checkpoint. This checkpoint alone leaves the private runner gates closed; the complete workflow
+below is the separate admission boundary.
+
+### Private Form Workflow
+
+The runner admits submit/followup only with an owned fresh gateway and explicit metadata-capture opt-in, checked
+before probes or model work. It materializes both supported corpus generation markers into independent per-trial
+values, retaining every trial's canaries in the existing bounded cohort until native shutdown, raw privacy scans
+and judging finish. Corpus digests remain source-manifest digests. The profile exposes native `browser_input`;
+ordinary answers never carry private values.
+
+Review requires all accepted fills, the requested public select, fixture-only native actions and a fresh ready
+snapshot in one session/tab/controller/execution. Followup requires an earlier name and an actual later correction;
+the final fixture oracle independently checks the submitted name, note and color. A native ordinary question keeps
+the task suspended while the LLM-user chooses the separate confirmation intent. The runner freezes the accepted
+input identities and page-state hash, then checks the native consumed confirmation before even considering the
+exact subsequent Submit-form approval. A fresh passive read must still match that review. A changed page, controller,
+input set, route, action or prompt is refused rather than retargeted. Confirmation and `allow_once` are different
+native interactions; neither private input nor the LLM-user's prose grants permission. Existing native HMAC and
+broker dispatch remain the authority, and uncertain sends are never replayed.
+
+The confirmation question's wire text, request and trace scope must match its actual delivered native outbox
+message through the shared native footer projection before confirmation. Its value-free text digest and short ID
+are frozen in the receipt; post-stop assessment requires exactly one matching native confirmation delivery again.
+Matching an interaction/message ID alone is insufficient, and no footer suffix is stripped heuristically.
+
+After owned shutdown, the runner rejoins resolved inputs and confirmation, the consumed exact approval, successful
+fill/select/submit invocations, original native policy/owner records, delivered final replies and empty temporary
+roots. Exactly one independently matched fixture submission and no account removal are required. Only this complete
+form contract, the raw owned-profile privacy census and owned exit may admit the separate tools-disabled judge.
+The existing runner finalizer publishes the canonical private report; a positive judge cannot repair missing hard
+evidence. Offline tests use actual broker/registry/outbox producers with a stub worker/trace and are not live results.
+
+Private offline regrade is deliberately still unavailable: the actual generated canaries are not persisted and a
+later judge input must not bypass their raw-value guard. A safe bounded regrade contract remains E5 work; adding a
+secret vault or silently judging without that guard is not an acceptable shortcut. Ambiguity/stale-account action
+admission and the fresh merged-source browser experiments also remain required. No production deployment follows
+from this workflow packet, and none of the preserved earlier negative results is upgraded.
 
 Only after B2 is reviewed and merged, generate fresh facts for the existing required browser cases and retain them
 in the runner's bounded private cohort. Expand a fact handle only at a freshly observed native protected prompt.
