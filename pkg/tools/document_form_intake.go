@@ -343,16 +343,33 @@ func (tool *DocumentTool) interpretFormIntake(
 		return document.FormIntakeInterpretation{}, document.ErrFormAuditUnavailable
 	}
 	aliases := append([]string{tool.formPolicy.PrimaryModel}, tool.formPolicy.EquivalentFallbacks...)
+	var lastErr error
 	for _, alias := range aliases {
 		result, err := tool.formInterpreter.InterpretFormIntake(ctx, alias, view)
 		if err == nil {
 			return result, nil
 		}
+		lastErr = documentFormIntakeInterpreterError(err)
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	return document.FormIntakeInterpretation{}, document.ErrFormAuditUnavailable
+	return document.FormIntakeInterpretation{}, errors.Join(document.ErrFormAuditUnavailable, lastErr)
+}
+
+func documentFormIntakeInterpreterError(err error) error {
+	for _, safe := range []error{
+		context.Canceled, context.DeadlineExceeded,
+		document.ErrFormIntakeInvalidContext, document.ErrFormIntakeInvalidResponse,
+		document.ErrFormIntakeModelMissing, document.ErrFormIntakeProviderAuth,
+		document.ErrFormIntakeProviderBilling, document.ErrFormIntakeProviderRequest,
+		document.ErrFormIntakeProviderLimited, document.ErrFormIntakeProviderTemp,
+	} {
+		if errors.Is(err, safe) {
+			return safe
+		}
+	}
+	return document.ErrFormAuditUnavailable
 }
 
 func (tool *DocumentTool) continueFormIntake(
@@ -482,10 +499,26 @@ func documentFormIntakeFailureReason(err error) string {
 		return "answer_rejected"
 	case errors.Is(err, document.ErrFormJobConflict):
 		return "state_changed"
-	case errors.Is(err, document.ErrFormAuditUnavailable):
-		return "interpretation_unavailable"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "interrupted"
+	case errors.Is(err, document.ErrFormIntakeInvalidContext):
+		return "interpretation_context_invalid"
+	case errors.Is(err, document.ErrFormIntakeInvalidResponse):
+		return "interpretation_response_invalid"
+	case errors.Is(err, document.ErrFormIntakeModelMissing):
+		return "interpretation_model_unavailable"
+	case errors.Is(err, document.ErrFormIntakeProviderAuth):
+		return "provider_authentication"
+	case errors.Is(err, document.ErrFormIntakeProviderBilling):
+		return "provider_billing"
+	case errors.Is(err, document.ErrFormIntakeProviderRequest):
+		return "provider_request_invalid"
+	case errors.Is(err, document.ErrFormIntakeProviderLimited):
+		return "provider_rate_limited"
+	case errors.Is(err, document.ErrFormIntakeProviderTemp):
+		return "provider_temporary"
+	case errors.Is(err, document.ErrFormAuditUnavailable):
+		return "interpretation_unavailable"
 	default:
 		return "unavailable"
 	}

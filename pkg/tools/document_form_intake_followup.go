@@ -43,6 +43,9 @@ func documentFormIntakeFollowup(
 			ResponseOnly: true,
 			Instruction: documentIntakeAcceptanceInstruction +
 				"Explain the trusted processing failure and its stage without echoing private values or raw errors. " +
+				"Only reason=provider_temporary establishes a temporary provider failure. Never call an unknown, " +
+				"invalid-context, invalid-response, authentication, billing, configuration or request failure temporary. " +
+				"When the reason is unknown, say it is unknown; the interpretation stage alone does not identify a cause. " +
 				"Use received_input_state and accepted_count/acknowledged_count to describe this continuation: " +
 				"A retained-input failure does not undo newly accepted decisions. " +
 				"Never say no answers were applied when accepted_count is positive. " +

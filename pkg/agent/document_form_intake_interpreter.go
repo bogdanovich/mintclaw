@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/document"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 const maxDocumentIntakeWireBytes = 64 * 1024
@@ -21,26 +22,69 @@ func (auditor *documentFormAuditor) InterpretFormIntake(
 	ctx context.Context, alias string, view document.FormIntakeInterpretationView,
 ) (document.FormIntakeInterpretation, error) {
 	if auditor == nil {
-		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+		return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(document.ErrFormIntakeModelMissing)
 	}
 	resolved, exists := auditor.models[alias]
 	if !exists || resolved.provider == nil || strings.TrimSpace(resolved.model) == "" {
-		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+		return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(document.ErrFormIntakeModelMissing)
 	}
 	payload, err := encodeDocumentIntakeView(view)
 	if err != nil {
-		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+		return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(
+			document.ErrFormIntakeInvalidContext,
+		)
 	}
 	defer clear(payload)
 	response, err := callDocumentPrivateModel(ctx, resolved, documentIntakeSystemPrompt, payload)
-	if err != nil || response == nil || len(response.ToolCalls) != 0 {
-		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+	if err != nil {
+		return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(documentIntakeProviderFailure(err))
+	}
+	if response == nil || len(response.ToolCalls) != 0 {
+		return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(
+			document.ErrFormIntakeInvalidResponse,
+		)
 	}
 	result, err := decodeDocumentIntakeInterpretation(response.Content, view.Pass.CandidateIDs, view.RelatedInputs...)
 	if err != nil {
-		return document.FormIntakeInterpretation{}, err
+		return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(
+			document.ErrFormIntakeInvalidResponse,
+		)
 	}
 	return verifyDocumentIntakeBooleanAssertions(ctx, resolved, view, payload, result)
+}
+
+func unavailableIntakeInterpretation(reason error) error {
+	return errors.Join(errDocumentIntakeInterpretationUnavailable, document.ErrFormAuditUnavailable, reason)
+}
+
+// Never retain or wrap provider error text: it can contain the protected input.
+func documentIntakeProviderFailure(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	var failure *providers.ProviderError
+	if !errors.As(err, &failure) || failure == nil {
+		return document.ErrFormAuditUnavailable
+	}
+	switch failure.Kind {
+	case "authentication":
+		return document.ErrFormIntakeProviderAuth
+	case "billing":
+		return document.ErrFormIntakeProviderBilling
+	case "invalid_request":
+		return document.ErrFormIntakeProviderRequest
+	case "rate_limit":
+		return document.ErrFormIntakeProviderLimited
+	case "transient", "network", "timeout":
+		return document.ErrFormIntakeProviderTemp
+	case "canceled":
+		return context.Canceled
+	default:
+		return document.ErrFormAuditUnavailable
+	}
 }
 
 const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance against only the supplied fields. ` +

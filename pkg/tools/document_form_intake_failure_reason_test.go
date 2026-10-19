@@ -21,6 +21,14 @@ func TestDocumentFormIntakeFailureReasonsDoNotExposeWrappedPrivateErrors(t *test
 		{"answer", document.ErrFormJobAnswerConflict, "answer_rejected"},
 		{"revision", document.ErrFormJobConflict, "state_changed"},
 		{"audit", document.ErrFormAuditUnavailable, "interpretation_unavailable"},
+		{"invalid-view", document.ErrFormIntakeInvalidContext, "interpretation_context_invalid"},
+		{"invalid-response", document.ErrFormIntakeInvalidResponse, "interpretation_response_invalid"},
+		{"missing-model", document.ErrFormIntakeModelMissing, "interpretation_model_unavailable"},
+		{"provider-auth", document.ErrFormIntakeProviderAuth, "provider_authentication"},
+		{"provider-billing", document.ErrFormIntakeProviderBilling, "provider_billing"},
+		{"provider-request", document.ErrFormIntakeProviderRequest, "provider_request_invalid"},
+		{"provider-rate", document.ErrFormIntakeProviderLimited, "provider_rate_limited"},
+		{"provider-temp", document.ErrFormIntakeProviderTemp, "provider_temporary"},
 		{"cancel", context.Canceled, "interrupted"},
 		{"deadline", context.DeadlineExceeded, "interrupted"},
 		{"corrupt", document.ErrFormJobRecordCorrupt, "unavailable"},
@@ -41,5 +49,32 @@ func TestDocumentFormIntakeFailureReasonsDoNotExposeWrappedPrivateErrors(t *test
 				t.Fatal("reason leaked private error content")
 			}
 		})
+	}
+}
+
+func TestDocumentFormIntakePreservesClosedFailureThroughTheInterpreterBoundary(t *testing.T) {
+	interpreter := &intakeWorkflowTestInterpreter{interpret: func(
+		document.FormIntakeInterpretationView,
+	) (document.FormIntakeInterpretation, error) {
+		return document.FormIntakeInterpretation{}, fmt.Errorf("PRIVATE_INTERPRETER_ERROR: %w", errors.Join(
+			document.ErrFormAuditUnavailable, document.ErrFormIntakeInvalidResponse,
+		))
+	}}
+	tool, ctx, _, _, _ := intakeWorkflowFixture(t, interpreter)
+	_, err := tool.interpretFormIntake(ctx, document.FormIntakeInterpretationView{})
+	if !errors.Is(err, document.ErrFormAuditUnavailable) ||
+		documentFormIntakeFailureReason(err) != "interpretation_response_invalid" ||
+		strings.Contains(err.Error(), "PRIVATE_") {
+		t.Fatal("interpretation boundary erased the closed private failure category")
+	}
+	followup, err := documentFormIntakeFollowup(safeDocumentFormResult{
+		Job: &safeDocumentFormJob{JobID: "form_job_test"},
+		Intake: &safeDocumentFormIntake{Failure: &safeDocumentFormFailure{
+			Code: "intake_pending", Stage: "interpretation", Reason: "interpretation_unavailable",
+		}},
+	}, false)
+	if err != nil || followup == nil || !followup.ResponseOnly ||
+		!strings.Contains(followup.Instruction, "stage alone does not identify a cause") {
+		t.Fatal("unknown interpretation failure can be presented as a proven temporary provider outage")
 	}
 }
