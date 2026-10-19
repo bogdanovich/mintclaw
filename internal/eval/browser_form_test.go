@@ -371,6 +371,7 @@ func (c *browserFormControl) confirm(t *testing.T, record interactions.Record, p
 	c.appendInput(request, browserFormConfirmationText)
 	current, err := c.registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		MessageID: request.ID, Text: browserFormConfirmationText,
+		Values: map[string]string{record.Questions[0].ID: browserFormConfirmationText},
 	}, interactions.OutcomeAnswered)
 	if err != nil {
 		t.Fatal(err)

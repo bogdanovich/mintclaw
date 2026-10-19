@@ -95,6 +95,21 @@ func TestBrowserFormConfirmationCannotInventOrChangeNativeAnswer(t *testing.T) {
 	if _, err = projectBrowserFormConfirmation(c.domain.review, resuming, time.Now()); err != nil {
 		t.Fatal("legitimate pending continuation refused", err)
 	}
+	legacy := cloneBrowserFormControlValue(t, resolved)
+	legacy.Answer.Values = nil
+	if _, err = projectBrowserFormConfirmation(c.domain.review, legacy, time.Now()); err != nil {
+		t.Fatal("legacy text-only native confirmation refused", err)
+	}
+	for _, values := range []map[string]string{
+		{record.Questions[0].ID: "different answer"},
+		{record.Questions[0].ID: browserFormConfirmationText, "foreign": browserFormConfirmationText},
+	} {
+		changed := cloneBrowserFormControlValue(t, resolved)
+		changed.Answer.Values = values
+		if _, err = projectBrowserFormConfirmation(c.domain.review, changed, time.Now()); err == nil {
+			t.Fatal("mismatched native answer values admitted")
+		}
+	}
 }
 
 func TestBrowserFormReviewRefusesOtherEffectsAndLostContext(t *testing.T) {

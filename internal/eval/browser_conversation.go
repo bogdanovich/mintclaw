@@ -21,6 +21,7 @@ type browserConversation struct {
 	input         *browserInputObservation
 	inputAttempts []browserInputAttempt
 	review        *browserFormReview
+	clarification *browserAmbiguityReview
 }
 
 func newBrowserConversation(
@@ -43,6 +44,14 @@ func (domain *browserConversation) initialTask() string { return domain.question
 func (domain *browserConversation) request(
 	ctx context.Context, action Action, prompt Event,
 ) (protocol.MintClawMessage, bool, error) {
+	if isBrowserAmbiguity(domain.item) && prompt.Kind == "question" && action.Kind == "message" {
+		request, err := domain.clarifyAmbiguousTarget(ctx, action, prompt)
+		return request, true, err
+	}
+	if isBrowserAmbiguity(domain.item) && action.Kind == "allow_once" && prompt.Kind == "approval" {
+		request, err := domain.allowReviewedBrowserAction(prompt, "Allow this clarified South account removal once.")
+		return request, true, err
+	}
 	if isBrowserForm(domain.item) && action.Kind == "confirm" {
 		request, err := domain.confirmForm(ctx, prompt)
 		return request, true, err

@@ -278,6 +278,11 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    including approval hashes and fresh revalidation. It grants no permission and
    does not remove the ambiguity skip: the owned-fixture clarification/approval
    consumer and post-stop wrong-account oracle remain required.
+   [Ambiguity admission A](agent-evals-browser-ambiguity.md) adds the native
+   answered-question, unchanged owned-page and exact South-only approval join,
+   reusing existing HMAC/single-use authority. B's post-stop receipt/assessment
+   and explicit case activation remain required; A does not remove the skip or
+   qualify a live attempt.
    No local fixture pass qualifies native browser behavior.
    The [private-input prerequisite](agent-evals-browser-private-input.md) separates the missing native ingress from
    already protected model-produced fill. B1 adds only generation-bound, value-free broker target bindings and
