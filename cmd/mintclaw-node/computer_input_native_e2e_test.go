@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -73,7 +74,7 @@ func TestCompanionNativeInputMechanismsOverWSS(t *testing.T) {
 		Reconnect:  companion.ReconnectConfig{MinDelaySeconds: 1, MaxDelaySeconds: 1, PendingDelaySeconds: 1},
 		Policy: nodes.LocalCommandPolicy{
 			Revision: "native-input-fixture-only", AllowedCommands: commands,
-			MaximumRisk: nodes.RiskWrite, MaxTimeoutSeconds: 120, MaxOutputBytes: 64 * 1024,
+			MaximumRisk: nodes.RiskWrite, MaxTimeoutSeconds: 180, MaxOutputBytes: 64 * 1024,
 		},
 		SystemExec: &companion.SystemExecPolicy{
 			WorkingRoots: []string{root}, Executables: []string{helper}, Environment: environment,
@@ -100,9 +101,9 @@ func TestCompanionNativeInputMechanismsOverWSS(t *testing.T) {
 	}
 	input, err := json.Marshal(map[string]any{
 		"argv": []string{
-			helper, "-test.run=^TestNativeQualification$/^Input$", "-test.v", "-test.count=1", "-test.timeout=100s",
+			helper, "-test.run=^TestNativeQualification$/^Input$", "-test.v", "-test.count=1", "-test.timeout=160s",
 		},
-		"cwd": root, "env": inputEnv, "timeout_seconds": 110,
+		"cwd": root, "env": inputEnv, "timeout_seconds": 170,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -111,12 +112,12 @@ func TestCompanionNativeInputMechanismsOverWSS(t *testing.T) {
 		InvocationID: "native-input-fixture", IdempotencyKey: "native-input-fixture", NodeID: connected.ID,
 		CatalogHash: registration.Snapshot.CatalogHash, Command: descriptor.Name, Input: input,
 		AgentID: "native-fixture", ActorID: "native-fixture", SessionID: "native-input-fixture",
-		TimeoutSeconds: 120, OutputLimitBytes: 64 * 1024,
-	}, descriptor, registration.Snapshot.Executor, registration.Snapshot.PolicyRevision, time.Now(), 2*time.Minute)
+		TimeoutSeconds: 180, OutputLimitBytes: 64 * 1024,
+	}, descriptor, registration.Snapshot.Executor, registration.Snapshot.PolicyRevision, time.Now(), 3*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 125*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 185*time.Second)
 	defer cancel()
 	data, _, err := admission.Invoke(ctx, connected.ID, plan, nil, nil)
 	if err != nil {
@@ -149,7 +150,11 @@ func nativeInputChildVerified(result nativeInputChildResult) bool {
 		return false
 	}
 	lines := strings.Split(result.Stdout, "\n")
-	for _, name := range []string{"UnicodeInsertion", "UnicodeReplacement", "ButtonClick", "ScopeDenial"} {
+	names := []string{"UnicodeInsertion", "UnicodeReplacement", "ButtonClick", "ScopeDenial"}
+	for index := range 7 {
+		names = append(names, "UnicodeInsertion/"+strconv.Itoa(index))
+	}
+	for _, name := range names {
 		prefix := "--- PASS: TestNativeQualification/Input/" + name + " ("
 		found := false
 		for _, line := range lines {
@@ -172,6 +177,9 @@ func TestNativeInputChildVerificationRequiresEffectsAndExit(t *testing.T) {
 	for _, name := range []string{"UnicodeInsertion", "UnicodeReplacement", "ButtonClick", "ScopeDenial"} {
 		valid += "    --- PASS: TestNativeQualification/Input/" + name + " (0.1s)\n"
 	}
+	for index := range 7 {
+		valid += "        --- PASS: TestNativeQualification/Input/UnicodeInsertion/" + strconv.Itoa(index) + " (0.1s)\n"
+	}
 	valid += "PASS\n"
 	if !nativeInputChildVerified(nativeInputChildResult{Stdout: valid}) {
 		t.Fatal("complete independent fixture proof rejected")
@@ -189,6 +197,14 @@ func TestNativeInputChildVerificationRequiresEffectsAndExit(t *testing.T) {
 	} {
 		if nativeInputChildVerified(result) {
 			t.Fatal("missing, skipped, failed, denied or truncated child proof reported as qualified")
+		}
+	}
+	for index := range 7 {
+		missing := strings.Replace(valid,
+			"--- PASS: TestNativeQualification/Input/UnicodeInsertion/"+strconv.Itoa(index)+" (",
+			"--- SKIP: omitted (", 1)
+		if nativeInputChildVerified(nativeInputChildResult{Stdout: missing}) {
+			t.Fatal("missing nonempty Unicode caret case reported as qualified", index)
 		}
 	}
 }

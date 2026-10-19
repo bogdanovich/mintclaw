@@ -20,6 +20,7 @@ import (
 type fixtureEvent struct {
 	Kind      string   `json:"kind"`
 	InspectID string   `json:"inspect_id"`
+	ErrorCode string   `json:"error_code"`
 	PID       uint32   `json:"pid"`
 	Windows   []uint64 `json:"windows"`
 	Values    []string `json:"values"`
@@ -39,7 +40,14 @@ func TestNativeQualification(t *testing.T) {
 	if fixturePath == "" {
 		t.Fatal("disposable fixture is required")
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	qualificationTimeout := 90 * time.Second
+	if runtime.GOOS == "darwin" {
+		// The actual-app suite now includes seven nonempty caret insertions in
+		// addition to its original effects. Freeze this expanded budget before
+		// native qualification; Linux's existing budget is unchanged.
+		qualificationTimeout = 150 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), qualificationTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, fixturePath)
 	if runtime.GOOS == "linux" {
@@ -105,6 +113,9 @@ func TestNativeQualification(t *testing.T) {
 				last = event
 				if !ok {
 					t.Fatal("fixture exited before native effect verification")
+				}
+				if event.Kind == "fixture_error" {
+					t.Fatal("owned fixture setup failed", event.ErrorCode)
 				}
 				if match(event) {
 					return event
@@ -322,10 +333,9 @@ func TestNativeQualification(t *testing.T) {
 			waitEvent(t, func(e fixtureEvent) bool {
 				return len(e.Values) == 2 && e.Values[0] == sample && e.Values[1] == "GUARD_UNCHANGED"
 			})
-			if runtime.GOOS != "linux" {
-				return // The fixture-side caret setup below currently qualifies GTK only.
-			}
-			const prefix, suffix = "Начало|", "|конец"
+			// Non-BMP scalars, a ZWJ sequence and a combining mark before the
+			// caret distinguish scalar, UTF-16 and grapheme index conventions.
+			const prefix, suffix = "Начало👩‍💻e\u0301|", "|конец"
 			for index, value := range []string{"ASCII", "Привет", "世界", "café", "e\u0301", "👩‍💻", "مرحبا"} {
 				t.Run(strconv.Itoa(index), func(t *testing.T) {
 					inspectID := "unicode-setup-" + strconv.Itoa(index)
