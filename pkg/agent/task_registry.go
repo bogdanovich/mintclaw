@@ -17,6 +17,7 @@ import (
 // delivery wiring.
 type taskCoordinator struct {
 	registries       sync.Map
+	registryLoads    sync.Map
 	completionClaims sync.Map
 	currentConfig    func() *config.Config
 	codingProfile    *CodingRuntimeProfile
@@ -119,21 +120,24 @@ func (c *taskCoordinator) loadRegistry(
 	if c == nil {
 		return nil
 	}
+	workspace = normalizeRuntimeWorkspace(workspace)
+	if workspace == "" {
+		return nil
+	}
 	if registry := c.registry(workspace); registry != nil {
 		return registry
 	}
-	candidate := taskregistry.NewRegistryWithOptions(storePath, options)
-	actual, loaded := c.registries.LoadOrStore(workspace, candidate)
-	registry, _ := actual.(*taskregistry.Registry)
-	if registry == nil {
-		registry = candidate
-	}
-	if !loaded {
+	// Construction can prune and persist. Serialize it with restoration, then
+	// publish only the ready registry. Different workspaces initialize independently.
+	initializer, _ := c.registryLoads.LoadOrStore(workspace, &sync.Once{})
+	initializer.(*sync.Once).Do(func() {
+		registry := taskregistry.NewRegistryWithOptions(storePath, options)
 		c.reconcileActiveTasksAfterRegistryRestore(workspace, registry, interactions)
 		c.reconcilePendingTerminalTaskDelivery(workspace, registry)
 		logTaskRegistryStats(workspace, registry)
-	}
-	return registry
+		c.registries.Store(workspace, registry)
+	})
+	return c.registry(workspace)
 }
 
 func (al *AgentLoop) taskRegistryOptions() taskregistry.Options {
