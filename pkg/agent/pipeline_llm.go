@@ -666,9 +666,9 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	llm *LLMIterationState,
 ) (LLMCallOutcome, error) {
 	iteration := llm.iteration
-	// A successful provider call has consumed live-only tool context. Keep the
-	// call-local copy available for response diagnostics, then replace the turn
-	// transcript with its durable projection before any next tool/model phase.
+	// A successful call consumes one-shot tool data, not an authorized task's
+	// input. Keep call-local data for response diagnostics; task input remains
+	// live across discovery and subsequent tool/model steps until turn cleanup.
 	defer exec.consumeLiveToolContexts(ts)
 	if ts != nil {
 		ts.documentVisionAvailable = llm.documentVisionResolved && llm.documentVisionAvailable

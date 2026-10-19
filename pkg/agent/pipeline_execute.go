@@ -618,6 +618,7 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 	hasContextText bool,
 	hasContextMedia bool,
 	requiresDocumentVision bool,
+	turnScopedInput bool,
 ) {
 	if runner == nil || runner.exec == nil || (!hasContextText && !hasContextMedia) {
 		return
@@ -634,6 +635,7 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 			durableMedia:           append([]string(nil), durable.Media...),
 			durableAttachments:     append([]providers.Attachment(nil), durable.Attachments...),
 			requiresDocumentVision: requiresDocumentVision,
+			turnScopedInput:        turnScopedInput,
 		})
 		return
 	}
@@ -678,13 +680,28 @@ func consumeLiveToolContextMessages(
 }
 
 func (exec *turnExecution) consumeLiveToolContexts(ts *turnState) {
+	exec.retireLiveToolContexts(ts, true)
+}
+
+func (exec *turnExecution) releaseLiveToolContexts(ts *turnState) {
+	exec.retireLiveToolContexts(ts, false)
+}
+
+func (exec *turnExecution) retireLiveToolContexts(ts *turnState, keepTaskInput bool) {
 	if exec == nil || len(exec.liveToolContexts) == 0 {
 		return
 	}
-	projections := append([]liveToolContextProjection(nil), exec.liveToolContexts...)
+	var projections, retained []liveToolContextProjection
+	for _, projection := range exec.liveToolContexts {
+		if keepTaskInput && projection.turnScopedInput {
+			retained = append(retained, projection)
+		} else {
+			projections = append(projections, projection)
+		}
+	}
 	consumeLiveToolContextMessages(exec.messages, projections)
 	ts.consumeLiveToolContexts(projections)
-	exec.liveToolContexts = nil
+	exec.liveToolContexts = retained
 }
 
 func toolResultForModelContext(toolName string, result *toolshared.ToolResult) *toolshared.ToolResult {
@@ -1937,6 +1954,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				liveContextText != "",
 				hasLiveContextMedia,
 				hasLiveContextMedia && toolResult.ContextMediaRequiresVision,
+				toolResult.ContextInput != nil,
 			)
 		}
 	}
