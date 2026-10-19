@@ -217,10 +217,20 @@ const (
 	ProtectedAnswerNotApplicableLabel = "Not applicable"
 )
 
+// ProtectedAnswerOrigin is scalar identity copied from the coordinator's
+// authoritative interaction record, never model-supplied continuation data.
+type ProtectedAnswerOrigin struct {
+	ToolName    string
+	ToolCallID  string
+	ExecutionID string
+	ActorID     string
+}
+
 // ProtectedAnswerSinkRequest is an ephemeral authority-bearing request. Text
 // is never serialized by the interaction package.
 type ProtectedAnswerSinkRequest struct {
 	Binding        ProtectedAnswerBinding
+	Origin         ProtectedAnswerOrigin
 	Workspace      string
 	Route          Route
 	InteractionID  string
@@ -234,6 +244,7 @@ type ProtectedAnswerSinkRequest struct {
 
 type ProtectedAnswerCancelRequest struct {
 	Binding        ProtectedAnswerBinding
+	Origin         ProtectedAnswerOrigin
 	Workspace      string
 	Route          Route
 	InteractionID  string
@@ -242,6 +253,7 @@ type ProtectedAnswerCancelRequest struct {
 
 type ProtectedAnswerCommitRequest struct {
 	Binding       ProtectedAnswerBinding
+	Origin        ProtectedAnswerOrigin
 	Workspace     string
 	Route         Route
 	InteractionID string
@@ -250,6 +262,7 @@ type ProtectedAnswerCommitRequest struct {
 
 type ProtectedAnswerDiscardRequest struct {
 	Binding       ProtectedAnswerBinding
+	Origin        ProtectedAnswerOrigin
 	Workspace     string
 	Route         Route
 	InteractionID string

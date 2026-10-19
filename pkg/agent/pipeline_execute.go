@@ -1231,6 +1231,11 @@ func (runner *toolLoopRunner) approveToolCall(
 		maxLiveToolContextTextBytes-runner.exec.liveToolContextTextBytes,
 	)
 	execCtx = runner.exec.protectedAnswerContinuation.documentIntakeProcessingContext(execCtx)
+	if runner.exec.protectedAnswerContinuation.awaitingInitialExecution() {
+		execCtx = toolshared.WithToolProtectedAnswerContinuation(
+			execCtx, ts.opts.InteractionContinuation.ProtectedAnswer,
+		)
+	}
 	execCtx = toolshared.WithToolCallID(execCtx, tc.ID)
 	approvalBypass, trustedExecution := toolApprovalBypass(p.Cfg, toolRegistry, toolName, toolArgs)
 	if p.trustAllTools {

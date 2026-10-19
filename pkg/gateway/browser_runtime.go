@@ -782,7 +782,19 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 		return err
 	}
 	agentLoop.SetBrowserCapabilityClient(capabilityClient)
+	if err = agentLoop.RegisterProtectedAnswerSink(tools.NewBrowserProtectedAnswerSink(
+		func() (tools.BrowserProtectedInputSource, error) { return sourceFor(agentLoop.GetConfig()) },
+	)); err != nil {
+		return err
+	}
 	factories := map[string]agent.RuntimeToolFactory{
+		"browser_input": func(reloadCfg *config.Config) (toolshared.Tool, error) {
+			source, err := sourceFor(reloadCfg)
+			if err != nil {
+				return nil, err
+			}
+			return tools.NewBrowserInputTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
+		},
 		"browser_login": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
@@ -849,7 +861,7 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 	}
 	for _, name := range []string{
 		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_capture", "browser_login",
-		"browser_diagnostics", "browser_act", "browser_execute",
+		"browser_diagnostics", "browser_act", "browser_input", "browser_execute",
 	} {
 		if err := agentLoop.RegisterRuntimeTool(name, factories[name]); err != nil {
 			return err

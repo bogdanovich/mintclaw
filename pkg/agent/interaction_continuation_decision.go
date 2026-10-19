@@ -31,7 +31,9 @@ type interactionContinuationDecisionState struct {
 func newInteractionContinuationDecisionState(opts turnInput) interactionContinuationDecisionState {
 	continuation := opts.InteractionContinuation
 	if continuation.Kind != interactions.KindQuestion || continuation.Outcome != interactions.OutcomeAnswered ||
-		!turnInputOwnsLiveHandoff(opts) {
+		strings.TrimSpace(continuation.ProtectedAnswer) != "" || !turnInputOwnsLiveHandoff(opts) {
+		// Accepted protected input must first consume its exact trusted tool call,
+		// not compete with the model's manual-handoff decision protocol.
 		return interactionContinuationDecisionState{}
 	}
 	return interactionContinuationDecisionState{

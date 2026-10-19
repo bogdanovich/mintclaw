@@ -30,6 +30,72 @@ type protectedFillBinding struct {
 	ExpiresAt            int64                `json:"expires_at"`
 }
 
+// ProtectedFillTarget is an authenticated value-free intent, not proof that its
+// target is still usable or that a native interaction accepted an answer.
+type ProtectedFillTarget struct {
+	Request   PrepareActionRequest
+	ExpiresAt int64
+}
+
+func (broker *Broker) InspectProtectedFillBinding(
+	ctx context.Context, owner Owner, token string,
+) (ProtectedFillTarget, error) {
+	if err := ctx.Err(); err != nil {
+		return ProtectedFillTarget{}, err
+	}
+	binding, err := broker.openProtectedFillBinding(token)
+	if err != nil {
+		return ProtectedFillTarget{}, err
+	}
+	if owner.Validate() != nil || binding.Request.Owner != owner {
+		return ProtectedFillTarget{}, ErrNotFound
+	}
+	return ProtectedFillTarget{Request: binding.Request, ExpiresAt: binding.ExpiresAt}, nil
+}
+
+// ProtectedFillPreparation reads existing native authority for an accepted
+// consumer continuation. It never reconstructs an answer. Active preparations
+// require the same live input slot; terminal records remain replay-safe reads.
+func (broker *Broker) ProtectedFillPreparation(
+	ctx context.Context, owner Owner, preparedID string,
+) (Preparation, error) {
+	if err := ctx.Err(); err != nil {
+		return Preparation{}, err
+	}
+	if owner.Validate() != nil || !validIdentifier(preparedID) {
+		return Preparation{}, ErrInvalid
+	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	prepared, err := broker.store.GetPreparedAction(ctx, preparedID)
+	if err != nil {
+		return Preparation{}, err
+	}
+	if prepared.Owner != owner || prepared.Action.Kind != ActionFill || prepared.Action.Value != "" ||
+		!validDigest(prepared.InputDigest) {
+		return Preparation{}, ErrNotFound
+	}
+	invocation, err := broker.store.GetInvocation(ctx,
+		derivedIdentifier("invocation", owner, prepared.SessionID, prepared.RequestID))
+	if err != nil {
+		return Preparation{}, err
+	}
+	if invocation.State.Terminal() {
+		return preparationView(prepared), nil
+	}
+	session, slot, worker, err := broker.actionSessionLocked(ctx, owner, prepared.SessionID, prepared.TabID)
+	if err != nil {
+		return Preparation{}, err
+	}
+	if err = broker.validateActionInput(slot, prepared); err != nil {
+		return Preparation{}, err
+	}
+	if err = broker.revalidatePreparedLocked(ctx, session, slot, worker, prepared); err != nil {
+		return Preparation{}, err
+	}
+	return preparationView(prepared), nil
+}
+
 // CreateProtectedFillBinding binds a value-free fill intent to this broker
 // generation and one fresh native target. It does not prepare or execute an
 // action, retain an answer, create an interaction, or authorize input ingress.

@@ -55,6 +55,43 @@ func TestBrowserRuntimeDisabledDoesNotOwnState(t *testing.T) {
 	}
 }
 
+func TestBrowserProtectedInputSourceRejectsStaleRuntimeGeneration(t *testing.T) {
+	cfg := gatewayBrowserConfig(t.TempDir())
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), &attachedOnlyGatewayDiagnosticsFactory{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &gatewayBrowserToolSource{
+		services:       &services{Browser: &browserRuntime{broker: broker, policyRevision: "current"}},
+		policyRevision: "obsolete",
+	}
+	checks := map[string]func() error{
+		"bind": func() error {
+			_, err := source.CreateProtectedFillBinding(t.Context(), browser.PrepareActionRequest{})
+			return err
+		},
+		"inspect": func() error {
+			_, err := source.InspectProtectedFillBinding(t.Context(), browser.Owner{}, "obsolete-token")
+			return err
+		},
+		"stage": func() error {
+			_, err := source.PrepareProtectedFill(t.Context(), browser.Owner{}, "obsolete-token", "private-value")
+			return err
+		},
+		"read": func() error {
+			_, err := source.ProtectedFillPreparation(t.Context(), browser.Owner{}, "prepared_obsolete")
+			return err
+		},
+	}
+	for name, check := range checks {
+		t.Run(name, func(t *testing.T) {
+			if err := check(); !errors.Is(err, browser.ErrDenied) {
+				t.Fatal("stale source reached a replacement broker", err)
+			}
+		})
+	}
+}
+
 func TestGatewayAttachedOnlyDiscoveryDoesNotAdvertiseUnsupportedDownload(t *testing.T) {
 	cfg := gatewayBrowserConfig(t.TempDir())
 	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]

@@ -464,6 +464,7 @@ func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 		"browser_capture",
 		"browser_contexts",
 		"browser_diagnostics",
+		"browser_input",
 		"browser_observe",
 		"browser_session",
 		"browser_targets",
@@ -480,6 +481,7 @@ func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 	for _, capability := range []runtimecap.CapabilityID{
 		runtimecap.CapabilityBrowserObserve,
 		runtimecap.CapabilityBrowserAct,
+		runtimecap.CapabilityBrowserInput,
 		runtimecap.CapabilityBrowserCapture,
 	} {
 		availability, found := al.CapabilityReport().Lookup(capability)
@@ -507,6 +509,7 @@ func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 	for _, capability := range []runtimecap.CapabilityID{
 		runtimecap.CapabilityBrowserObserve,
 		runtimecap.CapabilityBrowserAct,
+		runtimecap.CapabilityBrowserInput,
 		runtimecap.CapabilityBrowserCapture,
 	} {
 		if availability, found := al.CapabilityReport().Lookup(capability); found && availability.Available {
@@ -569,6 +572,7 @@ func TestConfigReloadRetainsOldRegistryWhenBrowserLeaseCannotDrain(t *testing.T)
 	toolNames := al.GetStartupInfo()["tools"].(map[string]any)["names"].([]string)
 	for _, name := range []string{
 		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_capture", "browser_act",
+		"browser_input",
 	} {
 		if !slices.Contains(toolNames, name) {
 			t.Fatalf("registered tools after failed reload = %#v, want %s", toolNames, name)

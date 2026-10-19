@@ -45,6 +45,16 @@ func (c *interactionCoordinator) registerProtectedAnswerSink(sink interactions.P
 	return nil
 }
 
+// RegisterProtectedAnswerSink installs a trusted domain consumer for this loop.
+// Gateway integrations register once; generation-specific resources stay behind
+// their existing runtime source instead of being captured by the coordinator.
+func (al *AgentLoop) RegisterProtectedAnswerSink(sink interactions.ProtectedAnswerSink) error {
+	if al == nil || al.usesCodingProfile() {
+		return errors.New("protected answer consumer requires a gateway runtime")
+	}
+	return al.interactions.registerProtectedAnswerSink(sink)
+}
+
 func (c *interactionCoordinator) protectedAnswerSink(namespace string) (interactions.ProtectedAnswerSink, bool) {
 	if c == nil {
 		return nil, false
