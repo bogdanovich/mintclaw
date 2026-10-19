@@ -575,6 +575,62 @@ func TestToolResultJournalKeepsContextTextLiveOnly(t *testing.T) {
 	}
 }
 
+func TestAuthorizedTaskInputHasTurnLifetimeWithoutChangingExtractedDataLifetime(t *testing.T) {
+	exec := &turnExecution{}
+	ts := &turnState{}
+	runner := &toolLoopRunner{exec: exec}
+	results := []*toolshared.ToolResult{
+		{
+			ForLLM: "grant receipt", ContextText: "AUTHORIZED_TASK_PURPOSE",
+			ContextMedia: []string{"media://new-task-input"},
+			ContextInput: &toolshared.ToolContextInput{Text: "AUTHORIZED_TASK_PURPOSE"},
+		},
+		{ForLLM: "extract receipt", ContextText: "ONE_SHOT_EXTRACTED_TEXT"},
+	}
+	for index, result := range results {
+		callID := fmt.Sprintf("lifetime-%d", index)
+		text := runner.takeLiveToolContextText(result)
+		live := buildToolResultJournalMessage(callID, result, liveToolResultContent(result, text))
+		durable := durableToolResultJournalMessage(live, result, result.ContentForLLM())
+		runner.messages = append(runner.messages, live)
+		ts.recordPersistedMessagePair(live, durable)
+		runner.registerLiveToolContext(callID, durable, true, len(result.ContextMedia) > 0, false,
+			result.ContextInput != nil)
+	}
+	exec.messages = runner.messages
+	spent := exec.liveToolContextTextBytes
+	for range 3 {
+		// A retry/compaction rebuild may shift indexes, not the native input's
+		// stable live-context identity or its already-spent text allowance.
+		exec.messages = append([]providers.Message{{Role: "system", Content: "rebuilt prefix"}}, exec.messages...)
+		exec.consumeLiveToolContexts(ts)
+		for _, messages := range [][]providers.Message{exec.messages, ts.liveTurnMessagesSnapshot()} {
+			joined := ""
+			for _, message := range messages {
+				joined += message.Content
+			}
+			if !strings.Contains(joined, "AUTHORIZED_TASK_PURPOSE") ||
+				strings.Contains(joined, "ONE_SHOT_EXTRACTED_TEXT") {
+				t.Fatal("task input and extracted data did not keep their distinct live lifetimes")
+			}
+		}
+		if len(exec.liveToolContexts) != 1 || exec.liveToolContextTextBytes != spent {
+			t.Fatal("retention duplicated the input or reset the aggregate text budget")
+		}
+	}
+	exec.releaseLiveToolContexts(ts)
+	for _, messages := range [][]providers.Message{exec.messages, ts.liveTurnMessagesSnapshot()} {
+		for _, message := range messages {
+			if strings.Contains(message.Content, "AUTHORIZED_TASK_PURPOSE") || len(message.Media) != 0 {
+				t.Fatal("turn cleanup retained authorized live-only input")
+			}
+		}
+	}
+	if len(exec.liveToolContexts) != 0 || exec.liveToolContextTextBytes != spent {
+		t.Fatal("turn cleanup retained projections or reset spent input budget")
+	}
+}
+
 func TestLiveToolContextIsAggregateBoundedAndConsumedAfterOneModelCall(t *testing.T) {
 	exec := &turnExecution{}
 	ts := &turnState{}
@@ -604,6 +660,7 @@ func TestLiveToolContextIsAggregateBoundedAndConsumedAfterOneModelCall(t *testin
 			contextText != "",
 			len(result.ContextMedia) > 0,
 			len(result.ContextMedia) > 0,
+			false,
 		)
 	}
 	exec.messages = runner.messages
