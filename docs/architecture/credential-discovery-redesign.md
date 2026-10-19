@@ -150,6 +150,11 @@ idle resources, preserve native cleanup evidence, wait durably, then resume with
 fresh website discovery and controls. The 20-hour grant begins at verified
 approval; five-minute passkey/setup ceremonies remain short. See the
 [approval roadmap and composition](credential-approval-wait.md). Native/provider
-qualification and reviewed deployment are complete. The fresh owner Facebook
-pilot remains the authentication gate; deployment alone does not certify a
-logged-in real account.
+qualification and reviewed deployment are complete. The owner Facebook pilot
+then confirmed website discovery, phone continuation, private password and
+stored TOTP submission, fresh authentication and browser closure. Its formal
+task report remained partial because the model could not see the confirmed
+login's runtime receipt ID. The tool projection now returns that opaque ID
+alongside `logged_in`, matching the trusted audit; unconfirmed outcomes carry
+no receipt. See the [rollout evidence](credential-website-login-rollout.md)
+for the remaining release and complete-task qualification gates.

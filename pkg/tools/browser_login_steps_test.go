@@ -48,7 +48,10 @@ func TestBrowserLoginWebsiteStepsUseOnlyCurrentReferencesAndSafeMetadata(t *test
 				args["credential_id"] = "item"
 			}
 			result := tool.Execute(browserToolTestContext(), args)
-			var output browser.CredentialLoginResult
+			var output struct {
+				browser.CredentialLoginResult
+				ReceiptID string `json:"receipt_id"`
+			}
 			if result == nil || json.Unmarshal([]byte(result.ForLLM), &output) != nil ||
 				output.Outcome != outcome || source.calls != 1 || source.request.Fields.Step != step ||
 				source.request.Account != "" || source.request.Principal.OwnerID != "" {
@@ -56,6 +59,13 @@ func TestBrowserLoginWebsiteStepsUseOnlyCurrentReferencesAndSafeMetadata(t *test
 			}
 			if (len(result.WriteAudit) == 1) != (step == "verify") {
 				t.Fatal("a submission or metadata lookup fabricated an authentication receipt")
+			}
+			if step == "verify" {
+				if output.ReceiptID == "" || output.ReceiptID != result.WriteAudit[0].Metadata["invocation_id"] {
+					t.Fatal("verified website login hid its runtime receipt from the model")
+				}
+			} else if output.ReceiptID != "" {
+				t.Fatal("unconfirmed website step exposed an authentication receipt")
 			}
 		})
 	}
