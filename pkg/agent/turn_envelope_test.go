@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func TestFreezeTurnEnvelopeMakesDynamicContextReplayStable(t *testing.T) {
@@ -252,6 +254,14 @@ func TestSetupTurnInteractionContinuationReusesOriginatingEnvelope(t *testing.T)
 	opts.Dispatch.UserMessage = ""
 	opts.ActiveGoal = "fresh goal must not enter the suspended turn"
 	opts.InteractionContinuation.OriginToolCallID = "call-question"
+	opts.InteractionContinuation.Kind = interactions.KindExternalWait
+	opts.InteractionContinuation.Outcome = interactions.OutcomeReady
+	opts.InitialReceipts = []taskresult.Receipt{{
+		ID: "cleanup-before-wait", Kind: taskresult.ReceiptKindResourceCleanup,
+		Tool: "browser_session", Action: "close", Target: "browser:fixture",
+		Summary:  "Disposable browser closed before waiting.",
+		Metadata: map[string]string{"state": "closed"},
+	}}
 	opts.SuppressBackgroundCompaction = true
 	ts := newTurnState(agent, normalizeTurnSpec(opts), turnEventScope{
 		turnID: "turn-frozen-interaction-continuation", context: newTurnContext(nil, nil, nil),
@@ -270,6 +280,19 @@ func TestSetupTurnInteractionContinuationReusesOriginatingEnvelope(t *testing.T)
 	if strings.Contains(exec.messages[0].Content, "2026-09-28") ||
 		strings.Contains(exec.messages[0].Content, "fresh goal must not enter") {
 		t.Fatalf("continuation recomputed dynamic context: %q", exec.messages[0].Content)
+	}
+	for _, expected := range []string{
+		"Recorded outcome: ready.", "Open fresh resources", "cleanup-before-wait",
+	} {
+		if !strings.Contains(exec.messages[0].Content, expected) {
+			t.Fatalf("frozen continuation lost current execution guidance %q", expected)
+		}
+	}
+	for _, block := range exec.messages[0].SystemParts {
+		if (strings.Contains(block.Text, "Recorded outcome: ready.") ||
+			strings.Contains(block.Text, "cleanup-before-wait")) && block.CacheControl != nil {
+			t.Fatal("live continuation guidance entered the stable provider cache prefix")
+		}
 	}
 	projected := projectTurnEnvelopesForProvider(exec.messages)
 	var providerText strings.Builder

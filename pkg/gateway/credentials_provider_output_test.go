@@ -115,6 +115,10 @@ func credentialProviderFixture(
 			Outcome string `json:"outcome"`
 		}
 		if durableApproval && json.Unmarshal([]byte(toolContent), &condition) == nil && condition.Outcome == "ready" {
+			if !strings.Contains(string(body), "Recorded outcome: ready.") ||
+				!strings.Contains(string(body), "Open fresh resources") {
+				failure = "provider readiness lost live continuation guidance"
+			}
 			if deferredRequests != 0 || phase != 4 {
 				failure = "provider received unexpected readiness"
 			}

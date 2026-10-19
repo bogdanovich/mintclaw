@@ -20,6 +20,8 @@ func promptBuildRequestForTurn(
 	nativeSearchCallable bool,
 ) PromptBuildRequest {
 	relation := relationForPromptInput(ts.opts.Dispatch, currentMessage, media)
+	overlays, executionOverlays := promptOverlaysForTurn(ts.opts.mode, ts.opts.ActiveGoal,
+		objectiveReceiptsForTurn(ts.opts.mode, ts.opts.InitialReceipts), ts.opts.InteractionContinuation)
 	req := PromptBuildRequest{
 		Checkpoint:             checkpoint,
 		History:                history,
@@ -31,13 +33,10 @@ func promptBuildRequestForTurn(
 		SenderDisplayName:      ts.opts.SenderDisplayName,
 		CurrentMessageRelation: relation,
 		ActiveSkills:           activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
-		Overlays: promptOverlays(
-			ts.opts.ActiveGoal,
-			objectiveReceiptsForTurn(ts.opts.mode, ts.opts.InitialReceipts),
-			ts.opts.InteractionContinuation,
-		),
-		BackgroundTaskSafety: !ts.opts.NoHistory,
-		CodingContext:        ts.opts.CodingContext,
+		Overlays:               overlays,
+		ExecutionOverlays:      executionOverlays,
+		BackgroundTaskSafety:   !ts.opts.NoHistory,
+		CodingContext:          ts.opts.CodingContext,
 	}
 	hasCallableTools := true
 	if ts.profile.Enabled {
@@ -91,6 +90,8 @@ func promptBuildRequestForTurnSpec(
 	media []string,
 ) PromptBuildRequest {
 	relation := relationForPromptInput(opts.Dispatch, currentMessage, media)
+	overlays, executionOverlays := promptOverlaysForTurn(opts.mode, opts.ActiveGoal,
+		objectiveReceiptsForTurn(opts.mode, opts.InitialReceipts), opts.InteractionContinuation)
 	req := PromptBuildRequest{
 		Checkpoint:             checkpoint,
 		History:                history,
@@ -102,13 +103,10 @@ func promptBuildRequestForTurnSpec(
 		SenderDisplayName:      opts.SenderDisplayName,
 		CurrentMessageRelation: relation,
 		ActiveSkills:           activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
-		Overlays: promptOverlays(
-			opts.ActiveGoal,
-			objectiveReceiptsForTurn(opts.mode, opts.InitialReceipts),
-			opts.InteractionContinuation,
-		),
-		BackgroundTaskSafety: !opts.NoHistory,
-		CodingContext:        opts.CodingContext,
+		Overlays:               overlays,
+		ExecutionOverlays:      executionOverlays,
+		BackgroundTaskSafety:   !opts.NoHistory,
+		CodingContext:          opts.CodingContext,
 	}
 	profile := opts.TurnProfile
 	hasCallableTools := true
@@ -152,6 +150,16 @@ func relationForPromptInput(
 	// dispatch for derived prompts, but those prompts must not inherit the
 	// origin event's reply or adjacency semantics.
 	return standaloneInboundMessageRelation(currentMessage, media)
+}
+
+func promptOverlaysForTurn(mode turnMode, activeGoal string, receipts []taskresult.Receipt,
+	continuation interactionContinuationPromptContext,
+) ([]PromptPart, []PromptPart) {
+	if mode == turnModeInteractionContinuation {
+		return promptOverlays(activeGoal, nil, interactionContinuationPromptContext{}),
+			promptOverlays("", receipts, continuation)
+	}
+	return promptOverlays(activeGoal, receipts, continuation), nil
 }
 
 func promptOverlays(

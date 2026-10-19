@@ -1288,8 +1288,8 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	}
 	personalPrompt := !cb.codingPrompt
 
-	if len(promptParts) > 0 {
-		for _, overlay := range sortPromptParts(promptParts) {
+	appendPromptOverlays := func(parts []PromptPart) {
+		for _, overlay := range sortPromptParts(parts) {
 			if strings.TrimSpace(overlay.Content) == "" {
 				continue
 			}
@@ -1310,6 +1310,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			)
 		}
 	}
+	appendPromptOverlays(promptParts)
 
 	dynamicChars := 0
 	if !req.SuppressDefaultSystemPrompt {
@@ -1405,6 +1406,9 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 		contentBlocks = append(contentBlocks, promptContentBlock(fallbackPart, nil))
 	}
 
+	// Live continuation decisions follow the stable prefix without replacing
+	// or refreshing the originating turn's immutable context.
+	appendPromptOverlays(req.ExecutionOverlays)
 	fullSystemPrompt := strings.Join(stringParts, "\n\n---\n\n")
 
 	// Log system prompt summary for debugging (debug mode only).
@@ -1421,7 +1425,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			"total_chars":    len(fullSystemPrompt),
 			"has_summary":    req.Summary != "",
 			"has_checkpoint": req.Checkpoint != nil,
-			"overlays":       len(req.Overlays),
+			"overlays":       len(req.Overlays) + len(req.ExecutionOverlays),
 			"cached":         isCached,
 		})
 
