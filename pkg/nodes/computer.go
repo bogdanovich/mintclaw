@@ -165,7 +165,7 @@ func (ComputerObservationResult) String() string {
 func (result ComputerObservationResult) GoString() string { return result.String() }
 
 func IsComputerCommand(name string) bool {
-	return slices.ContainsFunc(computerCommands, func(command struct {
+	return name == ComputerCommandAct || slices.ContainsFunc(computerCommands, func(command struct {
 		name string
 		risk Risk
 	},
@@ -232,6 +232,9 @@ var computerSchemaCache = sync.OnceValue(func() map[string][2]json.RawMessage {
 			computerCommandInputSchema(command.name), computerCommandOutputSchema(command.name),
 		}
 	}
+	result[ComputerCommandAct] = [2]json.RawMessage{
+		computerCommandInputSchema(ComputerCommandAct), computerCommandOutputSchema(ComputerCommandAct),
+	}
 	return result
 })
 
@@ -245,6 +248,8 @@ func ComputerCommandOutputSchema(command string) json.RawMessage {
 
 func computerCommandInputSchema(command string) json.RawMessage {
 	switch command {
+	case ComputerCommandAct:
+		return computerSchema(ComputerActInput{})
 	case ComputerCommandTargets:
 		return computerSchema(ComputerTargetsInput{})
 	case ComputerCommandOpen:
@@ -264,9 +269,13 @@ func computerCommandOutputSchema(command string) json.RawMessage {
 	switch command {
 	case ComputerCommandTargets:
 		return computerSchema(ComputerTargetsResult{})
-	case ComputerCommandObserve:
+	case ComputerCommandObserve, ComputerCommandAct:
 		var live any
-		_ = json.Unmarshal(computerSchema(ComputerObservationResult{}), &live)
+		value := any(ComputerObservationResult{})
+		if command == ComputerCommandAct {
+			value = ComputerActResult{}
+		}
+		_ = json.Unmarshal(computerSchema(value), &live)
 		return mustJSON(map[string]any{"oneOf": []any{live, map[string]any{
 			"type": "object", "additionalProperties": false, "required": []string{"protected_result"},
 			"properties": map[string]any{"protected_result": map[string]any{"const": true}},
@@ -368,6 +377,19 @@ func validateComputerInvocationInput(descriptor CommandDescriptor, raw []byte) e
 		return ErrInvalidInvocation
 	}
 	switch descriptor.Name {
+	case ComputerCommandAct:
+		var input ComputerActInput
+		if decodeComputerJSON(raw, &input) != nil || input.Validate() != nil ||
+			validateComputerTarget(input.Request.Binding.Target, descriptor.ComputerProfiles) != nil {
+			return ErrInvalidInvocation
+		}
+		for _, profile := range descriptor.ComputerProfiles {
+			if profile.Alias == input.Request.Binding.Target.Alias &&
+				profile.Revision == input.Request.Binding.PolicyRevision {
+				return nil
+			}
+		}
+		return ErrInvalidInvocation
 	case ComputerCommandTargets:
 		var input ComputerTargetsInput
 		return decodeComputerJSON(raw, &input)
@@ -405,6 +427,15 @@ func validateComputerInvocationInput(descriptor CommandDescriptor, raw []byte) e
 
 func validateComputerInvocationOutput(descriptor CommandDescriptor, raw []byte) error {
 	switch descriptor.Name {
+	case ComputerCommandAct:
+		if bytes.Equal(raw, []byte(`{"protected_result":true}`)) {
+			return nil
+		}
+		var result ComputerActResult
+		if decodeComputerJSON(raw, &result) != nil || !validInvocationIdentifier(result.ActionID) {
+			return ErrInvalidInvocation
+		}
+		return result.Observation.Validate(descriptor.ComputerProfiles)
 	case ComputerCommandTargets:
 		var result ComputerTargetsResult
 		if decodeComputerJSON(raw, &result) != nil || result.ObservedAt.IsZero() || len(result.Targets) > 32 {
@@ -447,7 +478,7 @@ func (descriptor CommandDescriptor) validateComputerProfiles() error {
 		return err
 	}
 	if descriptor.ModelContract != nil || descriptor.SupportsProgress || descriptor.SupportsTerminal ||
-		!descriptor.SupportsCancel {
+		!descriptor.SupportsCancel || descriptor.Name == ComputerCommandAct && descriptor.Risk != RiskWrite {
 		return fmt.Errorf("%w: malformed internal computer command behavior", ErrInvalidCapability)
 	}
 	for _, command := range computerCommands {
@@ -473,9 +504,14 @@ func (descriptor CommandDescriptor) validateComputerProfiles() error {
 
 func validateComputerCatalog(commands []CommandDescriptor) error {
 	var profiles []ComputerProfileDescriptor
+	var inputProfiles []ComputerProfileDescriptor
 	count := 0
 	for _, descriptor := range commands {
 		if !IsComputerCommand(descriptor.Name) {
+			continue
+		}
+		if descriptor.Name == ComputerCommandAct {
+			inputProfiles = descriptor.ComputerProfiles
 			continue
 		}
 		count++
@@ -487,6 +523,11 @@ func validateComputerCatalog(commands []CommandDescriptor) error {
 	}
 	if count != 0 && count != len(computerCommands) {
 		return fmt.Errorf("%w: computer catalog lacks complete command set", ErrInvalidCapability)
+	}
+	for _, profile := range inputProfiles {
+		if !slices.Contains(profiles, profile) {
+			return fmt.Errorf("%w: input profile lacks matching read-only authority", ErrInvalidCapability)
+		}
 	}
 	return nil
 }

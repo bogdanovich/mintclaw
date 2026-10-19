@@ -1288,8 +1288,9 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	}
 	personalPrompt := !cb.codingPrompt
 
-	if len(promptParts) > 0 {
-		for _, overlay := range sortPromptParts(promptParts) {
+	validPromptOverlays := func(parts []PromptPart) []PromptPart {
+		var valid []PromptPart
+		for _, overlay := range sortPromptParts(parts) {
 			if strings.TrimSpace(overlay.Content) == "" {
 				continue
 			}
@@ -1303,12 +1304,13 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 				})
 				continue
 			}
-			stringParts = append(stringParts, overlay.Content)
-			contentBlocks = append(
-				contentBlocks,
-				promptContentBlock(overlay, cacheControlForPromptPart(overlay)),
-			)
+			valid = append(valid, overlay)
 		}
+		return valid
+	}
+	for _, overlay := range validPromptOverlays(promptParts) {
+		stringParts = append(stringParts, overlay.Content)
+		contentBlocks = append(contentBlocks, promptContentBlock(overlay, cacheControlForPromptPart(overlay)))
 	}
 
 	dynamicChars := 0
@@ -1421,7 +1423,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			"total_chars":    len(fullSystemPrompt),
 			"has_summary":    req.Summary != "",
 			"has_checkpoint": req.Checkpoint != nil,
-			"overlays":       len(req.Overlays),
+			"overlays":       len(req.Overlays) + len(req.ExecutionOverlays),
 			"cached":         isCached,
 		})
 
@@ -1473,6 +1475,14 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			messages,
 			currentMessage,
 		)
+	}
+	// Current execution facts extend the transcript without rewriting any
+	// previously sent message or the originating turn's immutable context.
+	for _, overlay := range validPromptOverlays(req.ExecutionOverlays) {
+		messages = append(messages, promptMessageWithMetadata(
+			providers.Message{Role: "user", Content: overlay.Content},
+			overlay.Layer, overlay.Slot, overlay.Source.ID,
+		))
 	}
 	if len(messages) == 0 {
 		messages = append(messages, userPromptMessage("", nil))

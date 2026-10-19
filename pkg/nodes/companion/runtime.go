@@ -102,18 +102,19 @@ type commandInvocation struct {
 }
 
 type runtimeOptions struct {
-	systemExec      *SystemExecPolicy
-	shellExec       *shellExecRuntime
-	terminalBroker  terminalBrokerOpener
-	fileDescriptors []nodes.CommandDescriptor
-	serviceManager  ServiceManager
-	update          *updateCommandHandler
-	updateRecovery  UpdateCoordinator
-	browserHost     BrowserCommandHost
-	computerHost    ComputerCommandHost
-	jobs            *JobRuntime
-	workspaceRead   *workspaceReadRuntime
-	codingTasks     *CodingTaskHost
+	systemExec        *SystemExecPolicy
+	shellExec         *shellExecRuntime
+	terminalBroker    terminalBrokerOpener
+	fileDescriptors   []nodes.CommandDescriptor
+	serviceManager    ServiceManager
+	update            *updateCommandHandler
+	updateRecovery    UpdateCoordinator
+	browserHost       BrowserCommandHost
+	computerHost      ComputerCommandHost
+	computerInputHost ComputerInputCommandHost
+	jobs              *JobRuntime
+	workspaceRead     *workspaceReadRuntime
+	codingTasks       *CodingTaskHost
 }
 
 func WithWorkspaceRead(files *FileTransferRouter, systemExec SystemExecPolicy) RuntimeOption {
@@ -310,6 +311,13 @@ func NewRuntime(
 			return nil, fmt.Errorf("configure node computer runtime: %w", err)
 		}
 		handlers = append(handlers, computerHandlers...)
+	}
+	if settings.computerInputHost != nil {
+		handler, err := newComputerInputCommandHandler(settings.computerInputHost)
+		if err != nil {
+			return nil, fmt.Errorf("configure node computer input runtime: %w", err)
+		}
+		handlers = append(handlers, handler)
 	}
 	if settings.update != nil {
 		handlers = append(handlers, settings.update)
@@ -657,7 +665,8 @@ func durableInvocationSuccess(
 	plan nodes.ExecutionPlan,
 	result json.RawMessage,
 ) (json.RawMessage, error) {
-	if plan.Command == nodes.ComputerCommandObserve || plan.Command == nodes.BrowserCommandObserve ||
+	if plan.Command == nodes.ComputerCommandObserve || plan.Command == nodes.ComputerCommandAct ||
+		plan.Command == nodes.BrowserCommandObserve ||
 		plan.Command == nodes.BrowserCommandDiagnostics {
 		// Observations and diagnostics are live page data. An accessibility
 		// snapshot can echo a protected fill, while even bounded diagnostics

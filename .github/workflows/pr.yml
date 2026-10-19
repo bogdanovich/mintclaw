@@ -329,6 +329,15 @@ jobs:
             -o "$qualification_self_test"
           "$qualification_self_test"
 
+      - name: Check native fixture Unicode caret protocol without desktop access
+        shell: bash
+        run: |
+          fixture_text_self_test="$RUNNER_TEMP/mintclaw-fixture-text-self-test"
+          /usr/bin/swiftc -D MINTCLAW_FIXTURE_TEXT_SELF_TEST \
+            scripts/internal/computer-native-qualification/fixture_macos.swift \
+            -o "$fixture_text_self_test"
+          "$fixture_text_self_test"
+
       - name: Run workspace identity recovery tests
         shell: bash
         run: |

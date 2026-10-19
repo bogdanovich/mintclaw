@@ -150,6 +150,9 @@ reports, changed verified fields, or exhausted transient provider retries cannot
 erase its outputs or closure evidence. Cancellation and policy errors retain
 their existing fail-closed handling; new user guidance remains authoritative.
 This behavior belongs to the shared agent finalizer, not a site or channel rule.
+The same bounded presentation phase covers validated partial and blocked results.
+It preserves their incomplete status and the specific blocker verbatim, together
+with every retained output and receipt; formatting cannot certify missing work.
 
 With `agent live --trace-evidence-agent browser`, canonical trace publication
 can follow the visible final response. The CLI waits up to 30 seconds for this

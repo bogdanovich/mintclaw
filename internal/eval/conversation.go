@@ -147,8 +147,7 @@ func runDomainConversation(
 	verdict, code := flow.turn(caseCtx, item.Case.Limits, Action{Kind: "message", Text: task}, Event{}, 1)
 	if verdict == Pass && item.Case.Driver.Mode == "scripted" {
 		for index, step := range item.Case.Driver.Steps {
-			if flow.last.Kind != step.WaitFor.Kind ||
-				step.WaitFor.Contains != "" && !strings.Contains(flow.last.Content, step.WaitFor.Contains) {
+			if !step.WaitFor.matches(flow.last.Kind, flow.last.Content) {
 				verdict, code = Fail, "unexpected_turn_outcome"
 				break
 			}

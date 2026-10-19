@@ -34,6 +34,7 @@ func WithComputerHost(host ComputerCommandHost) RuntimeOption {
 			return errors.New("node computer command host is required")
 		}
 		options.computerHost = host
+		options.computerInputHost = nil // Explicitly retain the read-only composition.
 		return nil
 	}
 }

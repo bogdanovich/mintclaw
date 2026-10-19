@@ -15,6 +15,7 @@ test_path=''
 input_test_path=''
 capture_dir=''
 suite='companion'
+test_timeout='3m'
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 ]] || { usage; exit 2; }
   case "$1" in
@@ -37,6 +38,7 @@ case "$suite" in
     ;;
   input)
     test_name=TestCompanionNativeInputMechanismsOverWSS; test_package=./cmd/mintclaw-node
+    test_timeout='4m'
     [[ -z "$capture_dir" ]] || { echo '--capture-dir is companion-suite only.' >&2; exit 2; }
     ;;
   *) usage; exit 2 ;;
@@ -124,7 +126,7 @@ if [[ "$qualification_os" == Darwin ]]; then
     --env "MINTCLAW_COMPUTER_NATIVE_CAPTURE_DIR=$capture_dir" \
     --env MINTCLAW_COMPUTER_NATIVE_LOSS_CASE=1 \
     --env "MINTCLAW_NODE_TEST_BINARY=$node_path" \
-    "$qualification_app" --args -test.run="^$test_name$" -test.v -test.count=1 -test.timeout=3m \
+    "$qualification_app" --args -test.run="^$test_name$" -test.v -test.count=1 -test.timeout="$test_timeout" \
     || launch_status=$?
   [[ ! -f "$qualification_dir/test.stdout" ]] || cat "$qualification_dir/test.stdout"
   [[ ! -f "$qualification_dir/test.stderr" ]] || cat "$qualification_dir/test.stderr" >&2

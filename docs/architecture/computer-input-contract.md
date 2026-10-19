@@ -1,9 +1,10 @@
 # Bounded computer-input contracts
 
-Status: side-effect-free foundation only. No input driver, host, companion
-command, public tool or grant is registered by these types. Existing computer
-capabilities remain read-only. This independent slice does not depend on the
-private Linux Unicode-driver candidate.
+Status: typed foundation plus a separately opt-in internal companion transport.
+No native input executor, public input tool, configuration grant or production
+enablement is provided. Ordinary computer-host composition remains read-only.
+This independent slice does not depend on the private Linux Unicode-driver
+candidate or the Mac native ownership primitive.
 
 ## Shapes and protected payload
 
@@ -27,9 +28,55 @@ Text bytes are excluded from ordinary JSON and fixed `String`/`GoString`
 diagnostic projections. A metadata-only round trip cannot validate as a text
 request without an explicit ephemeral payload. This is not an encrypted secret
 container or a guarantee against a trusted caller deliberately reading/logging
-its in-memory bytes. Future integration must use the existing node ephemeral
+its in-memory bytes. The internal transport uses the existing node ephemeral
 envelope, bound payload commitment and protected argument/result projections;
-it must not serialize text into a durable execution plan or trace.
+text must not be serialized into a durable execution plan or trace.
+
+## Explicit protected companion transport
+
+`WithComputerHost` still advertises exactly the eight read-only/control commands.
+Input requires the separate `WithComputerInputHost` composition with a trusted
+owner implementing both interfaces. Only then can `computer.act.v1` be present;
+its profiles must be an exact subset of that same owner's read-only profiles.
+It has write risk, cancellation support and no generic model-tool contract.
+There is no configuration or default composition constructing a native executor.
+Applying `WithComputerHost` last explicitly downgrades back to read-only.
+
+`ComputerActInput` contains only typed metadata. Text insertion/replacement uses
+`ComputerActEphemeralInput`; a domain-separated digest binds the literal UTF-8
+bytes to the entire request, principal, session/worker/policy/control generation,
+target/window incarnation, observation, action and workspace. The decoded text
+limit and worst-case JSON escaping limit are distinct. Empty replacement must
+be explicit. Unknown/duplicate fields and foreign invocation/node ownership fail
+closed. Payload binding occurs before the existing invocation ledger accepts a
+new request or resumes an accepted-but-not-started request.
+
+`ValidateMetadata` and `ValidateEnvelope` are wire checks, not native authority.
+The trusted host must independently look up its stored evidence and enforce
+local policy, original geometry, fresh observation, exact native target,
+desktop-wide exclusion and human-control interlocks before dispatch. The host
+must not retain the text and must classify possible partial effects as unknown.
+
+Success requires same-binding post-action evidence with a different observation
+ID and a capture after this local handler started the action. Any transferred
+image must match this invocation/workspace. Acknowledging the driver alone is
+not success, and post-action evidence does not prove a business task succeeded.
+Live results may contain an AX echo of typed text, so the existing durable
+success record stores only `{"protected_result":true}`. Duplicate terminal calls
+return that receipt without input, observation or private-content replay.
+Running calls recovered after restart stay unknown and cannot be retried by
+resupplying text; accepted-but-not-started calls require the matching payload.
+
+Context cancellation, a closed lease or a killed worker is not cleanup proof.
+Only an actually delivered runtime cancellation plus the host's independent
+stop/owned-held-state cleanup attestation may become canceled. Uncertain effects
+take precedence over other error markers. Errors retain bounded public semantics
+without private host details. This reuses the existing invocation lifecycle and
+one host's disconnect boundary; it adds no separate recovery/ownership ledger.
+
+Desktop-free counter-host tests use the real runtime, read-only session core and
+file invocation ledger to verify these transport contracts. They do not qualify
+native input, independent held-key cleanup or the full per-platform task suite.
 
 ## Evidence and authority
 

@@ -25,8 +25,10 @@ Non-cooperating applications and human input are not blocked by this lease.
 
 The atomic admission briefly grabs the server, checks for an existing owner,
 claims only when empty, verifies the original token and publishes the local
-lease before ungrabbing. It never steals an occupied selection. Every native
-transaction has a 250 ms socket deadline (or a shorter caller deadline).
+lease before ungrabbing. It never steals an occupied selection. Each ownership
+transaction has a 250 ms socket deadline (or a shorter caller deadline). The
+preceding retained-window validation keeps its existing two-second bound; the
+complete acquisition/check call is not promised to finish within 250 ms.
 Cancellation or an uncertain protocol result closes the original observer
 connection, whose X11 close-down releases its own server grab, selection and
 control window. It does not close the independently owned application connection.
@@ -67,17 +69,21 @@ Opt-in native tests create only their own windows and exercise competing native
 guards/processes, process crash, stolen/restored ownership, destroyed control
 tokens/targets, stale cleanup and separate screens of one server. The dedicated
 CI job uses its own two-screen Xvfb and repeats each native fixture twenty times;
-the actual attached Linux tuple must also be qualified separately. Native tests
+the actual attached Linux tuple is qualified separately. Native tests
 do not capture existing apps, press keys, move the pointer or touch the clipboard.
 
-The candidate was exercised twenty times on the attached Linux GNOME/X11
-desktop: contention/crash, stolen/restored ownership, token/target destruction,
+The final reviewed head of merged
+[#1787](https://github.com/bogdanovich/mintclaw/pull/1787) was exercised twenty
+times on the attached Linux GNOME/X11 desktop: contention/crash, stolen/restored
+ownership, token/target destruction,
 explicit socket close and server-side observer disconnect all passed. Existing
 window-incarnation, wrong-process-owner, process-exit and event-pressure guards
 also passed twenty repetitions. That server has one screen, so the cross-screen
-case explicitly skipped there and remains a separate two-screen CI gate. This
-is lease-primitive evidence, not a representative computer-task or input-worker
-qualification; macOS input leases remain unsupported.
+case explicitly skipped there. The separate two-screen, race-enabled CI gate
+passed twenty repetitions on that same reviewed head, as did all 15 CI checks
+and automated review before authorized merge. This is lease-primitive evidence,
+not a representative computer-task or input-worker qualification; macOS input
+leases remain unsupported.
 
 This is cooperative exclusion, not a security sandbox, model policy, complete
 emergency-stop implementation or proof that an external worker dispatches on
