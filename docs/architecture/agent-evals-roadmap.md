@@ -97,6 +97,13 @@ The native path remains unqualified. The forward ordinary-question contract keep
 scope, delivered prompt digest/outbox binding and required semantic judging; its changed driver/rubric digest
 requires a separately identified fresh experiment, without upgrading or retrying the historical v1 result.
 
+The [denial v2 experiment](../operations/manual-agent-evals-browser-denial-v2-pilot-20261019.md) on merged #1798
+actually exercised that revised case once. It failed before any permission question/approval: the target returned
+a final readiness claim and closed the browser; native state showed only navigation. There were zero fixture
+effects, no cancel/grant and no judge/regrade. One returned final exposed 52,522 input / 586 output tokens, with
+all-call coverage still unknown. Both cancellation paths remain without positive live qualification; preserve
+this negative checkpoint result instead of accepting arbitrary finals or retrying/tuning target behavior away.
+
 ## Milestones
 
 | Stage | Outcome | Dependency | Status |
@@ -168,7 +175,9 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    account button would have been dispatched; live denial qualification remains pending after its preserved ordinary-
    question/native-approval mismatch. A natural permission-question path now has its own bounded native cancellation
    scope, delivered-prompt binding and required semantic criterion, without weakening the existing approval guard;
-   the changed case revision still needs actual qualification. The other three scenarios
+   the changed case revision was actually run in v2 and failed before a permission checkpoint, so neither
+   cancellation branch gained positive live qualification. This is a recorded negative result, not permission
+   for an open-ended target-repair loop. The other three scenarios
    remain gated. Submit/followup retain private-input gates; ambiguity retains its native-action evidence gate.
    No local fixture pass qualifies native browser behavior.
    Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a
