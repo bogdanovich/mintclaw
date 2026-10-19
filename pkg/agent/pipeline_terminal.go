@@ -101,6 +101,8 @@ func (p *Pipeline) completeTerminal(
 	result, err := p.finalizeTurn(turnCtx, ts, exec, llm, status, exec.terminal)
 	if err != nil {
 		status = TurnEndStatusError
+	} else {
+		status = result.status
 	}
 	return terminalGatewayOutcome{result: result, status: status, err: err}
 }
