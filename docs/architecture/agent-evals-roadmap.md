@@ -90,6 +90,15 @@ used fixture remains retained under unknown logical settlement. A protected live
 concrete separate runtime triage candidate, not a reason to loosen eval gates or rerun the task. E3 and remaining
 PDF/browser/private/adaptive/repeat/exit work remain open; no historical result is upgraded.
 
+The [empty-fields v3 pilot](../operations/manual-agent-evals-pdf-empty-v3-pilot-20261019.md) on merged #1840 passed
+six native Gemini request/response exchanges and reached source-bound `form.discover` with all five expected fields.
+It still returned **inconclusive**: the model did not call the trusted `document` continuation tool, the runtime
+guard stopped the turn and the error-final had no routed identity. No question/cancel/judge/regrade qualified;
+passive native field-use and 53.2k input / 581 output token observations do not backfill frozen unavailable evidence.
+All credential copies were removed; logical settlement/source cleanup remained unknown. Preserve this checkpoint,
+do not weaken the protected guard or retry/tune until green, and keep target-continuation triage separate from the
+remaining mandatory harness/domain work. E3 and the full goal are not complete.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 
