@@ -7,11 +7,14 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 )
 
 const (
@@ -28,13 +31,20 @@ type protectedFillBinding struct {
 	CatalogRevision      string               `json:"catalog_revision"`
 	IssuedAt             int64                `json:"issued_at"`
 	ExpiresAt            int64                `json:"expires_at"`
+	ElementRole          string               `json:"element_role"`
+	ElementNameSHA256    string               `json:"element_name_sha256"`
+	ElementPosition      uint32               `json:"element_position"`
+	URLSHA256            string               `json:"url_sha256"`
+	OriginSHA256         string               `json:"origin_sha256"`
+	PageStateSHA256      string               `json:"page_state_sha256"`
 }
 
 // ProtectedFillTarget is an authenticated value-free intent, not proof that its
 // target is still usable or that a native interaction accepted an answer.
 type ProtectedFillTarget struct {
-	Request   PrepareActionRequest
-	ExpiresAt int64
+	Request     PrepareActionRequest
+	ExpiresAt   int64
+	Observation browseraction.InputTargetObservation
 }
 
 func (broker *Broker) InspectProtectedFillBinding(
@@ -50,7 +60,23 @@ func (broker *Broker) InspectProtectedFillBinding(
 	if owner.Validate() != nil || binding.Request.Owner != owner {
 		return ProtectedFillTarget{}, ErrNotFound
 	}
-	return ProtectedFillTarget{Request: binding.Request, ExpiresAt: binding.ExpiresAt}, nil
+	request := binding.Request
+	observation := browseraction.InputTargetObservation{
+		Version: browseraction.InputTargetVersion, BindingSHA256: protectedFillTextSHA256(token),
+		ActorID: owner.ActorID, AgentID: owner.AgentID, SessionKey: owner.SessionKey, ExecutionID: owner.ExecutionID,
+		RequestID: request.RequestID, SessionID: request.SessionID, TabID: request.TabID, FrameID: request.FrameID,
+		SnapshotID: request.SnapshotID, SnapshotGeneration: request.SnapshotGeneration,
+		ContextCatalogID: request.ContextCatalogID, ContextGeneration: request.ContextGeneration,
+		ControllerGeneration: binding.ControllerGeneration, Ref: request.Action.Ref,
+		ElementRole: binding.ElementRole, ElementNameSHA256: binding.ElementNameSHA256,
+		ElementPosition: binding.ElementPosition, URLSHA256: binding.URLSHA256, OriginSHA256: binding.OriginSHA256,
+		PageStateSHA256: binding.PageStateSHA256, CatalogRevision: binding.CatalogRevision,
+		IssuedAt: binding.IssuedAt, ExpiresAt: binding.ExpiresAt,
+	}
+	if !observation.Valid() {
+		return ProtectedFillTarget{}, ErrInvalid
+	}
+	return ProtectedFillTarget{Request: request, ExpiresAt: binding.ExpiresAt, Observation: observation}, nil
 }
 
 // ProtectedFillPreparation reads existing native authority for an accepted
@@ -133,8 +159,16 @@ func (broker *Broker) CreateProtectedFillBinding(
 		Version: 1, Request: request, ControllerGeneration: session.ControllerGeneration,
 		ProfileRevision: session.ProfileRevision, PolicyRevision: session.PolicyRevision,
 		CatalogRevision: draft.CatalogRevision, IssuedAt: now.UnixNano(), ExpiresAt: expires,
+		ElementRole: draft.ElementRole, ElementNameSHA256: protectedFillTextSHA256(draft.ElementName),
+		ElementPosition: draft.ElementPosition, URLSHA256: protectedFillTextSHA256(slot.observedURL),
+		OriginSHA256: protectedFillTextSHA256(session.SnapshotOrigin), PageStateSHA256: session.PageStateHash,
 	}
 	return broker.sealProtectedFillBinding(binding)
+}
+
+func protectedFillTextSHA256(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
 }
 
 // PrepareProtectedFill stages an authorized consumer's transient answer in the

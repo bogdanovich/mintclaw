@@ -223,6 +223,7 @@ func (tool *BrowserInputTool) ask(
 		return browserActionToolError(browser.ErrInvalid)
 	}
 	result := toolshared.NewToolResult("Protected browser form input is waiting.")
+	result.BrowserInputTarget = target.Observation
 	result.Control.Suspension = suspension
 	retainBrowserInputResource(result, source, owner, request.SessionID)
 	return result.WithDeliveryIntent(toolshared.DeliverySilent)

@@ -1,5 +1,7 @@
 package diagnostictrace
 
+import "github.com/bogdanovich/mintclaw/pkg/browseraction"
+
 // Payload structs intentionally contain only normalized evidence. Capture
 // adapters must project source-specific values into these fields instead of
 // storing arbitrary runtime payloads.
@@ -64,19 +66,31 @@ type ModelPayload struct {
 }
 
 type ToolPayload struct {
-	Tool             string                 `json:"tool"`
-	ArgsHash         string                 `json:"args_hash,omitempty"`
-	ResultHash       string                 `json:"result_hash,omitempty"`
-	Status           string                 `json:"status,omitempty"`
-	Executed         bool                   `json:"executed,omitempty"`
-	IsError          bool                   `json:"is_error,omitempty"`
-	Action           string                 `json:"action,omitempty"`
-	DecisionCode     string                 `json:"decision_code,omitempty"`
-	Count            int                    `json:"count,omitempty"`
-	Threshold        int                    `json:"threshold,omitempty"`
-	ArgumentsPreview string                 `json:"arguments_preview,omitempty"`
-	ResultPreview    string                 `json:"result_preview,omitempty"`
-	DocumentFields   *DocumentFieldsPayload `json:"document_fields,omitempty"`
+	Tool               string                     `json:"tool"`
+	ArgsHash           string                     `json:"args_hash,omitempty"`
+	ResultHash         string                     `json:"result_hash,omitempty"`
+	Status             string                     `json:"status,omitempty"`
+	Executed           bool                       `json:"executed,omitempty"`
+	IsError            bool                       `json:"is_error,omitempty"`
+	Action             string                     `json:"action,omitempty"`
+	DecisionCode       string                     `json:"decision_code,omitempty"`
+	Count              int                        `json:"count,omitempty"`
+	Threshold          int                        `json:"threshold,omitempty"`
+	ArgumentsPreview   string                     `json:"arguments_preview,omitempty"`
+	ResultPreview      string                     `json:"result_preview,omitempty"`
+	DocumentFields     *DocumentFieldsPayload     `json:"document_fields,omitempty"`
+	BrowserInputTarget *BrowserInputTargetPayload `json:"browser_input_target,omitempty"`
+}
+
+// BrowserInputTargetPayload is published only after a native protected question
+// is durably owned. It describes a target, never an accepted value or mutation.
+type BrowserInputTargetPayload struct {
+	InteractionID string                               `json:"interaction_id"`
+	Target        browseraction.InputTargetObservation `json:"target"`
+}
+
+func (payload BrowserInputTargetPayload) Valid() bool {
+	return safeIDPattern.MatchString(payload.InteractionID) && payload.Target.Valid()
 }
 
 // DocumentFieldsPayload is a native read observation, not approval authority or
