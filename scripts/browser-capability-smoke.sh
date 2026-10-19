@@ -13,7 +13,7 @@ Options:
   --fixture-host <host>      Host advertised by the local fixture (default 127.0.0.1).
   --config <path>            Config path on the live-client host. The standard
                              deployed main profile is selected when available.
-  --timeout <seconds>        Per-request timeout (default 180).
+  --timeout <seconds>        Per-request and delegated-step timeout (default 180).
   --allow-billable           Required for cloud targets.
 EOF
 }
@@ -436,6 +436,7 @@ make_stage_prompt() {
 	fi
 	cat <<EOF
 Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
+Set delegate.timeout_seconds to the number ${timeout_seconds}.
 
 Only the delegated browser agent may use tool_search_tool_bm25 to discover first-party browser tool schemas when needed. Tool discovery does not replace any required browser operation.
 
@@ -460,6 +461,7 @@ fi
 
 cleanup_prompt=$(cat <<EOF
 Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
+Set delegate.timeout_seconds to the number ${timeout_seconds}.
 
 Only the delegated browser agent may use tool_search_tool_bm25 to discover first-party browser tool schemas when needed. Tool discovery does not replace any required browser operation.
 

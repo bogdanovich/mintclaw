@@ -11,13 +11,18 @@ cat >"$fake" <<'EOF'
 #!/bin/sh
 set -eu
 message=""
+timeout_seconds=""
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	--message)
 		message=$2
 		shift 2
 		;;
-	--timeout|--config)
+	--timeout)
+		timeout_seconds=${2%s}
+		shift 2
+		;;
+	--config)
 		shift 2
 		;;
 	--auto-answer-question|--auto-answer-question-match)
@@ -26,6 +31,10 @@ while [ "$#" -gt 0 ]; do
 	*) shift ;;
 	esac
 done
+if ! printf '%s' "$message" | grep -Fq "Set delegate.timeout_seconds to the number ${timeout_seconds}."; then
+	echo "browser smoke prompt did not propagate the request timeout to delegation" >&2
+	exit 1
+fi
 is_cleanup=false
 stage=core
 if printf '%s' "$message" | grep -Fq 'cleanup audit'; then
@@ -444,6 +453,11 @@ assert report["artifacts"] == []
 assert all(check["state"] == "passed" for check in report["checks"])
 PY
 done
+
+MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite managed-reuse --timeout 600 \
+	--json-output "$test_root/custom-delegation-timeout.json"
 
 for suite in steel-cloud steel-profile-reuse steel-handoff; do
 	output="$test_root/$suite.json"
