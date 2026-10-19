@@ -71,7 +71,8 @@ func TestDocumentFormTaskHandoffReadmitsOnlyNewPDFSelectorsAndMedia(t *testing.T
 		{Role: "user", Content: ts.userMessage},
 		{Role: "tool", ToolCallID: "native-task-handoff", Content: "new task", Media: []string{ref}},
 	}, ts, config.DefaultMaxMediaSize)
-	if len(messages[1].Media) != 0 || len(messages[1].Attachments) != 1 || messages[1].Attachments[0].Type != "document" ||
+	if len(messages[1].Media) != 0 || len(messages[1].Attachments) != 1 ||
+		messages[1].Attachments[0].Type != "document" ||
 		!strings.Contains(messages[1].Content, ref) ||
 		strings.Contains(messages[1].Content, "NEW_PRIVATE_SOURCE") {
 		t.Fatal("live handoff PDF was omitted or treated as an image rather than a document")
