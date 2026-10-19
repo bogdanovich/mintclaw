@@ -187,6 +187,10 @@ Its [repair checkpoint](pdf-intake-telegram-followup-checkpoint.md) records revi
 verified deployment and a new real Russian gateway/model test with four native value matches, truthful
 field acknowledgements and cancellation/privacy cleanup. Actual Telegram requalification remains pending;
 the negative historical job and both I-134 jobs were not modified.
+The [natural task routing checkpoint](pdf-intake-task-routing-checkpoint.md)
+tracks leaving and resuming a protected draft, ambiguous new attachments,
+bare task-scope answers and authorized-input lifetime across tool discovery.
+Its bounded gateway checks do not close actual Telegram or full PDFI4 gates.
 
 ### Deferred Follow-Up: Editable Hybrid Derivatives
 
