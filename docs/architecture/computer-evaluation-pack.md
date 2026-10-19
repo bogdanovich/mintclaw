@@ -1,7 +1,8 @@
 # Computer-use evaluation pack v1
 
-Status: frozen task intents and acceptance rules, not an implemented runner or
-measured completion result. None of these model tasks is currently qualified.
+Status: frozen task intents and acceptance rules, with private text fixtures and
+saved-byte oracles for CU-T01–05. The full runner and native/model qualification
+remain unimplemented. None of these model tasks is currently qualified.
 This pack supplies the representative-task gate in the
 [computer-use roadmap](computer-use-roadmap.md); read-only and single-action
 fixture passes do not satisfy it.
@@ -97,6 +98,47 @@ The executable revision must materialize deterministic long-document, rich-text,
 spreadsheet, form and canvas inputs and exact destinations; it must not silently
 generate easier data per backend. The table specifies completion conditions,
 not permission to bypass an unsupported mechanism with filesystem mutation.
+
+## Private native-editor fixture subset
+
+`scripts/internal/computer-evaluation/text_fixtures.py` materializes the first
+five tasks without opening a desktop or calling a model. It is controller-only
+test setup and artifact inspection, not a native action implementation. The
+controller must not expose its code, oracle data or filesystem tools to the
+evaluated agent. Its immutable subset digest covers all five exact seeds,
+instructions, expected bytes and the 64 KiB artifact limit. This digest is not a
+full executable-pack revision or authentication of an untrusted controller.
+
+```sh
+python3 scripts/internal/computer-evaluation/text_fixtures.py prepare \
+  --task CU-T02 --run-directory /absolute/new/private-task-directory
+# A future independently qualified native runner performs the GUI task here.
+python3 scripts/internal/computer-evaluation/text_fixtures.py check-artifact \
+  --task CU-T02 --run-directory /absolute/new/private-task-directory
+```
+
+Setup refuses an existing directory and never deletes or adopts it. CU-T01
+starts without a candidate file; the native editor must create `document.txt`.
+CU-T02 fixes the scalar caret at offset 6, immediately after `ALPHA` plus LF,
+and inserts `R` before the existing `U`. CU-T03 retains the original two sentinel
+lines. CU-T04 appends `FIRST<TAB>U<LF>SECOND e<U+0301><LF>THIRD R<LF>` with the
+literal canonical `U` and `R`. CU-T05 preserves its first occurrence and middle
+line. No case normalizes Unicode, line endings or literal tab/LF characters.
+
+The checker uses bounded no-follow directory-relative reads of owned regular
+single-link files, checks the task/revision/directory binding and rejects
+observed mutation/replacement. It reports hashes and byte counts, not document
+contents or raw OS errors. This is not a filesystem security sandbox against
+same-UID processes or an atomic snapshot guarantee. Setup errors leave only the
+newly created private directory for explicit controller cleanup.
+
+Exit 0 from `check-artifact` means only exact saved-byte equality; 1 means a
+mismatch and 2 means unverifiable. `native_task_qualified` is always false.
+An artifact match does not prove native GUI use, CU-T01's reopen, unchanged guard
+window, authorized dialogs, intermediate state, cancellation or post-cleanup
+disposition. The eventual existing-Pipeline controller must attest those
+independently before a full task pass. The other 15 tasks remain unimplemented
+and stay in the 20-task denominator. No provider run or spending is authorized.
 
 ## Scoring, safety and resource limits
 
