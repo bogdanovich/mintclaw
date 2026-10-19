@@ -48,6 +48,7 @@ archives the execution ledgers and records the deployed state.
 | Turn execution and tool outcomes | `pkg/agent`, generation-owned runtime and finalization | [Runtime host](agentloop-runtime.md); [reliability roadmap](reliability-code-health-20261017-roadmap.md) R5/R7 |
 | Inbound persistence and canonical history | `pkg/bus/inbound_spool.go`, `pkg/session`, Seahorse reconciliation | [Durable ingress](durable-ingress.md); [session system](session-system.md); [reconciliation](seahorse-reconciliation.md) |
 | Outbound delivery and domain settlement | `pkg/outbox`, `pkg/agent/outbound_transaction.go`, `outbound_recovery.go` | [Durable delivery](durable-outbound-delivery.md); [retention decision](outbox-retention-decision-20261017.md); [offline capacity/retirement](../operations/outbox-retention-20261018.md) |
+| Interaction admission and observer lifecycle | `pkg/interactions`, registry budget and subscription delivery; runtime close adapter in `pkg/agent` | [Admission and contention qualification](../operations/architecture-robustness-20261019-qualification.md); retain commit identity, pre-persistence rejection and explicit pending/resync outcomes |
 | Tool discovery and transport classification | `pkg/mcp`; tool adapters consume its outcomes | Reliability R2/R5; preserve uncertain-call no-replay behavior |
 | Web UI chat and credential requests | `web/frontend/src/features/chat/controller.ts`, `src/api`, shared model form | Reliability R3/R8/R12; asynchronous request/socket ownership and secret preservation |
 | Behavioral quality evidence | Existing manual eval runner and independent domain witnesses | [Agent evals roadmap](agent-evals-roadmap.md), especially its Next Mandatory Work; harness tests do not qualify live domains |
@@ -126,6 +127,9 @@ owners. The completed first roadmap is not reopened.
 The [October 19 architecture review](architecture-robustness-review-20261019.md)
 records merged ownership corrections: cleanup settles before the final answer
 is committed, and task restoration finishes before the registry is published.
-Interaction contention qualification is complete; production enforcement of
-bounded waits and backlog remains the next admission. Other architectural
-extraction remains conditional.
+Interaction store admission, committed observation backlog and subscription
+settlement are now bounded within their existing owners; runtime worker and
+observer drain share a one-second budget with explicit incomplete teardown.
+[Qualification evidence](../operations/architecture-robustness-20261019-qualification.md)
+records measured behavior and practical limits. Other architectural extraction
+remains conditional.
