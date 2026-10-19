@@ -21,16 +21,28 @@ func compareNativeModels(result *Comparison, baseline, current RunReport) {
 		observation := source.report.NativeModels
 		if observation == nil || observation.Code != "observed" {
 			result.EnvironmentUnknowns = append(result.EnvironmentUnknowns, source.name+"_native_record_coverage")
-		} else if !nativeResponseModelsKnown(observation) {
+			continue
+		}
+		if !nativeResponseModelsKnown(observation) {
 			result.EnvironmentUnknowns = append(result.EnvironmentUnknowns, source.name+"_native_response_models")
+		}
+		if !nativeModelProvidersKnown(observation, false) {
+			result.EnvironmentUnknowns = append(result.EnvironmentUnknowns, source.name+"_native_request_providers")
+		}
+		if !nativeModelProvidersKnown(observation, true) {
+			result.EnvironmentUnknowns = append(result.EnvironmentUnknowns, source.name+"_native_response_providers")
 		}
 	}
 	if baseline.NativeModels == nil || current.NativeModels == nil ||
 		baseline.NativeModels.Code != "observed" || current.NativeModels.Code != "observed" {
 		return
 	}
-	aRequested, aResponses, aInputs := nativeModelComparisonInputs(baseline)
-	bRequested, bResponses, bInputs := nativeModelComparisonInputs(current)
+	requestProviders := nativeModelProvidersKnown(baseline.NativeModels, false) &&
+		nativeModelProvidersKnown(current.NativeModels, false)
+	responseProviders := nativeModelProvidersKnown(baseline.NativeModels, true) &&
+		nativeModelProvidersKnown(current.NativeModels, true)
+	aRequested, aResponses, aInputs := nativeModelComparisonInputs(baseline, requestProviders, responseProviders)
+	bRequested, bResponses, bInputs := nativeModelComparisonInputs(current, requestProviders, responseProviders)
 	if !slices.Equal(aRequested, bRequested) ||
 		nativeResponseModelsKnown(baseline.NativeModels) && nativeResponseModelsKnown(current.NativeModels) &&
 			!slices.Equal(aResponses, bResponses) {
@@ -47,7 +59,18 @@ func nativeResponseModelsKnown(observation *NativeModelObservation) bool {
 	}
 	for _, turn := range observation.Turns {
 		for _, call := range turn.Calls {
-			if call.ResponseProvider == "" || call.ResponseModel == "" {
+			if call.ResponseModel == "" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func nativeModelProvidersKnown(observation *NativeModelObservation, response bool) bool {
+	for _, turn := range observation.Turns {
+		for _, call := range turn.Calls {
+			if response && call.ResponseProvider == "" || !response && call.RequestProvider == "" {
 				return false
 			}
 		}
@@ -57,7 +80,10 @@ func nativeResponseModelsKnown(observation *NativeModelObservation) bool {
 
 // Actual request shapes can change because of paths, time, different responses
 // or tool loops. This records drift, not normalized inputs or causal attribution.
-func nativeModelComparisonInputs(report RunReport) ([]string, []string, []string) {
+func nativeModelComparisonInputs(
+	report RunReport,
+	requestProviders, responseProviders bool,
+) ([]string, []string, []string) {
 	requested, responses, inputs := []string{}, []string{}, []string{}
 	if report.NativeModels == nil {
 		return requested, responses, inputs
@@ -68,12 +94,19 @@ func nativeModelComparisonInputs(report RunReport) ([]string, []string, []string
 	}
 	for _, turn := range report.NativeModels.Turns {
 		for _, call := range turn.Calls {
+			requestProvider, responseProvider := "", ""
+			if requestProviders {
+				requestProvider = call.RequestProvider
+			}
+			if responseProviders {
+				responseProvider = call.ResponseProvider
+			}
 			request, _ := json.Marshal([]string{
-				cases[turn.TrialID], call.RequestProvider, call.RequestModel,
+				cases[turn.TrialID], requestProvider, call.RequestModel,
 			})
 			response, _ := json.Marshal([]string{
-				cases[turn.TrialID], call.RequestProvider, call.RequestModel,
-				call.ResponseProvider, call.ResponseModel,
+				cases[turn.TrialID], requestProvider, call.RequestModel,
+				responseProvider, call.ResponseModel,
 			})
 			input, _ := json.Marshal(struct {
 				Case   string            `json:"case"`

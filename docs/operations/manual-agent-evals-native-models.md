@@ -34,6 +34,11 @@ contradictory completion, orphan/duplicate attempts and wrong scopes preserve un
 response provider/model names remain distinct, including fallback. Retry/fallback record counts are observations,
 not a count of every provider attempt.
 
+Native provider names can be absent even when model names and fingerprints are present. Empty provider fields
+remain unknown; they are never inferred from configuration or model-name spelling. Comparison retains separate
+request/response provider unknowns, compares known model names independently and compares provider identities only
+when both sides have complete evidence. A coverage change alone is not an observed provider change.
+
 ## Results
 
 - `observed`: every selected routed scope has an admitted native record set. This is not complete billing or a
@@ -45,8 +50,12 @@ not a count of every provider attempt.
 
 Per-attempt usage preserves `observed`, `unavailable`, `legacy_unknown` and `not_returned`. Explicit provider presence
 includes an observed zero; absent legacy presence does not turn nonzero counters into trustworthy returned usage.
-Failed/aborted attempts can lack a response, with no estimated usage. A tool-call-only response can have usage and
-no response-content hash. Every admitted response is summed, not only the last LLM call of a tool loop.
+Failed/aborted attempts can lack a response, with no estimated usage. A completed turn may also retain an unanswered
+attempt when an actual native `model.retry` binds to that still-unanswered attempt. `retry_observed: true` preserves
+that evidence; usage stays `not_returned`, never observed zero. Orphan, duplicate, post-response, wrong-scope and
+post-terminal retries cannot explain a missing response; a fallback count alone is not such evidence. A
+tool-call-only response can have usage and no response-content hash. Every admitted response is summed, not only
+the last LLM call of a tool loop.
 
 Totals retain raw integer input/output tokens and coverage/counts. Display uses the existing compact formatter,
 for example `10352` becomes `10.3k`. Overflow clears totals with an explicit `overflow` coverage state. The trace

@@ -89,6 +89,101 @@ func makeNativeModelTestTrace(binding nativeModelBinding) (diagnostictrace.Trace
 	return diagnostictrace.Finalize(trace)
 }
 
+func makeNativeModelRetryTestTrace(binding nativeModelBinding) (diagnostictrace.Trace, error) {
+	trace, err := makeNativeModelTestTrace(binding)
+	if err != nil {
+		return trace, err
+	}
+	trace.Records[2].Kind = diagnostictrace.RecordModelRetry
+	trace.Records[2].Data, err = json.Marshal(diagnostictrace.ModelPayload{
+		Status: "retry", Attempt: 1, Reason: "server_error", ErrorCode: "server_error",
+	})
+	if err != nil {
+		return trace, err
+	}
+	for index := range trace.Records {
+		record := &trace.Records[index]
+		if record.Kind != diagnostictrace.RecordModelRequest && record.Kind != diagnostictrace.RecordModelResponse {
+			continue
+		}
+		var payload diagnostictrace.ModelPayload
+		if err = json.Unmarshal(record.Data, &payload); err != nil {
+			return trace, err
+		}
+		payload.Provider = ""
+		record.Data, err = json.Marshal(payload)
+		if err != nil {
+			return trace, err
+		}
+	}
+	return diagnostictrace.Finalize(trace)
+}
+
+func TestNativeModelProjectionKeepsNativeRetriesAndUnknownProviders(t *testing.T) {
+	binding := nativeModelTestBinding("/private/workspace")
+	trace, err := makeNativeModelRetryTestTrace(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := projectNativeModelTrace(trace, binding, digest([]byte("raw")), nil)
+	totals := summarizeNativeModels([]NativeModelTurn{turn})
+	if turn.Code != "observed" || len(turn.Calls) != 2 || turn.RetryFallbackRecords != 1 ||
+		!turn.Calls[0].RetryObserved || turn.Calls[0].UsageState != "not_returned" || turn.Calls[0].Usage != nil ||
+		turn.Calls[1].RetryObserved || turn.Calls[1].UsageState != "observed" ||
+		turn.Calls[0].RequestProvider != "" || turn.Calls[1].RequestProvider != "" ||
+		turn.Calls[1].ResponseProvider != "" || turn.Calls[1].ResponseModel != "actual-model" ||
+		totals.Requests != 2 || totals.Responses != 1 || totals.UsageResponses != 1 ||
+		totals.InputTokens != 100 || totals.OutputTokens != 4 || totals.Coverage != "partial_native_responses" {
+		t.Fatal("native retry or unknown provider was discarded/filled from configuration", turn, totals)
+	}
+}
+
+func TestNativeModelProjectionRejectsUnboundOrContradictoryRetries(t *testing.T) {
+	for _, mode := range []string{
+		"orphan", "duplicate", "response-after-retry", "scope", "status", "attempt", "absent", "fallback", "terminal",
+	} {
+		t.Run(mode, func(t *testing.T) {
+			binding := nativeModelTestBinding("/private/workspace")
+			trace, err := makeNativeModelRetryTestTrace(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "orphan":
+				trace.Records[2].Correlation.ModelAttemptID = "foreign-attempt"
+			case "duplicate":
+				trace.Records[3] = trace.Records[2]
+			case "response-after-retry":
+				trace.Records[3].Kind = diagnostictrace.RecordModelResponse
+				trace.Records[3].Data = trace.Records[4].Data
+				trace.Records[3].Correlation.ModelAttemptID = trace.Records[2].Correlation.ModelAttemptID
+			case "scope":
+				trace.Records[2].Scope.TurnID = "foreign-turn"
+			case "status", "attempt":
+				payload := diagnostictrace.ModelPayload{Status: "retry", Attempt: 1}
+				if mode == "status" {
+					payload.Status = "success"
+				} else {
+					payload.Attempt = 0
+				}
+				trace.Records[2].Data, _ = json.Marshal(payload)
+			case "absent":
+				trace.Records[2].Kind = diagnostictrace.RecordContextSnapshot
+				trace.Records[2].Data = []byte(`{}`)
+			case "fallback":
+				trace.Records[2].Kind = diagnostictrace.RecordModelFallbackAttempt
+			case "terminal":
+				trace.Records = append(trace.Records, trace.Records[2])
+			}
+			rehashNativeModelTestTrace(t, &trace)
+			turn := projectNativeModelTrace(trace, binding, digest([]byte("raw")), nil)
+			if turn.Code != "invalid_trace" || len(turn.Calls) != 0 {
+				t.Fatal("unexplained or contradictory response gap qualified", mode, turn)
+			}
+		})
+	}
+}
+
 func rehashNativeModelTestTrace(t *testing.T, trace *diagnostictrace.Trace) {
 	t.Helper()
 	for index := range trace.Records {
@@ -164,6 +259,7 @@ func TestNativeModelProjectionRejectsIncompleteOrForeignRecords(t *testing.T) {
 	for _, mode := range []string{
 		"session", "agent", "turn", "channel", "duplicate-request", "duplicate-response",
 		"orphan-response", "truncated", "drop", "preview", "negative", "end", "missing-response", "gap",
+		"request-model", "request-provider",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			binding := nativeModelTestBinding("/private/workspace")
@@ -200,6 +296,15 @@ func TestNativeModelProjectionRejectsIncompleteOrForeignRecords(t *testing.T) {
 				trace.Records = trace.Records[:len(trace.Records)-1]
 			case "missing-response":
 				trace.Records = slices.Delete(trace.Records, 4, 5)
+			case "request-model", "request-provider":
+				var payload diagnostictrace.ModelPayload
+				_ = json.Unmarshal(trace.Records[1].Data, &payload)
+				if mode == "request-model" {
+					payload.Model = ""
+				} else {
+					payload.Provider = "\n"
+				}
+				trace.Records[1].Data, _ = json.Marshal(payload)
 			}
 			rehashNativeModelTestTrace(t, &trace)
 			if mode == "gap" {
