@@ -117,3 +117,9 @@ reproduced correctness defects, now fixed in #1778 and #1781, and their permanen
 regressions. The bounded login extraction is merged; eval extraction remains
 conditional, while qualification and measured follow-ups keep their existing
 owners. The completed first roadmap is not reopened.
+
+The [October 19 architecture review](architecture-robustness-review-20261019.md)
+admits two ownership corrections: settle terminal cleanup before committing the
+final answer, and finish task restoration before publishing its registry.
+Interaction contention and notification budgets enter bounded qualification;
+other architectural extraction remains conditional.
