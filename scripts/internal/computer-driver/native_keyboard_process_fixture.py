@@ -159,7 +159,7 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed):
             if result["acknowledged"] != normal:
                 raise RuntimeError("native acknowledgement outcome mismatch")
             if mode in {"cancel_held", "blocked_stop"}:
-                if not result["cancelled"] or not result["cancellation_delivered"]:
+                if not result["canceled"] or not result["cancellation_delivered"]:
                     raise RuntimeError("scoped stop was not delivered")
                 if time.monotonic() - cancelled_at > 1:
                     raise RuntimeError("blocked child concealed emergency stop")

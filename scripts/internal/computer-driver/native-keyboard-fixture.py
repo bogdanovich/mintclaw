@@ -27,8 +27,15 @@ def main():
     parser.add_argument("--process-worker", type=Path)
     parser.add_argument("--process-worker-sha256")
     parser.add_argument("--process-modes", nargs="+", default=["normal"])
+    parser.add_argument("--host-probe", type=Path)
+    parser.add_argument("--host-probe-sha256")
     args = parser.parse_args()
-    for path, expected in [(args.xvfb, args.xvfb_sha256), (args.probe, args.probe_sha256)]:
+    if args.host_probe and (not args.gtk or not args.process_worker):
+        parser.error("host qualification requires the explicit private process worker and fixture environment")
+    executables = [(args.xvfb, args.xvfb_sha256), (args.probe, args.probe_sha256)]
+    if args.host_probe:
+        executables.append((args.host_probe, args.host_probe_sha256))
+    for path, expected in executables:
         if not path.is_absolute() or path.is_symlink() or not path.is_file() or digest(path) != expected:
             raise RuntimeError("private fixture executable identity mismatch")
     if not args.output.is_absolute() or args.output.is_symlink():
@@ -94,6 +101,21 @@ def main():
                             command.extend(["--process-worker", str(args.process_worker), "--process-mode", mode,
                                             "--process-worker-sha256", args.process_worker_sha256])
                         subprocess.run(command, env=environment, stdin=subprocess.DEVNULL, timeout=25, check=True)
+                if args.host_probe:
+                    environment.update(MINTCLAW_NATIVE_X11_GUARD_TEST="1", MINTCLAW_NATIVE_X11_LEASE_TEST="1",
+                                       MINTCLAW_PRIVATE_NATIVE_HOST_TEST="1",
+                                       MINTCLAW_PRIVATE_NATIVE_HOST_WORKER=str(args.process_worker),
+                                       MINTCLAW_PRIVATE_NATIVE_HOST_WORKER_SHA256=args.process_worker_sha256)
+                    with (work / "host.log").open("xb") as host_log:
+                        subprocess.run([str(args.host_probe), "-test.run=^TestPrivateNativeKeyboard", "-test.v",
+                                        "-test.count=1", "-test.timeout=30s"], env=environment,
+                                       stdin=subprocess.DEVNULL, stdout=host_log, stderr=subprocess.STDOUT,
+                                       timeout=35, check=True)
+                    host_report = (work / "host.log").read_text()
+                    if (len(re.findall(r"^--- PASS: TestPrivateNativeKeyboard", host_report, re.M)) != 7
+                            or "SKIP" in host_report or "FAIL" in host_report):
+                        raise RuntimeError("original Go host generation cases missing")
+                    print(f"original Go host fixture round {attempt}: seven cases PASS", flush=True)
                 print(f"native-keyboard fixture round {attempt}: ten cases PASS", flush=True)
             finally:
                 server.stdout.close()

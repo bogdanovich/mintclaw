@@ -168,7 +168,7 @@ enum HostReply {
     Complete {
         operation: Operation,
         acknowledged: bool,
-        cancelled: bool,
+        canceled: bool,
         cancellation_delivered: bool,
         cleanup_confirmed: bool,
     },
@@ -714,7 +714,7 @@ fn supervise(mut host: Wire, parent: u32, overall: Instant) -> Result<()> {
             &HostReply::Complete {
                 operation: start.operation,
                 acknowledged: false,
-                cancelled: true,
+                canceled: true,
                 cancellation_delivered: false,
                 cleanup_confirmed: false,
             },
@@ -739,7 +739,7 @@ fn supervise(mut host: Wire, parent: u32, overall: Instant) -> Result<()> {
             &HostReply::Complete {
                 operation,
                 acknowledged: false,
-                cancelled: true,
+                canceled: true,
                 cancellation_delivered: false,
                 cleanup_confirmed: false,
             },
@@ -748,15 +748,15 @@ fn supervise(mut host: Wire, parent: u32, overall: Instant) -> Result<()> {
     }
     let mut keeper = prepared.grant(identity, child.process.id(), timeout(3, overall))?;
     let outcome = active(&mut host, &mut wire, &mut keeper, &start, overall);
-    let cancelled = matches!(outcome, Ok(false));
+    let canceled = matches!(outcome, Ok(false));
     let delivered = child.stop();
     let cleanup_confirmed = keeper.cleanup();
     host.send(
         &HostReply::Complete {
             operation,
             acknowledged: matches!(outcome, Ok(true)),
-            cancelled,
-            cancellation_delivered: cancelled && delivered,
+            canceled,
+            cancellation_delivered: canceled && delivered,
             cleanup_confirmed,
         },
         timeout(3, overall),

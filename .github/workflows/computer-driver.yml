@@ -65,6 +65,32 @@ jobs:
             --output "$RUNNER_TEMP/mintclaw-window-keys" \
             --candidate "${{ matrix.candidate }}"
 
+      - name: Set up pinned Go for the default-disabled original-host join
+        if: ${{ matrix.candidate == 'native-keyboard' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build private original-host qualification, not a production input host
+        if: ${{ matrix.candidate == 'native-keyboard' }}
+        env:
+          CGO_ENABLED: '1'
+          GOMAXPROCS: '2'
+        run: |
+          go test -race -tags=mintclaw_private_native_keyboard ./pkg/computer/desktop \
+            -run '^TestPrivateKeyboard' -count=1 -timeout=30s
+          go test -race -tags=mintclaw_private_native_keyboard -c ./pkg/computer/desktop \
+            -o "$RUNNER_TEMP/mintclaw-window-keys/native-host.test"
+          {
+            echo 'PRIVATE QUALIFICATION ONLY; NOT AN ADMITTED INPUT HOST'
+            git rev-parse HEAD
+            sha256sum go.mod go.sum pkg/computer/desktop/private_keyboard_linux.go \
+              pkg/computer/desktop/private_keyboard_linux_test.go \
+              "$RUNNER_TEMP/mintclaw-window-keys/native-host.test" \
+              "$RUNNER_TEMP/mintclaw-window-keys/build-receipt.txt"
+          } > "$RUNNER_TEMP/mintclaw-window-keys/native-host-receipt.txt"
+
       - name: Qualify only owned native window events, twenty repetitions
         env:
           MINTCLAW_WINDOW_KEYS_NATIVE: '1'
@@ -89,7 +115,9 @@ jobs:
             --output "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-fixture" --gtk \
             --process-worker "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-worker" \
             --process-worker-sha256 "$(sha256sum "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-worker" | cut -d ' ' -f 1)" \
-            --process-modes normal cancel_held blocked_stop crash_held foreign_stop duplicate_permit wire_loss
+            --process-modes normal cancel_held blocked_stop crash_held foreign_stop duplicate_permit wire_loss \
+            --host-probe "$RUNNER_TEMP/mintclaw-window-keys/native-host.test" \
+            --host-probe-sha256 "$(sha256sum "$RUNNER_TEMP/mintclaw-window-keys/native-host.test" | cut -d ' ' -f 1)"
 
       - name: Preserve private probe and build receipt, not an admitted driver
         if: ${{ always() && steps.window_key_probe.outcome == 'success' }}
