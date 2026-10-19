@@ -56,6 +56,13 @@ a missing Gemini `thought_signature`; no filled artifact or final output assessm
 also retained one opaque file. The target-defect triage and credential-copy cleanup are recorded separately from
 the remaining harness/domain qualification; no task was retried or prior result upgraded.
 
+The [empty-fields v1 experiment](../operations/manual-agent-evals-pdf-empty-v1-pilot-20261019.md) on merged #1830
+reported pass for cancellation/no-write, judge, offline regrade and comparison, but passive native inspection found
+three errored file-tool calls and no document invocation. Its frozen pass is preserved; actual empty-PDF recognition
+is **not qualified**. Repair the missing native discovery admission and source-bound inspection/field-use check,
+with no-document negative controls, before claiming the empty case or rerunning a changed contract. No task/prompt
+tuning or historical upgrade is authorized by that coverage gap.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 
