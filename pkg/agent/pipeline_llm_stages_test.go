@@ -487,6 +487,7 @@ func TestBrowserDiagnosticsTaintSurvivesHookDuplicatedRootMarker(t *testing.T) {
 
 func TestLLMNormalizationPersistsProjectionButRetainsLiveTurnArguments(t *testing.T) {
 	secret := "ephemeral-browser-fill-canary"
+	signature := "ephemeral-provider-replay-signature-canary"
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{
 			Content:          "ephemeral-browser-fill-canary",
@@ -498,7 +499,7 @@ func TestLLMNormalizationPersistsProjectionButRetainsLiveTurnArguments(t *testin
 					Arguments: map[string]any{
 						"value": secret,
 					},
-					ThoughtSignature:        secret,
+					ThoughtSignature:        signature,
 					ToolFeedbackExplanation: "explanation repeats " + secret,
 				},
 			},
@@ -510,6 +511,10 @@ func TestLLMNormalizationPersistsProjectionButRetainsLiveTurnArguments(t *testin
 	agent.Tools.Register(durableProjectionTestTool{})
 
 	pipeline := newTestPipeline(al)
+	pipeline.Cfg.Diagnostics.TraceCapture.Enabled = true
+	pipeline.Cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	emitter := &captureRuntimeEmitter{}
+	pipeline.events = emitter
 	contextCapture := &trackingContextManager{}
 	pipeline.Context.Runtime = contextCapture
 	ts := newTurnState(agent, makeTestTurnSpec("projection-session"), turnEventScope{
@@ -536,34 +541,33 @@ func TestLLMNormalizationPersistsProjectionButRetainsLiveTurnArguments(t *testin
 		t.Fatalf("execution value = %#v", got)
 	}
 	liveCall := exec.messages[len(exec.messages)-1].ToolCalls[0]
-	if liveCall.Arguments["value"] != secret {
+	if liveCall.Arguments["value"] != secret || liveCall.ThoughtSignature != signature {
 		t.Fatalf("live tool call = %#v", liveCall)
 	}
 	message := exec.messages[len(exec.messages)-1]
-	if message.Content != "" || message.ReasoningContent != "" || liveCall.ToolFeedbackExplanation != "" ||
-		liveCall.ThoughtSignature != "" {
+	if message.Content != "" || message.ReasoningContent != "" || liveCall.ToolFeedbackExplanation != "" {
 		t.Fatalf("protected sibling response fields were retained: %#v", message)
 	}
 	liveTurn, err := json.Marshal(ts.liveTurnMessagesSnapshot())
-	if err != nil || !bytes.Contains(liveTurn, []byte(secret)) {
+	if err != nil || !bytes.Contains(liveTurn, []byte(secret)) || !bytes.Contains(liveTurn, []byte(signature)) {
 		t.Fatalf("live turn lost protected argument: %s, %v", liveTurn, err)
 	}
 	history, err := json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
-	if err != nil || bytes.Contains(history, []byte(secret)) {
+	if err != nil || bytes.Contains(history, []byte(secret)) || bytes.Contains(history, []byte(signature)) {
 		t.Fatalf("canonical session retained protected value: %s, %v", history, err)
 	}
 	if !bytes.Contains(history, []byte(`"value":"*"`)) {
 		t.Fatalf("canonical session lost durable projection: %s", history)
 	}
 	persisted, err := json.Marshal(ts.persistedMessagesSnapshot())
-	if err != nil || bytes.Contains(persisted, []byte(secret)) {
+	if err != nil || bytes.Contains(persisted, []byte(secret)) || bytes.Contains(persisted, []byte(signature)) {
 		t.Fatalf("turn journal retained protected value: %s, %v", persisted, err)
 	}
 	contextCapture.mu.Lock()
 	ingested := contextCapture.lastIngest
 	contextCapture.mu.Unlock()
 	ingestedJSON, err := json.Marshal(ingested)
-	if err != nil || bytes.Contains(ingestedJSON, []byte(secret)) {
+	if err != nil || bytes.Contains(ingestedJSON, []byte(secret)) || bytes.Contains(ingestedJSON, []byte(signature)) {
 		t.Fatalf("context ingest retained protected value: %s, %v", ingestedJSON, err)
 	}
 
@@ -580,12 +584,26 @@ func TestLLMNormalizationPersistsProjectionButRetainsLiveTurnArguments(t *testin
 		t.Fatalf("provider requests = %d, want 2", len(provider.requests))
 	}
 	secondRequest, err := json.Marshal(provider.requests[1])
-	if err != nil || !bytes.Contains(secondRequest, []byte(secret)) {
+	if err != nil || !bytes.Contains(secondRequest, []byte(secret)) ||
+		!bytes.Contains(secondRequest, []byte(signature)) {
 		t.Fatalf("same-turn follow-up lost protected argument: %s, %v", secondRequest, err)
 	}
 	history, err = json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
-	if err != nil || bytes.Contains(history, []byte(secret)) {
+	if err != nil || bytes.Contains(history, []byte(secret)) || bytes.Contains(history, []byte(signature)) {
 		t.Fatalf("canonical session retained protected value after follow-up: %s, %v", history, err)
+	}
+	previews := 0
+	for _, event := range emitter.events {
+		data, marshalErr := json.Marshal(event.payload)
+		if marshalErr != nil || bytes.Contains(data, []byte(signature)) {
+			t.Fatalf("diagnostic event retained provider replay metadata: kind=%s", event.kind)
+		}
+		if payload, ok := event.payload.(LLMRequestPayload); ok && payload.DiagnosticMessages != "" {
+			previews++
+		}
+	}
+	if previews != 2 {
+		t.Fatalf("redacted request previews = %d, want 2", previews)
 	}
 }
 

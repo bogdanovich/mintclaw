@@ -1073,6 +1073,8 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			// Reusing the durable projection here makes a later tool call see the
 			// placeholder instead of the source it just authored.
 			liveCall.Arguments = cloneStringAnyMap(tc.Arguments)
+			// Provider replay metadata is needed only by this live exchange.
+			liveCall.ThoughtSignature = tc.ThoughtSignature
 		}
 		liveAssistantMsg.ToolCalls = append(liveAssistantMsg.ToolCalls, liveCall)
 	}
