@@ -57,6 +57,12 @@ browser session owns these copies until its worker closes, at which point
 the existing private output-directory cleanup removes them. Input digest,
 size, filename, ownership, permissions, and staging checks remain unchanged.
 
+An observed native file input uses Playwright's direct file assignment, not a
+click followed by an OS file-picker wait. This also works when the page cancels
+the input's click event. Other chooser controls still use the real file-chooser
+event and recheck navigation after activation, before assigning the file. Both
+paths retain the same fresh-target, navigation, staged-file and approval checks.
+
 ## Verification
 
 Run the real Chromium driver regression with the repository's pinned

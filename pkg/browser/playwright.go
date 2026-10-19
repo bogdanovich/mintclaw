@@ -2004,6 +2004,19 @@ func playwrightNavigationCheckedUploadCode(
   if (await uploadTarget.count() !== 1 || !await uploadTarget.isVisible()) {
     return "MINTCLAW_NAV_ACT_V1|stale";
   }
+  const nativeFileInput = await uploadTarget.evaluate(element =>
+    element instanceof HTMLInputElement && element.type === "file");
+  if (nativeFileInput) {
+    const inputNavigationStatus = await navigationStatus();
+    if (inputNavigationStatus !== "ok") {
+      return "MINTCLAW_NAV_ACT_V1|" + inputNavigationStatus;
+    }
+    // File assignment does not require opening an OS picker. A page can
+    // cancel that click, so waiting for its filechooser event can time out
+    // even though the observed input accepts the authorized file normally.
+    await uploadTarget.setInputFiles([` + jsonString(stagedPath) + `]);
+    return "MINTCLAW_NAV_ACT_V1|ok";
+  }
   // Playwright MCP turns this event into a cross-tool modal state. Suppress
   // that listener only for this worker-exclusive transaction so the checked
   // click and file assignment complete in one driver call.
