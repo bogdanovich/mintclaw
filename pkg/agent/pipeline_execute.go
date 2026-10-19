@@ -479,14 +479,14 @@ func attachMediaArtifacts(result *toolshared.ToolResult, store mediaResolver) {
 }
 
 func mergeDeliverableArtifacts(existing, additional []taskresult.Artifact) []taskresult.Artifact {
-	out := append([]taskresult.Artifact(nil), existing...)
+	out := taskresult.CloneArtifacts(existing)
 	byRef := make(map[string]int, len(out))
 	for index, artifact := range out {
 		if ref := strings.TrimSpace(artifact.Ref); ref != "" {
 			byRef[ref] = index
 		}
 	}
-	for _, artifact := range additional {
+	for _, artifact := range taskresult.CloneArtifacts(additional) {
 		ref := strings.TrimSpace(artifact.Ref)
 		if ref == "" {
 			continue
@@ -502,7 +502,7 @@ func mergeDeliverableArtifacts(existing, additional []taskresult.Artifact) []tas
 }
 
 func mergeArtifactHints(target *taskresult.Artifact, source taskresult.Artifact) {
-	if target.LocalPath == "" {
+	if target.LocalPath == "" && target.Recovery == nil && source.Recovery == nil {
 		target.LocalPath = source.LocalPath
 	}
 	if target.Kind == "" || target.Kind == "media" {
@@ -513,6 +513,12 @@ func mergeArtifactHints(target *taskresult.Artifact, source taskresult.Artifact)
 	}
 	if target.ContentType == "" {
 		target.ContentType = source.ContentType
+	}
+	if target.Recovery == nil {
+		target.Recovery = taskresult.CloneArtifactRecovery(source.Recovery)
+	}
+	if target.Recovery != nil {
+		target.LocalPath = ""
 	}
 	target.Delivered = target.Delivered || source.Delivered
 }
@@ -612,6 +618,7 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 	hasContextText bool,
 	hasContextMedia bool,
 	requiresDocumentVision bool,
+	turnScopedInput bool,
 ) {
 	if runner == nil || runner.exec == nil || (!hasContextText && !hasContextMedia) {
 		return
@@ -628,6 +635,7 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 			durableMedia:           append([]string(nil), durable.Media...),
 			durableAttachments:     append([]providers.Attachment(nil), durable.Attachments...),
 			requiresDocumentVision: requiresDocumentVision,
+			turnScopedInput:        turnScopedInput,
 		})
 		return
 	}
@@ -672,13 +680,28 @@ func consumeLiveToolContextMessages(
 }
 
 func (exec *turnExecution) consumeLiveToolContexts(ts *turnState) {
+	exec.retireLiveToolContexts(ts, true)
+}
+
+func (exec *turnExecution) releaseLiveToolContexts(ts *turnState) {
+	exec.retireLiveToolContexts(ts, false)
+}
+
+func (exec *turnExecution) retireLiveToolContexts(ts *turnState, keepTaskInput bool) {
 	if exec == nil || len(exec.liveToolContexts) == 0 {
 		return
 	}
-	projections := append([]liveToolContextProjection(nil), exec.liveToolContexts...)
+	var projections, retained []liveToolContextProjection
+	for _, projection := range exec.liveToolContexts {
+		if keepTaskInput && projection.turnScopedInput {
+			retained = append(retained, projection)
+		} else {
+			projections = append(projections, projection)
+		}
+	}
 	consumeLiveToolContextMessages(exec.messages, projections)
 	ts.consumeLiveToolContexts(projections)
-	exec.liveToolContexts = nil
+	exec.liveToolContexts = retained
 }
 
 func toolResultForModelContext(toolName string, result *toolshared.ToolResult) *toolshared.ToolResult {
@@ -1931,8 +1954,12 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				liveContextText != "",
 				hasLiveContextMedia,
 				hasLiveContextMedia && toolResult.ContextMediaRequiresVision,
+				toolResult.ContextInput != nil,
 			)
 		}
+	}
+	if protectedResult && call.resultSource != toolResultHook {
+		recordDeliverable(exec, retainSuppressedMedia(ts, p.Cfg, toolResult))
 	}
 	if !protectedResult && toolResult.Deliverable != nil {
 		recordDeliverable(exec, toolResult.Deliverable)

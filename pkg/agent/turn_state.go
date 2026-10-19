@@ -198,7 +198,8 @@ type turnExecution struct {
 
 	loopGuard *loopguard.Controller
 
-	// Live-only tool context is exposed to at most one successful model call.
+	// Extracted tool data is exposed to at most one successful model call.
+	// A freshly authorized task input stays live for this turn's tool/model loop.
 	// Its text budget is aggregate across the whole root turn, not per tool
 	// invocation, so repeated extracts cannot grow the prompt without bound.
 	liveToolContextTextBytes int
@@ -221,6 +222,7 @@ type liveToolContextProjection struct {
 	durableMedia           []string
 	durableAttachments     []providers.Attachment
 	requiresDocumentVision bool
+	turnScopedInput        bool
 }
 
 // turnPendingInputs is the single owner of messages accepted for a later

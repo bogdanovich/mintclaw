@@ -69,6 +69,9 @@ func (d *observerDelivery) unsubscribe() bool {
 	}
 	d.mu.Lock()
 	d.unsubscribed = true
+	if d.work == 0 {
+		d.observer = nil
+	}
 	var pending []*queuedObservation
 	if !d.active {
 		d.closed = true
@@ -120,6 +123,9 @@ func (d *observerDelivery) finishWork(n int) {
 	d.work -= n
 	if d.work == 0 && n > 0 {
 		close(d.idle)
+		if d.unsubscribed {
+			d.observer = nil
+		}
 	}
 }
 

@@ -19,7 +19,14 @@ import (
 )
 
 func TestNativeModelsRunGradeAndCompareWithoutRereadingRuntime(t *testing.T) {
-	fixture := newOwnedGatewayFixture(t, "native_models")
+	for _, mode := range []string{"native_models", "native_models_retry"} {
+		t.Run(mode, func(t *testing.T) { testNativeModelsRunGradeAndCompare(t, mode) })
+	}
+}
+
+func testNativeModelsRunGradeAndCompare(t *testing.T, mode string) {
+	t.Helper()
+	fixture := newOwnedGatewayFixture(t, mode)
 	enableTestModelMetadata(t, fixture)
 	item := loadedTestCase(t, "general.native-models")
 	item.Case.Rubric = []Criterion{{ID: "coherent", Description: "Visible replies are coherent.", Required: true}}
@@ -31,9 +38,14 @@ func TestNativeModelsRunGradeAndCompareWithoutRereadingRuntime(t *testing.T) {
 	if source.NativeModels == nil {
 		t.Fatal("run did not retain a native observation", err)
 	}
+	input, output, responses := int64(41408), int64(28), 8
+	if mode == "native_models_retry" {
+		input, output, responses = 400, 16, 4
+	}
 	if !errors.Is(err, ErrNotPassed) || !source.Complete ||
 		source.NativeModels.Code != "observed" || !source.NativeModels.valid(source.Runtime) ||
-		source.NativeModels.Totals.InputTokens != 41408 || source.NativeModels.Totals.OutputTokens != 28 ||
+		source.NativeModels.Totals.InputTokens != input || source.NativeModels.Totals.OutputTokens != output ||
+		source.NativeModels.Totals.Responses != responses ||
 		source.NativeModels.Totals.Requests != 8 || source.NativeModels.AllCalls != "unknown" ||
 		source.TargetUsage.AllCalls != "unknown" {
 		t.Fatal("run did not observe each routed native call independently of final usage", err,
@@ -86,7 +98,21 @@ func TestNativeModelsRunGradeAndCompareWithoutRereadingRuntime(t *testing.T) {
 		!slices.Contains(comparison.EnvironmentUnknowns, "target_all_call_models") {
 		t.Fatal("native drift was hidden or stronger identity/usage was invented", comparison, err)
 	}
-	for _, variant := range []string{"binding", "route", "request", "totals", "source", "all-call", "duplicate", "usage"} {
+	variants := []string{
+		"binding",
+		"route",
+		"request",
+		"totals",
+		"source",
+		"all-call",
+		"duplicate",
+		"usage",
+		"retry-response",
+	}
+	if mode == "native_models_retry" {
+		variants = append(variants, "retry-count")
+	}
+	for _, variant := range variants {
 		t.Run(variant, func(t *testing.T) {
 			data, _ := json.Marshal(source)
 			var changed RunReport
@@ -127,7 +153,11 @@ func TestNativeModelsRunGradeAndCompareWithoutRereadingRuntime(t *testing.T) {
 			case "duplicate":
 				changed.NativeModels.Turns[1].TraceID = changed.NativeModels.Turns[0].TraceID
 			case "usage":
-				changed.NativeModels.Turns[0].Calls[0].Usage.InputTokens = -1
+				changed.NativeModels.Turns[0].Calls[1].Usage.InputTokens = -1
+			case "retry-response":
+				changed.NativeModels.Turns[0].Calls[1].RetryObserved = true
+			case "retry-count":
+				changed.NativeModels.Turns[0].RetryFallbackRecords = 0
 			}
 			writeAdmissionJSON(t, filepath.Join(source.ReportDir, "run.json"), changed)
 			before := calls.Load()
@@ -244,5 +274,43 @@ func TestNativeModelComparisonRetainsKnownRequestResponsePairs(t *testing.T) {
 	compareNativeModels(&comparison, baseline, current)
 	if !slices.Contains(comparison.EnvironmentChanges, "native_requested_or_response_models") {
 		t.Fatal("known request-response pair changes disappeared", comparison)
+	}
+}
+
+func TestNativeModelComparisonPreservesUnknownProviders(t *testing.T) {
+	for _, field := range []string{"request", "response"} {
+		for _, change := range []string{"none", "model", "provider"} {
+			t.Run(field+"/"+change, func(t *testing.T) {
+				baseline := nativeModelComparisonReport(t, "completed")
+				current := nativeModelComparisonReport(t, "completed")
+				a := &baseline.NativeModels.Turns[0].Calls[1]
+				b := &current.NativeModels.Turns[0].Calls[1]
+				if field == "request" {
+					a.RequestProvider = ""
+					switch change {
+					case "model":
+						b.RequestModel = "changed-model"
+					case "provider":
+						b.RequestProvider = "anthropic"
+					}
+				} else {
+					a.ResponseProvider = ""
+					switch change {
+					case "model":
+						b.ResponseModel = "changed-model"
+					case "provider":
+						b.ResponseProvider = "anthropic"
+					}
+				}
+				comparison := Comparison{}
+				compareNativeModels(&comparison, baseline, current)
+				changed := slices.Contains(comparison.EnvironmentChanges, "native_requested_or_response_models")
+				if changed != (change == "model") ||
+					!slices.Contains(comparison.EnvironmentUnknowns, "baseline_native_"+field+"_providers") ||
+					slices.Contains(comparison.EnvironmentUnknowns, "baseline_native_response_models") {
+					t.Fatal("provider absence was invented as identity or hid known model drift", comparison)
+				}
+			})
+		}
 	}
 }

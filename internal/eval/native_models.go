@@ -40,6 +40,7 @@ type NativeModelCall struct {
 	ResponseSHA256   string            `json:"response_sha256,omitempty"`
 	UsageState       string            `json:"usage_state"`
 	Usage            *NativeModelUsage `json:"usage,omitempty"`
+	RetryObserved    bool              `json:"retry_observed,omitempty"`
 }
 
 type NativeModelTurn struct {
@@ -168,19 +169,27 @@ func (observation *NativeModelObservation) valid(runtime health.RuntimeProbe) bo
 			return false
 		}
 		traces[turn.TraceID], traces[turn.TraceSHA256] = true, true
-		attempts := map[string]bool{}
+		attempts, retries := map[string]bool{}, 0
 		for _, call := range turn.Calls {
 			if !call.valid() || attempts[call.AttemptID] {
 				return false
 			}
 			attempts[call.AttemptID] = true
+			if call.RetryObserved {
+				retries++
+			}
+		}
+		if retries > turn.RetryFallbackRecords {
+			return false
 		}
 	}
 	return (observation.Code == "partial") == partial
 }
 
 func (call NativeModelCall) valid() bool {
-	if !validID(call.AttemptID) || !boundedText(call.RequestProvider, 128) || !boundedText(call.RequestModel, 256) {
+	if !validID(call.AttemptID) ||
+		call.RequestProvider != "" && !boundedText(call.RequestProvider, 128) || !boundedText(call.RequestModel, 256) ||
+		call.RetryObserved && call.UsageState != "not_returned" {
 		return false
 	}
 	for _, value := range []string{

@@ -17,11 +17,15 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type taskScopeInboundProvider struct {
 	simpleConvProvider
-	sawOriginalFile atomic.Bool
+	sawOriginalFile        atomic.Bool
+	requireAcrossDiscovery bool
+	discoveryRequested     atomic.Bool
+	inputAfterDiscovery    atomic.Bool
 }
 
 func (provider *taskScopeInboundProvider) Chat(
@@ -48,7 +52,32 @@ func (provider *taskScopeInboundProvider) Chat(
 		}
 		break
 	}
+	if provider.requireAcrossDiscovery {
+		present := false
+		for _, message := range messages {
+			present = present || strings.Contains(message.Content,
+				"Start a new task with the second file; preserve the draft.")
+		}
+		if !present {
+			return nil, errors.New("authorized task purpose disappeared after tool discovery")
+		}
+		if !provider.discoveryRequested.Swap(true) {
+			return &providers.LLMResponse{FinishReason: "tool_calls", ToolCalls: []providers.ToolCall{{
+				ID: "discover-reader", Name: "task_scope_discovery_probe", Arguments: map[string]any{},
+			}}}, nil
+		}
+		provider.inputAfterDiscovery.Store(true)
+	}
 	return provider.simpleConvProvider.Chat(ctx, messages, definitions, model, options)
+}
+
+type taskScopeDiscoveryProbe struct{}
+
+func (taskScopeDiscoveryProbe) Name() string               { return "task_scope_discovery_probe" }
+func (taskScopeDiscoveryProbe) Description() string        { return "Harmless intermediate reader discovery" }
+func (taskScopeDiscoveryProbe) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (taskScopeDiscoveryProbe) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	return &toolshared.ToolResult{ForLLM: "Reader discovery completed; continue the same newly authorized task."}
 }
 
 type taskScopeInboundInterpreter struct{ documentFormAuditor }
@@ -386,5 +415,25 @@ func TestDocumentTaskScopeBareAnswerKeepsOriginalFileAndDoesNotBecomeANewRoot(t 
 	grant, err := f.store.GrantFormTaskHandoff(t.Context(), view.Reference, f.owner)
 	if err != nil || !grant.Reused || grant.Text != "" || len(grant.Media) != 0 {
 		t.Fatal("replay released the authorized request again")
+	}
+}
+
+func TestDocumentTaskScopeAuthorizedPurposeSurvivesIntermediateDiscovery(t *testing.T) {
+	f := newTaskScopeInboundFixture(t)
+	f.model.requireAcrossDiscovery = true
+	f.agent.Tools.Register(taskScopeDiscoveryProbe{})
+	coordinator := newInboundTurnCoordinator(f.loop)
+	coordinator.handleInbound(t.Context(), f.msg)
+	coordinator.wait()
+	f.wait(t)
+	if !f.model.discoveryRequested.Load() || !f.model.inputAfterDiscovery.Load() {
+		t.Fatal("the native task grant lost its purpose between model/tool iterations")
+	}
+	for _, key := range f.agent.Sessions.ListSessions() {
+		for _, message := range f.agent.Sessions.GetHistory(key) {
+			if strings.Contains(message.Content, f.msg.Content) {
+				t.Fatal("live-only protected selection was persisted as ordinary history")
+			}
+		}
 	}
 }

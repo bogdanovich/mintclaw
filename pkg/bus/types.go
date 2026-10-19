@@ -263,38 +263,24 @@ const (
 
 // OutboundRecovery is a bounded, model-private prerequisite that must be
 // restored before a durable media intent is republished after restart.
-type OutboundRecovery struct {
-	Kind              string `json:"kind"`
-	ArtifactRef       string `json:"artifact_ref"`
-	MediaRef          string `json:"media_ref"`
-	WorkspaceID       string `json:"workspace_id"`
-	AgentID           string `json:"agent_id"`
-	ActorID           string `json:"actor_id"`
-	RouteID           string `json:"route_id"`
-	SessionID         string `json:"session_id"`
-	ToolCallID        string `json:"tool_call_id"`
-	AuthorityKind     string `json:"authority_kind,omitempty"`
-	OperationID       string `json:"operation_id,omitempty"`
-	DomainDeliveryID  string `json:"domain_delivery_id,omitempty"`
-	DomainJobID       string `json:"domain_job_id,omitempty"`
-	DomainOwnerDigest string `json:"domain_owner_digest,omitempty"`
-}
+type OutboundRecovery = taskresult.ArtifactRecovery
 
 // OutboundMediaMessage carries media attachments from Agent to channels via the bus.
 type OutboundMediaMessage struct {
-	DeliveryID      string                        `json:"delivery_id,omitempty"`
-	Channel         string                        `json:"channel"`
-	ChatID          string                        `json:"chat_id"`
-	Context         InboundContext                `json:"context"`
-	Metadata        OutboundMetadata              `json:"metadata,omitzero"`
-	AgentID         string                        `json:"agent_id,omitempty"`
-	SessionKey      string                        `json:"session_key,omitempty"`
-	TraceScopes     []runtimeevents.TraceScope    `json:"trace_scopes,omitempty"`
-	TraceSettlement bool                          `json:"trace_settlement,omitempty"`
-	Scope           *OutboundScope                `json:"scope,omitempty"`
-	Transcript      *OutboundTranscriptProjection `json:"transcript,omitempty"`
-	Parts           []MediaPart                   `json:"parts"`
-	Recovery        *OutboundRecovery             `json:"recovery,omitempty"`
+	DeliveryID         string                        `json:"delivery_id,omitempty"`
+	Channel            string                        `json:"channel"`
+	ChatID             string                        `json:"chat_id"`
+	Context            InboundContext                `json:"context"`
+	Metadata           OutboundMetadata              `json:"metadata,omitzero"`
+	AgentID            string                        `json:"agent_id,omitempty"`
+	SessionKey         string                        `json:"session_key,omitempty"`
+	TraceScopes        []runtimeevents.TraceScope    `json:"trace_scopes,omitempty"`
+	TraceSettlement    bool                          `json:"trace_settlement,omitempty"`
+	Scope              *OutboundScope                `json:"scope,omitempty"`
+	Transcript         *OutboundTranscriptProjection `json:"transcript,omitempty"`
+	Parts              []MediaPart                   `json:"parts"`
+	Recovery           *OutboundRecovery             `json:"recovery,omitempty"`
+	AdditionalRecovery []OutboundRecovery            `json:"additional_recovery,omitempty"`
 }
 
 // AudioChunk represents a chunk of streaming voice data.

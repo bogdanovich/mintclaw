@@ -105,6 +105,7 @@ func TestSubscriptionClosePreservesAdmittedActiveDeliveries(t *testing.T) {
 	if registry.Stats().PendingObservations != 0 {
 		t.Fatal("settled callback leaked budget")
 	}
+	assertObserverReleased(t, subscription)
 }
 
 func TestSubscriptionCloseGatedRequiresSnapshotWithoutReplaying(t *testing.T) {
@@ -328,5 +329,37 @@ func TestSubscriptionCloseFromCallbackReportsItsOwnPendingWork(t *testing.T) {
 	}
 	if err := subscription.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSubscriptionReleasesIdleObserverWithoutRegistryCompaction(t *testing.T) {
+	for _, gated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("gated-%t", gated), func(t *testing.T) {
+			registry := NewRegistry("")
+			var subscription *Subscription
+			var err error
+			if gated {
+				_, subscription, err = registry.SubscribeSnapshotWithHandle(func(EventObservation) {})
+			} else {
+				subscription, err = registry.SubscribeWithHandle(func(EventObservation) {})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			subscription.Unsubscribe()
+			assertObserverReleased(t, subscription)
+		})
+	}
+}
+
+// Retired registry entries await compaction, so settlement must release the
+// callback capture independently of a future registry operation.
+func assertObserverReleased(t *testing.T, subscription *Subscription) {
+	t.Helper()
+	subscription.delivery.mu.Lock()
+	retained := subscription.delivery.observer != nil
+	subscription.delivery.mu.Unlock()
+	if retained {
+		t.Fatal("settled subscription retained its observer closure")
 	}
 }
