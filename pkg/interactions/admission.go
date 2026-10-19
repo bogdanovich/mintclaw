@@ -44,6 +44,9 @@ func retryStoreLock(ctx context.Context, try func() (bool, error)) error {
 // file lock before mu, so a live external holder cannot block reads, observer
 // removal, or other writers' independent admission deadlines.
 func (r *Registry) lockAndReload(ctx context.Context) (func(), error) {
+	if r.closed.Load() {
+		return nil, ErrStoreClosed
+	}
 	ctx, cancel := context.WithTimeout(ctx, r.options.StoreLockTimeout)
 	defer cancel()
 	release := func() {}
@@ -60,6 +63,11 @@ func (r *Registry) lockAndReload(ctx context.Context) (func(), error) {
 	if err := retryStoreLock(ctx, func() (bool, error) { return r.mu.TryLock(), nil }); err != nil {
 		release()
 		return nil, err
+	}
+	if r.closed.Load() {
+		r.mu.Unlock()
+		release()
+		return nil, ErrStoreClosed
 	}
 	if r.loadErr != nil && !errors.Is(r.loadErr, ErrStoreBusy) {
 		err := fmt.Errorf("%w: %w", ErrStoreUnavailable, r.loadErr)

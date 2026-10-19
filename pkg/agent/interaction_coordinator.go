@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 // resume flights, and recovery admission remain stable for the loop lifetime.
 type interactionCoordinator struct {
 	registries      sync.Map
+	closing         atomic.Bool
 	resolutions     sync.Map
 	resumeFlights   sync.Map
 	catalog         *interactions.WorkspaceCatalog
@@ -81,7 +84,7 @@ func (c *interactionCoordinator) configure(
 }
 
 func (c *interactionCoordinator) registryForWorkspace(workspace string) *interactions.Registry {
-	if c == nil {
+	if c == nil || c.closing.Load() {
 		return nil
 	}
 	workspace = normalizeRuntimeWorkspace(workspace)
@@ -107,6 +110,10 @@ func (c *interactionCoordinator) registryForWorkspace(workspace string) *interac
 	stored, _ := actual.(*interactions.Registry)
 	if stored == nil {
 		stored = registry
+	}
+	if c.closing.Load() {
+		_ = stored.Close()
+		return nil
 	}
 	if !loaded {
 		if c.observe != nil {
@@ -187,4 +194,25 @@ func (c *interactionCoordinator) activeTaskIDs(workspace string) (map[string]str
 		return nil, fmt.Errorf("load interaction registry: %w", err)
 	}
 	return registry.NonterminalTaskIDs(), nil
+}
+
+// closeRegistries seals registry creation before retiring observer owners. All
+// workspaces share one deadline, including registries with detached callbacks.
+func (c *interactionCoordinator) closeRegistries(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, interactions.DefaultObserverShutdownTimeout)
+	defer cancel()
+	c.closing.Store(true)
+	var failures []error
+	c.registries.Range(func(_, value any) bool {
+		if registry, ok := value.(*interactions.Registry); ok && registry != nil {
+			if err := registry.CloseContext(ctx); err != nil {
+				failures = append(failures, err)
+			}
+		}
+		return true
+	})
+	return errors.Join(failures...)
 }

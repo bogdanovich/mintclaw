@@ -261,6 +261,7 @@ func (r *Registry) ClaimOverdue(now time.Time) ([]Record, error) {
 	before := make(map[string]Record)
 	claimed := make([]Record, 0)
 	batch := r.newNotificationBatchLocked()
+	defer batch.releaseAdmissions()
 	for id, rec := range r.records {
 		if (rec.Status != StatusCreated && rec.Status != StatusWaiting) ||
 			rec.ExpiresAt <= 0 || rec.ExpiresAt > nowMillis {

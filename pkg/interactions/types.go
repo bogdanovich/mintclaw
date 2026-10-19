@@ -69,6 +69,7 @@ const (
 const (
 	SnapshotSchemaVersion             = "interaction_snapshot.v1"
 	EventSchemaVersion                = "interaction_event.v1"
+	DefaultObserverShutdownTimeout    = time.Second
 	DefaultStoreLockTimeout           = time.Second
 	DefaultMaxPendingObservations     = 256
 	DefaultMaxPendingObservationBytes = 4 * 1024 * 1024
@@ -107,6 +108,9 @@ var (
 )
 
 var (
+	ErrStoreClosed               = errors.New("interaction store closed")
+	ErrObserverPending           = errors.New("interaction observer work still pending")
+	ErrObserverResyncRequired    = errors.New("interaction observer resynchronization required")
 	ErrObserverPayloadOverBudget = errors.New("interaction observation payload over budget")
 	ErrObserverBacklog           = errors.New("interaction observer backlog full")
 	ErrStoreBusy                 = errors.New("interaction store busy")

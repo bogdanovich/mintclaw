@@ -1,14 +1,21 @@
 package interactions
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 type observerDelivery struct {
-	mu        sync.Mutex
-	observer  Observer
-	active    bool
-	closed    bool
-	notifying bool
-	pending   []*queuedObservation
+	mu             sync.Mutex
+	observer       Observer
+	active         bool
+	closed         bool
+	notifying      bool
+	pending        []*queuedObservation
+	unsubscribed   bool
+	resyncRequired bool
+	work           int
+	idle           chan struct{}
 }
 
 func newObserverDelivery(observer Observer, active bool) *observerDelivery {
@@ -22,7 +29,7 @@ func (d *observerDelivery) enqueue(observation *queuedObservation) {
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
-		observation.done()
+		d.finishObservation(observation)
 		return
 	}
 	d.pending = append(d.pending, observation)
@@ -56,22 +63,92 @@ func (d *observerDelivery) activate() {
 	}
 }
 
-func (d *observerDelivery) unsubscribe() {
+func (d *observerDelivery) unsubscribe() bool {
 	if d == nil {
-		return
+		return false
 	}
 	d.mu.Lock()
-	if d.active {
-		d.mu.Unlock()
-		return
+	d.unsubscribed = true
+	var pending []*queuedObservation
+	if !d.active {
+		d.closed = true
+		d.resyncRequired = d.resyncRequired || d.work > 0
+		pending = d.pending
+		d.pending = nil
+		d.notifying = false
 	}
-	d.closed = true
-	for _, observation := range d.pending {
-		observation.done()
-	}
-	d.pending = nil
-	d.notifying = false
+	resync := d.resyncRequired
 	d.mu.Unlock()
+	for _, observation := range pending {
+		d.finishObservation(observation)
+	}
+	return resync
+}
+
+func (d *observerDelivery) subscribed() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return !d.unsubscribed
+}
+
+func (d *observerDelivery) beginAdmission() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.unsubscribed {
+		return false
+	}
+	d.addWorkLocked(1)
+	return true
+}
+
+func (d *observerDelivery) addWork(n int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.addWorkLocked(n)
+}
+
+func (d *observerDelivery) addWorkLocked(n int) {
+	if d.work == 0 && n > 0 {
+		d.idle = make(chan struct{})
+	}
+	d.work += n
+}
+
+func (d *observerDelivery) finishWork(n int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.work -= n
+	if d.work == 0 && n > 0 {
+		close(d.idle)
+	}
+}
+
+func (d *observerDelivery) finishObservation(observation *queuedObservation) {
+	observation.done()
+	d.finishWork(1)
+}
+
+func (d *observerDelivery) wait(ctx context.Context) (int, bool, error) {
+	d.mu.Lock()
+	if d.work == 0 {
+		resync := d.resyncRequired
+		d.mu.Unlock()
+		return 0, resync, nil
+	}
+	idle := d.idle
+	d.mu.Unlock()
+	var err error
+	select {
+	case <-idle:
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.work == 0 {
+		err = nil
+	}
+	return d.work, d.resyncRequired, err
 }
 
 func (d *observerDelivery) drain() {
@@ -87,7 +164,7 @@ func (d *observerDelivery) drain() {
 				Record: cloneRecord(observation.observation.Record),
 			},
 		)
-		observation.done()
+		d.finishObservation(observation)
 	}
 }
 
