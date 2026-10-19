@@ -163,6 +163,8 @@ func (dispatch InvocationDispatch) Validate() error {
 	}
 	maximum := 0
 	switch dispatch.Plan.Command {
+	case ComputerCommandAct:
+		maximum = MaxComputerEphemeralInputBytes
 	case BrowserCommandAct:
 		maximum = MaxBrowserEphemeralInputBytes
 	case BrowserCommandExecute:

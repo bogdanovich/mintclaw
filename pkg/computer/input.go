@@ -2,6 +2,7 @@ package computer
 
 import (
 	"bytes"
+	"math"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -40,6 +41,11 @@ func (point *InputPoint) valid(geometry Geometry) bool {
 	return err == nil
 }
 
+func (point *InputPoint) validShape() bool {
+	return point != nil && point.X >= 0 && point.Y >= 0 &&
+		!math.IsInf(point.X, 0) && !math.IsInf(point.Y, 0) && !math.IsNaN(point.X) && !math.IsNaN(point.Y)
+}
+
 // InputSelector uses exactly one pixel point or opaque host-issued reference
 // from this observation. An element reference is never a label, native path or
 // model-supplied vendor token. The host must resolve it from its own evidence.
@@ -53,6 +59,13 @@ func (selector InputSelector) valid(geometry Geometry) bool {
 		return selector.Point == nil && validIdentifier(selector.ElementRef)
 	}
 	return selector.Point.valid(geometry)
+}
+
+func (selector InputSelector) validShape() bool {
+	if selector.ElementRef != "" {
+		return selector.Point == nil && validIdentifier(selector.ElementRef)
+	}
+	return selector.Point.validShape()
 }
 
 type InputClickSpec struct {
@@ -141,10 +154,9 @@ type InputAction struct {
 	Drag   *InputDragSpec   `json:"drag,omitempty"`
 }
 
-func (action InputAction) Validate(geometry Geometry) error {
-	if geometry.Validate() != nil {
-		return ErrInvalid
-	}
+// ValidateShape checks wire structure without pretending that caller-authored
+// geometry or a vendor element token establishes native targeting authority.
+func (action InputAction) ValidateShape() error {
 	arms := 0
 	for _, present := range []bool{
 		action.Click != nil, action.Text != nil, action.Key != nil, action.Scroll != nil, action.Drag != nil,
@@ -159,24 +171,45 @@ func (action InputAction) Validate(geometry Geometry) error {
 	valid := false
 	switch action.Kind {
 	case InputClick:
-		valid = action.Click != nil && action.Click.Target.valid(geometry) &&
+		valid = action.Click != nil && action.Click.Target.validShape() &&
 			validInputButton(action.Click.Button) && action.Click.Count >= 1 && action.Click.Count <= 2
 	case InputInsertText, InputReplaceText:
 		valid = action.Text != nil && validIdentifier(action.Text.ElementRef)
 	case InputKey:
 		valid = action.Key != nil && action.Key.valid()
 	case InputScroll:
-		valid = action.Scroll != nil && action.Scroll.Point.valid(geometry) &&
+		valid = action.Scroll != nil && action.Scroll.Point.validShape() &&
 			(action.Scroll.DeltaX != 0 || action.Scroll.DeltaY != 0) &&
 			action.Scroll.DeltaX >= -MaxInputScrollPixels && action.Scroll.DeltaX <= MaxInputScrollPixels &&
 			action.Scroll.DeltaY >= -MaxInputScrollPixels && action.Scroll.DeltaY <= MaxInputScrollPixels
 	case InputDrag:
-		valid = action.Drag != nil && action.Drag.From.valid(geometry) && action.Drag.To.valid(geometry) &&
+		valid = action.Drag != nil && action.Drag.From.validShape() && action.Drag.To.validShape() &&
 			*action.Drag.From != *action.Drag.To && validInputButton(action.Drag.Button) &&
 			action.Drag.DurationMS >= 1 && action.Drag.DurationMS <= MaxInputGestureMillis
 	}
 	if !valid {
 		return ErrInvalid
+	}
+	return nil
+}
+
+func (action InputAction) Validate(geometry Geometry) error {
+	if geometry.Validate() != nil || action.ValidateShape() != nil {
+		return ErrInvalid
+	}
+	switch action.Kind {
+	case InputClick:
+		if !action.Click.Target.valid(geometry) {
+			return ErrInvalid
+		}
+	case InputScroll:
+		if !action.Scroll.Point.valid(geometry) {
+			return ErrInvalid
+		}
+	case InputDrag:
+		if !action.Drag.From.valid(geometry) || !action.Drag.To.valid(geometry) {
+			return ErrInvalid
+		}
 	}
 	return nil
 }
@@ -225,9 +258,40 @@ type InputRequest struct {
 func (request InputRequest) String() string   { return "computer input (protected payload omitted)" }
 func (request InputRequest) GoString() string { return request.String() }
 
-func (request InputRequest) Validate(session Session, evidence InputEvidence, now time.Time) error {
+// ValidateMetadata checks identifiers and action shape only. It neither admits
+// the principal nor replaces the host's stored evidence, geometry or generation.
+func (request InputRequest) ValidateMetadata() error {
 	if !validIdentifier(request.ID) || request.Binding.Validate() != nil || !validIdentifier(request.ObservationID) {
 		return ErrInvalid
+	}
+	return request.Action.ValidateShape()
+}
+
+// ValidateEnvelope additionally checks the separately protected text bytes.
+// A transport commitment is not evidence freshness, local policy or execution.
+func (request InputRequest) ValidateEnvelope() error {
+	if err := request.ValidateMetadata(); err != nil {
+		return err
+	}
+	return request.validateText()
+}
+
+func (request InputRequest) validateText() error {
+	textAction := request.Action.Kind == InputInsertText || request.Action.Kind == InputReplaceText
+	if textAction {
+		if request.Text == nil || len(request.Text) > MaxInputTextBytes || !utf8.Valid(request.Text) ||
+			bytes.IndexByte(request.Text, 0) >= 0 || request.Action.Kind == InputInsertText && len(request.Text) == 0 {
+			return ErrInvalid
+		}
+	} else if request.Text != nil {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func (request InputRequest) Validate(session Session, evidence InputEvidence, now time.Time) error {
+	if err := request.ValidateMetadata(); err != nil {
+		return err
 	}
 	if err := evidence.Validate(session, now); err != nil {
 		return err
@@ -238,14 +302,8 @@ func (request InputRequest) Validate(session Session, evidence InputEvidence, no
 	if err := request.Action.Validate(evidence.Geometry); err != nil {
 		return err
 	}
-	textAction := request.Action.Kind == InputInsertText || request.Action.Kind == InputReplaceText
-	if textAction {
-		if request.Text == nil || len(request.Text) > MaxInputTextBytes || !utf8.Valid(request.Text) ||
-			bytes.IndexByte(request.Text, 0) >= 0 || request.Action.Kind == InputInsertText && len(request.Text) == 0 {
-			return ErrInvalid
-		}
-	} else if request.Text != nil {
-		return ErrInvalid
+	if err := request.validateText(); err != nil {
+		return err
 	}
 	if drag := request.Action.Drag; drag != nil &&
 		!now.Add(time.Duration(drag.DurationMS)*time.Millisecond).Before(evidence.ExpiresAt) {
