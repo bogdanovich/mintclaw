@@ -38,10 +38,12 @@ func TestObjectiveRepairIncludesRejectedSuccessfulPresentation(t *testing.T) {
 			require.Empty(t, outcome.UserSummary)
 			require.Len(t, outcome.CompletedItems[1].Receipts, 3)
 
-			instruction, repair := objectiveOutcomeRepairInstruction(content, audits, checklist)
-			require.True(t, repair, "successful execution must not skip a rejected final answer")
-			require.Contains(t, instruction, "user-facing answer did not preserve the verified objective outputs")
-			require.Contains(t, instruction, "Preserve completed_items, receipt_ids, and output values unchanged")
+			_, canonicalRepair := objectiveOutcomeRepairInstruction(content, audits, checklist)
+			require.False(t, canonicalRepair, "presentation cannot replace a verified outcome")
+			repair := newVerifiedPresentationRepair(terminalContent{content: content}, audits, nil, checklist)
+			require.NotNil(t, repair, "successful execution must not skip a rejected final answer")
+			instruction := repair.instruction()
+			require.Contains(t, instruction, "Return only one complete natural-language answer")
 			require.Contains(t, instruction, "requested language and response format")
 			require.Contains(t, instruction, "model-only repair pass")
 			require.Contains(t, instruction, "do not call any tool")
@@ -52,8 +54,10 @@ func TestObjectiveRepairIncludesRejectedSuccessfulPresentation(t *testing.T) {
 
 func TestObjectivePresentationRepairLeavesExactJSONAndValidAnswersAlone(t *testing.T) {
 	reported, audits, checklist := artifactObjectiveFixture()
-	instruction, repair := objectiveOutcomeRepairInstruction(encodePresentationReport(t, reported), audits, checklist)
+	content := encodePresentationReport(t, reported)
+	instruction, repair := objectiveOutcomeRepairInstruction(content, audits, checklist)
 	require.False(t, repair, instruction)
+	require.Nil(t, newVerifiedPresentationRepair(terminalContent{content: content}, audits, nil, checklist))
 
 	checklist = normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
 		Item: "Return exact JSON", Kind: "result",
@@ -65,8 +69,10 @@ func TestObjectivePresentationRepairLeavesExactJSONAndValidAnswersAlone(t *testi
 			ObjectiveID: "objective_1", Output: &taskresult.ObjectiveOutput{Kind: "text", Text: `{"ok":true}`},
 		}},
 	}
-	instruction, repair = objectiveOutcomeRepairInstruction(encodePresentationReport(t, reported), nil, checklist)
+	content = encodePresentationReport(t, reported)
+	instruction, repair = objectiveOutcomeRepairInstruction(content, nil, checklist)
 	require.False(t, repair, instruction)
+	require.Nil(t, newVerifiedPresentationRepair(terminalContent{content: content}, nil, nil, checklist))
 }
 
 type presentationCloseTool struct{ calls atomic.Int32 }
@@ -83,13 +89,17 @@ func (tool *presentationCloseTool) Execute(context.Context, map[string]any) *too
 }
 
 func TestSpawnSubTurnRepairsPresentationAfterAcquisitionAndClosureWithoutReplay(t *testing.T) {
+	mixed, _, _ := artifactObjectiveFixture()
+	mixed.CompletedItems[1].Output.Text = "Original files obtained."
 	for _, test := range []struct {
-		name      string
-		corrected bool
-		toolCall  bool
-		raw       *string
-		change    bool
-		failure   bool
+		name            string
+		corrected       bool
+		toolCall        bool
+		raw             *string
+		change          bool
+		failure         bool
+		canonicalRepair bool
+		initial         string
 	}{
 		{name: "complete answer", corrected: true},
 		{name: "bounded fallback"},
@@ -100,10 +110,27 @@ func TestSpawnSubTurnRepairsPresentationAfterAcquisitionAndClosureWithoutReplay(
 		{name: "serialized tool projection", raw: new(`[tool_use: browser_act, args: {"photo":1}]`)},
 		{name: "changed verified output", change: true},
 		{name: "transient provider failure", failure: true},
+		{
+			name: "missing report then presentation", canonicalRepair: true,
+			initial: "Three originals obtained. Browser closed.", corrected: true,
+		},
+		{
+			name: "malformed report then presentation", canonicalRepair: true,
+			initial: "<task_outcome>{invalid}</task_outcome>", corrected: true,
+		},
+		{name: "canonical repair then bounded fallback", canonicalRepair: true, initial: "Browser work finished."},
+		{
+			name: "canonical repair then provider failure", canonicalRepair: true,
+			initial: "Browser work finished.", failure: true,
+		},
+		{
+			name: "invalid output then presentation", canonicalRepair: true,
+			initial: encodePresentationReport(t, mixed), corrected: true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			reported, _, _ := artifactObjectiveFixture()
-			complete := encodePresentationReport(t, reported)
+			complete := reported.Result
 			reported.Result = "Three originals were obtained, and the session is closed. END-OF-REPORT"
 			incomplete := encodePresentationReport(t, reported)
 			repairResponse := &providers.LLMResponse{Content: incomplete, FinishReason: "stop"}
@@ -141,8 +168,17 @@ func TestSpawnSubTurnRepairsPresentationAfterAcquisitionAndClosureWithoutReplay(
 				{Content: incomplete, FinishReason: "stop"},
 				repairResponse,
 			}}
+			if test.canonicalRepair {
+				provider.responses[2] = &providers.LLMResponse{Content: test.initial, FinishReason: "stop"}
+				provider.responses = append(provider.responses[:3],
+					&providers.LLMResponse{Content: incomplete, FinishReason: "stop"}, repairResponse)
+			}
+			callsBeforePresentation := 3
+			if test.canonicalRepair {
+				callsBeforePresentation++
+			}
 			if test.failure {
-				provider.responses = provider.responses[:3]
+				provider.responses = provider.responses[:callsBeforePresentation]
 				provider.failure = errors.New("connection reset by peer")
 			}
 			al, cleanup := newMultiAgentLoop(t, provider)
@@ -178,12 +214,26 @@ func TestSpawnSubTurnRepairsPresentationAfterAcquisitionAndClosureWithoutReplay(
 			require.Equal(t, int32(1), closure.calls.Load())
 			counts := provider.toolDefinitionCounts()
 			if test.failure {
-				require.GreaterOrEqual(t, len(counts), 4, "provider retry stays within the existing retry policy")
+				require.GreaterOrEqual(
+					t,
+					len(counts),
+					callsBeforePresentation+1,
+					"provider retry stays within the existing retry policy",
+				)
 			} else {
-				require.Len(t, counts, 4, "one bounded presentation repair, not a retry loop")
+				require.Len(t, counts, callsBeforePresentation+1, "each correction phase is bounded independently")
 			}
 			for _, count := range counts[3:] {
 				require.Zero(t, count, "repair and transport retries expose no tools")
+			}
+			presentationMessages := provider.messagesForCall(callsBeforePresentation)
+			require.NotEmpty(t, presentationMessages)
+			instruction := presentationMessages[len(presentationMessages)-1].Content
+			require.Contains(t, instruction, "Return only one complete natural-language answer")
+			require.Contains(t, instruction, "Do not return a task_outcome block")
+			if test.canonicalRepair {
+				canonicalMessages := provider.messagesForCall(3)
+				require.Contains(t, canonicalMessages[len(canonicalMessages)-1].Content, "Finalization repair required")
 			}
 			if test.corrected {
 				require.Equal(t, result.ForUser, result.Deliverable.Text)
@@ -206,7 +256,7 @@ func TestVerifiedPresentationRepairKeepsCanonicalProofAndProtection(t *testing.T
 	for _, change := range []string{"none", "artifact", "receipt", "missing item", "reordered items"} {
 		t.Run(change, func(t *testing.T) {
 			reported, audits, checklist := artifactObjectiveFixture()
-			candidate := encodePresentationReport(t, reported)
+			candidate := reported.Result
 			reported.Result = "The originals are ready."
 			original := terminalContent{content: encodePresentationReport(t, reported), protected: true}
 			repair := newVerifiedPresentationRepair(original, audits, nil, checklist)
@@ -226,9 +276,12 @@ func TestVerifiedPresentationRepairKeepsCanonicalProofAndProtection(t *testing.T
 			if change != "none" {
 				candidate = encodePresentationReport(t, proposed)
 			}
-			got := repair.accept(terminalContent{content: candidate}, audits, nil, checklist)
+			got := repair.accept(terminalContent{content: candidate})
 			if change == "none" {
-				require.Equal(t, candidate, got.content)
+				_, accepted := extractObjectiveOutcome(got.content, audits, true, checklist)
+				require.Equal(t, candidate, accepted.UserSummary)
+				accepted.UserSummary = ""
+				require.Equal(t, before, accepted, "presentation can replace only the natural answer")
 				require.True(t, got.protected, "presentation cannot downgrade protected evidence")
 			} else {
 				require.Equal(t, original, got)
@@ -247,7 +300,7 @@ func TestPresentationRepairDoesNotFreezeLaterUserSteering(t *testing.T) {
 	}
 	initial := encodePresentationReport(t, report)
 	report.Result = "Original result."
-	corrected := encodePresentationReport(t, report)
+	corrected := report.Result
 	report.CompletedItems[0].Output.Text, report.Result = "New user-requested result.", "New user-requested result."
 	updated := encodePresentationReport(t, report)
 	provider := &objectiveRepairCaptureProvider{responses: []*providers.LLMResponse{

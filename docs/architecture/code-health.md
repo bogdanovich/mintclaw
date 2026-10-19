@@ -113,5 +113,7 @@ or abstraction target.
 
 The [October 18 second sweep](reliability-code-health-20261018-sweep.md) reviews the
 subsequent browser, credential, computer and evaluation changes. It records two
-reproduced correctness defects and a proposed follow-up order. Implementation
-selection remains pending; the completed first roadmap is not reopened.
+reproduced correctness defects, now fixed in #1778 and #1781, and their permanent
+regressions. The bounded login extraction is merged; eval extraction remains
+conditional, while qualification and measured follow-ups keep their existing
+owners. The completed first roadmap is not reopened.

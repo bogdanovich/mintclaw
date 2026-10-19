@@ -2726,6 +2726,10 @@ func TestSpawnSubTurnRepairsIncompleteResultWithoutTools(t *testing.T) {
 	provider := &objectiveRepairCaptureProvider{responses: []*providers.LLMResponse{
 		{Content: invalid, FinishReason: "stop"},
 		{Content: repaired, FinishReason: "stop"},
+		{Content: "Found three active listings.\n\n" +
+			"title: Desk; price: $40; status: Active\n" +
+			"title: Lamp; price: $15; status: Active\n" +
+			"title: Chair; price: $20; status: Active", FinishReason: "stop"},
 	}}
 	al, cleanup := newMultiAgentLoop(t, provider)
 	defer cleanup()
@@ -2755,8 +2759,12 @@ func TestSpawnSubTurnRepairsIncompleteResultWithoutTools(t *testing.T) {
 		!strings.Contains(result.ForLLM, "title: Desk") || !strings.Contains(result.ForLLM, "price: $15") {
 		t.Fatalf("repaired subturn result = (%#v, %v)", result, err)
 	}
-	if counts := provider.toolDefinitionCounts(); len(counts) != 2 || counts[0] == 0 || counts[1] != 0 {
-		t.Fatalf("provider tool counts = %v, want initial tools then model-only repair", counts)
+	if result.Deliverable.ObjectiveOutcome.UserSummary == "" {
+		t.Fatal("corrected canonical records must retain the separately admitted natural answer")
+	}
+	if counts := provider.toolDefinitionCounts(); len(counts) != 3 || counts[0] == 0 || counts[1] != 0 ||
+		counts[2] != 0 {
+		t.Fatalf("provider tool counts = %v, want initial tools then outcome and presentation without tools", counts)
 	}
 }
 
@@ -2800,7 +2808,7 @@ func TestSpawnSubTurnRepairsUnclaimedTransferReceiptsWithoutReplay(t *testing.T)
 		`{"status":"succeeded","completed_items":[` +
 		`{"objective_id":"objective_1","receipt_ids":["inv-submit"]},` +
 		`{"objective_id":"objective_2","output":{"kind":"records","records":[{"uploaded":"true"}]}}],` +
-		`"missing_items":[],"result":"The test image was uploaded and verified."}` + objectiveOutcomeEnd
+		`"missing_items":[],"result":"The test image was uploaded and verified (uploaded: true)."}` + objectiveOutcomeEnd
 	repaired := strings.Replace(initial, `["inv-submit"]`, `["inv-download","inv-upload","inv-submit"]`, 1)
 	var calls []providers.ToolCall
 	for _, action := range []string{"download", "upload", "submit"} {

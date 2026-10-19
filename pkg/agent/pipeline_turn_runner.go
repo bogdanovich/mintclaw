@@ -240,10 +240,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 		if repairIteration {
 			repairCandidate := llmOutcome.terminalCandidate(terminalContent{})
 			if exec.verifiedPresentationRepair != nil {
-				repairCandidate = exec.verifiedPresentationRepair.accept(
-					repairCandidate, exec.writeAudit, objectiveReceiptsForTurn(ts.opts.mode, exec.receipts),
-					ts.opts.ObjectiveChecklist,
-				)
+				repairCandidate = exec.verifiedPresentationRepair.accept(repairCandidate)
 				exec.verifiedPresentationRepair = nil // Never constrain later user steering or tool-capable work.
 				exec.terminal = repairCandidate
 			}

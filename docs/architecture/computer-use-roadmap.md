@@ -214,9 +214,9 @@ deployment remain separately authorized operations.
 | Phase | Status on October 18 | Remaining gate |
 | --- | --- | --- |
 | CU-0 | Read-only contracts, canonical catalogs, default-disabled composition and generic resource disposition are implemented. | Preserve these invariants as input commands are introduced. |
-| CU-1 | Pinned Cua 0.34.1 read-only path qualifies on Linux GNOME X11 and unlocked macOS 26.6.2; native incarnation guards qualify separately. | Input, Unicode insertion, cancellation, geometry and alternative-driver comparisons are not fully qualified. |
+| CU-1 | Read-only paths and native incarnation guards qualify on selected Linux GNOME X11 and unlocked macOS 26.6.2. Private semantic-input fixtures now pass with the corrected Linux candidate and original Mac driver through the actual app. | Generic exact-root input, cancellation/held-state cleanup, pixel/key/scroll/drag, geometry and alternative-driver comparisons remain incomplete. |
 | CU-2 | Merged in [#1672](https://github.com/bogdanovich/mintclaw/pull/1672) and [#1683](https://github.com/bogdanovich/mintclaw/pull/1683). | Requalify supported platform tuples after driver, OS or signing changes. |
-| CU-3 | Not exposed or production-enabled. | Implement and qualify bounded input, ephemeral text, shared local arbitration, no-replay outcomes, cancellation and independent verification. |
+| CU-3 | Side-effect-free bounded input contracts merged in [#1771](https://github.com/bogdanovich/mintclaw/pull/1771); no executor, public input tool or production enablement. | Implement and qualify native execution, ephemeral invocation binding, shared OS-wide arbitration, no-replay outcomes, cancellation and independent verification. |
 | CU-4 | Read-only localized handoff, same-target fresh resume and typed finish/release are implemented. | Extend interlocks to input, held-state cancellation and overlapping capabilities; evaluate interactive continuity. |
 | CU-5 | Function tools and protected one-shot vision context are implemented for observations. | Complete action planning and budgets, representative full-task evaluation and adversarial task tests on both OSes. |
 | CU-6 | Not deployed or enabled in production. | Prepare explicit profiles, health, rollback and recovery evidence; obtain deployment/enablement approval before a pilot. |
@@ -233,6 +233,18 @@ final-head CI checks and automated review passed before #1683 merged as
 These are read-only fixture results, not general application, input, locked-host
 or model-task success claims. Earlier failed/refused Mac attempts and broad local
 suite timeouts remain recorded in qualification/PR evidence, not relabeled green.
+
+Additional private mechanism results are now merged: the corrected Linux
+Unicode candidate passes insertion (including seven nonempty caret/prefix/suffix
+cases), replacement, click, scope denial and read-only lifecycle in 4.57 seconds;
+transient-overlay refusal passes separately in 4.74 seconds. The actual unchanged
+Mac companion app independently verifies insertion/replacement/click/denial in
+41.47 seconds and repeats from the final reviewed head in 47.83 seconds.
+See [Linux artifact provenance](computer-linux-unicode-build.md) and
+[actual-app Mac qualification](computer-native-input-qualification.md). Both
+code PRs passed CI and automated review before authorized merge. These narrow
+mechanism passes do not expose input, establish a full task score, install a
+driver, alter the app/OS grants or authorize a production pilot.
 
 ### Remaining implementation sequence
 
@@ -316,6 +328,10 @@ proposed thresholds, not measured results. Record successful-run cost, total cos
 including failures, wall-clock time, action count, token/image usage, and p50/p95
 latency. CU-1 sets resource limits that preserve gateway headroom on the 8 GB host.
 
+The [v1 evaluation pack](computer-evaluation-pack.md) freezes the initial 20 task
+intents and independent completion conditions. Its executable fixtures, approved
+budgets and actual model runs are still pending; no task score is claimed.
+
 Use [OSWorld](https://github.com/xlang-ai/OSWorld) for additional evaluation ideas,
 not as a substitute for companion lifecycle and policy tests or as evidence that
 published model benchmark scores predict our production success rate.
@@ -325,9 +341,11 @@ published model benchmark scores predict our production success rate.
 1. Read-only qualification currently covers the selected Linux GNOME X11 host
    and the actual approved companion app on the Intel Mac. Additional desktops,
    application families, architectures and OS versions need separate evidence.
-2. Keep Cua 0.34.1 as the pinned read-only baseline until a replacement passes the
-   same scope/lifecycle suite. Linux Unicode insertion is a known failed input
-   capability, not something to hide with replacement or clipboard fallback.
+2. Keep the original Cua 0.34.1 read-only pins by default. The original Linux
+   artifact still fails Unicode insertion; a separately identified exact patched
+   artifact now passes private fixture qualification. Neither replacement nor
+   clipboard paste is a substitute, and the remaining input/scope/cancel gates
+   must pass before choosing a production input backend.
 3. Choose input backends only from measured exact-target, Unicode, cancellation,
    latency and resource results; document unsupported operations explicitly.
 4. Managed environments, VM/locked-host execution, Wayland and cloud spending
