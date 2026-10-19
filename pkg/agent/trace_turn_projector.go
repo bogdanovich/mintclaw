@@ -674,6 +674,7 @@ func runtimeEventRecord(
 			return diagnostictrace.Record{}, false, false
 		}
 		kind = diagnostictrace.RecordModelResponse
+		hasProviderUsage := value.HasProviderUsage
 		payload = diagnostictrace.ModelPayload{
 			Provider:              value.Provider,
 			Model:                 value.Model,
@@ -681,6 +682,7 @@ func runtimeEventRecord(
 			ResponseHash:          value.ResponseHash,
 			PromptTokens:          value.PromptTokens,
 			ResponseTokens:        value.CompletionTokens,
+			HasProviderUsage:      &hasProviderUsage,
 			CacheReadInputTokens:  value.CacheReadInputTokens,
 			CacheReadKnown:        value.CacheReadKnown,
 			CacheWriteInputTokens: value.CacheWriteInputTokens,

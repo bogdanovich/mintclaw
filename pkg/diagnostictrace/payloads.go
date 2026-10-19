@@ -42,6 +42,7 @@ type ModelPayload struct {
 	ResponseHash                  string `json:"response_hash,omitempty"`
 	PromptTokens                  int    `json:"prompt_tokens,omitempty"`
 	ResponseTokens                int    `json:"response_tokens,omitempty"`
+	HasProviderUsage              *bool  `json:"has_provider_usage,omitempty"`
 	CacheReadInputTokens          int    `json:"cache_read_input_tokens,omitempty"`
 	CacheReadKnown                bool   `json:"cache_read_known,omitempty"`
 	CacheWriteInputTokens         int    `json:"cache_write_input_tokens,omitempty"`
