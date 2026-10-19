@@ -87,6 +87,14 @@ The [browser artifact v1 pilot](../operations/manual-agent-evals-browser-artifac
 so the runner refused the grant. The fixture recorded zero downloads and mutations; no judge ran. The task was
 not retried and policy was not widened. The complete artifact assessment code is not positive live qualification.
 
+The [browser denial v1 pilot](../operations/manual-agent-evals-browser-denial-v1-pilot-20261019.md) on merged
+#1786 retained one failed `unexpected_turn_outcome` attempt: an ordinary North-removal permission question arrived
+where the script required native approval. No cancel or grant was dispatched, no removal was prepared, and the
+visited fixture had zero effects. The unanswered native question remains waiting after physical shutdown. Scoped
+privacy and credential-copy cleanup passed, but no judge/regrade or native denial assessment qualified. This is a
+scenario interaction-shape mismatch, not evidence of an unsafe product action; do not rewrite or retry the old trial.
+The native path and a safe outcome-oriented ordinary-question alternative require explicit follow-up.
+
 ## Milestones
 
 | Stage | Outcome | Dependency | Status |
@@ -95,7 +103,7 @@ not retried and policy was not widened. The complete artifact assessment code is
 | E1 | Run bounded scripted multi-turn cases and produce honest reports | E0 | Contracts/client/runtime admission merged; both required general scripted cases passed on Linux after #1598, with recorded platform/cleanup limits |
 | E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation/adaptive runner/grade merged (#1531, #1541); judge v2 live calibration passed 6/6; adaptive live qualification pending |
 | E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Fixtures/oracle, preparation, approval contracts, dialogue, write intent, native write observation, metadata settlement and artifact collection merged (#1544, #1546, #1547, #1550, #1552, #1553, #1557, #1558); uniqueness/privacy/cleanup and live qualification pending |
-| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | One Linux owned read trial/regrade passed after #1754; artifact assessment merged in #1761, first live attempt inconclusive; other five cases, adaptive private input, protected action and domain qualification pending |
+| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Read trial/regrade passed after #1754; artifact first attempt inconclusive; denial assessment merged in #1786, first attempt failed an ordinary-question/native-approval mismatch; adaptive private input, remaining scenarios and domain qualification pending |
 | E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Repeats/all-trial regrade/comparison (#1588), owned gateway (#1639), file observations (#1648) and explicit allowlisted seed provisioning (#1665) merged; Linux general repeats/regrade/error comparison exercised; per-trial/effective-input witnesses and domain qualification pending |
 
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
@@ -155,7 +163,9 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    tool exposure/action choice before any new experiment. Denial now has exact native approval/HMAC-bound cancel,
    post-stop unconsumed cancellation/unaccepted invocation/outbox evidence and independent no-effect/privacy/cleanup
    checks before separate judging or offline regrade. It never grants the removal or claims which identically named
-   account button would have been dispatched; live denial qualification remains pending. The other three scenarios
+   account button would have been dispatched; live denial qualification remains pending after its preserved ordinary-
+   question/native-approval mismatch. A natural permission-question path needs its own bounded native cancellation
+   and semantic-evidence contract, without weakening the existing approval guard. The other three scenarios
    remain gated. Submit/followup retain private-input gates; ambiguity retains its native-action evidence gate.
    No local fixture pass qualifies native browser behavior.
    Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a
