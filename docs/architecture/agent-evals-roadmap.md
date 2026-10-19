@@ -144,8 +144,12 @@ The [native system-source producer](../operations/native-system-source-fingerpri
 eval consumer retains validated per-request workspace-definition/catalog/active-skill content witnesses and
 compares them with explicit legacy/unavailable coverage, using frozen reports rather than current files.
 These are filtered runtime-labeled content identities, not complete skill/helper-version provenance or provider
-wire attestation. Offline controls are not a new live qualification; per-trial resources and remaining domain
-cases/repeats/exit remain mandatory.
+wire attestation. Consumer #1830 then merged, and one
+[fresh merged-source experiment](../operations/manual-agent-evals-system-sources-v1-20261019.md) passed the
+unchanged context task, independent judge, offline regrade and comparison. Both actual routed requests retained
+observed workspace/catalog groups and an explicitly empty active-skill group; frozen projections remained equal.
+Per-trial resources and remaining domain cases/repeats/exit remain mandatory; broader version/provider/all-call
+unknowns and every historical negative result are preserved.
 
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
 prerequisites when necessary. Do not reimplement protected intake, browser sessions, approval, or delivery in the harness.
