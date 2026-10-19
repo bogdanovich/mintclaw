@@ -648,6 +648,7 @@ func runtimeEventRecord(
 			Provider:                      value.Provider,
 			Model:                         value.Model,
 			PromptHash:                    value.PromptHash,
+			SystemSources:                 diagnosticSystemSources(settings, value.SystemSources),
 			PromptCacheMode:               value.PromptCacheMode,
 			StablePrefixVersion:           value.PromptCache.StablePrefixVersion,
 			StablePrefixHash:              value.PromptCache.StablePrefixHash,
