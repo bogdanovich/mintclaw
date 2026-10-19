@@ -4,6 +4,7 @@ import (
 	"time"
 
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -105,6 +106,7 @@ type LLMRequestPayload struct {
 	Provider           string
 	Model              string
 	PromptHash         string
+	SystemSources      *diagnostictrace.SystemSourceFingerprint
 	PromptCacheMode    string
 	PromptCache        PromptCacheFingerprint
 	MessagesCount      int

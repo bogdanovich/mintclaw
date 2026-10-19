@@ -548,6 +548,11 @@ func restoreFrozenTurnEnvelopes(before, after []providers.Message) error {
 }
 
 func restoreSystemMessagePromptMetadata(before, after []providers.Message) {
+	for messageIndex := range after {
+		for partIndex := range after[messageIndex].SystemParts {
+			after[messageIndex].SystemParts[partIndex].PromptSections = nil
+		}
+	}
 	for messageIndex := range before {
 		if messageIndex >= len(after) || before[messageIndex].Role != "system" || after[messageIndex].Role != "system" {
 			continue
@@ -562,6 +567,10 @@ func restoreSystemMessagePromptMetadata(before, after []providers.Message) {
 			after[messageIndex].SystemParts[partIndex].PromptLayer = before[messageIndex].SystemParts[partIndex].PromptLayer
 			after[messageIndex].SystemParts[partIndex].PromptSlot = before[messageIndex].SystemParts[partIndex].PromptSlot
 			after[messageIndex].SystemParts[partIndex].PromptSource = before[messageIndex].SystemParts[partIndex].PromptSource
+			previous, next := before[messageIndex].SystemParts[partIndex], &after[messageIndex].SystemParts[partIndex]
+			if previous.Type == next.Type && previous.Text == next.Text {
+				next.PromptSections = append([]providers.PromptSection(nil), previous.PromptSections...)
+			}
 		}
 	}
 }
@@ -618,6 +627,7 @@ func providerVisibleMessage(msg providers.Message) providers.Message {
 			msg.SystemParts[i].PromptLayer = ""
 			msg.SystemParts[i].PromptSlot = ""
 			msg.SystemParts[i].PromptSource = ""
+			msg.SystemParts[i].PromptSections = nil
 		}
 	}
 	return msg
@@ -1041,6 +1051,9 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 			cloned[i].SystemParts = make([]providers.ContentBlock, len(msg.SystemParts))
 			copy(cloned[i].SystemParts, msg.SystemParts)
 			for partIndex := range msg.SystemParts {
+				cloned[i].SystemParts[partIndex].PromptSections = append(
+					[]providers.PromptSection(nil), msg.SystemParts[partIndex].PromptSections...,
+				)
 				if msg.SystemParts[partIndex].CacheControl == nil {
 					continue
 				}

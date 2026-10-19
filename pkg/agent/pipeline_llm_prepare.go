@@ -256,6 +256,7 @@ func (p *Pipeline) emitLLMRequestAttempt(
 			Provider:           primaryCandidateProvider(exec.model.activeCandidates),
 			Model:              llm.llmModel,
 			PromptHash:         safeJSONHash(traceSettings, diagnosticPromptHashMessages(llm.callMessages)),
+			SystemSources:      fingerprintSystemSources(traceSettings, llm.callMessages),
 			PromptCacheMode:    string(effectivePromptCacheMode(p.Cfg)),
 			PromptCache:        promptCache,
 			MessagesCount:      len(llm.callMessages),

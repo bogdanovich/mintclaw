@@ -92,9 +92,20 @@ type ContentBlock struct {
 	// Prompt metadata is internal to the agent runtime. It records which
 	// structured prompt segment produced this block without changing provider
 	// JSON.
-	PromptLayer  string `json:"-"`
-	PromptSlot   string `json:"-"`
-	PromptSource string `json:"-"`
+	PromptLayer    string          `json:"-"`
+	PromptSlot     string          `json:"-"`
+	PromptSource   string          `json:"-"`
+	PromptSections []PromptSection `json:"-"`
+}
+
+// PromptSection identifies the byte range of one runtime-assembled source in
+// Text. It is internal provenance, never provider JSON or tool authority.
+type PromptSection struct {
+	Start  int
+	End    int
+	Layer  string
+	Slot   string
+	Source string
 }
 
 type Attachment struct {

@@ -1494,6 +1494,7 @@ func normalizeMessageForComparison(msg providers.Message) providers.Message {
 			msg.SystemParts[i].PromptLayer = ""
 			msg.SystemParts[i].PromptSlot = ""
 			msg.SystemParts[i].PromptSource = ""
+			msg.SystemParts[i].PromptSections = nil
 		}
 	}
 	if len(msg.ToolCalls) == 0 {
