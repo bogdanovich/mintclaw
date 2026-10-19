@@ -361,3 +361,51 @@ func TestFormTaskRoutingReferencesAreExactNativeIdentifiers(t *testing.T) {
 		}
 	}
 }
+
+func TestFormTaskRoutingStaleFirstConfirmationFallsBackToProtectedQuestion(t *testing.T) {
+	store, options := newTestFormJobStore(t)
+	request, route := startTaskRouteFixture(t, store)
+	route = decideTaskRouteFixture(t, store, request, route, FormTaskSwitch)
+	paused, err := store.SetFormIntakeState(t.Context(), request.JobID, route.ModeID,
+		route.Revision, request.Owner, FormIntakePaused)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := store.SetFormIntakeState(t.Context(), request.JobID, route.ModeID,
+		paused.Revision, request.Owner, FormIntakeActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := decideTaskRouteFixture(t, store, request, route, FormTaskSwitch)
+	if fresh.State != FormTaskQuestion || fresh.Revision != resumed.Revision || fresh.Passes != 2 ||
+		fresh.Text != route.Text || len(fresh.MediaRefs) != len(route.MediaRefs) {
+		t.Fatal("a stale earlier confirmation did not preserve the request in a valid protected question")
+	}
+	store.Close()
+	store, err = OpenFormJobStore(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	if _, err = store.GrantFormTaskHandoff(t.Context(), route.Reference, request.Owner); err == nil {
+		t.Fatal("a stale earlier confirmation granted the new task")
+	}
+	if _, err = store.ReserveFormTaskRoute(
+		t.Context(),
+		route.Reference,
+		request.Owner,
+	); !errors.Is(
+		err,
+		ErrFormJobConflict,
+	) {
+		t.Fatal("question recovery continued spending the automatic confirmation budget")
+	}
+	current, err := store.ReadFormTaskRoute(t.Context(), route.Reference, request.Owner)
+	if err != nil || current.State != FormTaskQuestion || current.Passes != 2 || current.Text != route.Text {
+		t.Fatal("restart or rejected automatic retry lost the bounded protected recovery state")
+	}
+	progress, err := store.FindFormIntake(t.Context(), request.Owner)
+	if err != nil || progress == nil || progress.State != FormIntakeActive {
+		t.Fatal("stale confirmation suspended or erased the original draft")
+	}
+}

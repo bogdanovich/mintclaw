@@ -257,10 +257,12 @@ func (store *FormJobStore) DecideFormTaskRoute(
 			}
 		case FormTaskSwitch:
 			state = FormTaskVerify
-			if len(route.Decisions) > 0 && route.State == FormTaskVerify &&
-				route.Decisions[len(route.Decisions)-1].Action == FormTaskSwitch &&
-				route.Decisions[len(route.Decisions)-1].Revision == record.Revision {
-				state = FormTaskReady
+			if len(route.Decisions) > 0 && route.State == FormTaskVerify {
+				state = FormTaskQuestion
+				previous := route.Decisions[len(route.Decisions)-1]
+				if previous.Action == FormTaskSwitch && previous.Revision == record.Revision {
+					state = FormTaskReady
+				}
 			}
 		}
 		route.Decisions = append(route.Decisions, formTaskRouteStoredDecision{
