@@ -232,9 +232,12 @@ func configuredSkillToolStates(
 	}
 	for _, name := range []string{
 		"browser_act", "browser_capture", "browser_contexts", "browser_diagnostics",
-		"browser_execute", "browser_observe", "browser_session", "browser_targets",
+		"browser_execute", "browser_input", "browser_observe", "browser_session", "browser_targets",
 	} {
 		states[name] = browserState
+	}
+	if cfg.Tools.Browser.Limits.Effective().PreparedSeconds <= 60 {
+		states["browser_input"] = skills.SkillRequirementPolicyDisabled
 	}
 	return states
 }
@@ -308,6 +311,7 @@ func configuredSkillCapabilities(
 	for capability, toolName := range map[runtimecap.CapabilityID]string{
 		runtimecap.CapabilityBrowserObserve: "browser_observe",
 		runtimecap.CapabilityBrowserAct:     "browser_act",
+		runtimecap.CapabilityBrowserInput:   "browser_input",
 		runtimecap.CapabilityBrowserCapture: "browser_capture",
 	} {
 		capabilities = append(

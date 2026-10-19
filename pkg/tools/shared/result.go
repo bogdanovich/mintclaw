@@ -155,14 +155,14 @@ type ToolControl struct {
 	// interaction is answered, times out, is canceled, or fails.
 	ResolveSuspension func(context.Context, interactions.Outcome) error `json:"-"`
 
-	// LiveHandoff proves that the tool transferred one live resource to human
-	// control before requesting a durable suspension. The runtime, not the
-	// model, turns this proof into an objective receipt after it durably owns
-	// the suspension.
+	// LiveHandoff identifies a resource transferred to human control or retained
+	// under a native interaction's ownership. The tool's durable resolver owns
+	// its exact resume/abandon semantics. The runtime, not the model, creates
+	// the objective receipt after it durably owns the suspension.
 	LiveHandoff *LiveResourceHandoff `json:"-"`
 }
 
-// LiveResourceHandoff identifies a successfully transferred live resource.
+// LiveResourceHandoff identifies a transferred or interaction-retained resource.
 // ResourceKind is an extensible tool-defined namespace (for example,
 // "browser_session"); ResourceID is the opaque identity already returned by
 // that tool. A handoff is valid only together with a durable suspension.

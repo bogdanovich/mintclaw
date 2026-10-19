@@ -69,6 +69,40 @@ Validate actual AgentLoop suspension/resume and cancellation, durable/diagnostic
 bindings, competing answers, erasure, failed commits and restart/no-replay. Scope is ordinary synthetic form input;
 qualify gateway-local placement first. No companion/cloud/credential or Telegram claim follows from an interface.
 
+### B2 Consumer Contract
+
+The gateway registers `browser_input` with its distinct `browser.input` capability and one `browser.fill.v1`
+protected-answer sink. It does not claim the existing `browser.act` capability's catalog ownership. `ask` accepts only a
+value-free, fresh field authority and a self-contained question; it exposes no value argument or sink selector.
+It requires durable gateway history and a prepared-action window longer than the native one-minute question
+minimum. Its question deadline is bounded by the broker's signed target deadline. The original execution,
+tool-call, actor and route identities come from the coordinator record, not from model-authored receipt data.
+
+The sink borrows the current gateway source on each call. Accept stages the value through B1 but does not execute;
+Commit revalidates the existing native preparation after the coordinator claims the answer. `resume` requires the
+exact runtime-only protected continuation reference, or a separately consumed native approval whose arguments
+match that preparation. A guessed reference or a bare approval flag is insufficient. Restricted-policy `ask`
+still suspends for approval; no external-submit permission follows from providing a field value.
+
+Task suspension retains the original browser session under agent control. The existing durable tool-owned
+resource resolver checks that resource on resume and closes it on abandonment. Accepted protected input uses
+its exact trusted continuation, not the separate model decision protocol for manual browser handoff. Forced
+discard and cancellation close the originating native owner, including after the original token's process
+generation is gone. Non-forced recovery reads do not erase an in-flight winning answer. Restart never rebuilds
+lost input from durable state. A successful fill followed by a failed observation preserves the known native
+success and requests observation without replaying the fill.
+
+Tool arguments/results, including question text, use protected history and diagnostic projections. The question
+itself remains ordinary display text in the native interaction and must not repeat entered values. This is not a
+general model-output non-disclosure guarantee; B3 still rejects private echoes in prompts and final responses.
+The bounded
+native hexadecimal receipt ID survives durable approval history; it contains no field value and alone cannot
+authorize execution. Malformed receipt data is redacted. Operational argument logging records only a bounded
+operation and argument count. Offline regression tests exercise the real
+AgentLoop, interaction coordinator, browser broker and file store with a synthetic worker, plus wrong ownership,
+stale/generation changes, competing answers, separate approval, forced cleanup and lost ephemeral input. These
+are runtime integration tests, not a live browser/LLM qualification or admission of private eval cases.
+
 ## B3: Eval Consumer And Mutation Evidence
 
 Only after B2 is reviewed and merged, generate fresh facts for the existing required browser cases and retain them
