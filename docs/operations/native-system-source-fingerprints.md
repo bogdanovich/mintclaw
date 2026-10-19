@@ -12,9 +12,10 @@ and active skill instructions (`skill:active`). Each group retains its ordered c
 count. The source is the actual request after runtime assembly, media/candidate shaping and hook processing, not a
 new filesystem inventory. Provider-specific serialization remains outside this observation.
 
-This native producer is a prerequisite for eval evidence. The existing eval report projection does not yet retain
-these source groups; its six aggregate request hashes and instruction/skill unknowns remain unchanged until the
-consumer is implemented. No historical report or trace is backfilled.
+The [eval consumer](manual-agent-evals-native-models.md#runtime-labeled-system-sources) retains this typed witness
+per routed native request alongside its six aggregate hashes. It preserves absent/unavailable coverage and can
+compare each observed group without reading current workspace files. Broader instruction/skill version unknowns
+remain explicit. No historical report or trace is backfilled.
 
 ## Assembly And Cache
 

@@ -140,6 +140,13 @@ requests, two responses and two bound retries, available 4,707 input / 28 output
 all-call usage still unknown. No additional model task ran and original reports stayed partial and byte-identical.
 This validates the consumer contract, not a new canonical live run, loaded-skill proof or completion of E0-E5.
 
+The [native system-source producer](../operations/native-system-source-fingerprints.md) merged in #1826. Its
+eval consumer retains validated per-request workspace-definition/catalog/active-skill content witnesses and
+compares them with explicit legacy/unavailable coverage, using frozen reports rather than current files.
+These are filtered runtime-labeled content identities, not complete skill/helper-version provenance or provider
+wire attestation. Offline controls are not a new live qualification; per-trial resources and remaining domain
+cases/repeats/exit remain mandatory.
+
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
 prerequisites when necessary. Do not reimplement protected intake, browser sessions, approval, or delivery in the harness.
 

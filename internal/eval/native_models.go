@@ -31,16 +31,17 @@ type NativeModelUsage struct {
 }
 
 type NativeModelCall struct {
-	AttemptID        string            `json:"attempt_id"`
-	RequestProvider  string            `json:"request_provider"`
-	RequestModel     string            `json:"request_model"`
-	Inputs           NativeModelInputs `json:"inputs"`
-	ResponseProvider string            `json:"response_provider,omitempty"`
-	ResponseModel    string            `json:"response_model,omitempty"`
-	ResponseSHA256   string            `json:"response_sha256,omitempty"`
-	UsageState       string            `json:"usage_state"`
-	Usage            *NativeModelUsage `json:"usage,omitempty"`
-	RetryObserved    bool              `json:"retry_observed,omitempty"`
+	AttemptID        string                                   `json:"attempt_id"`
+	RequestProvider  string                                   `json:"request_provider"`
+	RequestModel     string                                   `json:"request_model"`
+	Inputs           NativeModelInputs                        `json:"inputs"`
+	SystemSources    *diagnostictrace.SystemSourceFingerprint `json:"system_sources,omitempty"`
+	ResponseProvider string                                   `json:"response_provider,omitempty"`
+	ResponseModel    string                                   `json:"response_model,omitempty"`
+	ResponseSHA256   string                                   `json:"response_sha256,omitempty"`
+	UsageState       string                                   `json:"usage_state"`
+	Usage            *NativeModelUsage                        `json:"usage,omitempty"`
+	RetryObserved    bool                                     `json:"retry_observed,omitempty"`
 }
 
 type NativeModelTurn struct {
@@ -189,7 +190,8 @@ func (observation *NativeModelObservation) valid(runtime health.RuntimeProbe) bo
 func (call NativeModelCall) valid() bool {
 	if !validID(call.AttemptID) ||
 		call.RequestProvider != "" && !boundedText(call.RequestProvider, 128) || !boundedText(call.RequestModel, 256) ||
-		call.RetryObserved && call.UsageState != "not_returned" {
+		call.RetryObserved && call.UsageState != "not_returned" ||
+		call.SystemSources != nil && call.SystemSources.Validate() != nil {
 		return false
 	}
 	for _, value := range []string{

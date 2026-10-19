@@ -9,6 +9,7 @@ func compareNativeModels(result *Comparison, baseline, current RunReport) {
 	if baseline.NativeModels == nil && current.NativeModels == nil {
 		return
 	}
+	compareNativeSystemSources(result, baseline, current)
 	result.EnvironmentCoverage = "recorded_runtime_roles_and_partial_native_records"
 	if baseline.NativeModels != nil && current.NativeModels != nil &&
 		baseline.NativeModels.Code == "observed" && current.NativeModels.Code == "observed" {

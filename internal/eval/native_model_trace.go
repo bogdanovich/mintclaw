@@ -88,7 +88,8 @@ func projectNativeModelTrace(
 				attempts[id] = len(calls)
 				call := NativeModelCall{
 					AttemptID: id, RequestProvider: payload.Provider, RequestModel: payload.Model,
-					UsageState: "not_returned", Inputs: NativeModelInputs{
+					SystemSources: payload.SystemSources,
+					UsageState:    "not_returned", Inputs: NativeModelInputs{
 						Prompt: payload.PromptHash, StableSystem: payload.StableSystemHash,
 						DynamicSystem: payload.DynamicSystemHash, Tools: payload.ToolSchemaHash,
 						History: payload.HistoryHash, DynamicTail: payload.DynamicTailHash,
