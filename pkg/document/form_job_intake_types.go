@@ -21,6 +21,8 @@ const (
 	FormIntakeActive FormIntakeState = "active"
 	FormIntakePaused FormIntakeState = "paused"
 	FormIntakeClosed FormIntakeState = "closed"
+	// Suspended preserves a draft without capturing the route's next task.
+	FormIntakeSuspended FormIntakeState = "suspended"
 )
 
 // FormIntakeContext is bounded, value-free presentation chosen by the agent.
@@ -52,6 +54,8 @@ type FormIntakeProgress struct {
 	PendingInputs int               `json:"pending_inputs"`
 	RetainedBytes int               `json:"retained_bytes"`
 	InputCount    int               `json:"input_count"`
+	PendingTasks  int               `json:"pending_tasks,omitempty"`
+	TaskBytes     int               `json:"task_retained_bytes,omitempty"`
 	Context       FormIntakeContext `json:"-"`
 }
 
@@ -79,6 +83,7 @@ type FormIntakeMessageRequest struct {
 	Schema           FormFieldsFacts
 	MessageIdentity  string
 	Text             string `json:"-"`
+	RoutingReference string `json:"-"`
 }
 
 // FormIntakeInput is an ephemeral protected read. Even accidental ordinary JSON
@@ -153,6 +158,7 @@ type formIntakeStoredMode struct {
 	Context        FormIntakeContext                   `json:"context"`
 	InitialBinding interactions.ProtectedAnswerBinding `json:"initial_binding"`
 	Inputs         []formIntakeStoredInput             `json:"inputs,omitempty"`
+	TaskRoutes     []formTaskRouteStored               `json:"task_routes,omitempty"`
 }
 
 type formIntakeInputState string

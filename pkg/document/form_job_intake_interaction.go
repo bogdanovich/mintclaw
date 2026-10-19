@@ -213,6 +213,14 @@ func (store *FormJobStore) SetFormIntakeState(
 				return false, ErrFormJobConflict
 			}
 		}
+		if state == FormIntakeClosed && formIntakeProgress(record.Public, source.Intake).PendingTasks != 0 {
+			return false, ErrFormJobConflict
+		}
+		if state == FormIntakeActive || state == FormIntakePaused {
+			if err := store.requireExclusiveFormIntake(snapshot, jobID, record.Public.OwnerDigest); err != nil {
+				return false, err
+			}
+		}
 		if source.Intake.State == state {
 			result = formIntakeProgress(record.Public, source.Intake)
 			return false, nil
