@@ -36,6 +36,9 @@ jobs:
       - name: Test CI selection
         run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
 
+      - name: Test desktop-free computer evaluation fixtures
+        run: python3 -m unittest discover -s scripts/internal/computer-evaluation -p 'test_*.py' -v
+
       - name: Lint documentation layout
         run: bash ./scripts/lint-docs.sh
 
