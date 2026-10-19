@@ -18,6 +18,70 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  linux-window-keys:
+    name: Private Linux window-key primitive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CUA_TELEMETRY: '0'
+      DO_NOT_TRACK: '1'
+    steps:
+      - name: Checkout exact MintClaw candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Checkout unchanged pinned native dependency
+        uses: actions/checkout@v7
+        with:
+          repository: trycua/cua
+          ref: 0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc
+          path: .private-cua-source
+          persist-credentials: false
+
+      - name: Install ephemeral runner build and X11 fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang pkg-config libdbus-1-dev \
+            libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev xvfb xauth
+
+      - name: Install pinned upstream Rust toolchain
+        uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build and unit-test explicit private library feature
+        id: window_key_probe
+        run: |
+          bash scripts/internal/computer-driver/build-linux-key-probe.sh \
+            --source "$GITHUB_WORKSPACE/.private-cua-source" \
+            --output "$RUNNER_TEMP/mintclaw-window-keys"
+
+      - name: Qualify only owned native window events, twenty repetitions
+        env:
+          MINTCLAW_WINDOW_KEYS_NATIVE: '1'
+        run: |
+          for attempt in {1..20}; do
+            # Fixture connections intentionally close between tests. Keep this
+            # owned server alive instead of racing its last-client reset.
+            timeout 20s xvfb-run -a \
+              --error-file="$RUNNER_TEMP/mintclaw-window-keys/xvfb-${attempt}.log" \
+              --server-args='-screen 0 1280x800x24 -nolisten tcp -noreset' \
+              "$RUNNER_TEMP/mintclaw-window-keys/window-keys.test" \
+              input::mintclaw_window_keys::native:: --ignored --test-threads=1
+          done
+
+      - name: Preserve private probe and build receipt, not an admitted driver
+        if: ${{ always() && steps.window_key_probe.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: computer-window-keys-probe-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/mintclaw-window-keys/
+          if-no-files-found: error
+          retention-days: 3
+
   linux-utf8:
     name: Pinned Linux Unicode driver
     runs-on: ubuntu-24.04
