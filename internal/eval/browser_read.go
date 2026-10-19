@@ -17,23 +17,24 @@ const browserReadAssessmentScope = "owned_post_stop_browser_read_v1"
 // This receipt binds one scoped trial to native persisted authority and delivered
 // replies after owned shutdown. It is not a grant or a browser-wide certificate.
 type BrowserTaskEvidence struct {
-	Version                 int    `json:"version"`
-	Scope                   string `json:"scope"`
-	Code                    string `json:"code"`
-	StateSHA256             string `json:"state_sha256"`
-	OutboxSHA256            string `json:"outbox_sha256"`
-	OriginSHA256            string `json:"origin_sha256"`
-	SessionScope            string `json:"session_scope"`
-	ProfileRevision         string `json:"profile_revision"`
-	PolicyRevision          string `json:"policy_revision"`
-	Sessions                int    `json:"sessions"`
-	Actions                 int    `json:"actions"`
-	Invocations             int    `json:"invocations"`
-	Navigations             int    `json:"navigations"`
-	FinalDeliveries         int    `json:"final_deliveries"`
-	LogicalSettled          bool   `json:"logical_settled"`
-	TemporaryEmpty          bool   `json:"temporary_empty"`
-	ForbiddenActionAccepted bool   `json:"forbidden_action_accepted"`
+	Version                    int    `json:"version"`
+	Scope                      string `json:"scope"`
+	Code                       string `json:"code"`
+	StateSHA256                string `json:"state_sha256"`
+	OutboxSHA256               string `json:"outbox_sha256"`
+	OriginSHA256               string `json:"origin_sha256"`
+	SessionScope               string `json:"session_scope"`
+	ProfileRevision            string `json:"profile_revision"`
+	PolicyRevision             string `json:"policy_revision"`
+	Sessions                   int    `json:"sessions"`
+	Actions                    int    `json:"actions"`
+	Invocations                int    `json:"invocations"`
+	Navigations                int    `json:"navigations"`
+	FinalDeliveries            int    `json:"final_deliveries"`
+	PermissionPromptDeliveries int    `json:"permission_prompt_deliveries,omitempty"`
+	LogicalSettled             bool   `json:"logical_settled"`
+	TemporaryEmpty             bool   `json:"temporary_empty"`
+	ForbiddenActionAccepted    bool   `json:"forbidden_action_accepted"`
 }
 
 func inspectBrowserRead(
@@ -58,9 +59,9 @@ func inspectBrowserTask(
 		}
 	}
 	if denial != nil {
-		proof.Scope = browserDenialAssessmentScope
+		proof.Scope = denial.Scope
 		if download != nil ||
-			!validBrowserCancellation(trial, lastOutcome(trial.Events), target.preset.ExpectedWorkspace) {
+			!validBrowserCancellationProof(denial, trial, lastOutcome(trial.Events), target.preset.ExpectedWorkspace) {
 			return proof
 		}
 	}
@@ -159,7 +160,7 @@ func inspectBrowserTask(
 				action.ElementName == "Download fixture report" && action.PolicyEffect == browser.EffectUnknown &&
 				action.Effect == browser.EffectUnknown
 		}
-		if denial != nil && action.ID == denial.PreparedActionID {
+		if denial != nil && denial.Scope == browserDenialAssessmentScope && action.ID == denial.PreparedActionID {
 			allowed = !canceled && fixtureRemovalAction(action) && action.CurrentOrigin == fixture.origin &&
 				action.ActionHash == denial.ActionHash && action.PolicyRevision == denial.PolicyRevision &&
 				invocation.State == browser.InvocationCanceled && invocation.AcceptedAt == 0 &&
@@ -175,7 +176,8 @@ func inspectBrowserTask(
 			proof.Navigations++
 		}
 	}
-	if proof.Sessions == 0 || proof.Navigations == 0 || len(used) != len(prepared) || denial != nil && !canceled {
+	if proof.Sessions == 0 || proof.Navigations == 0 || len(used) != len(prepared) ||
+		denial != nil && denial.Scope == browserDenialAssessmentScope && !canceled {
 		return proof
 	}
 	proof.Code = "native_delivery_unavailable"
@@ -211,6 +213,13 @@ func inspectBrowserTask(
 		if message == nil || message.AgentID != trial.AgentID || message.SessionKey != trial.SessionKey {
 			return proof
 		}
+		if denial != nil && denial.Scope == browserQuestionDenialAssessmentScope &&
+			intent.ID == denial.Cancellation.PromptDeliveryID {
+			if !observedBrowserPermissionPrompt(trial, denial, intent, target) {
+				return proof
+			}
+			proof.PermissionPromptDeliveries++
+		}
 		if !message.Metadata.IsFinalReply() && !message.Metadata.IsFinal() {
 			continue
 		}
@@ -234,7 +243,8 @@ func inspectBrowserTask(
 		seen[id] = true
 	}
 	proof.FinalDeliveries = len(seen)
-	if len(finals) == 0 || len(seen) != len(finals) {
+	if len(finals) == 0 || len(seen) != len(finals) ||
+		denial != nil && denial.Scope == browserQuestionDenialAssessmentScope && proof.PermissionPromptDeliveries != 1 {
 		return proof
 	}
 	proof.LogicalSettled = settled

@@ -74,6 +74,12 @@ type Expectation struct {
 	Contains string `json:"contains,omitempty"`
 }
 
+func (expected Expectation) matches(kind, content string) bool {
+	matched := expected.Kind == kind || expected.Kind == "question_or_approval" &&
+		(kind == "question" || kind == "approval")
+	return matched && (expected.Contains == "" || strings.Contains(content, expected.Contains))
+}
+
 type Limits struct {
 	MaxUserTurns   int    `json:"max_user_turns"`
 	TurnTimeout    string `json:"turn_timeout"`
@@ -132,6 +138,12 @@ func (c Case) Validate() error {
 		return ErrInvalidCase
 	}
 	for _, step := range c.Driver.Steps {
+		if step.WaitFor.Kind == "question_or_approval" && (c.Browser == nil || c.Browser.Scenario != "denied") {
+			return ErrInvalidCase
+		}
+		if step.WaitFor.Kind == "question_or_approval" && !requiredRubric(c.Rubric) {
+			return ErrInvalidCase
+		}
 		if step.Action.Kind == "confirm" || step.Action.Kind == "allow_once" {
 			pdfOutput := c.PDF != nil && c.PDF.Output == "required"
 			browserDownload := c.Browser != nil && c.Browser.Scenario == "artifact" && step.Action.Kind == "allow_once"
@@ -221,7 +233,8 @@ func (driver Driver) validate(limits Limits) error {
 	}
 	for _, step := range driver.Steps {
 		if step.Action.validate(driver.Facts) != nil ||
-			!slices.Contains([]string{"final", "question", "approval"}, step.WaitFor.Kind) ||
+			!slices.Contains([]string{"final", "question", "approval", "question_or_approval"}, step.WaitFor.Kind) ||
+			step.WaitFor.Kind == "question_or_approval" && step.Action.Kind != "cancel" ||
 			step.WaitFor.Contains != "" && !boundedText(step.WaitFor.Contains, 4096) {
 			return ErrInvalidCase
 		}

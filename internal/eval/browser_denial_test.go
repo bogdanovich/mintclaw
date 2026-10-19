@@ -404,7 +404,11 @@ func TestBrowserDenialRejectsUnsettledOrAcceptedNativeInvocation(t *testing.T) {
 }
 
 func TestBrowserDenialRequiresNativeCancellationControls(t *testing.T) {
-	control := newBrowserDenialControl(t)
+	testBrowserCancellationControlBinding(t, newBrowserDenialControl(t))
+}
+
+func testBrowserCancellationControlBinding(t *testing.T, control *browserArtifactControl) {
+	t.Helper()
 	trial := control.trial
 	observed, err := observeBrowserNative(t.Context(), control.fixture.workspace, nil, nil)
 	if err != nil {
@@ -438,14 +442,18 @@ func TestBrowserDenialRequiresNativeCancellationControls(t *testing.T) {
 				case "missing-controls":
 					metadata.InteractionControls = ""
 				case "wrong-kind":
-					metadata.InteractionKind = "question"
+					if metadata.InteractionKind == "question" {
+						metadata.InteractionKind = "approval"
+					} else {
+						metadata.InteractionKind = "question"
+					}
 				case "wrong-controls":
 					metadata.InteractionControls = bus.OutboundInteractionControlsPrompt
 				}
 			}
 			native := inspectBrowserTask(trial, control.target(), control.page, copy, true, nil, proof)
 			if !found || native.Code == "native_post_stop_observed" || native.FinalDeliveries != 0 {
-				t.Fatal("native cancellation without matching approval/remove metadata was accepted", mode)
+				t.Fatal("native cancellation without matching interaction/remove metadata was accepted", mode)
 			}
 		})
 	}

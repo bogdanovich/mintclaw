@@ -46,9 +46,14 @@ func validBrowserTaskProof(trial Trial, proof *BrowserTaskEvidence, scope string
 		proof.Navigations < 1 || proof.Navigations > proof.Invocations || !proof.LogicalSettled || !proof.TemporaryEmpty {
 		return false
 	}
+	if scope == browserQuestionDenialAssessmentScope && proof.PermissionPromptDeliveries != 1 ||
+		scope != browserQuestionDenialAssessmentScope && proof.PermissionPromptDeliveries != 0 {
+		return false
+	}
 	finals := 0
 	for _, event := range trial.Events {
-		if event.Kind == "final" || scope == browserDenialAssessmentScope && event.Kind == "canceled" {
+		if event.Kind == "final" || event.Kind == "canceled" &&
+			(scope == browserDenialAssessmentScope || scope == browserQuestionDenialAssessmentScope) {
 			finals++
 		}
 	}
