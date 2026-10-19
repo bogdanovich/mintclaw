@@ -1,10 +1,11 @@
 # Phone approval without a short response race
 
-Status: reviewed, qualified and deployed on 2026-10-18 at merge
-`80f00e37a0a915444fe1a8d65af7f65a402d0adf`. The owner's fresh Facebook
-pilot resumed automatically but stopped at TOTP. The generic submit-readiness
-correction is also deployed at `51426f6ac5e6ad9ee6cc977b1012834ee572af66`;
-authentication remains a separate gate. See the
+Status: reviewed, qualified and deployed. The latest live-context correction,
+PR #1792 / `77c79cd50e61ce50d75b8fe0e4b60a63f56b5fda`, was verified on
+2026-10-19 UTC. It preserves the original root context while delivering the
+current decision and fresh-resource instructions after phone approval. The
+two-hour wait and generic submit-readiness correction remain included.
+Real Facebook authentication remains a separate fresh owner-pilot gate; see
 [rollout evidence](credential-website-login-rollout.md).
 
 ## User behavior
