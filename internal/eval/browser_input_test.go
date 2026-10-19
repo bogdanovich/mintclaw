@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -23,7 +24,39 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
-type browserInputWorker struct{ *browserReadWorker }
+type browserInputWorker struct {
+	*browserReadWorker
+	values map[string]string
+}
+
+func (worker *browserInputWorker) AuthorizeFill(ctx context.Context, expected, target string) error {
+	current, err := worker.NavigationIdentity(ctx)
+	if err != nil || current != expected || (target != "name" && target != "note") {
+		return browser.ErrStale
+	}
+	return nil
+}
+
+func (worker *browserInputWorker) Execute(ctx context.Context, action browser.DriverAction) error {
+	if action.Kind == browser.DriverFill && (action.Target == "name" || action.Target == "note") {
+		if worker.values == nil {
+			worker.values = map[string]string{}
+		}
+		worker.values[action.Target] = action.Value
+		return nil
+	}
+	return worker.browserReadWorker.Execute(ctx, action)
+}
+
+func (worker *browserInputWorker) ExecuteAfterNavigationCheck(
+	ctx context.Context, expected string, action browser.DriverAction,
+) error {
+	current, _ := worker.NavigationIdentity(ctx)
+	if current != expected {
+		return browser.ErrStale
+	}
+	return worker.Execute(ctx, action)
+}
 
 func (worker *browserInputWorker) Open(context.Context, browser.WorkerOpenRequest) (browser.WorkerOpenResult, error) {
 	return browser.WorkerOpenResult{Owner: worker, Capabilities: browser.WorkerCapabilityActions}, nil
@@ -65,14 +98,29 @@ type browserInputControl struct {
 	store    string
 	broker   *browser.Broker
 	request  browser.PrepareActionRequest
+	worker   *browserInputWorker
 }
 
 // Native broker, registry and delivered outbox, with a stub browser/trace. This
 // tests admission contracts, not live model/browser or mutation qualification.
 func newBrowserInputControl(t *testing.T) *browserInputControl {
+	return browserInputControlWithLocalEdits(t, false)
+}
+
+func browserInputControlWithLocalEdits(t *testing.T, allow bool) *browserInputControl {
 	t.Helper()
 	f := newAdmissionFixture(t)
 	enableAdmissionBrowser(t, f)
+	if allow {
+		cfg := f.cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+		profile := cfg.Profiles["eval-browser"]
+		profile.Policy.Rules = append([]browserpolicy.Rule{{
+			ID: "edit", Decision: browserpolicy.DecisionAllow,
+			Match: browserpolicy.RuleMatch{Origins: profile.AllowedOrigins, Effects: []string{"local_edit"}},
+		}}, profile.Policy.Rules...)
+		cfg.Profiles["eval-browser"] = profile
+		f.cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = cfg
+	}
 	f.cfg.Diagnostics.TraceCapture = evalModelMetadataCapture()
 	target := admittedTarget{config: f.cfg, preset: f.preset, probe: f.probe}
 	target.probe.GitCommit, target.probe.BuildVersion = nativeModelTestCommit, "native-test"
@@ -88,7 +136,7 @@ func newBrowserInputControl(t *testing.T) *browserInputControl {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
-	worker := &browserInputWorker{&browserReadWorker{page: page, origin: "about:blank"}}
+	worker := &browserInputWorker{browserReadWorker: &browserReadWorker{page: page, origin: "about:blank"}}
 	broker, err := browser.NewBroker(f.cfg, store, worker)
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +253,7 @@ func newBrowserInputControl(t *testing.T) *browserInputControl {
 		t.Fatal(err)
 	}
 	control := &browserInputControl{
-		domain: domain, registry: registry, record: record, broker: broker, request: request,
+		domain: domain, registry: registry, record: record, broker: broker, request: request, worker: worker,
 		store: filepath.Join(f.workspace, "state/diagnostics/traces"),
 		prompt: Event{
 			Kind: "question", MessageID: "input-message", RequestID: "input-request", AgentID: record.Route.AgentID,
@@ -294,7 +342,8 @@ func TestBrowserInputExpandsOnlyTheNativeFieldFact(t *testing.T) {
 	}
 	trial := Trial{ExecutionVerdict: Pass}
 	domain.conclude(t.Context(), &trial)
-	if trial.EvidenceEligible || trial.Browser != nil {
+	if trial.EvidenceEligible || trial.Browser == nil || trial.Browser.FormInputs == nil ||
+		trial.Browser.FormInputs.Code == "native_inputs_observed" || trial.Browser.NativeAuthority == "observed" {
 		t.Fatal("input admission invented mutation, cleanup or judge eligibility")
 	}
 	if state := domain.fixture.snapshot(); len(state.submissions) != 0 || len(state.removals) != 0 {
@@ -488,7 +537,7 @@ func TestBrowserInputScansRawEvidenceBeforeProjection(t *testing.T) {
 			if err = c.domain.observe(t.Context(), c.prompt); !errors.Is(err, ErrPrivateEvidence) {
 				t.Fatal("original private bytes disappeared through decoding or earlier uncertainty", surface, err)
 			}
-			if len(c.domain.sentInputs) != 0 {
+			if len(c.domain.inputAttempts) != 0 {
 				t.Fatal("private evidence failure emitted an answer")
 			}
 		})
@@ -551,7 +600,7 @@ func TestBrowserInputRechecksNativeWaitingStateBeforeAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	request, _, err := c.domain.request(t.Context(), Action{Kind: "protected_answer", Fact: "name"}, c.prompt)
-	if err == nil || request.ID != "" || len(c.domain.sentInputs) != 0 {
+	if err == nil || request.ID != "" || len(c.domain.inputAttempts) != 0 {
 		t.Fatal("cached native target was used after its question stopped waiting", err)
 	}
 }

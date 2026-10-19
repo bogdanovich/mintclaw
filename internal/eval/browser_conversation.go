@@ -12,14 +12,14 @@ import (
 var errBrowserEvidence = errors.New("eval: native browser evidence unavailable")
 
 type browserConversation struct {
-	fixture    *browserFixture
-	questions  questionConversation
-	item       Case
-	target     admittedTarget
-	approval   *browserApprovalObservation
-	wire       *mediaWireObservation
-	input      *browserInputObservation
-	sentInputs map[string]bool
+	fixture       *browserFixture
+	questions     questionConversation
+	item          Case
+	target        admittedTarget
+	approval      *browserApprovalObservation
+	wire          *mediaWireObservation
+	input         *browserInputObservation
+	inputAttempts []browserInputAttempt
 }
 
 func newBrowserConversation(
@@ -72,6 +72,14 @@ func (domain *browserConversation) observe(ctx context.Context, prompt Event) er
 
 func (domain *browserConversation) conclude(_ context.Context, trial *Trial) {
 	trial.EvidenceEligible = false
+	if domain.item.Browser.Scenario == "submit" || domain.item.Browser.Scenario == "followup" {
+		inputs, err := domain.readFormInputs()
+		trial.Browser = &BrowserTrialEvidence{FormInputs: inputs}
+		if errors.Is(err, ErrPrivateEvidence) {
+			trial.Verdict, trial.Code = Fail, "private_native_input_evidence"
+			trial.ExecutionVerdict, trial.ExecutionCode = Fail, trial.Code
+		}
+	}
 	if domain.item.Browser.Scenario == "denied" {
 		trial.Browser = &BrowserTrialEvidence{Denial: domain.denialEvidence()}
 	}
