@@ -695,10 +695,21 @@ func requireNodeOutcomeOnlyPrompt(
 }
 
 func nodeP0LastToolPayload(call llmscenario.ProviderCall) (map[string]any, error) {
-	if len(call.Messages) == 0 {
+	index := len(call.Messages) - 1
+	for index >= 0 {
+		message := call.Messages[index]
+		if message.Role != "user" || message.PromptLayer != string(agent.PromptLayerContext) ||
+			message.PromptSlot != string(
+				agent.PromptSlotRuntime,
+			) || message.PromptSource != string(agent.PromptSourceRuntime) {
+			break
+		}
+		index--
+	}
+	if index < 0 {
 		return nil, errors.New("model received no tool result")
 	}
-	last := call.Messages[len(call.Messages)-1]
+	last := call.Messages[index]
 	if last.Role != "tool" {
 		return nil, fmt.Errorf("last message role = %q, want tool", last.Role)
 	}
@@ -711,6 +722,35 @@ func nodeP0LastToolPayload(call llmscenario.ProviderCall) (map[string]any, error
 		return nil, fmt.Errorf("decode tool result %q: %w", content, err)
 	}
 	return payload, nil
+}
+
+func TestNodeP0LastToolPayloadRequiresToolBeforeRuntimeContext(t *testing.T) {
+	tool := providers.Message{Role: "tool", Content: `{"status":"completed"}`}
+	runtimeContext := providers.Message{
+		Role: "user", Content: "current continuation facts",
+		PromptLayer: string(agent.PromptLayerContext), PromptSlot: string(agent.PromptSlotRuntime),
+		PromptSource: string(agent.PromptSourceRuntime),
+	}
+	untrusted := runtimeContext
+	untrusted.PromptSource = string(agent.PromptSourceUserMessage)
+	for _, scenario := range []struct {
+		name     string
+		messages []providers.Message
+		wantErr  bool
+	}{
+		{"tool", []providers.Message{tool}, false},
+		{"current-runtime", []providers.Message{tool, runtimeContext, runtimeContext}, false},
+		{"ordinary-user", []providers.Message{tool, {Role: "user", Content: "new request"}}, true},
+		{"untrusted-context", []providers.Message{tool, untrusted}, true},
+		{"no-tool", []providers.Message{runtimeContext}, true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			payload, err := nodeP0LastToolPayload(llmscenario.ProviderCall{Messages: scenario.messages})
+			if (err != nil) != scenario.wantErr || (err == nil && payload["status"] != "completed") {
+				t.Fatalf("tool payload = %v, error = %v, want error %v", payload, err, scenario.wantErr)
+			}
+		})
+	}
 }
 
 func nodeP0AvailableTarget(payload map[string]any) (string, error) {
