@@ -199,20 +199,29 @@ func (domain *questionConversation) record(id string) (interactions.Record, erro
 	if !validID(id) {
 		return interactions.Record{}, errQuestionEvidence
 	}
-	data, err := domain.read(domain.workspace, "state/interaction_registry.json", interactions.DefaultMaxBytes)
+	records, _, err := domain.records()
 	if err != nil {
 		return interactions.Record{}, err
 	}
-	defer clear(data)
-	snapshot, err := interactions.InspectSnapshot(data)
-	if err == nil {
-		for _, record := range snapshot.Records {
-			if record.ID == id {
-				return record, nil
-			}
+	for _, record := range records {
+		if record.ID == id {
+			return record, nil
 		}
 	}
 	return interactions.Record{}, errQuestionEvidence
+}
+
+func (domain *questionConversation) records() ([]interactions.Record, string, error) {
+	data, err := domain.read(domain.workspace, "state/interaction_registry.json", interactions.DefaultMaxBytes)
+	if err != nil {
+		return nil, "", err
+	}
+	defer clear(data)
+	snapshot, err := interactions.InspectSnapshot(data)
+	if err != nil {
+		return nil, "", errQuestionEvidence
+	}
+	return snapshot.Records, digest(data), nil
 }
 
 func (domain *questionConversation) read(path, name string, maximum int64) ([]byte, error) {

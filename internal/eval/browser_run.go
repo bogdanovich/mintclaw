@@ -32,15 +32,16 @@ func (receipt *BrowserFixtureHostEvidence) verdict() Verdict {
 }
 
 type BrowserTrialEvidence struct {
-	Version         int                      `json:"version"`
-	Scope           string                   `json:"scope"`
-	Fixture         *browserFixtureOracle    `json:"fixture,omitempty"`
-	NativeAuthority string                   `json:"native_authority"`
-	NativeCleanup   string                   `json:"native_cleanup"`
-	Read            *BrowserTaskEvidence     `json:"read,omitempty"`
-	Download        *BrowserDownloadEvidence `json:"download,omitempty"`
-	Artifact        *BrowserArtifactEvidence `json:"artifact,omitempty"`
-	Denial          *BrowserDenialEvidence   `json:"denial,omitempty"`
+	Version         int                        `json:"version"`
+	Scope           string                     `json:"scope"`
+	Fixture         *browserFixtureOracle      `json:"fixture,omitempty"`
+	NativeAuthority string                     `json:"native_authority"`
+	NativeCleanup   string                     `json:"native_cleanup"`
+	Read            *BrowserTaskEvidence       `json:"read,omitempty"`
+	Download        *BrowserDownloadEvidence   `json:"download,omitempty"`
+	Artifact        *BrowserArtifactEvidence   `json:"artifact,omitempty"`
+	Denial          *BrowserDenialEvidence     `json:"denial,omitempty"`
+	FormInputs      *BrowserFormInputsEvidence `json:"form_inputs,omitempty"`
 }
 
 type browserRun struct {
@@ -138,9 +139,11 @@ func (run *browserRun) finish(
 		clear(data)
 		var artifact *BrowserArtifactEvidence
 		var denial *BrowserDenialEvidence
+		var formInputs *BrowserFormInputsEvidence
 		if trial.Browser != nil {
 			artifact = trial.Browser.Artifact
 			denial = trial.Browser.Denial
+			formInputs = trial.Browser.FormInputs
 		}
 		trial.Browser = &BrowserTrialEvidence{
 			Version:         Version,
@@ -149,6 +152,7 @@ func (run *browserRun) finish(
 			NativeCleanup:   "unavailable",
 			Artifact:        artifact,
 			Denial:          denial,
+			FormInputs:      formInputs,
 		}
 		if err == nil {
 			trial.Browser.Fixture = &oracle

@@ -6,19 +6,24 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 )
 
+type browserInputTraceTarget struct {
+	target     browseraction.InputTargetObservation
+	generation string
+}
+
 // This projection correlates a native producer with one delivered question.
 // It does not authenticate tokens, supply values, or authorize browser effects.
 func projectBrowserInputTarget(
 	trace diagnostictrace.Trace, binding nativeModelBinding, record interactions.Record,
 	sha string, filter func(string) string,
-) (browseraction.InputTargetObservation, bool) {
+) (browserInputTraceTarget, bool) {
 	turn := projectNativeModelTrace(trace, binding, sha, filter)
 	if turn.Code != "observed" || trace.Outcome.Status != "suspended" || record.ProtectedAnswer == nil {
-		return browseraction.InputTargetObservation{}, false
+		return browserInputTraceTarget{}, false
 	}
 	type callIdentity struct{ id, generation string }
 	calls := map[callIdentity]bool{}
-	var selected browseraction.InputTargetObservation
+	var selected browserInputTraceTarget
 	terminal := false
 	originCalls := 0
 	for _, event := range trace.Records {
@@ -30,7 +35,7 @@ func projectBrowserInputTarget(
 		}
 		payload, err := decodeDocument[diagnostictrace.ToolPayload](event.Data, 16*1024)
 		if err != nil || payload.BrowserInputTarget != nil && payload.Tool != "browser_input" {
-			return browseraction.InputTargetObservation{}, false
+			return browserInputTraceTarget{}, false
 		}
 		if payload.Tool != "browser_input" {
 			continue
@@ -41,7 +46,7 @@ func projectBrowserInputTarget(
 			!boundedIdentity(event.Correlation.ToolCallID, 256) ||
 			!boundedIdentity(event.Correlation.ToolCallGeneration, 256) || !payload.Executed ||
 			payload.ArgumentsPreview != "" || payload.ResultPreview != "" {
-			return browseraction.InputTargetObservation{}, false
+			return browserInputTraceTarget{}, false
 		}
 		identity := callIdentity{event.Correlation.ToolCallID, event.Correlation.ToolCallGeneration}
 		if event.Kind == diagnostictrace.RecordToolCall {
@@ -50,34 +55,34 @@ func projectBrowserInputTarget(
 			}
 			if _, duplicate := calls[identity]; duplicate || payload.Status != "started" ||
 				payload.BrowserInputTarget != nil || !validDigest(payload.ArgsHash) || originCalls > 1 {
-				return browseraction.InputTargetObservation{}, false
+				return browserInputTraceTarget{}, false
 			}
 			calls[identity] = false
 			continue
 		}
 		completed, found := calls[identity]
 		if !found || completed {
-			return browseraction.InputTargetObservation{}, false
+			return browserInputTraceTarget{}, false
 		}
 		calls[identity] = true
 		if payload.BrowserInputTarget == nil {
 			if payload.Status != "completed" {
-				return browseraction.InputTargetObservation{}, false
+				return browserInputTraceTarget{}, false
 			}
 			continue
 		}
 		proof := payload.BrowserInputTarget
 		if payload.Status != "completed" || payload.IsError || !proof.Valid() ||
 			proof.InteractionID != record.ID || identity.id != record.Origin.ToolCallID ||
-			!proof.Target.MatchesToken(record.ProtectedAnswer.Token) || selected.Version != "" {
-			return browseraction.InputTargetObservation{}, false
+			!proof.Target.MatchesToken(record.ProtectedAnswer.Token) || selected.target.Version != "" {
+			return browserInputTraceTarget{}, false
 		}
-		selected = proof.Target
+		selected = browserInputTraceTarget{target: proof.Target, generation: identity.generation}
 	}
 	for _, completed := range calls {
 		if !completed {
-			return browseraction.InputTargetObservation{}, false
+			return browserInputTraceTarget{}, false
 		}
 	}
-	return selected, selected.Valid()
+	return selected, selected.target.Valid()
 }

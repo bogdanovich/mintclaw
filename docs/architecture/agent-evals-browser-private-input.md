@@ -154,6 +154,26 @@ The runner's private submit/followup gates remain closed. Native mutation/approv
 generation/cohort retention and post-stop privacy/cleanup assessment must be connected before any live private
 trial is admitted. No production deployment or successful live private-form result follows from this packet.
 
+### Accepted Input Checkpoint
+
+The subsequent B3 component retains each attempted answer's original native identity, fact handle and request
+ID, not its value or outgoing message body. It replaces the redundant sent-ID map with one bounded attempt
+sequence; an uncertain send still cannot be retried. The trace's exact source, digest, turn and tool-call
+generation survive the projection for later audit.
+
+`form_inputs` is an intermediate diagnostic checkpoint. It joins the unchanged delivered protected question,
+native accepted receipt and original ask owner/request to the existing native preparation, exact field and one
+successful fill invocation. Both the native registry and browser state are inspected from bounded original bytes
+before decoding. Their byte digests accompany the value-free projection. The broker's input digest is keyed;
+this observer does not invent a raw-value hash or decode a protected token to authenticate a fill.
+
+A successful fill can precede final interaction delivery, so the checkpoint explicitly retains whether the
+native record is still resuming or resolved. Neither status proves overall settlement. This checkpoint does not
+prove field readback, correct final submitted values, confirmation, action permission, retained context, delivery,
+privacy census or cleanup, and never admits a judge or makes a trial pass. Read/artifact/denial contracts reject
+a mixed-in form checkpoint. Private submit/followup runner gates remain closed until their complete independent
+contracts and bounded live experiments are connected.
+
 Only after B2 is reviewed and merged, generate fresh facts for the existing required browser cases and retain them
 in the runner's bounded private cohort. Expand a fact handle only at a freshly observed native protected prompt.
 Use registry/outbox/route/owner/operation bindings, not text-extracted IDs or an unauthenticated token decoder.

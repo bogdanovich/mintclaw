@@ -20,8 +20,11 @@ import (
 )
 
 type browserInputObservation struct {
-	record interactions.Record
-	target browseraction.InputTargetObservation
+	record                           interactions.Record
+	target                           browseraction.InputTargetObservation
+	traceID, traceSHA256, generation string
+	source                           diagnostictrace.Source
+	traceScope                       events.TraceScope
 }
 
 func (domain *browserConversation) observeQuestion(ctx context.Context, prompt Event) error {
@@ -92,7 +95,7 @@ func (domain *browserConversation) readInput(
 		AgentID: prompt.AgentID, SessionKey: prompt.SessionKey,
 		TraceScope: events.NewTraceScope(domain.questions.workspace, record.Origin.TurnID),
 	}
-	var selected browseraction.InputTargetObservation
+	var selected browserInputObservation
 	count := 0
 	var replace func(string) string
 	if domain.questions.filter != nil {
@@ -102,13 +105,16 @@ func (domain *browserConversation) readInput(
 		domain.questions.facts, domain.questions.filter, func(_ int, trace diagnostictrace.Trace, sha string) {
 			count++
 			if target, ok := projectBrowserInputTarget(trace, binding, record, sha, replace); ok {
-				selected = target
+				selected = browserInputObservation{
+					record: record, target: target.target, generation: target.generation,
+					traceID: trace.TraceID, traceSHA256: sha, source: trace.Source, traceScope: binding.TraceScope,
+				}
 			}
 		})
 	if reason == "raw_private_evidence" {
 		return nil, ErrPrivateEvidence
 	}
-	if reason != "" || count != 1 || !selected.Valid() {
+	if reason != "" || count != 1 || !selected.target.Valid() {
 		return nil, errBrowserEvidence
 	}
 	data, err := domain.questions.read(
@@ -121,10 +127,10 @@ func (domain *browserConversation) readInput(
 	}
 	defer clear(data)
 	snapshot, err := browser.InspectStateSnapshot(data)
-	if err != nil || !domain.inputSessionMatches(record, selected, snapshot, time.Now()) {
+	if err != nil || !domain.inputSessionMatches(record, selected.target, snapshot, time.Now()) {
 		return nil, errBrowserEvidence
 	}
-	return &browserInputObservation{record: record, target: selected}, nil
+	return &selected, nil
 }
 
 func (domain *browserConversation) inputSessionMatches(
@@ -174,8 +180,8 @@ func (domain *browserConversation) protectedInputRequest(
 		return protocol.MintClawMessage{}, err
 	}
 	input := domain.input
-	if input == nil || domain.item.Validate() != nil || domain.sentInputs[input.record.ID] ||
-		len(domain.sentInputs) >= 64 {
+	if input == nil || domain.item.Validate() != nil || domain.inputAttempted(input.record.ID) ||
+		len(domain.inputAttempts) >= 64 {
 		return protocol.MintClawMessage{}, errBrowserEvidence
 	}
 	admitted := false
@@ -196,15 +202,17 @@ func (domain *browserConversation) protectedInputRequest(
 	if !admitted || !found || value == "" || value == generatePrivateFact {
 		return protocol.MintClawMessage{}, errBrowserEvidence
 	}
-	if domain.sentInputs == nil {
-		domain.sentInputs = map[string]bool{}
-	}
-	// Fail closed on send uncertainty; this is not a replay/claim manager.
-	domain.sentInputs[input.record.ID] = true
-	return protocol.MintClawMessage{
+	now := time.Now()
+	request := protocol.MintClawMessage{
 		Type: protocol.TypeMessageSend, ID: uuid.NewString(), SessionID: domain.questions.sessionID,
-		Timestamp: time.Now().UnixMilli(), Payload: map[string]any{
+		Timestamp: now.UnixMilli(), Payload: map[string]any{
 			protocol.PayloadKeyContent: "/answer " + input.record.ShortID + " " + value,
 		},
-	}, nil
+	}
+	// Retain only the native pre-answer identity and handle, never the value or
+	// outgoing content. A send attempt still cannot be retried after uncertainty.
+	domain.inputAttempts = append(domain.inputAttempts, browserInputAttempt{
+		observation: *input, prompt: prompt, fact: handle, requestID: request.ID, attemptedAt: now,
+	})
+	return request, nil
 }
