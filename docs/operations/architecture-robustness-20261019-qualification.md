@@ -1,6 +1,6 @@
 # Interaction Contention Qualification
 
-Status: bounded local qualification for architecture finding A3. This records
+Status: bounded CI qualification for architecture finding A3. This records
 current behavior and the next admission contract. It does not claim a production
 incident, an OOM reproduction, or implemented production queue/deadline limits.
 
@@ -54,17 +54,41 @@ are not an exact process heap or retained-memory measurement.
 
 ## Execution evidence
 
-The initial local qualification attempt was inconclusive: the new test binary
-stalled at macOS `_dyld_start`, before Go runtime entry, with a 12 KiB process
-footprint and no test output. It was stopped without changing assertions or
-runtime behavior. No local normal or race pass is claimed for that attempt.
+The initial local qualification attempt was inconclusive: macOS stalled the
+new test binary at `_dyld_start` before Go runtime entry, with a 12 KiB process
+footprint and no test output. That attempt was stopped without changing test
+assertions or production behavior. It is not counted as a normal or race pass.
 
-The repository's normal CI suite runs every package with JSON test output;
-its critical runtime race suite runs all of `pkg/interactions`. These execute
-the bounded three-repetition tests. Record the observed queue sizes, timings,
-runner platform, exact tested head and successful normal/race job identities
-here after those checks complete. Budgets below remain admission targets until
-production enforcement is implemented.
+CI validated source head `1255e094a5b3cbb28bb370021106c12f6d1bcc82` on
+ubuntu-latest. The runner reported `go version go1.26.9 linux/amd64`.
+The [normal job](https://github.com/bogdanovich/mintclaw/actions/runs/39202805170/job/117899233013)
+and [race job](https://github.com/bogdanovich/mintclaw/actions/runs/39202805170/job/117899233072) both passed.
+This head includes both merged runtime fixes, so its full CI checks their
+combined result. The normal JSON log records all six subcase passes and both
+parent test passes; the race job runs the complete interaction package. Each
+test contains three independent repetitions.
+
+| Attempt | Queued observations | Serialized queue bytes | Durable snapshot bytes | Retained records/events | Producer elapsed |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 256 | 293691 | 1705 / 16384 | 1 / 1 | 619.415581ms |
+| 2 | 256 | 293691 | 1705 / 16384 | 1 / 1 | 890.363601ms |
+| 3 | 256 | 293691 | 1705 / 16384 | 1 / 1 | 1.002209634s |
+
+These are serialized payload bytes, not exact retained heap. The observations
+outlive the pruned records and snapshot limits; ordered delivery drains after
+the callback releases. This confirms that durable snapshot capacity is not a
+notification-backlog budget.
+
+| Attempt | Controlled live-lock hold | Total elapsed through recovery |
+| --- | --- | --- |
+| 1 | 1.251500433s | 1.252572217s |
+| 2 | 1.252015674s | 1.252936464s |
+| 3 | 1.251556594s | 1.252915371s |
+
+The hold duration is selected by the test. It is a measured lower bound on
+blocking for this workload, not a supported maximum latency. The committed
+record survives release and recovery. No permanently stalled holder, process
+OOM, production incident, or deployed guarantee is claimed.
 
 ## Next admission contract
 
