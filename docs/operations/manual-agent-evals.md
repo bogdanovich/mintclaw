@@ -311,6 +311,12 @@ are not token usage. Duplicate finals cannot double-count tokens. Offline grade 
 observation for its selected trials without target work. This is not all-call coverage: interrupted turns, missing
 provider usage and internal attempts remain unknown, and the top-level `usage` stays `unknown`.
 
+New native `model.response` trace payloads also retain optional `has_provider_usage`: `true` means the source
+response carried provider usage (including observed zero counts), and `false` means it did not. Older payloads
+without this member remain unknown, even if they contain token counters. This presence bit is a prerequisite
+for future bounded all-call collection, not an eval collector, an attempt-completeness witness or a new total.
+Existing eval reports and returned-final usage coverage are unchanged.
+
 The [target usage v1 pilot](manual-agent-evals-target-usage-v1-pilot-20261018.md) passed four general trials but found
 no target usage blocks on the non-streaming wire. Native outbox counters demonstrated a channel projection gap;
 the original receipt stays unknown. Its one regrade retained three judge errors instead of retrying them away.
