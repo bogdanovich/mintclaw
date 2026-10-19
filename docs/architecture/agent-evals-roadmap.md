@@ -115,7 +115,9 @@ this negative checkpoint result instead of accepting arbitrary finals or retryin
 | E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Read trial/regrade passed after #1754; artifact first attempt inconclusive; denial assessment merged in #1786, first attempt failed an ordinary-question/native-approval mismatch; adaptive private input, remaining scenarios and domain qualification pending |
 | E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Repeats/all-trial regrade/comparison (#1588), owned gateway (#1639), file observations (#1648) and explicit allowlisted seed provisioning (#1665) merged; Linux general repeats/regrade/error comparison exercised; per-trial/effective-input witnesses and domain qualification pending |
 
-E5's next narrow prerequisite is explicit owned-profile metadata capture, described in the
+E5's explicit owned-profile metadata capture prerequisite merged in #1801, with
+[validation and preserved failures](../operations/manual-agent-evals-model-metadata-validation-20261019.md).
+It is described in the
 [operator guide](../operations/manual-agent-evals.md#opt-in-model-metadata-capture): fixed native metadata-only
 limits, no attached targets/content previews/alternate roots, fresh preparation without old traces, and post-stop
 raw privacy inspection even without private facts. Capture alone does not provide an effective-input witness or
