@@ -68,6 +68,29 @@ not raw protected content, provider wire bytes, an individually attested skill c
 Fresh absolute paths, time, model replies and tool loops can legitimately change hashes. Comparison reports drift,
 not normalized inputs or causal quality attribution; instruction/skill and all-call-model unknowns remain explicit.
 
+### Runtime-Labeled System Sources
+
+New native requests may additionally carry `system_sources`, the shared
+[producer witness](native-system-source-fingerprints.md). The eval consumer retains and validates that typed
+witness per request; it never reconstructs source content from current workspace files. Its scope is filtered
+runtime-labeled system text before provider serialization: workspace definition, skill catalog and active skills.
+It does not identify individual skill manifests, helper versions, every instruction root or provider wire bytes.
+
+Comparison reports `native_workspace_definition`, `native_skill_catalog` and `native_active_skills` separately
+from aggregate `native_effective_requests`. Each group is a case-bound, duplicate-preserving multiset across routed
+requests. Paths, catalog rendering and varying tool loops can legitimately change these observations; changes are
+not normalized versions or causal explanations. Comparing a source group requires observed native records and
+valid observed source witnesses on every routed request on both sides. Otherwise
+`baseline_native_system_sources` or `current_native_system_sources` preserves the missing coverage, rather than
+treating unknown sources as empty. An observed zero-part group has the native canonical empty-array hash and
+can differ from a known nonempty group.
+
+Legacy absent and explicit unavailable witnesses remain distinct in frozen reports. Malformed source hashes,
+counts or scope refuse trace projection and cannot reach offline judging or comparison as valid observations.
+Grade preserves the validated source projection without reading current runtime state; historical reports are
+never backfilled. The broader `instructions_and_skills` unknown remains because this content-only witness does
+not establish complete file/version provenance. Deterministic controls do not qualify new live experiments.
+
 ## Offline And Retention
 
 Judge-only grade validates the selected frozen trial/route bindings and source identity and preserves their native
@@ -82,6 +105,6 @@ cryptographic authenticity certificate for reports edited by their owner. Do not
 concurrently or restart a used profile. Native traces may be truncated, pruned or never persisted; keep those gaps
 visible rather than retroactively backfilling historical reports.
 
-This observer does not finish automatic per-trial profile isolation, actual loaded skill-version attestation,
+This observer does not finish per-trial resource isolation, complete loaded skill-version attestation,
 remaining PDF/browser/adaptive scenarios, domain repeats or the full E0-E5 exit. Stub controls and an observed
 metadata record set are not live domain qualification.

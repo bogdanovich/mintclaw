@@ -19,7 +19,7 @@ import (
 )
 
 func TestNativeModelsRunGradeAndCompareWithoutRereadingRuntime(t *testing.T) {
-	for _, mode := range []string{"native_models", "native_models_retry"} {
+	for _, mode := range []string{"native_models", "native_models_retry", "native_models_sources"} {
 		t.Run(mode, func(t *testing.T) { testNativeModelsRunGradeAndCompare(t, mode) })
 	}
 }
@@ -54,6 +54,15 @@ func testNativeModelsRunGradeAndCompare(t *testing.T, mode string) {
 	if _, err = Compare(source.ReportDir, source.ReportDir); err != nil {
 		t.Fatal("qualified native observations were not readable offline", err)
 	}
+	for _, turn := range source.NativeModels.Turns {
+		for _, call := range turn.Calls {
+			if (call.SystemSources != nil) != (mode == "native_models_sources") ||
+				call.SystemSources != nil &&
+					!reflect.DeepEqual(call.SystemSources, nativeSystemSourceTestFingerprint()) {
+				t.Fatal("source witness was lost or invented from runtime files", mode)
+			}
+		}
+	}
 	// The historical projection must remain usable without runtime files or PID.
 	if err = os.RemoveAll(filepath.Join(fixture.workspace, "state", "diagnostics", "traces")); err != nil {
 		t.Fatal(err)
@@ -87,8 +96,23 @@ func testNativeModelsRunGradeAndCompare(t *testing.T, mode string) {
 	comparison, err := Compare(source.ReportDir, graded.ReportDir)
 	if err != nil || !comparison.CompatibleCases ||
 		slices.Contains(comparison.EnvironmentChanges, "native_effective_requests") ||
+		slices.Contains(comparison.EnvironmentChanges, "native_workspace_definition") ||
+		(mode == "native_models_sources") ==
+			slices.Contains(comparison.EnvironmentUnknowns, "baseline_native_system_sources") ||
 		comparison.Attribution != "not_established" {
 		t.Fatal("same historical model records were treated as a new model experiment", comparison, err)
+	}
+	if mode == "native_models_sources" {
+		witness := graded.NativeModels.Turns[0].Calls[0].SystemSources
+		original := *witness
+		witness.SkillCatalog.SHA256 = digest([]byte("different loaded catalog"))
+		writeAdmissionJSON(t, filepath.Join(graded.ReportDir, "run.json"), graded)
+		comparison, err = Compare(source.ReportDir, graded.ReportDir)
+		if err != nil || !slices.Contains(comparison.EnvironmentChanges, "native_skill_catalog") ||
+			slices.Contains(comparison.EnvironmentChanges, "native_effective_requests") {
+			t.Fatal("frozen source drift was lost or conflated with aggregate hashes", comparison, err)
+		}
+		*witness = original
 	}
 	graded.NativeModels.Turns[0].Calls[0].Inputs.Prompt = digest([]byte("different effective request"))
 	writeAdmissionJSON(t, filepath.Join(graded.ReportDir, "run.json"), graded)
@@ -111,6 +135,9 @@ func testNativeModelsRunGradeAndCompare(t *testing.T, mode string) {
 	}
 	if mode == "native_models_retry" {
 		variants = append(variants, "retry-count")
+	}
+	if mode == "native_models_sources" {
+		variants = append(variants, "system-source-hash", "system-source-count", "system-source-scope")
 	}
 	for _, variant := range variants {
 		t.Run(variant, func(t *testing.T) {
@@ -158,6 +185,12 @@ func testNativeModelsRunGradeAndCompare(t *testing.T, mode string) {
 				changed.NativeModels.Turns[0].Calls[1].RetryObserved = true
 			case "retry-count":
 				changed.NativeModels.Turns[0].RetryFallbackRecords = 0
+			case "system-source-hash":
+				changed.NativeModels.Turns[0].Calls[0].SystemSources.Workspace.SHA256 = "invalid"
+			case "system-source-count":
+				changed.NativeModels.Turns[0].Calls[0].SystemSources.SystemParts = 0
+			case "system-source-scope":
+				changed.NativeModels.Turns[0].Calls[0].SystemSources.Scope = "files_on_disk"
 			}
 			writeAdmissionJSON(t, filepath.Join(source.ReportDir, "run.json"), changed)
 			before := calls.Load()
