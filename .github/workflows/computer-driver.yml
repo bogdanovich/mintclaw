@@ -19,9 +19,13 @@ concurrency:
 
 jobs:
   linux-window-keys:
-    name: Private Linux window-key primitive
+    name: Private Linux ${{ matrix.candidate }} primitive
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: [window-keys, native-keyboard]
     env:
       CUA_TELEMETRY: '0'
       DO_NOT_TRACK: '1'
@@ -57,7 +61,8 @@ jobs:
         run: |
           bash scripts/internal/computer-driver/build-linux-key-probe.sh \
             --source "$GITHUB_WORKSPACE/.private-cua-source" \
-            --output "$RUNNER_TEMP/mintclaw-window-keys"
+            --output "$RUNNER_TEMP/mintclaw-window-keys" \
+            --candidate "${{ matrix.candidate }}"
 
       - name: Qualify only owned native window events, twenty repetitions
         env:
@@ -77,7 +82,7 @@ jobs:
         if: ${{ always() && steps.window_key_probe.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: computer-window-keys-probe-${{ github.event.pull_request.head.sha || github.sha }}
+          name: computer-${{ matrix.candidate }}-probe-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/mintclaw-window-keys/
           if-no-files-found: error
           retention-days: 3
