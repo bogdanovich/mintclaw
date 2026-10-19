@@ -163,13 +163,23 @@ def main():
                     return (entries[0].get_text().encode() == (prefix + text + suffix).encode()
                             and entries[1].get_text() == "GUARD_UNCHANGED")
 
+                def cleanup_observed(cleaned):
+                    current_devices = devices()
+                    return (entries[0].get_text() == prefix + "a" + suffix
+                            and entries[1].get_text() == "GUARD_UNCHANGED"
+                            and (current_devices == original if cleaned else len(current_devices) == len(original) + 4))
+
                 outcome = run(executable, args.process_mode,
                               {"socket": f"/tmp/.X11-unix/X{os.environ['MINTCLAW_PRIVATE_X_DISPLAY_NUMBER']}",
                                "screen": 0, "auth": list(bytes.fromhex(os.environ["MINTCLAW_PRIVATE_X_COOKIE"])),
                                "server": {"pid": int(os.environ["MINTCLAW_PRIVATE_XVFB_PID"]),
                                           "uid": os.getuid(), "root": root}},
                               {"window": target, "pid": os.getpid(), "lease_window": token,
-                               "lease_pid": os.getpid()}, chords, pump, process_ready, process_observed)
+                               "lease_pid": os.getpid()}, chords, pump, process_ready, process_observed, cleanup_observed)
+                if args.process_mode in {"keeper_crash_held", "group_term_held"}:
+                    # Wait past several server autorepeat periods. A removed
+                    # process/closed socket alone did not stop this regression.
+                    pump(0.75)
                 pump()
                 focus, revert = window(), integer()
                 get_focus(opened, C.byref(focus), C.byref(revert))

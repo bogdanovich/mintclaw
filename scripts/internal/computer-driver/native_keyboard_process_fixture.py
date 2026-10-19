@@ -40,14 +40,15 @@ def signal_owned_input(keeper, executable, signum):
         raise
 
 
-def run(executable, mode, bootstrap, binding, chords, pump, ready, observed):
-    allowed = {"normal", "cancel_held", "crash_held", "blocked_stop", "foreign_stop", "duplicate_permit", "wire_loss"}
+def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cleanup_observed):
+    allowed = {"normal", "cancel_held", "crash_held", "blocked_stop", "foreign_stop", "duplicate_permit", "wire_loss",
+               "keeper_crash_held", "group_term_held"}
     if mode not in allowed:
         raise RuntimeError("unknown private qualification mode")
     operation = list(secrets.token_bytes(32))
     parent, child = socket.socketpair()
     keeper = subprocess.Popen([str(executable), "--keeper"], stdin=child, stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL, close_fds=True)
+                              stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
     child.close()
     buffer = bytearray()
     result, keyboard, pending_ordinal = None, None, None
@@ -94,9 +95,30 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed):
                     keyboard = data["keyboard"]
                 elif kind == "edge":
                     ordinal, held = data["ordinal"], data["held"]
-                    if not injected and mode in {"cancel_held", "crash_held", "blocked_stop", "wire_loss"} and held:
+                    if not injected and mode in {"cancel_held", "crash_held", "blocked_stop", "wire_loss",
+                                                 "keeper_crash_held", "group_term_held"} and held:
                         injected = True
-                        if mode == "crash_held":
+                        if mode in {"keeper_crash_held", "group_term_held"}:
+                            # Retain and attest the runnable original child before
+                            # its parent dies. No signal is sent to help cleanup.
+                            fault_descriptor = signal_owned_input(keeper, executable, 0)
+                            effect_deadline = time.monotonic() + 0.25
+                            while not cleanup_observed(False) and time.monotonic() < effect_deadline:
+                                pump(0.002)
+                            if not cleanup_observed(False):
+                                raise RuntimeError("keeper loss did not exercise actual app-held input")
+                            cancelled_at = time.monotonic()
+                            if mode == "group_term_held":
+                                if os.getpgid(keeper.pid) != keeper.pid:
+                                    raise RuntimeError("fixture-owned native process session changed")
+                                # This session was created only for our retained
+                                # keeper and its original input child.
+                                os.killpg(keeper.pid, signal.SIGTERM)
+                            else:
+                                keeper.kill()  # retained, unreaped fixture-owned process only
+                            parent.close()
+                            lost_wire = True
+                        elif mode == "crash_held":
                             fault_descriptor = signal_owned_input(keeper, executable, signal.SIGKILL)
                             send("continue", operation=operation, ordinal=ordinal)
                         elif mode == "blocked_stop":
@@ -145,12 +167,22 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed):
                 send("finish", operation=operation)
                 sent_finish = False
             if lost_wire and keeper.poll() is not None:
-                result = {"wire_loss": True}
+                if mode in {"keeper_crash_held", "group_term_held"}:
+                    if time.monotonic() - cancelled_at >= 1:
+                        raise RuntimeError("keeper loss did not stop held native input within the fixture budget")
+                    if not cleanup_observed(True) or not select.select([fault_descriptor], [], [], 0)[0]:
+                        continue
+                    # Native/app observations do not manufacture the receipt
+                    # lost with the keeper. The real host must retain UNKNOWN.
+                    result = {"controller_loss": mode, "host_outcome": "unknown", "native_cleanup_observed": True}
+                else:
+                    result = {"wire_loss": True}
                 break
         if result is None:
             raise RuntimeError("private process qualification deadline")
         keeper.wait(timeout=2)
-        if lost_wire and keeper.returncode != 1:
+        expected_exit = -signal.SIGKILL if mode == "keeper_crash_held" else 1
+        if lost_wire and keeper.returncode != expected_exit:
             raise RuntimeError("lost-wire outcome must remain unconfirmed to its caller")
         if not lost_wire:
             if keeper.returncode != 0 or not result["cleanup_confirmed"]:

@@ -12,11 +12,12 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use mintclaw_native_keyboard::{
-    Binding, Endpoint, InputIdentity, Keeper, PairWitness, PreparedInput, PreparedKeeper,
-    ServerIdentity,
+    BackupCleanup, Binding, Endpoint, InputIdentity, Keeper, PairWitness, PreparedInput,
+    PreparedKeeper, ServerIdentity,
 };
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
@@ -24,6 +25,26 @@ use zeroize::{Zeroize, Zeroizing};
 type Result<T> = io::Result<T>;
 type Operation = [u8; 32];
 const MAX_FRAME: usize = 65536;
+static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn request_stop(_: libc::c_int) {
+    // Lock-free on this pinned x86_64 target. Do no IO/allocation in a handler.
+    STOP_REQUESTED.store(true, Ordering::Relaxed);
+}
+
+fn install_stop_handlers() -> Result<()> {
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    action.sa_sigaction = request_stop as *const () as usize;
+    unsafe {
+        libc::sigemptyset(&mut action.sa_mask);
+    }
+    for signal in [libc::SIGTERM, libc::SIGINT] {
+        if unsafe { libc::sigaction(signal, &action, std::ptr::null_mut()) } != 0 {
+            return Err(refused());
+        }
+    }
+    Ok(())
+}
 
 fn refused() -> io::Error {
     io::Error::new(
@@ -188,6 +209,7 @@ enum WorkerMessage {
         bootstrap: Bootstrap,
         binding: Binding,
         budget_ms: u32,
+        controller_token: u32,
     },
     Bind {
         operation: Operation,
@@ -290,6 +312,9 @@ impl Wire {
 
     fn transfer(&mut self, mut data: &mut [u8], writing: bool, deadline: Instant) -> Result<()> {
         while !data.is_empty() {
+            if STOP_REQUESTED.load(Ordering::Relaxed) {
+                return Err(refused());
+            }
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .ok_or_else(refused)?;
@@ -421,12 +446,13 @@ fn timeout(seconds: u64, overall: Instant) -> Instant {
     overall.min(Instant::now() + Duration::from_secs(seconds))
 }
 
-fn worker(mut wire: Wire, overall: Instant) -> Result<()> {
+fn worker(mut wire: Wire, parent: u32, overall: Instant) -> Result<()> {
     let WorkerMessage::Init {
         operation,
         bootstrap,
         binding,
         budget_ms,
+        controller_token,
     } = wire.receive(timeout(3, overall))?
     else {
         return Err(refused());
@@ -439,52 +465,70 @@ fn worker(mut wire: Wire, overall: Instant) -> Result<()> {
         binding,
         timeout(3, overall),
     )?;
-    wire.send(
-        &WorkerReply::Prepared {
-            operation,
-            identity: input.identity(),
-        },
+    let mut backup = BackupCleanup::prepare(
+        bootstrap.connect(timeout(3, overall))?,
+        binding,
+        parent,
+        controller_token,
+        input.identity(),
         timeout(3, overall),
     )?;
-    let WorkerMessage::Bind {
-        operation: key,
-        witness,
-    } = wire.receive(timeout(5, overall))?
-    else {
-        return Err(refused());
-    };
-    if key != operation {
-        return Err(refused());
-    }
-    let mut input = input.bind(witness, timeout(3, overall))?;
-    wire.send(&WorkerReply::Bound { operation }, timeout(3, overall))?;
-    let WorkerMessage::Begin { operation: key } = wire.receive(timeout(5, overall))? else {
-        return Err(refused());
-    };
-    if key != operation {
-        return Err(refused());
-    }
-    let deadline = overall.min(Instant::now() + Duration::from_millis(u64::from(budget_ms)));
-    input.begin(deadline)?;
-    wire.send(&WorkerReply::Begun { operation }, deadline)?;
-    loop {
-        match wire.receive(deadline)? {
-            WorkerMessage::Edge {
-                operation: key,
-                ordinal,
-                code,
-                press,
-            } if key == operation => {
-                input.edge(ordinal, code, press)?;
-                wire.send(&WorkerReply::Edge { operation, ordinal }, deadline)?;
-            }
-            WorkerMessage::End { operation: key } if key == operation => {
-                input.end()?;
-                return wire.send(&WorkerReply::Ended { operation }, deadline);
-            }
-            _ => return Err(refused()),
+    let result = (|| {
+        wire.send(
+            &WorkerReply::Prepared {
+                operation,
+                identity: input.identity(),
+            },
+            timeout(3, overall),
+        )?;
+        let WorkerMessage::Bind {
+            operation: key,
+            witness,
+        } = wire.receive(timeout(5, overall))?
+        else {
+            return Err(refused());
+        };
+        if key != operation {
+            return Err(refused());
         }
+        backup.bind(witness.clone(), timeout(3, overall))?;
+        let mut input = input.bind(witness, timeout(3, overall))?;
+        wire.send(&WorkerReply::Bound { operation }, timeout(3, overall))?;
+        let WorkerMessage::Begin { operation: key } = wire.receive(timeout(5, overall))? else {
+            return Err(refused());
+        };
+        if key != operation {
+            return Err(refused());
+        }
+        let deadline = overall.min(Instant::now() + Duration::from_millis(u64::from(budget_ms)));
+        input.begin(deadline)?;
+        wire.send(&WorkerReply::Begun { operation }, deadline)?;
+        loop {
+            match wire.receive(deadline)? {
+                WorkerMessage::Edge {
+                    operation: key,
+                    ordinal,
+                    code,
+                    press,
+                } if key == operation => {
+                    input.edge(ordinal, code, press)?;
+                    wire.send(&WorkerReply::Edge { operation, ordinal }, deadline)?;
+                }
+                WorkerMessage::End { operation: key } if key == operation => {
+                    input.end()?;
+                    return wire.send(&WorkerReply::Ended { operation }, deadline);
+                }
+                _ => return Err(refused()),
+            }
+        }
+    })();
+    if result.is_err() {
+        // Input has dropped before cleanup takeover. Notify a live primary
+        // without exiting and discarding the dormant original cleanup epoch.
+        let _ = wire.0.shutdown(std::net::Shutdown::Both);
+        backup.after_input_failure(overall);
     }
+    result
 }
 
 enum Permit {
@@ -504,6 +548,9 @@ fn wait_worker(
     deadline: Instant,
 ) -> Result<Option<WorkerReply>> {
     loop {
+        if STOP_REQUESTED.load(Ordering::Relaxed) {
+            return Err(refused());
+        }
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .ok_or_else(refused)?;
@@ -704,6 +751,7 @@ fn supervise(mut host: Wire, parent: u32, overall: Instant) -> Result<()> {
             },
             binding: start.binding,
             budget_ms: start.budget_ms,
+            controller_token: prepared.controller_token(),
         },
         timeout(3, overall),
     )?;
@@ -768,11 +816,12 @@ fn main() -> std::process::ExitCode {
     // panic payload containing protected auth/text/physical key sequences.
     std::panic::set_hook(Box::new(|_| {}));
     let result = (|| {
+        install_stop_handlers()?;
         let (wire, parent) = Wire::inherited()?;
         let overall = Instant::now() + Duration::from_secs(30);
         match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
             [mode] if mode == "--keeper" => supervise(wire, parent, overall),
-            [mode] if mode == "--input" => worker(wire, overall),
+            [mode] if mode == "--input" => worker(wire, parent, overall),
             _ => Err(refused()),
         }
     })();

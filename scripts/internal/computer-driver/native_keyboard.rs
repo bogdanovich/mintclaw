@@ -333,6 +333,7 @@ struct Watch {
     target_good: bool,
     pair_good: bool,
     input_gone: bool,
+    controller: Option<(u32, bool)>,
 }
 
 impl Watch {
@@ -367,6 +368,11 @@ impl Watch {
                     }
                     if event.window == input_token {
                         self.input_gone = true;
+                    }
+                    if let Some((token, gone)) = &mut self.controller {
+                        if event.window == *token {
+                            *gone = true;
+                        }
                     }
                 }
                 Event::UnmapNotify(event) if event.window == authority.binding.window => self.target_good = false,
@@ -431,6 +437,7 @@ fn observer(endpoint: &Endpoint) -> Result<u32> {
 pub(super) struct PreparedKeeper {
     control: Endpoint,
     authority: Authority,
+    observer: u32,
 }
 
 pub(super) struct PreparedInput {
@@ -589,14 +596,18 @@ impl Pair {
 
 impl PreparedKeeper {
     pub(super) fn prepare(control: Endpoint, binding: Binding, deadline: Instant) -> Result<Self> {
-        let authority = at(
+        let (observer, authority) = at(
             "native control preparation",
             control.transaction(deadline, || {
                 let observer = observer(&control)?;
-                Authority::subscribe(&control, binding, observer)
+                Ok((observer, Authority::subscribe(&control, binding, observer)?))
             }),
         )?;
-        Ok(Self { control, authority })
+        Ok(Self { control, authority, observer })
+    }
+
+    pub(super) fn controller_token(&self) -> u32 {
+        self.observer
     }
 
     /// The trusted host must have checked its original epoch after prepare().
@@ -646,7 +657,7 @@ impl PreparedKeeper {
             pair,
             input_token: identity.input_token,
             _input_process: input_process,
-            watch: Watch { target_good: true, pair_good: true, input_gone: false },
+            watch: Watch { target_good: true, pair_good: true, input_gone: false, controller: None },
             cleanup_result: None,
         };
         keeper.control.transaction(deadline, || {
@@ -670,6 +681,158 @@ impl PreparedKeeper {
     }
 }
 
+/// A dormant cleanup connection, retained in the input process before a pair
+/// exists. It never types and cannot take over while the original controller
+/// is alive. Its native epoch observations are not reconstructed after death.
+pub(super) struct BackupCleanup {
+    prepared: PreparedKeeper,
+    controller: Process,
+    input_process: Process,
+    input_token: u32,
+    pair: Option<Pair>,
+    watch: Watch,
+}
+
+impl BackupCleanup {
+    pub(super) fn prepare(
+        control: Endpoint,
+        binding: Binding,
+        controller_pid: u32,
+        controller_token: u32,
+        input: InputIdentity,
+        deadline: Instant,
+    ) -> Result<Self> {
+        let controller = Process::retain(controller_pid)?;
+        let input_process = Process::retain(std::process::id())?;
+        let prepared = PreparedKeeper::prepare(control, binding, deadline)?;
+        prepared.control.transaction(deadline, || {
+            if prepared.control.server() != input.server
+                || input.pid != std::process::id()
+                || controller_pid == std::process::id()
+                || controller_token <= 1
+                || controller_token == input.input_token
+                || !controller.alive()
+            {
+                return Err(unavailable());
+            }
+            let connection = &prepared.control.connection;
+            for (token, pid) in [(controller_token, controller_pid), (input.input_token, input.pid)] {
+                checked(
+                    checked(connection.change_window_attributes(
+                        token,
+                        &xproto::ChangeWindowAttributesAux::new().event_mask(xproto::EventMask::STRUCTURE_NOTIFY),
+                    ))?
+                    .check(),
+                )?;
+                let owner = checked(
+                    checked(connection.res_query_client_ids(&[res::ClientIdSpec {
+                        client: token,
+                        mask: res::ClientIdMask::LOCAL_CLIENT_PID,
+                    }]))?
+                    .reply(),
+                )?;
+                let attributes = checked(checked(connection.get_window_attributes(token))?.reply())?;
+                let geometry = checked(checked(connection.get_geometry(token))?.reply())?;
+                if owner.ids.len() != 1
+                    || owner.ids[0].spec.mask != res::ClientIdMask::LOCAL_CLIENT_PID
+                    || owner.ids[0].value != [pid]
+                    || attributes.class != xproto::WindowClass::INPUT_ONLY
+                    || attributes.map_state != xproto::MapState::UNMAPPED
+                    || geometry.root != prepared.control.root
+                {
+                    return Err(unavailable());
+                }
+            }
+            Ok(())
+        })?;
+        Ok(Self {
+            prepared,
+            controller,
+            input_process,
+            input_token: input.input_token,
+            pair: None,
+            watch: Watch {
+                target_good: true,
+                pair_good: true,
+                input_gone: false,
+                controller: Some((controller_token, false)),
+            },
+        })
+    }
+
+    pub(super) fn bind(&mut self, witness: PairWitness, deadline: Instant) -> Result<()> {
+        let pair = Pair::from_witness(witness)?;
+        self.prepared.control.transaction(deadline, || {
+            self.prepared.authority.check(&self.prepared.control)?;
+            pair.check(&self.prepared.control)?;
+            self.watch.drain(&self.prepared.control, &self.prepared.authority, &pair, self.input_token, true)?;
+            if !self.controller.alive()
+                || !self.watch.target_good
+                || !self.watch.pair_good
+                || self.watch.input_gone
+                || !matches!(self.watch.controller, Some((_, false)))
+            {
+                return Err(unavailable());
+            }
+            Ok(())
+        })?;
+        self.pair = Some(pair);
+        Ok(())
+    }
+
+    /// Closing the input transport alone does not release global MPX keys.
+    /// Wait only for the original pidfd, never infer death from a heartbeat or
+    /// wire timeout. The live primary remains the sole cleanup owner otherwise.
+    pub(super) fn after_input_failure(mut self, deadline: Instant) -> bool {
+        while self.controller.alive() && Instant::now() < deadline {
+            unsafe {
+                libc::poll(std::ptr::null_mut(), 0, 5);
+            }
+        }
+        if self.controller.alive() {
+            return false;
+        }
+        let Some(pair) = self.pair.take() else {
+            return false;
+        };
+        let fenced = self.prepared.control.transaction(Instant::now() + TRANSACTION, || {
+            pair.check(&self.prepared.control)?;
+            self.watch.drain(&self.prepared.control, &self.prepared.authority, &pair, self.input_token, false)?;
+            if !self.watch.pair_good {
+                return Err(unavailable());
+            }
+            let Some((token, gone)) = self.watch.controller else {
+                return Err(unavailable());
+            };
+            if !gone {
+                let killed = checked(self.prepared.control.connection.kill_client(token))?.check();
+                checked(checked(self.prepared.control.connection.get_input_focus())?.reply())?;
+                self.watch.drain(&self.prepared.control, &self.prepared.authority, &pair, self.input_token, false)?;
+                if !matches!(self.watch.controller, Some((_, true))) {
+                    checked(killed)?;
+                    return Err(unavailable());
+                }
+            }
+            Ok(())
+        });
+        // No owner with a mutating Drop exists until the original controller's
+        // queued requests are positively fenced. Unknown stays quarantined.
+        if fenced.is_err() {
+            return false;
+        }
+        let mut keeper = Keeper {
+            control: self.prepared.control,
+            authority: self.prepared.authority,
+            pair,
+            input_token: self.input_token,
+            _input_process: self.input_process,
+            watch: self.watch,
+            cleanup_result: None,
+        };
+        keeper.cleanup()
+    }
+}
+
 impl PreparedInput {
     pub(super) fn prepare(input: Endpoint, binding: Binding, deadline: Instant) -> Result<Self> {
         let (input_token, authority) = input.transaction(deadline, || {
@@ -690,7 +853,7 @@ impl PreparedInput {
 
     pub(super) fn bind(self, witness: PairWitness, deadline: Instant) -> Result<InputWorker> {
         let pair = Pair::from_witness(witness)?;
-        let mut watch = Watch { target_good: true, pair_good: true, input_gone: false };
+        let mut watch = Watch { target_good: true, pair_good: true, input_gone: false, controller: None };
         let event_base = self.input.transaction(deadline, || {
             self.authority.check(&self.input)?;
             pair.check(&self.input)?;
@@ -1380,8 +1543,9 @@ mod native {
     #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
     fn forged_destroy_event_cannot_attest_owned_client_cleanup() {
         let fixture = Fixture::new();
-        let session = fixture.session();
+        let mut session = fixture.session();
         let pair = session.pair.clone();
+        session.keeper.watch.controller = Some((session.input_token, false));
         fixture
             .endpoint
             .transaction(deadline(), || {
@@ -1403,6 +1567,9 @@ mod native {
                 )
             })
             .unwrap();
+        assert!(session.keeper.check(deadline()).is_err());
+        assert!(!session.keeper.watch.pair_good);
+        assert!(matches!(session.keeper.watch.controller, Some((_, false))));
         let receipt = session.run(&[vec![fixture.key]], deadline());
         assert!(!receipt.dispatched && !receipt.acknowledged && !receipt.cleanup_confirmed, "{receipt:?}");
         assert!(fixture.events().is_empty());

@@ -112,10 +112,10 @@ def main():
                                        stdin=subprocess.DEVNULL, stdout=host_log, stderr=subprocess.STDOUT,
                                        timeout=35, check=True)
                     host_report = (work / "host.log").read_text()
-                    if (len(re.findall(r"^--- PASS: TestPrivateNativeKeyboard", host_report, re.M)) != 7
+                    if (len(re.findall(r"^--- PASS: TestPrivateNativeKeyboard", host_report, re.M)) != 8
                             or "SKIP" in host_report or "FAIL" in host_report):
                         raise RuntimeError("original Go host generation cases missing")
-                    print(f"original Go host fixture round {attempt}: seven cases PASS", flush=True)
+                    print(f"original Go host fixture round {attempt}: eight cases PASS", flush=True)
                 print(f"native-keyboard fixture round {attempt}: ten cases PASS", flush=True)
             finally:
                 server.stdout.close()

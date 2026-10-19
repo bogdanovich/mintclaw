@@ -456,17 +456,40 @@ func TestPrivateNativeKeyboardWireLossRetainsUnknownHostOwnership(t *testing.T) 
 	fixture.heldOutsideWorker(t)
 }
 
-func TestPrivateNativeKeyboardCancellationInterruptsBlockedChildAcknowledgement(t *testing.T) {
+func TestPrivateNativeKeyboardKeeperLossRetainsUnknownHostOwnership(t *testing.T) {
 	fixture := newPrivateKeyboardFixture(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	owner := fixture.prepare(t, ctx)
+	owner := fixture.prepare(t, t.Context())
 	privateKeyboardAdmit(t, owner)
 	privateKeyboardAllow(t, owner)
 	step := privateKeyboardReceive(t, owner, "edge")
-	if *step.Held != 1 {
-		t.Fatal("blocked-child case did not exercise held state")
+	if *step.Held != 1 || fixture.events(t) < 1 {
+		t.Fatal("keeper loss did not exercise actual held input")
 	}
+	pidfd, _ := privateKeyboardOwnedInputChild(t, owner)
+	if err := owner.process.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.receive(); err == nil || owner.receipt != nil || owner.close() == nil {
+		t.Fatal("keeper loss manufactured a completion/cleanup receipt")
+	}
+	until := time.Now().Add(time.Second)
+	for {
+		process := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
+		if _, err := unix.Poll(process, 5); err != nil {
+			t.Fatal(err)
+		}
+		if process[0].Revents&unix.POLLIN != 0 {
+			break
+		}
+		if time.Now().After(until) {
+			t.Fatal("original backup input process did not finish after keeper loss")
+		}
+	}
+	fixture.heldOutsideWorker(t)
+}
+
+func privateKeyboardOwnedInputChild(t *testing.T, owner *privateKeyboard) (int, string) {
+	t.Helper()
 	parent := strconv.Itoa(owner.process.Process.Pid)
 	children, err := os.ReadFile("/proc/" + parent + "/task/" + parent + "/children")
 	pids := strings.Fields(string(children))
@@ -492,12 +515,27 @@ func TestPrivateNativeKeyboardCancellationInterruptsBlockedChildAcknowledgement(
 		!os.SameFile(childExecutable, parentExecutable) || !strings.Contains(string(status), "PPid:\t"+parent+"\n") {
 		t.Fatal("private input child's kernel identity changed")
 	}
-	if err = unix.PidfdSendSignal(pidfd, unix.SIGSTOP, nil, 0); err != nil {
+	return pidfd, statusPath
+}
+
+func TestPrivateNativeKeyboardCancellationInterruptsBlockedChildAcknowledgement(t *testing.T) {
+	fixture := newPrivateKeyboardFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	owner := fixture.prepare(t, ctx)
+	privateKeyboardAdmit(t, owner)
+	privateKeyboardAllow(t, owner)
+	step := privateKeyboardReceive(t, owner, "edge")
+	if *step.Held != 1 {
+		t.Fatal("blocked-child case did not exercise held state")
+	}
+	pidfd, statusPath := privateKeyboardOwnedInputChild(t, owner)
+	if err := unix.PidfdSendSignal(pidfd, unix.SIGSTOP, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	until := time.Now().Add(250 * time.Millisecond)
 	for {
-		status, err = os.ReadFile(statusPath)
+		status, err := os.ReadFile(statusPath)
 		if err == nil && strings.Contains(string(status), "State:\tT ") {
 			break
 		}

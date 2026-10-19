@@ -116,6 +116,7 @@ jobs:
             --process-worker "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-worker" \
             --process-worker-sha256 "$(sha256sum "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-worker" | cut -d ' ' -f 1)" \
             --process-modes normal cancel_held blocked_stop crash_held foreign_stop duplicate_permit wire_loss \
+              keeper_crash_held group_term_held \
             --host-probe "$RUNNER_TEMP/mintclaw-window-keys/native-host.test" \
             --host-probe-sha256 "$(sha256sum "$RUNNER_TEMP/mintclaw-window-keys/native-host.test" | cut -d ' ' -f 1)"
 
