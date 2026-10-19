@@ -5,6 +5,7 @@ package desktop
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 
@@ -142,8 +143,8 @@ func (lease *darwinFileLease) check() (err error) {
 	}()
 	// Drain before and after identity checks. Even delete/restore or chmod/restore
 	// is terminal; matching numbers at the end must not resurrect authority.
-	if !lease.eventsEmpty() {
-		return computer.ErrStale
+	if err = lease.checkEvents(); err != nil {
+		return err
 	}
 	var root, namedRoot, file, namedFile unix.Stat_t
 	if unix.Fstat(lease.root, &root) != nil || !sameDarwinFile(root, lease.rootInfo) ||
@@ -152,16 +153,28 @@ func (lease *darwinFileLease) check() (err error) {
 		!sameDarwinFile(root, namedRoot) ||
 		unix.Fstat(lease.file, &file) != nil || !lease.validFile(file) || !sameDarwinFile(file, lease.fileInfo) ||
 		unix.Fstatat(lease.root, lease.name, &namedFile, unix.AT_SYMLINK_NOFOLLOW) != nil ||
-		!lease.validFile(namedFile) || !sameDarwinFile(file, namedFile) || !lease.eventsEmpty() {
-		return computer.ErrStale
+		!lease.validFile(namedFile) || !sameDarwinFile(file, namedFile) {
+		return fmt.Errorf("%w: native lock identity changed", computer.ErrStale)
 	}
-	return nil
+	return lease.checkEvents()
 }
 
-func (lease *darwinFileLease) eventsEmpty() bool {
+func (lease *darwinFileLease) checkEvents() error {
 	var events [1]unix.Kevent_t
 	n, err := unix.Kevent(lease.queue, nil, events[:], &unix.Timespec{})
-	return err == nil && n == 0
+	if err != nil {
+		return fmt.Errorf("%w: native lock event read failed", computer.ErrStale)
+	}
+	if n != 0 {
+		source := "file"
+		if events[0].Ident == uint64(lease.root) {
+			source = "directory"
+		}
+		// Safe native metadata only: no path, UID, app content or raw syscall
+		// error. Public input checks still sanitize the result to ErrStale.
+		return fmt.Errorf("%w: native lock %s event flags %#x", computer.ErrStale, source, events[0].Fflags)
+	}
+	return nil
 }
 
 func (lease *darwinFileLease) close() error {

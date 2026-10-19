@@ -127,8 +127,8 @@ func TestDarwinInputFileExcludesSameAndOtherProcesses(t *testing.T) {
 	if err := child.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	if first.check() != nil {
-		t.Fatal("competing opens revoked original owner")
+	if err := first.check(); err != nil {
+		t.Fatal("competing opens revoked original owner", err)
 	}
 	if err := first.close(); err != nil || first.close() != nil {
 		t.Fatal("release was not idempotent", err)
