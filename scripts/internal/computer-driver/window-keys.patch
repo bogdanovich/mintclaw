@@ -1,0 +1,13 @@
+diff --git a/libs/cua-driver/rust/crates/platform-linux/Cargo.toml b/libs/cua-driver/rust/crates/platform-linux/Cargo.toml
+--- a/libs/cua-driver/rust/crates/platform-linux/Cargo.toml
++++ b/libs/cua-driver/rust/crates/platform-linux/Cargo.toml
+@@ -128,0 +129,2 @@
++# MintClaw private qualification only; never in default/portal feature sets.
++mintclaw-window-keys = []
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
+--- a/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
+@@ -26,0 +27,3 @@
++// Private, explicit native qualification; no public tool registration.
++#[cfg(feature = "mintclaw-window-keys")]
++pub mod mintclaw_window_keys;
