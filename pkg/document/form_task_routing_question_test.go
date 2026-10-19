@@ -1,6 +1,7 @@
 package document
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,38 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 )
+
+func TestFormTaskRouteQuestionBindingHintDoesNotMatchOtherProtectedQuestions(t *testing.T) {
+	_, _, _, _, _, answer := taskQuestionFixture(t)
+	if !IsFormTaskRouteQuestionBinding(&answer.Binding) {
+		t.Fatal("native task-scope binding was not recognized")
+	}
+	for _, binding := range []*interactions.ProtectedAnswerBinding{
+		nil,
+		{Namespace: "other-owner", Token: answer.Binding.Token},
+		{Namespace: FormProtectedAnswerNamespace, Token: "malformed"},
+	} {
+		if IsFormTaskRouteQuestionBinding(binding) {
+			t.Fatal("unrelated or malformed binding was treated as a task question")
+		}
+	}
+	envelope, err := decodeFormProtectedBindingEnvelope(answer.Binding.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"answer_binding", formIntakeBindingKind} {
+		envelope.Kind = kind
+		encoded, encodeErr := json.Marshal(envelope)
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		binding := answer.Binding
+		binding.Token = base64.RawURLEncoding.EncodeToString(encoded)
+		if IsFormTaskRouteQuestionBinding(&binding) {
+			t.Fatal("ordinary field or intake question gained task-scope precedence")
+		}
+	}
+}
 
 func taskQuestionFixture(t *testing.T) (*FormJobStore, FormJobStoreOptions, FormIntakeStartRequest,
 	FormTaskRouteSnapshot, *FormProtectedAnswerSink, interactions.ProtectedAnswerSinkRequest,
