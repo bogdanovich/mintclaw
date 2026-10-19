@@ -84,6 +84,9 @@ func TestGatewayDocumentIntakeUsesProductionCompositionAndOrdinaryTransport(t *t
 	if provider.intakeCalls.Load() == 0 {
 		t.Fatal("ordinary transport never invoked private interpretation")
 	}
+	if provider.routingCalls.Load() != 1 {
+		t.Fatal("ordinary form paragraph did not cross the private task-routing boundary exactly once")
+	}
 	for _, key := range fixture.Agent.Sessions.ListSessions() {
 		for _, message := range fixture.Agent.Sessions.GetHistory(key) {
 			encoded, err := json.Marshal(message)
@@ -158,6 +161,7 @@ func assertDocumentIntakeGatewayTraces(t *testing.T, workspace, digest string, f
 type documentIntakeGatewayE2EProvider struct {
 	*documentFormReviewE2EProvider
 	intakeCalls  atomic.Int32
+	routingCalls atomic.Int32
 	readEvidence bool
 }
 
@@ -166,6 +170,20 @@ func (provider *documentIntakeGatewayE2EProvider) Chat(
 	model string, options map[string]any,
 ) (*providers.LLMResponse, error) {
 	joined := documentProviderMessagesText(messages)
+	if protocoltypes.IsSensitiveRequest(ctx) && len(messages) == 2 &&
+		messages[0].Content == documentFormTaskRoutingPrompt {
+		var input struct {
+			Message     string `json:"current_message"`
+			Attachments int    `json:"attachment_count"`
+		}
+		if len(definitions) != 0 || json.Unmarshal([]byte(messages[1].Content), &input) != nil ||
+			input.Message != "The date is "+provider.privateValues[0]+" and the notes are "+provider.privateValues[1] ||
+			input.Attachments != 0 {
+			return nil, errors.New("private routing received an unexpected paragraph or ordinary tools")
+		}
+		provider.routingCalls.Add(1)
+		return llmscenario.TextResponse(`{"action":"continue_form"}`), nil
+	}
 	if provider.initialCalls == 2 && !provider.readEvidence {
 		provider.readEvidence = true
 		return llmscenario.ToolCallResponse(
