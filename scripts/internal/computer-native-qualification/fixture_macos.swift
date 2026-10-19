@@ -1,4 +1,23 @@
 import AppKit
+import CoreFoundation
+
+struct PreparedFixtureText {
+    let value: String
+    let utf16Caret: Int
+
+    init?(_ input: Any?) {
+        guard let prepared = input as? [String: Any],
+              let value = prepared["value"] as? String,
+              value.utf8.count <= 4096,
+              let number = prepared["caret"] as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              !CFNumberIsFloatType(number),
+              let caret = prepared["caret"] as? Int,
+              caret >= 0, caret <= value.unicodeScalars.count else { return nil }
+        self.value = value
+        self.utf16Caret = String(value.unicodeScalars.prefix(caret)).utf16.count
+    }
+}
 
 final class Fixture: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextFieldDelegate {
     var windows: [NSWindow] = []
@@ -14,6 +33,30 @@ final class Fixture: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextFi
     }
 
     func state() { emit(["kind": "state", "values": fields.map { $0.stringValue }, "counts": counts]) }
+
+    // Controller-only fixture seeding, never an evaluated model action. The
+    // protocol counts Unicode scalars, while AppKit selection ranges use UTF-16.
+    func prepareText(_ inspectID: String, prepared: PreparedFixtureText) {
+        guard windows[0].makeFirstResponder(nil) else {
+            emit(["kind": "fixture_error", "inspect_id": inspectID, "error_code": "editor_resign_failed"])
+            return
+        }
+        fields[0].stringValue = prepared.value
+        guard windows[0].makeFirstResponder(fields[0]),
+              let editor = fields[0].currentEditor() as? NSTextView,
+              editor.string == prepared.value else {
+            emit(["kind": "fixture_error", "inspect_id": inspectID, "error_code": "editor_unavailable"])
+            return
+        }
+        let selection = NSRange(location: prepared.utf16Caret, length: 0)
+        editor.setSelectedRange(selection)
+        guard editor.selectedRange() == selection else {
+            emit(["kind": "fixture_error", "inspect_id": inspectID, "error_code": "caret_setup_failed"])
+            return
+        }
+        emit(["kind": "prepared_text", "inspect_id": inspectID,
+              "values": fields.map { $0.stringValue }, "counts": counts])
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         for index in 0..<2 {
@@ -49,6 +92,11 @@ final class Fixture: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextFi
                       let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let inspectID = request["inspect_id"] as? String,
                       !inspectID.isEmpty, inspectID.utf8.count <= 128 else { continue }
+                if request["prepare_text"] != nil {
+                    guard let prepared = PreparedFixtureText(request["prepare_text"]) else { continue }
+                    DispatchQueue.main.async { self.prepareText(inspectID, prepared: prepared) }
+                    continue
+                }
                 DispatchQueue.main.async {
                     if request["advance_visual"] as? Bool == true {
                         self.headings[0].stringValue = "MintClaw fresh resumed frame"
@@ -86,8 +134,26 @@ final class Fixture: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextFi
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
+#if MINTCLAW_FIXTURE_TEXT_SELF_TEST
+let text = "A👩‍💻e\u{0301}|Z"
+// Exact Unicode-scalar boundaries, including inside the ZWJ and combining
+// sequences. Neither Swift Character counts nor byte offsets are AppKit ranges.
+for (caret, utf16Caret) in [0, 1, 3, 4, 6, 7, 8, 9, 10].enumerated() {
+    let prepared = PreparedFixtureText(["value": text, "caret": caret])
+    precondition(prepared?.value == text && prepared?.utf16Caret == utf16Caret)
+}
+for caret: Any in [-1, 10, true, false, 1.5, NSNumber(value: 1.0), "1", NSNull()] {
+    precondition(PreparedFixtureText(["value": text, "caret": caret]) == nil)
+}
+precondition(PreparedFixtureText(nil) == nil)
+precondition(PreparedFixtureText(["value": 1, "caret": 0]) == nil)
+precondition(PreparedFixtureText(["value": "", "caret": 0])?.utf16Caret == 0)
+precondition(PreparedFixtureText(["value": String(repeating: "é", count: 2049), "caret": 0]) == nil)
+print("Mac fixture text protocol and scalar/UTF-16 caret self-tests passed.")
+#else
 let app = NSApplication.shared
 let fixture = Fixture()
 app.setActivationPolicy(.regular)
 app.delegate = fixture
 app.run()
+#endif

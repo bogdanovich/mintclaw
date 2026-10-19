@@ -45,6 +45,32 @@ the native run unless explicitly staged; deterministic result-verifier tests run
 without macOS permissions. The launcher refuses a known locked/login screen;
 it does not retry after unlocking or change OS security settings automatically.
 
+## Nonempty caret corpus
+
+The Mac fixture now accepts the same controller-only bounded text/caret seeding
+protocol as the GTK fixture. It uses the real AppKit field editor and selection,
+not a custom accessibility setter or a model-visible setup command. Protocol
+carets count Unicode scalars; AppKit ranges count UTF-16 units. Desktop-free
+Swift self-tests cover the conversion, empty text, bounds and malformed values.
+
+Seven insertions exercise ASCII, Cyrillic, CJK, accented and combining text, an
+emoji ZWJ sequence and Arabic between exact sentinels. The prefix itself includes
+non-BMP, ZWJ and combining scalars, so a byte/UTF-16/grapheme index confusion
+cannot accidentally pass. Every case independently observes complete application
+state and an unchanged sibling field. The actual-app controller requires all
+seven named passes as well as its original effect checks; an old empty-field-only
+helper cannot establish this corpus's qualification.
+
+Before the first unlocked expanded run, the Mac helper's full-suite context
+budget is fixed at 150 seconds (formerly 90 for the smaller suite), with 160-second
+process, 170-second private command, 180-second invocation and four-minute outer
+test limits. This is qualification-only orchestration, not a production timeout
+change. Linux retains its original 90-second helper budget. No timeout is raised
+in response to an observed corpus performance failure.
+
+The first expanded Mac attempt refused at the lock-screen preflight with exit
+75; no new successful Mac corpus measurement is established by that attempt.
+
 ## Measured fixture result
 
 On October 18, 2026, the actual installed Intel Mac companion completed this
@@ -77,9 +103,9 @@ the explicitly selected GUI session, whereas macOS needs the actual app's TCC
 responsibility context. It does not qualify Linux input, a rebuilt companion
 identity, arbitrary native applications, pixel actions, hotkeys, scrolling,
 dragging, cancellation, held-state cleanup, desktop-wide arbitration or model
-tasks. The Mac insertion case begins in an empty field; it does not yet qualify
-the nonempty-caret/prefix/suffix corpus exercised separately on Linux. It does
-not repair Cua's insertion-to-replacement fallback or establish
+tasks. The earlier 41.47/47.83-second Mac measurements began in an empty field;
+they do not qualify the new nonempty-caret corpus. It does not repair Cua's
+insertion-to-replacement fallback or establish
 generic Linux accessibility-root/window identity.
 
 Keep native effect results distinct from the full
