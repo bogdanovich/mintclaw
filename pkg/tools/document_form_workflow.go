@@ -201,6 +201,8 @@ func (tool *DocumentTool) formWorkflow(
 		return tool.collectFormWorkflow(ctx, store, mediaOwner, owner, args, "collect")
 	case "continue":
 		return tool.continueFormWorkflow(ctx, store, mediaOwner, owner, args)
+	case "route":
+		return tool.routeFormTaskWorkflow(ctx, store, mediaOwner, owner, args)
 	case "pause", "resume":
 		return tool.setFormIntakeWorkflowState(ctx, store, mediaOwner, owner, args, formAction)
 	case "clarify", "back":
@@ -906,6 +908,7 @@ func (tool *DocumentTool) formEvidence(
 	projection.Evidence = &evidence
 	result := documentFormToolResult(projection)
 	result.ContextText, result.ContextMedia = read.ContextText, read.ContextMedia
+	result.ContextMediaRequiresVision = read.ContextMediaRequiresVision
 	return result
 }
 

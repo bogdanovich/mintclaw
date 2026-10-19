@@ -42,6 +42,10 @@ const (
 // delivery directives are grouped separately so output cannot acquire
 // contradictory execution or routing flags.
 type ToolResult struct {
+	// ContextInput is a freshly authorized user-input handoff, not durable
+	// history. The document runtime must re-admit its exact selectors/media;
+	// merely attaching a PDF to live model text does not grant tool authority.
+	ContextInput *ToolContextInput `json:"-"`
 	// ForLLM is the content sent to the LLM for context.
 	// Required for all results.
 	ForLLM string `json:"for_llm"`
@@ -91,6 +95,11 @@ type ToolResult struct {
 
 	Control  ToolControl  `json:"control,omitzero"`
 	Delivery ToolDelivery `json:"delivery,omitzero"`
+}
+
+type ToolContextInput struct {
+	Text  string
+	Media []string
 }
 
 // ToolControl carries runtime execution directives. It is not produced output

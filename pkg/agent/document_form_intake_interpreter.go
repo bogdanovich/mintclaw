@@ -206,7 +206,7 @@ type documentIntakeFieldWire struct {
 
 func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byte, error) {
 	pass := view.Pass
-	if pass.Input.AdmissionOrder < 0 || pass.Input.AdmissionOrder > document.MaxFormIntakeReceipts {
+	if pass.Input.AdmissionOrder < 0 || pass.Input.AdmissionOrder > document.MaxFormIntakeAdmissionOrder {
 		return nil, errDocumentIntakeInterpretationUnavailable
 	}
 	if pass.Input.Consumed || pass.Input.Text == "" || !utf8.ValidString(pass.Input.Text) ||
@@ -249,7 +249,7 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 	for _, input := range view.RelatedInputs {
 		relatedBytes += len(input.Text)
 		if input.Consumed || input.Text == "" || !utf8.ValidString(input.Text) ||
-			input.AdmissionOrder < 0 || input.AdmissionOrder > document.MaxFormIntakeReceipts ||
+			input.AdmissionOrder < 0 || input.AdmissionOrder > document.MaxFormIntakeAdmissionOrder ||
 			((pass.Input.AdmissionOrder == 0) != (input.AdmissionOrder == 0)) ||
 			(input.AdmissionOrder > 0 && (input.AdmissionOrder == pass.Input.AdmissionOrder ||
 				seenOrders[input.AdmissionOrder])) ||

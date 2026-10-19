@@ -207,6 +207,9 @@ func (store *FormJobStore) SetFormIntakeState(
 			) || record.Public.Revision != revision || record.Public.Revision == math.MaxInt64 {
 			return false, ErrFormJobConflict
 		}
+		if hasStagedFormIntake(source.Intake) {
+			return false, ErrFormJobConflict
+		}
 		for _, input := range source.Intake.Inputs {
 			if input.State == formIntakeInputStaged ||
 				state == FormIntakeClosed && input.State != formIntakeInputConsumed {

@@ -219,6 +219,7 @@ type liveToolContextProjection struct {
 	messageID              string
 	durableContent         string
 	durableMedia           []string
+	durableAttachments     []providers.Attachment
 	requiresDocumentVision bool
 }
 

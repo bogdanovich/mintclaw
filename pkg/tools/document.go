@@ -317,7 +317,7 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"type": "string",
 				"enum": []string{
 					"discover", "start", "collect", "continue", "clarify", "back", "status", "correct", "review",
-					"commit", "cancel", "clarify_intent", "evidence", "pause", "resume",
+					"commit", "cancel", "clarify_intent", "evidence", "pause", "resume", "route",
 				},
 				"description": "Agent-led protected form operation. discover returns a bounded field window and exact " +
 					"field_schema_digest; start prepares a job from that digest without asking a question and returns " +
@@ -499,6 +499,12 @@ func (*DocumentTool) ProtectedDurableArguments(args map[string]any) bool {
 // re-ask their bound field without a model-authored transition.
 func (*DocumentTool) ProtectedAnswerContinuationArguments(reference string) (map[string]any, error) {
 	reference = strings.TrimSpace(reference)
+	if _, _, err := document.ParseFormTaskRouteReference(reference); err == nil {
+		return map[string]any{"action": "form", "form_action": "route", "answer_ref": reference}, nil
+	}
+	if _, _, _, err := document.ParseFormTaskRouteAnswerReference(reference); err == nil {
+		return map[string]any{"action": "form", "form_action": "route", "answer_ref": reference}, nil
+	}
 	if _, _, err := document.ParseFormIntakeReference(reference); err == nil {
 		return map[string]any{"action": "form", "form_action": "continue", "answer_ref": reference}, nil
 	}
@@ -530,6 +536,9 @@ func (*DocumentTool) ProtectedAnswerContinuationFollowup(
 	if result == nil || result.IsError || strings.TrimSpace(result.ForLLM) == "" {
 		return nil, errors.New("protected form continuation result is unavailable")
 	}
+	if followup, handled, err := documentFormTaskFollowup(result); handled {
+		return followup, err
+	}
 	var projection safeDocumentFormResult
 	if err := json.Unmarshal([]byte(result.ForLLM), &projection); err != nil ||
 		projection.SchemaVersion != documentFormWorkflowSchemaVersion ||
@@ -551,6 +560,9 @@ func (tool *DocumentTool) ToolResultFollowup(
 ) (*toolshared.ToolOnlyFollowup, error) {
 	if result == nil || result.IsError || strings.TrimSpace(result.ForLLM) == "" {
 		return nil, nil
+	}
+	if followup, handled, err := documentFormTaskFollowup(result); handled {
+		return followup, err
 	}
 	var projection safeDocumentFormResult
 	if err := json.Unmarshal([]byte(result.ForLLM), &projection); err != nil {
@@ -1292,6 +1304,7 @@ func (tool *DocumentTool) render(
 	}
 	if !retain {
 		result.ContextMedia = refs
+		result.ContextMediaRequiresVision = len(refs) > 0
 		return result
 	}
 	result.Media = refs
@@ -1719,6 +1732,13 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 			if hasSource || !hasJob || hasAnswer || hasNavigation || hasLegacyEvent || !hasField || !hasQuestion ||
 				hasSchemaDigest {
 				return errors.New("form collect or correction requires job_id, field_id, and question")
+			}
+		case "route":
+			_, _, rootErr := document.ParseFormTaskRouteReference(stringDocumentArg(args, "answer_ref"))
+			_, _, _, answerErr := document.ParseFormTaskRouteAnswerReference(stringDocumentArg(args, "answer_ref"))
+			if hasSource || hasJob || hasNavigation || hasField || hasQuestion || !hasAnswer || hasLegacyEvent ||
+				hasSchemaDigest || hasFormSummary || hasCollectionPlan || hasCheckboxLabels || (rootErr != nil && answerErr != nil) {
+				return errors.New("form route requires only an exact protected task reference")
 			}
 		case "continue":
 			if hasSource || hasNavigation || hasField || hasQuestion || hasAnswer == hasLegacyEvent ||

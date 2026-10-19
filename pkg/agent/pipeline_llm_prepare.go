@@ -19,10 +19,9 @@ func (p *Pipeline) prepareLLMRequest(
 ) (llmStageResult, error) {
 	iteration := llm.iteration
 	if iteration > 1 {
-		exec.messages = resolveMediaRefs(
+		exec.messages = p.resolveFollowupMedia(
 			exec.messages,
-			p.Context.MediaResolver,
-			p.Context.CodingMedia,
+			ts,
 			p.maxMediaSize(),
 		)
 		usedVisionOverride, err := p.Context.ModelExecution.maybeApplyVisionExecutionState(ts.agent, exec)

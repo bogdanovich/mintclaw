@@ -13,9 +13,11 @@ import (
 )
 
 const (
-	MaxFormTaskRoutingPasses = 4
-	MaxFormTaskRoutingMedia  = 10
-	formTaskRoutePrefix      = "form_route."
+	MaxFormTaskRoutingPasses        = 4
+	MaxFormTaskRoutingMedia         = 10
+	MaxFormTaskRoutingRetainedBytes = 64 * 1024
+	MaxFormTaskRoutingPending       = 4
+	formTaskRoutePrefix             = "form_route."
 )
 
 type FormTaskRouteAction string
@@ -24,6 +26,7 @@ const (
 	FormTaskContinue FormTaskRouteAction = "continue_form"
 	FormTaskAsk      FormTaskRouteAction = "ask"
 	FormTaskSwitch   FormTaskRouteAction = "switch_task"
+	FormTaskKeep     FormTaskRouteAction = "keep_form"
 )
 
 type FormTaskRouteState string
@@ -53,18 +56,21 @@ type FormTaskRouteRequest struct {
 // FormTaskRouteSnapshot is a bounded private interpretation view. Its JSON
 // projection contains only native routing metadata, never the user request.
 type FormTaskRouteSnapshot struct {
-	Reference        string             `json:"reference"`
-	JobID            string             `json:"job_id"`
-	ModeID           string             `json:"mode_id"`
-	Revision         int64              `json:"revision"`
-	AdmittedRevision int64              `json:"-"`
-	State            FormTaskRouteState `json:"state"`
-	Passes           int                `json:"passes"`
-	FieldReference   string             `json:"field_reference,omitempty"`
-	Reused           bool               `json:"reused,omitempty"`
-	Text             string             `json:"-"`
-	MediaRefs        []string           `json:"-"`
-	Context          FormIntakeContext  `json:"-"`
+	HandoffTextBytes int                  `json:"-"`
+	Reference        string               `json:"reference"`
+	JobID            string               `json:"job_id"`
+	ModeID           string               `json:"mode_id"`
+	Revision         int64                `json:"revision"`
+	AdmittedRevision int64                `json:"-"`
+	GrantRevision    int64                `json:"-"`
+	State            FormTaskRouteState   `json:"state"`
+	Passes           int                  `json:"passes"`
+	FieldReference   string               `json:"field_reference,omitempty"`
+	Answer           *FormTaskRouteAnswer `json:"-"`
+	Reused           bool                 `json:"reused,omitempty"`
+	Text             string               `json:"-"`
+	MediaRefs        []string             `json:"-"`
+	Context          FormIntakeContext    `json:"-"`
 }
 
 type FormTaskRouteDecision struct {
@@ -93,6 +99,8 @@ type formTaskRouteStoredDecision struct {
 }
 
 type formTaskRouteStored struct {
+	AdmissionOrder   int                           `json:"admission_order"`
+	Context          FormIntakeContext             `json:"context"`
 	ID               string                        `json:"id"`
 	MessageDigest    string                        `json:"message_digest"`
 	BodyDigest       string                        `json:"body_digest"`
@@ -105,6 +113,10 @@ type formTaskRouteStored struct {
 	ReservedRevision int64                         `json:"reserved_revision,omitempty"`
 	Decisions        []formTaskRouteStoredDecision `json:"decisions,omitempty"`
 	FieldReference   string                        `json:"field_reference,omitempty"`
+	QuestionRound    int                           `json:"question_round,omitempty"`
+	Question         *formTaskRouteQuestion        `json:"question,omitempty"`
+	Answers          []formTaskRouteAnswerStored   `json:"answers,omitempty"`
+	ConsentAnswerID  string                        `json:"consent_answer_id,omitempty"`
 }
 
 func (store *FormJobStore) BeginFormTaskRoute(
@@ -142,20 +154,25 @@ func (store *FormJobStore) BeginFormTaskRoute(
 			result = formTaskRouteSnapshot(record.Public, mode, route, true)
 			return false, nil
 		}
-		if !formIntakeMutable(record.Public) || mode.State != FormIntakeActive ||
+		if !formIntakeMutable(record.Public) || !formIntakeCapturesRoute(mode) ||
 			record.Public.Revision != request.ExpectedRevision || len(record.PendingEvents) != 0 {
 			return false, ErrFormJobConflict
 		}
 		if len(mode.TaskRoutes) >= MaxFormIntakeReceipts ||
-			formIntakeProgress(record.Public, mode).TaskBytes+len(request.Text) > MaxFormIntakeInputBytes {
+			formIntakeProgress(record.Public, mode).TaskBytes+len(request.Text) > MaxFormTaskRoutingRetainedBytes {
 			return false, ErrFormJobCapacityExceeded
 		}
+		pending := 0
 		for _, route := range mode.TaskRoutes {
 			if formTaskRoutePending(route) {
-				return false, ErrFormJobConflict
+				pending++
 			}
 		}
+		if pending >= MaxFormTaskRoutingPending {
+			return false, ErrFormJobCapacityExceeded
+		}
 		route := formTaskRouteStored{
+			AdmissionOrder: nextFormIntakeAdmissionOrder(mode), Context: cloneFormIntakeContext(mode.Context),
 			ID: "form_route_" + identity[:32], MessageDigest: identity, BodyDigest: body,
 			Revision: record.Public.Revision, CreatedAt: now.UnixMilli(), State: FormTaskPending,
 			Text: request.Text, MediaRefs: slices.Clone(request.MediaRefs),
@@ -191,7 +208,7 @@ func (store *FormJobStore) ReserveFormTaskRoute(
 	err := store.updateFormTaskRoute(ctx, reference, owner, func(
 		record *FormJobRecord, mode *formIntakeStoredMode, route *formTaskRouteStored,
 	) (bool, error) {
-		if mode.State != FormIntakeActive ||
+		if !formIntakeCapturesRoute(mode) ||
 			(route.State != FormTaskPending && route.State != FormTaskVerify) {
 			return false, ErrFormJobConflict
 		}
@@ -235,7 +252,7 @@ func (store *FormJobStore) DecideFormTaskRoute(
 			result = formTaskRouteSnapshot(*record, mode, *route, true)
 			return false, nil
 		}
-		if mode.State != FormIntakeActive || record.Revision != request.ExpectedRevision ||
+		if !formIntakeCapturesRoute(mode) || record.Revision != request.ExpectedRevision ||
 			record.Revision != route.ReservedRevision || request.Pass != route.Passes ||
 			(route.State != FormTaskPending && route.State != FormTaskVerify) {
 			return false, ErrFormJobConflict
@@ -252,7 +269,7 @@ func (store *FormJobStore) DecideFormTaskRoute(
 		state := FormTaskQuestion
 		switch request.Action {
 		case FormTaskContinue:
-			if len(route.MediaRefs) == 0 && route.State != FormTaskVerify {
+			if len(route.MediaRefs) == 0 && route.State != FormTaskVerify && mode.State == FormIntakeActive {
 				state = FormTaskCurrent
 			}
 		case FormTaskSwitch:
@@ -289,17 +306,22 @@ func (store *FormJobStore) GrantFormTaskHandoff(
 			result.Progress, result.Reused = formIntakeProgress(*record, mode), true
 			return false, nil
 		}
-		if route.State != FormTaskReady || mode.State != FormIntakeActive ||
-			len(route.Decisions) == 0 || record.Revision != route.Decisions[len(route.Decisions)-1].Revision ||
+		if route.State != FormTaskReady || !formIntakeCapturesRoute(mode) ||
+			record.Revision != formTaskGrantRevision(*route) ||
 			record.Revision == math.MaxInt64 {
 			return false, ErrFormJobConflict
 		}
-		if slices.ContainsFunc(mode.Inputs, func(input formIntakeStoredInput) bool {
-			return input.State == formIntakeInputStaged
-		}) {
+		if hasStagedFormIntake(mode) {
 			return false, ErrFormJobConflict
 		}
 		result.Text, result.Media = route.Text, slices.Clone(route.MediaRefs)
+		for index := range route.Answers {
+			answer := &route.Answers[index]
+			if answer.ID == route.ConsentAnswerID && answer.ChoiceKind == "private" && answer.Choice == FormTaskSwitch {
+				result.Text = strings.TrimSpace(result.Text + "\n\n" + answer.Text)
+				answer.Text = ""
+			}
+		}
 		route.State, route.Text, route.MediaRefs = FormTaskGranted, "", nil
 		mode.State = FormIntakeSuspended
 		record.Revision++
@@ -316,6 +338,17 @@ func (store *FormJobStore) GrantFormTaskHandoff(
 func (store *FormJobStore) updateFormTaskRoute(
 	ctx context.Context, reference string, owner FormJobOwner,
 	mutate func(*FormJobRecord, *formIntakeStoredMode, *formTaskRouteStored) (bool, error),
+) error {
+	return store.updateFormTaskRouteKey(ctx, reference, owner, func(
+		record *FormJobRecord, mode *formIntakeStoredMode, route *formTaskRouteStored, _ []byte,
+	) (bool, error) {
+		return mutate(record, mode, route)
+	})
+}
+
+func (store *FormJobStore) updateFormTaskRouteKey(
+	ctx context.Context, reference string, owner FormJobOwner,
+	mutate func(*FormJobRecord, *formIntakeStoredMode, *formTaskRouteStored, []byte) (bool, error),
 ) error {
 	jobID, routeID, err := ParseFormTaskRouteReference(reference)
 	if err != nil {
@@ -338,7 +371,7 @@ func (store *FormJobStore) updateFormTaskRoute(
 		if index < 0 {
 			return false, ErrFormJobNotFound
 		}
-		changed, err := mutate(&record.Public, source.Intake, &source.Intake.TaskRoutes[index])
+		changed, err := mutate(&record.Public, source.Intake, &source.Intake.TaskRoutes[index], key)
 		if err != nil || !changed {
 			return false, err
 		}
@@ -370,11 +403,19 @@ func validFormTaskRoutingID(id, prefix string) bool {
 func formTaskRouteSnapshot(
 	record FormJobRecord, mode *formIntakeStoredMode, route formTaskRouteStored, reused bool,
 ) FormTaskRouteSnapshot {
+	handoffBytes := len(route.Text)
+	for _, answer := range route.Answers {
+		if answer.ID == route.ConsentAnswerID && answer.ChoiceKind == "private" && answer.Choice == FormTaskSwitch {
+			handoffBytes += 2 + len(answer.Text)
+		}
+	}
 	return FormTaskRouteSnapshot{
-		Reference: formTaskRoutePrefix + record.JobID + "." + route.ID,
-		JobID:     record.JobID, ModeID: mode.ID, Revision: record.Revision, AdmittedRevision: route.Revision,
+		HandoffTextBytes: handoffBytes,
+		GrantRevision:    formTaskGrantRevision(route),
+		Reference:        formTaskRoutePrefix + record.JobID + "." + route.ID,
+		JobID:            record.JobID, ModeID: mode.ID, Revision: record.Revision, AdmittedRevision: route.Revision,
 		State: route.State, Passes: route.Passes, FieldReference: route.FieldReference, Reused: reused,
-		Text: route.Text, MediaRefs: slices.Clone(route.MediaRefs), Context: cloneFormIntakeContext(mode.Context),
+		Text: route.Text, MediaRefs: slices.Clone(route.MediaRefs), Context: cloneFormIntakeContext(route.Context),
 	}
 }
 
@@ -458,17 +499,31 @@ func validateStoredFormTaskRoutes(record FormJobRecord, mode *formIntakeStoredMo
 		if !validFormTaskRouteDecisionState(route) {
 			return ErrFormJobRecordCorrupt
 		}
+		if err := validateStoredFormTaskQuestion(record, mode, route); err != nil {
+			return err
+		}
 	}
 	progress := formIntakeProgress(record, mode)
-	if pending > 1 || progress.TaskBytes > MaxFormIntakeInputBytes || mode.State == FormIntakeClosed && pending != 0 {
+	if pending > MaxFormTaskRoutingPending || progress.TaskBytes > MaxFormTaskRoutingRetainedBytes ||
+		mode.State == FormIntakeClosed && pending != 0 {
 		return ErrFormJobRecordCorrupt
 	}
 	return nil
 }
 
 func validFormTaskRouteDecisionState(route formTaskRouteStored) bool {
+	if route.ConsentAnswerID != "" {
+		switch formTaskRouteConsent(route) {
+		case FormTaskSwitch:
+			return route.State == FormTaskReady || route.State == FormTaskGranted
+		case FormTaskContinue:
+			return route.State == FormTaskCurrent || route.State == FormTaskKept
+		default:
+			return false
+		}
+	}
 	if len(route.Decisions) == 0 {
-		return route.State == FormTaskPending
+		return route.State == FormTaskPending || route.State == FormTaskQuestion || route.State == FormTaskKept
 	}
 	last := route.Decisions[len(route.Decisions)-1]
 	if last.Pass == route.Passes && last.Revision != route.ReservedRevision {
@@ -487,6 +542,30 @@ func validFormTaskRouteDecisionState(route formTaskRouteStored) bool {
 	default:
 		return false
 	}
+}
+
+func formTaskRouteConsent(route formTaskRouteStored) FormTaskRouteAction {
+	for _, answer := range route.Answers {
+		if answer.ID == route.ConsentAnswerID && answer.State == "handled" {
+			return answer.Choice
+		}
+	}
+	return ""
+}
+
+func formTaskGrantRevision(route formTaskRouteStored) int64 {
+	if route.ConsentAnswerID != "" {
+		for _, answer := range route.Answers {
+			if answer.ID == route.ConsentAnswerID && answer.Choice == FormTaskSwitch && answer.State == "handled" {
+				return answer.Revision
+			}
+		}
+		return 0
+	}
+	if len(route.Decisions) == 0 {
+		return 0
+	}
+	return route.Decisions[len(route.Decisions)-1].Revision
 }
 
 func formIntakeCapturesRoute(mode *formIntakeStoredMode) bool {
@@ -547,19 +626,75 @@ func (store *FormJobStore) validateRoutedFormAdmission(
 		return nil
 	}
 	jobID, routeID, err := ParseFormTaskRouteReference(reference)
+	answerID := ""
+	if err != nil {
+		jobID, routeID, answerID, err = ParseFormTaskRouteAnswerReference(reference)
+	}
 	if err != nil || jobID != record.JobID || identity != reference || staged ||
 		intent != interactions.ProtectedAnswerValue {
 		return ErrFormJobAnswerConflict
 	}
-	digest, err := store.formTaskRouteBodyDigest(text, nil)
-	if err != nil {
-		return err
-	}
 	for _, route := range mode.TaskRoutes {
-		if route.ID == routeID && route.State == FormTaskCurrent && len(route.MediaRefs) == 0 &&
-			constantTimeStringEqual(route.BodyDigest, digest) {
+		if route.ID != routeID {
+			continue
+		}
+		if answerID != "" {
+			for _, answer := range route.Answers {
+				if answer.ID != answerID {
+					continue
+				}
+				if answer.FieldReference != "" {
+					return store.validateRoutedFieldReplay(
+						record.JobID,
+						mode,
+						answer.FieldReference,
+						identity,
+						text,
+						intent,
+					)
+				}
+				if answer.State == "handled" && answer.ForForm && answer.Text == text {
+					return nil
+				}
+				return ErrFormJobAnswerConflict
+			}
+			return ErrFormJobAnswerConflict
+		}
+		if route.State != FormTaskCurrent {
+			continue
+		}
+		if route.FieldReference != "" {
+			return store.validateRoutedFieldReplay(record.JobID, mode, route.FieldReference, identity, text, intent)
+		}
+		if len(route.MediaRefs) > 0 && formTaskRouteConsent(route) != FormTaskContinue {
+			return ErrFormJobAnswerConflict
+		}
+		digest, digestErr := store.formTaskRouteBodyDigest(text, route.MediaRefs)
+		if digestErr == nil && constantTimeStringEqual(route.BodyDigest, digest) {
 			return nil
 		}
+		return ErrFormJobAnswerConflict
+	}
+	return ErrFormJobAnswerConflict
+}
+
+func (store *FormJobStore) validateRoutedFieldReplay(
+	jobID string,
+	mode *formIntakeStoredMode,
+	reference, identity, text string,
+	intent interactions.ProtectedAnswerIntent,
+) error {
+	job, inputID, parseErr := parseFormIntakeReceipt(reference)
+	index := formIntakeInputIndex(mode, inputID)
+	if parseErr != nil || job != jobID || index < 0 {
+		return ErrFormJobAnswerConflict
+	}
+	input := mode.Inputs[index]
+	digest, digestErr := store.formIntakeBodyDigest(input.Origin, intent, text)
+	expected := keyedDigest(store.profileKey, "intake_message", jobID, mode.ID, identity)
+	if digestErr == nil && constantTimeStringEqual(input.BodyDigest, digest) &&
+		constantTimeStringEqual(input.MessageDigest, expected) {
+		return nil
 	}
 	return ErrFormJobAnswerConflict
 }
@@ -567,9 +702,18 @@ func (store *FormJobStore) validateRoutedFormAdmission(
 func linkRoutedFormInput(jobID string, mode *formIntakeStoredMode, reference, inputID string) {
 	for index := range mode.TaskRoutes {
 		route := &mode.TaskRoutes[index]
+		for answerIndex := range route.Answers {
+			answer := &route.Answers[answerIndex]
+			if formTaskAnswerReference(jobID, route.ID, answer.ID) == reference {
+				answer.FieldReference = formIntakeReceiptPrefix + jobID + "." + inputID
+				answer.Text = ""
+				return
+			}
+		}
 		if formTaskRoutePrefix+jobID+"."+route.ID == reference {
 			route.FieldReference = formIntakeReceiptPrefix + jobID + "." + inputID
 			route.Text = ""
+			route.MediaRefs = nil
 			return
 		}
 	}

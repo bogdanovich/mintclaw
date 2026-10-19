@@ -170,19 +170,20 @@ const (
 )
 
 type formIntakeStoredInput struct {
-	ID            string                             `json:"id"`
-	MessageDigest string                             `json:"message_digest"`
-	BodyDigest    string                             `json:"body_digest"`
-	InteractionID string                             `json:"interaction_id,omitempty"`
-	State         formIntakeInputState               `json:"state"`
-	Intent        interactions.ProtectedAnswerIntent `json:"intent"`
-	Text          string                             `json:"text,omitempty"`
-	Origin        formIntakeBindingPayload           `json:"origin"`
-	CreatedAt     int64                              `json:"created_at"`
-	CommittedAt   int64                              `json:"committed_at,omitempty"`
-	Reservations  []formIntakeStoredPass             `json:"reservations,omitempty"`
-	OriginalBytes int                                `json:"original_bytes,omitempty"`
-	Accounted     []formIntakeSpan                   `json:"accounted,omitempty"`
+	AdmissionOrder int                                `json:"admission_order,omitempty"`
+	ID             string                             `json:"id"`
+	MessageDigest  string                             `json:"message_digest"`
+	BodyDigest     string                             `json:"body_digest"`
+	InteractionID  string                             `json:"interaction_id,omitempty"`
+	State          formIntakeInputState               `json:"state"`
+	Intent         interactions.ProtectedAnswerIntent `json:"intent"`
+	Text           string                             `json:"text,omitempty"`
+	Origin         formIntakeBindingPayload           `json:"origin"`
+	CreatedAt      int64                              `json:"created_at"`
+	CommittedAt    int64                              `json:"committed_at,omitempty"`
+	Reservations   []formIntakeStoredPass             `json:"reservations,omitempty"`
+	OriginalBytes  int                                `json:"original_bytes,omitempty"`
+	Accounted      []formIntakeSpan                   `json:"accounted,omitempty"`
 }
 
 // The bounded reservation list is also the budget: no separately mutable

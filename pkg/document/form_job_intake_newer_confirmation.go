@@ -9,7 +9,10 @@ func consumeOlderFormIntakeGuidance(
 	mode *formIntakeStoredMode, currentIndex int, schema FormFieldsFacts,
 	record FormJobRecord, currentValueIDs []string, outcome *formIntakeStoredOutcome,
 ) {
-	for index := 0; index < currentIndex; index++ {
+	for index := range mode.Inputs {
+		if formIntakeAdmissionOrder(mode, index) >= formIntakeAdmissionOrder(mode, currentIndex) {
+			continue
+		}
 		input := &mode.Inputs[index]
 		if input.State != formIntakeInputCommitted || !formIntakeTextAccounted(input.Text, input.Accounted) ||
 			formIntakeHasScopedInstruction(*input) && !formIntakeScopeCoverageComplete(*input, schema) {

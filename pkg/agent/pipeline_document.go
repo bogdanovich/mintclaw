@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 const protectedLocalPDFSelectorReceipt = "[local PDF selector omitted]"
@@ -34,6 +35,13 @@ type documentPromptRejection struct {
 }
 
 func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
+	if ts == nil {
+		return
+	}
+	p.prepareDocumentInput(ts, ts.userMessage, ts.media)
+}
+
+func (p *Pipeline) prepareDocumentInput(ts *turnState, message string, mediaRefs []string) {
 	if p == nil || ts == nil || ts.agent == nil {
 		return
 	}
@@ -42,12 +50,12 @@ func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
 	if turnProfileSkillAllowed(ts.profile, "pdf") && ts.agent.ContextBuilder != nil {
 		_, skillAvailable = ts.agent.ContextBuilder.ResolveSkillName("pdf")
 	}
-	localPaths := localPDFPathCandidates(ts.userMessage)
+	localPaths := localPDFPathCandidates(message)
 	ts.documentLocalPaths = append([]string(nil), localPaths...)
 	if workflowAllowed && skillAvailable && len(localPaths) > 0 {
 		ts.activeSkills = appendUniqueString(ts.activeSkills, "pdf")
 	}
-	if p.Context.MediaResolver == nil || len(ts.media) == 0 {
+	if p.Context.MediaResolver == nil || len(mediaRefs) == 0 {
 		return
 	}
 	resolver, ok := p.Context.MediaResolver.(document.OwnedMediaResolver)
@@ -58,7 +66,7 @@ func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
 	if err != nil {
 		return
 	}
-	for _, candidate := range ts.media {
+	for _, candidate := range mediaRefs {
 		ref := strings.TrimSpace(candidate)
 		if !strings.HasPrefix(ref, "media://") {
 			continue
@@ -183,6 +191,16 @@ func projectDocumentUserMessageForDurableBoundary(message string) string {
 	return projectDocumentLocalPathsForDurableMessage(message, localPDFPathCandidates(message))
 }
 
+// A native task grant authorizes only its new input. Reuse normal document
+// admission without changing the protected root message or its durable form.
+func (p *Pipeline) prepareDocumentHandoff(ts *turnState, input *toolshared.ToolContextInput) {
+	if input == nil || ts == nil {
+		return
+	}
+	ts.documentProjections, ts.documentRejections, ts.documentLocalPaths = nil, nil, nil
+	p.prepareDocumentInput(ts, input.Text, input.Media)
+}
+
 func isDocumentPathSpace(value byte) bool {
 	switch value {
 	case ' ', '\t', '\n', '\r', '\v', '\f':
@@ -271,7 +289,7 @@ func projectDocumentAttachments(
 	projected := append([]providers.Message(nil), messages...)
 	start := normalizeCurrentTurnStart(projected, currentTurnStart)
 	for index := start; index < len(projected); index++ {
-		if projected[index].Role != "user" || len(projected[index].Media) == 0 {
+		if (projected[index].Role != "user" && projected[index].Role != "tool") || len(projected[index].Media) == 0 {
 			continue
 		}
 		var promptProjections []documentPromptProjection
@@ -358,4 +376,19 @@ func (p *Pipeline) resolveDocumentTurnMedia(
 		maxMediaSize,
 		start,
 	)
+}
+
+// Tool media arrives after the initial user-input projection. Preserve PDF
+// identity before the generic resolver can replace it with a backing path.
+// Historical image resolution keeps its existing behavior.
+func (p *Pipeline) resolveFollowupMedia(
+	messages []providers.Message, ts *turnState, maxMediaSize int,
+) []providers.Message {
+	projected := projectDocumentAttachments(
+		messages,
+		promptCurrentTurnStart(messages, ts.userMessage, ts.media),
+		ts.documentProjections,
+		ts.documentRejections,
+	)
+	return resolveMediaRefs(projected, p.Context.MediaResolver, p.Context.CodingMedia, maxMediaSize)
 }

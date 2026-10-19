@@ -616,6 +616,7 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 			messageID:              message.LiveToolContextID,
 			durableContent:         durable.Content,
 			durableMedia:           append([]string(nil), durable.Media...),
+			durableAttachments:     append([]providers.Attachment(nil), durable.Attachments...),
 			requiresDocumentVision: requiresDocumentVision,
 		})
 		return
@@ -654,6 +655,7 @@ func consumeLiveToolContextMessages(
 			}
 			message.Content = projection.durableContent
 			message.Media = append([]string(nil), projection.durableMedia...)
+			message.Attachments = append([]providers.Attachment(nil), projection.durableAttachments...)
 			message.LiveToolContextID = ""
 		}
 	}
@@ -1190,6 +1192,10 @@ func (runner *toolLoopRunner) approveToolCall(
 	call.protectedResult = toolRegistry.ProtectedDurableResult(toolName, toolArgs)
 
 	execCtx := toolExecutionContextForTurn(turnCtx, ts)
+	execCtx = toolshared.WithToolLiveContextTextAllowance(
+		execCtx,
+		maxLiveToolContextTextBytes-runner.exec.liveToolContextTextBytes,
+	)
 	execCtx = runner.exec.protectedAnswerContinuation.documentIntakeProcessingContext(execCtx)
 	execCtx = toolshared.WithToolCallID(execCtx, tc.ID)
 	approvalBypass, trustedExecution := toolApprovalBypass(p.Cfg, toolRegistry, toolName, toolArgs)
@@ -1835,6 +1841,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
 	} else {
 		liveContextText := runner.takeLiveToolContextText(toolResult)
+		p.prepareDocumentHandoff(ts, toolResult.ContextInput)
 		hasLiveContextMedia := len(toolResult.ContextMedia) > 0
 		modelContextResult := toolResultForModelContext(toolName, toolResult)
 		toolResultMsg := buildToolResultJournalMessage(
@@ -1913,7 +1920,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				durableToolResultMsg,
 				liveContextText != "",
 				hasLiveContextMedia,
-				hasLiveContextMedia && (toolName == "document" || toolResult.ContextMediaRequiresVision),
+				hasLiveContextMedia && toolResult.ContextMediaRequiresVision,
 			)
 		}
 	}
@@ -2402,6 +2409,7 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	journalResult := *result
 	journalResult.ContextText = ""
 	journalResult.ContextMedia = nil
+	journalResult.ContextInput = nil
 	msg := buildToolResultJournalMessage(
 		toolCall.ID,
 		&journalResult,
