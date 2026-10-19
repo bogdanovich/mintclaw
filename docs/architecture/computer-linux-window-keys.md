@@ -56,7 +56,12 @@ pin and a new private output directory. It builds a library-test executable with
 Rust 1.97.1 and the explicit feature. Its checksum receipt is build metadata,
 **not** an `artifact.py` manifest or an authorization/qualification token.
 
-The separate CI job builds on an ephemeral runner and uses its own Xvfb server.
+The separate CI job builds on an ephemeral runner and uses its own Xvfb server
+with last-client reset disabled: each independent fixture closes its own app
+and worker connections. This changes only the disposable test server's lifetime,
+not native input/error behavior or an existing desktop's settings. Failed native
+runs retain the compiled probe and server diagnostics for investigation; an
+uploaded artifact does not mean the native gate passed.
 Six deterministic tests cover validation, stop boundaries, modifier state,
 partial/uncertain presses and every combination of release failures. The builder
 checks the exact unit/native test counts to reject empty-filter success. Four opt-in native

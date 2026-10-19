@@ -53,6 +53,7 @@ jobs:
           targets: x86_64-unknown-linux-gnu
 
       - name: Build and unit-test explicit private library feature
+        id: window_key_probe
         run: |
           bash scripts/internal/computer-driver/build-linux-key-probe.sh \
             --source "$GITHUB_WORKSPACE/.private-cua-source" \
@@ -63,12 +64,17 @@ jobs:
           MINTCLAW_WINDOW_KEYS_NATIVE: '1'
         run: |
           for attempt in {1..20}; do
-            timeout 20s xvfb-run -a --server-args='-screen 0 1280x800x24 -nolisten tcp' \
+            # Fixture connections intentionally close between tests. Keep this
+            # owned server alive instead of racing its last-client reset.
+            timeout 20s xvfb-run -a \
+              --error-file="$RUNNER_TEMP/mintclaw-window-keys/xvfb-${attempt}.log" \
+              --server-args='-screen 0 1280x800x24 -nolisten tcp -noreset' \
               "$RUNNER_TEMP/mintclaw-window-keys/window-keys.test" \
               input::mintclaw_window_keys::native:: --ignored --test-threads=1
           done
 
       - name: Preserve private probe and build receipt, not an admitted driver
+        if: ${{ always() && steps.window_key_probe.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: computer-window-keys-probe-${{ github.event.pull_request.head.sha || github.sha }}
