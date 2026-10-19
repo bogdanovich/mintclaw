@@ -82,6 +82,14 @@ driver and rubric stay unchanged, but its manifest hash now includes independent
 requires opted-in metadata capture. Known no-document evidence fails regardless of a positive judge; unknown
 legacy/incomplete evidence cannot pass. Consumer merge/tests alone are not a v2 experiment or E3 qualification.
 
+The [empty-fields v2 pilot](../operations/manual-agent-evals-pdf-empty-v2-pilot-20261019.md) on merged #1838 preserved
+one **inconclusive** attempt. Native BM25 and one document call succeeded, but Gemini then returned missing
+`thought_signature` HTTP 400; the unqualified error-final had no route identity. There was no field-read/question/
+judge qualification or offline regrade. All credential copies were removed and production was unchanged; the
+used fixture remains retained under unknown logical settlement. A protected live-call signature projection is a
+concrete separate runtime triage candidate, not a reason to loosen eval gates or rerun the task. E3 and remaining
+PDF/browser/private/adaptive/repeat/exit work remain open; no historical result is upgraded.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 
