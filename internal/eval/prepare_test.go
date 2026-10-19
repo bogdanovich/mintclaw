@@ -185,19 +185,30 @@ func TestPrepareProfileRefusesUnsafeInputsBeforeAllocation(t *testing.T) {
 }
 
 func TestPrepareProfileRejectsBroadSeedBeforeNativeRepository(t *testing.T) {
-	fixture := newAdmissionFixture(t)
-	fixture.cfg.Tools.Exec.Enabled = true
-	fixture.writeConfig(t)
-	lock := filepath.Join(fixture.home, config.SecurityConfigFile+".lock")
-	if err := os.Remove(lock); err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatal(err)
-	}
-	_, err := PrepareProfile(t.Context(), fixture.preset, fixture.home, t.TempDir())
-	if !errors.Is(err, ErrPreparation) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
-		t.Fatal("broad seed reached runtime", err)
-	}
-	if _, err = os.Lstat(lock); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("broad seed reached native lock/recovery", err)
+	for _, variant := range []string{"exec", "shared history"} {
+		t.Run(variant, func(t *testing.T) {
+			fixture := newAdmissionFixture(t)
+			if variant == "exec" {
+				fixture.cfg.Tools.Exec.Enabled = true
+			} else {
+				fixture.cfg.Session.Dimensions = []string{"sender"}
+			}
+			fixture.writeConfig(t)
+			lock := filepath.Join(fixture.home, config.SecurityConfigFile+".lock")
+			if err := os.Remove(lock); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+			parent := t.TempDir()
+			result, err := PrepareProfile(t.Context(), fixture.preset, fixture.home, parent)
+			entries, readErr := os.ReadDir(parent)
+			if !errors.Is(err, ErrPreparation) || result.Home != "" || readErr != nil || len(entries) != 0 ||
+				fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+				t.Fatal("unsafe seed allocated a profile or reached runtime", err, readErr)
+			}
+			if _, err = os.Lstat(lock); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("unsafe seed reached native lock/recovery", err)
+			}
+		})
 	}
 }
 

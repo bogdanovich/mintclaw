@@ -17,10 +17,12 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/internal/gatewayclient"
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/health"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/pid"
+	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
 
 var ErrUnsafeTarget = errors.New("eval: prepared isolated target not admitted")
@@ -150,6 +152,12 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		agent.ToolPolicy.Default != config.AgentCapabilityDefaultDeny ||
 		agent.MCPServerPolicy == nil || agent.MCPServerPolicy.Default != config.AgentCapabilityDefaultDeny ||
 		len(agent.MCPServerPolicy.Allow) != 0 {
+		return ErrUnsafeTarget
+	}
+	// ClientSessionID is metadata, not a native history-key dimension. The
+	// fresh MintClaw chat identity must survive effective routing policy.
+	route := routing.NewRouteResolver(cfg).ResolveRoute(bus.InboundContext{Channel: "mintclaw"})
+	if route.AgentID != preset.ExpectedAgent || !slices.Contains(route.SessionPolicy.Dimensions, "chat") {
 		return ErrUnsafeTarget
 	}
 	for _, tool := range agent.ToolPolicy.Allow {

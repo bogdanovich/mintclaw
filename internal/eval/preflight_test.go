@@ -16,11 +16,14 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/health"
 	"github.com/bogdanovich/mintclaw/pkg/pid"
+	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
 const admissionTestToken = "00112233445566778899aabbccddeeff"
@@ -196,6 +199,64 @@ func TestPreparedAdmissionChecksActiveIdentity(t *testing.T) {
 	target, err := admitPreparedTarget(t.Context(), fixture.preset, fixture.home)
 	if err != nil || target.probe != fixture.probe || fixture.probes.Load() != 1 || fixture.tasks.Load() != 0 {
 		t.Fatal("prepared identity was not admitted without task execution", err)
+	}
+}
+
+func allocateEvalTestSession(cfg *config.Config, id string) session.Allocation {
+	inbound := bus.InboundContext{
+		Channel: "mintclaw", ChatType: "direct", ChatID: "mintclaw:" + id,
+		SenderID: "mintclaw-user", ClientSessionID: id,
+	}
+	route := routing.NewRouteResolver(cfg).ResolveRoute(inbound)
+	return session.AllocateRouteSession(session.AllocationInput{
+		AgentID: route.AgentID, Context: inbound, SessionPolicy: route.SessionPolicy,
+	})
+}
+
+func TestPreparedAdmissionRejectsSharedNativeTrialSessionsBeforeProbe(t *testing.T) {
+	for name, dimensions := range map[string][]string{
+		"absent": nil, "empty": {}, "sender": {"sender"}, "space": {"space"}, "topic": {"topic"},
+		"combined": {"space", "topic", "sender"}, "normalized_sender": {" SENDER "},
+		"unsupported": {"client_session_id"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newAdmissionFixture(t)
+			fixture.cfg.Session.Dimensions = dimensions
+			first := allocateEvalTestSession(fixture.cfg, "trial-one")
+			second := allocateEvalTestSession(fixture.cfg, "trial-two")
+			if first.Scope.ClientSessionID == second.Scope.ClientSessionID ||
+				first.SessionKey == "" || first.SessionKey != second.SessionKey {
+				t.Fatal("control did not reproduce distinct client IDs sharing native history", name)
+			}
+			if validateConversationPolicy(fixture.cfg, fixture.preset, fixture.workspace) == nil {
+				t.Fatal("offline admission accepted a cross-trial native history scope", name)
+			}
+			fixture.writeConfig(t)
+			_, err := admitPreparedTarget(t.Context(), fixture.preset, fixture.home)
+			if !errors.Is(err, ErrUnsafeTarget) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+				t.Fatal("shared-history profile reached runtime observation or task ingress", name, err)
+			}
+		})
+	}
+}
+
+func TestPreparedAdmissionPreservesNativeChatDimensionNormalization(t *testing.T) {
+	for name, dimensions := range map[string][]string{
+		"default": {"chat"}, "normalized": {" CHAT ", "SENDER", "chat"},
+		"additional": {"space", "chat", "topic", "sender"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newAdmissionFixture(t)
+			fixture.cfg.Session.Dimensions = dimensions
+			first := allocateEvalTestSession(fixture.cfg, "trial-one")
+			followup := allocateEvalTestSession(fixture.cfg, "trial-one")
+			second := allocateEvalTestSession(fixture.cfg, "trial-two")
+			if first.SessionKey == "" || first.SessionKey != followup.SessionKey ||
+				first.SessionKey == second.SessionKey ||
+				validateConversationPolicy(fixture.cfg, fixture.preset, fixture.workspace) != nil {
+				t.Fatal("native chat isolation or supported normalization was lost", name)
+			}
+		})
 	}
 }
 

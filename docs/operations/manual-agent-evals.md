@@ -250,6 +250,16 @@ Replace its workspace/model placeholders, choose an unused loopback port, and co
 provider is a shape example, not a model recommendation. Every configured gateway listener must bind only to
 loopback; wildcard, unspecified, external, and mixed loopback/external listeners are refused before a runtime probe.
 A loopback probe address alone does not prove a private bind. This eval restriction does not change `agent live`.
+
+The effective native routing policy must also retain the `chat` session dimension (the default is
+`session.dimensions: ["chat"]`). Every trial has a fresh MintClaw chat/client ID, but the client ID alone is
+metadata, not a native history-key dimension. Sender-only, topic-only, space-only, empty or unsupported dimensions
+can otherwise collapse trials onto one shared history because they use the same synthetic sender. Eval admission
+uses the native route resolver's normalized policy and refuses that configuration before gateway probes/tasks;
+`eval prepare` refuses it before native repository access or profile allocation. Normalized `chat` and additional
+dimensions that retain it remain supported. This is conversation-scope admission, not proof of independent
+filesystem/browser resources, privacy or whole-runtime quiescence, and does not change ordinary runtime routing.
+
 Use native credential configuration; do not put keys in
 case manifests, presets, shell arguments, reports, or git. A native security overlay can provide file references:
 
