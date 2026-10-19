@@ -1502,9 +1502,11 @@ func (worker *nodeBrowserWorker) CaptureRetainedScreenshot(
 		output.ContentType != "image/png" || output.Size < 1 || output.Size > uint64(maximum) {
 		return browser.DriverScreenshot{}, browser.ErrDriverIncompatible
 	}
+	// Private companion reads can advance its generation without publishing a
+	// new gateway snapshot. Retained metadata belongs to the public authority.
 	record, err := worker.receiveBrowserOutput(
 		ctx, artifactOwner, output, browserScreenshotKind(request.Target),
-		output.TabID, output.SnapshotID, output.SnapshotGeneration,
+		output.TabID, output.SnapshotID, request.SnapshotGeneration,
 	)
 	if err != nil {
 		return browser.DriverScreenshot{}, err
