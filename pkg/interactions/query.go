@@ -135,14 +135,19 @@ func (r *Registry) Stats() Stats {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	pending, pendingBytes := r.notificationBudget.usage()
 	stats := Stats{
-		RecordCount:      len(r.records),
-		EventCount:       len(r.events),
-		SnapshotBytes:    r.snapshotSizeLocked(),
-		Retention:        r.options.TerminalRetention,
-		MaxRecords:       r.options.MaxRecords,
-		MaxEvents:        r.options.MaxEvents,
-		MaxSnapshotBytes: r.options.MaxSnapshotBytes,
+		PendingObservations:        pending,
+		PendingObservationBytes:    pendingBytes,
+		MaxPendingObservations:     r.options.MaxPendingObservations,
+		MaxPendingObservationBytes: r.options.MaxPendingObservationBytes,
+		RecordCount:                len(r.records),
+		EventCount:                 len(r.events),
+		SnapshotBytes:              r.snapshotSizeLocked(),
+		Retention:                  r.options.TerminalRetention,
+		MaxRecords:                 r.options.MaxRecords,
+		MaxEvents:                  r.options.MaxEvents,
+		MaxSnapshotBytes:           r.options.MaxSnapshotBytes,
 	}
 	for _, rec := range r.records {
 		if !isTerminal(rec.Status) {

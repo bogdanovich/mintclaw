@@ -11,12 +11,14 @@ import (
 
 type Options struct {
 	// StoreLockTimeout bounds admission, including local writer contention.
-	StoreLockTimeout  time.Duration
-	TerminalRetention time.Duration
-	MaxRecords        int
-	MaxEvents         int
-	MaxSnapshotBytes  int
-	Now               func() time.Time
+	StoreLockTimeout           time.Duration
+	TerminalRetention          time.Duration
+	MaxRecords                 int
+	MaxEvents                  int
+	MaxSnapshotBytes           int
+	MaxPendingObservations     int
+	MaxPendingObservationBytes int
+	Now                        func() time.Time
 }
 
 type Snapshot struct {
@@ -36,21 +38,25 @@ type observerEntry struct {
 type queuedObservation struct {
 	observation EventObservation
 	observers   []*observerDelivery
+	budget      *notificationBudget
+	bytes       int
+	remaining   atomic.Int64
 }
 
 var observerSequence atomic.Uint64
 
 type Registry struct {
-	mu             sync.RWMutex
-	storePath      string
-	options        Options
-	records        map[string]Record
-	events         []Event
-	observers      []observerEntry
-	notifications  []queuedObservation
-	notifying      bool
-	commitSequence uint64
-	loadErr        error
+	mu                 sync.RWMutex
+	storePath          string
+	options            Options
+	records            map[string]Record
+	events             []Event
+	observers          []observerEntry
+	notifications      []*queuedObservation
+	notificationBudget notificationBudget
+	notifying          bool
+	commitSequence     uint64
+	loadErr            error
 }
 
 var _ Store = (*Registry)(nil)
@@ -74,6 +80,12 @@ func NewRegistryWithOptions(storePath string, opts Options) *Registry {
 	}
 	if opts.MaxSnapshotBytes <= 0 {
 		opts.MaxSnapshotBytes = DefaultMaxBytes
+	}
+	if opts.MaxPendingObservations <= 0 {
+		opts.MaxPendingObservations = DefaultMaxPendingObservations
+	}
+	if opts.MaxPendingObservationBytes <= 0 {
+		opts.MaxPendingObservationBytes = DefaultMaxPendingObservationBytes
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now

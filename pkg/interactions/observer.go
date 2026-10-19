@@ -8,20 +8,21 @@ type observerDelivery struct {
 	active    bool
 	closed    bool
 	notifying bool
-	pending   []EventObservation
+	pending   []*queuedObservation
 }
 
 func newObserverDelivery(observer Observer, active bool) *observerDelivery {
 	return &observerDelivery{observer: observer, active: active}
 }
 
-func (d *observerDelivery) enqueue(observation EventObservation) {
+func (d *observerDelivery) enqueue(observation *queuedObservation) {
 	if d == nil {
 		return
 	}
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
+		observation.done()
 		return
 	}
 	d.pending = append(d.pending, observation)
@@ -65,6 +66,9 @@ func (d *observerDelivery) unsubscribe() {
 		return
 	}
 	d.closed = true
+	for _, observation := range d.pending {
+		observation.done()
+	}
 	d.pending = nil
 	d.notifying = false
 	d.mu.Unlock()
@@ -76,19 +80,26 @@ func (d *observerDelivery) drain() {
 		if !ok {
 			return
 		}
-		notifyObserver(observer, observation)
+		notifyObserver(
+			observer,
+			EventObservation{
+				Event:  cloneEvent(observation.observation.Event),
+				Record: cloneRecord(observation.observation.Record),
+			},
+		)
+		observation.done()
 	}
 }
 
-func (d *observerDelivery) claimNext() (EventObservation, Observer, bool) {
+func (d *observerDelivery) claimNext() (*queuedObservation, Observer, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed || !d.active || len(d.pending) == 0 {
 		d.notifying = false
-		return EventObservation{}, nil, false
+		return nil, nil, false
 	}
 	observation := d.pending[0]
-	d.pending[0] = EventObservation{}
+	d.pending[0] = nil
 	d.pending = d.pending[1:]
 	return observation, d.observer, true
 }
