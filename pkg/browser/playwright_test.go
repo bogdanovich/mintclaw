@@ -1410,7 +1410,9 @@ func TestPlaywrightWorkerChecksNavigationImmediatelyBeforeFileChooser(t *testing
 	code, _ := client.calls[0].arguments["code"].(string)
 	if !strings.Contains(code, `page.waitForEvent("filechooser")`) ||
 		!strings.Contains(code, `uploadTarget.click({ button: "left" })`) ||
-		strings.Count(code, `await navigationStatus()`) != 2 ||
+		strings.Count(code, `await navigationStatus()`) != 3 ||
+		!strings.Contains(code, `element instanceof HTMLInputElement && element.type === "file"`) ||
+		!strings.Contains(code, `uploadTarget.setInputFiles([`) ||
 		!strings.Contains(code, `page.off("filechooser", listener)`) ||
 		!strings.Contains(code, `page.on("filechooser", listener)`) ||
 		!strings.Contains(code, `fileChooser.setFiles([`) || !strings.Contains(code, `"e4"`) ||
@@ -1421,6 +1423,11 @@ func TestPlaywrightWorkerChecksNavigationImmediatelyBeforeFileChooser(t *testing
 	setFiles := strings.Index(code, `fileChooser.setFiles([`)
 	if postCheck < 0 || setFiles < 0 || postCheck >= setFiles {
 		t.Fatalf("post-click navigation check is not before file assignment: %q", code)
+	}
+	inputCheck := strings.Index(code, `const inputNavigationStatus = await navigationStatus()`)
+	inputFiles := strings.Index(code, `uploadTarget.setInputFiles([`)
+	if inputCheck < 0 || inputFiles < 0 || inputCheck >= inputFiles || inputFiles >= postCheck {
+		t.Fatalf("native assignment must have its own navigation check before the picker branch: %q", code)
 	}
 	client.calls = nil
 	if err := worker.UploadAfterNavigationCheck(
@@ -4715,15 +4722,28 @@ func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
 	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER") != "1" {
 		t.Skip("set MINTCLAW_BROWSER_REAL_DRIVER=1 to run the pinned Playwright MCP fixture")
 	}
-	fixture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	fixture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if request.URL.Path == "/upload-frame" {
+			_, _ = fmt.Fprint(writer, `<!doctype html><label>Frame attachment <input type="file"
+ aria-label="Frame attachment" onclick="event.preventDefault()"
+ onchange="document.querySelector('#frame-output').textContent=this.files[0]?.name"></label>
+<output id="frame-output"></output>`)
+			return
+		}
 		_, _ = fmt.Fprint(writer, `<!doctype html><title>File Chooser Fixture</title>
-<label>Attachment <input type="file" aria-label="Attachment"
- onchange="document.querySelector('#upload-output').textContent=this.files[0]?.name+'|'+this.files[0]?.size"></label>
+<button onclick="document.querySelector('#attachment').click()">Attachment</button>
+<input type="file" id="attachment" hidden
+ onchange="document.querySelector('#upload-output').textContent=this.files[0]?.name+'|'+this.files[0]?.size">
 <output id="upload-output"></output>
-<label>History attachment <input type="file" aria-label="History attachment"
- onclick="history.pushState({},'', '/changed-before-file-assignment')"
- onchange="document.querySelector('#history-output').textContent=this.files[0]?.name"></label>
+<label>Direct attachment <input type="file" aria-label="Direct attachment"
+ onclick="event.preventDefault();window.cancelledFileClicks=(window.cancelledFileClicks||0)+1"
+ onchange="document.querySelector('#direct-output').textContent=this.files[0]?.name+'|'+this.files[0]?.size"></label>
+<output id="direct-output"></output>
+<iframe title="Upload frame" src="/upload-frame"></iframe>
+<button onclick="history.pushState({},'', '/changed-before-file-assignment');document.querySelector('#history-attachment').click()">History attachment</button>
+<input type="file" id="history-attachment" hidden
+ onchange="document.querySelector('#history-output').textContent=this.files[0]?.name">
 <output id="history-output"></output>`)
 	}))
 	defer fixture.Close()
@@ -4822,6 +4842,68 @@ func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
 	}
 	if !retained {
 		t.Fatal("selected file must survive until the browser finishes using it")
+	}
+
+	observation, err = worker.Observe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directChooser := mustSnapshotRef(t, observation.Snapshot, `button "Direct attachment" \[ref=(e[0-9]+)\]`)
+	setup, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => { page.setDefaultTimeout(1000); return "bounded chooser wait"; }`,
+	})
+	if err != nil || setup == nil || setup.IsError {
+		t.Fatalf("direct chooser setup = %#v, %v", setup, err)
+	}
+	navigationIdentity, err = worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.UploadAfterNavigationCheck(ctx, navigationIdentity, DriverAction{
+		Kind: DriverUpload, Target: directChooser, Element: "Direct attachment", Value: artifactPath,
+		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactBytes: int64(len(artifactContent)),
+		ArtifactFilename: "bounded-upload.txt", ArtifactContentType: "text/plain",
+	}); err != nil {
+		t.Fatalf("native input upload must not depend on a file-picker click: %v", err)
+	}
+	probe, err = worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => "MINTCLAW_NATIVE_FILE_V1|" +
+			String(await page.locator("#direct-output").textContent()) + "|" +
+			String(await page.evaluate(() => window.cancelledFileClicks || 0))`,
+	})
+	probeText, probeTextErr = boundedPlaywrightText(probe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || probeTextErr != nil || probe == nil || probe.IsError ||
+		!strings.Contains(
+			probeText,
+			fmt.Sprintf("MINTCLAW_NATIVE_FILE_V1|bounded-upload.txt|%d|0", len(artifactContent)),
+		) {
+		t.Fatalf("native file assignment = %q, %#v, %v, %v", probeText, probe, err, probeTextErr)
+	}
+
+	observation, err = worker.Observe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frameChooser := mustSnapshotRef(t, observation.Snapshot, `button "Frame attachment" \[ref=([a-z0-9]*e[0-9]+)\]`)
+	navigationIdentity, err = worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.UploadAfterNavigationCheck(ctx, navigationIdentity, DriverAction{
+		Kind: DriverUpload, Target: frameChooser, Element: "Frame attachment", Value: artifactPath,
+		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactBytes: int64(len(artifactContent)),
+		ArtifactFilename: "bounded-upload.txt", ArtifactContentType: "text/plain",
+	}); err != nil {
+		t.Fatalf("frame-native file assignment: %v", err)
+	}
+	probe, err = worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => "MINTCLAW_FRAME_FILE_V1|" +
+			String(await page.frameLocator('iframe').locator('#frame-output').textContent())`,
+	})
+	probeText, probeTextErr = boundedPlaywrightText(probe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || probeTextErr != nil || probe == nil || probe.IsError ||
+		!strings.Contains(probeText, "MINTCLAW_FRAME_FILE_V1|bounded-upload.txt") {
+		t.Fatalf("frame assignment probe = %q, %#v, %v, %v", probeText, probe, err, probeTextErr)
 	}
 
 	observation, err = worker.Observe(ctx)
