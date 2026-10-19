@@ -369,6 +369,10 @@ func mergeCompatibleObjectiveOutcomes(existing, additional *taskresult.Outcome) 
 		}
 		if !duplicate {
 			out.CompletedItems = append(out.CompletedItems, item)
+			// Output coverage cannot certify newly retained receipt-only facts.
+			if item.Output == nil && len(item.Receipts) > 0 {
+				out.UserSummary = ""
+			}
 		}
 	}
 	out.MissingItems = mergeUniqueOutcomeStrings(out.MissingItems, additional.MissingItems)

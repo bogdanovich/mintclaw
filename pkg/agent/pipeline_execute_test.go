@@ -366,6 +366,52 @@ func TestMergeDeliverablesKeepsValidSummaryForDuplicateOutcome(t *testing.T) {
 	}
 }
 
+func TestMergeDeliverablesRetainsReceiptOnlyFactsBehindEarlierSummary(t *testing.T) {
+	for _, kind := range []string{taskresult.ObjectiveKindExternalAction, taskresult.ObjectiveKindLiveHandoff} {
+		t.Run(kind, func(t *testing.T) {
+			const fact = "The first page was inspected."
+			const blocker = "The second account requires sign-in."
+			const action = "The requested action completed and was independently verified."
+			first := &taskresult.Deliverable{Text: fact + " " + blocker, ObjectiveOutcome: &taskresult.Outcome{
+				Status: taskresult.OutcomeBlocked, Explanation: blocker, UserSummary: fact + " " + blocker,
+				CompletedItems: []taskresult.Item{{
+					Item: "inspect the first page", Kind: "result",
+					Output: &taskresult.ObjectiveOutput{Kind: "text", Text: fact},
+				}},
+				MissingItems: []string{"verify the second account"},
+			}}
+			additional := &taskresult.Deliverable{ObjectiveOutcome: &taskresult.Outcome{
+				Status: taskresult.OutcomePartial, Explanation: blocker,
+				MissingItems: []string{"verify the second account"},
+				CompletedItems: []taskresult.Item{{
+					Item: "complete the authorized action", Kind: kind,
+					Receipts: []taskresult.Receipt{{ID: "verified-action", Kind: kind, Summary: action}},
+				}},
+			}}
+			merged := mergeDeliverables(first, additional)
+			if merged.ObjectiveOutcome.Status != taskresult.OutcomeBlocked ||
+				merged.ObjectiveOutcome.UserSummary != "" {
+				t.Fatalf("new receipt fact stayed hidden behind stale summary: %#v", merged)
+			}
+			rendered := objectiveOutcomeUserContent(merged.Text, merged.ObjectiveOutcome)
+			for _, want := range []string{fact, blocker, action} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("merged presentation omitted %q: %s", want, rendered)
+				}
+			}
+			if first.ObjectiveOutcome.UserSummary != fact+" "+blocker {
+				t.Fatal("source summary was mutated")
+			}
+			merged.ObjectiveOutcome.UserSummary = fact + " " + action + " " + blocker
+			repeated := mergeDeliverables(merged, additional)
+			if repeated.ObjectiveOutcome.UserSummary != merged.ObjectiveOutcome.UserSummary ||
+				len(repeated.ObjectiveOutcome.CompletedItems) != 2 {
+				t.Fatalf("duplicate receipt invalidated an already complete summary: %#v", repeated)
+			}
+		})
+	}
+}
+
 func TestMergeDeliverablesCombinesEqualSeverityVerifiedOutcomes(t *testing.T) {
 	firstItem := taskresult.Item{
 		Item: "first child completed", Kind: "delegated_task",
