@@ -8,6 +8,13 @@ implementation; an admission document alone is not a functioning eval engine.
 
 The roadmap builds a small manual quality harness, not a replacement runtime or an automatic self-improvement system.
 
+The [private browser v1 pilot](../operations/manual-agent-evals-browser-private-v1-pilot-20261019.md) after merged
+#1847 attempted submit and followup once each on separate fresh Linux profiles. Both failed with expected submissions
+missing: the target used ordinary `request_user_input`, and followup also had an unavailable LLM-user provider.
+No protected value, grant, correction, submission or judge qualified. Scoped raw privacy and physical exit were
+observed, but unanswered logical questions remain waiting. Both failures and their offline self-comparisons are
+preserved; no task was retried. Protected-form live qualification and private regrade/E5 remain open.
+
 The [target usage v1 pilot](../operations/manual-agent-evals-target-usage-v1-pilot-20261018.md) on merged #1766 passed
 four new general trials. One regrade preserved one pass and three provider-unavailable judge errors; comparison
 retained every trial. Four correlated target finals had no wire usage blocks despite native outbox counters:

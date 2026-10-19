@@ -8,6 +8,12 @@ approval/byte/delivery assessment path, but no live qualification yet. Submit/fo
 confirmation, approval and post-stop assessment, requiring explicit metadata capture; their live qualification and
 ambiguity admission remain unfinished. Offline controls use no model or installed browser and are not live qualification.
 
+The [private form v1 pilot](manual-agent-evals-browser-private-v1-pilot-20261019.md) after #1847 attempted both
+private cases once on separate fresh profiles. Both failed without a submission: the target asked ordinary
+questions, and followup additionally lost its LLM-user call to provider unavailability. Native privacy and physical
+shutdown were observed, not protected-input/context/approval qualification or logical question settlement. Neither
+used profile was retried and no judge or private regrade ran.
+
 The [first owned read pilot](manual-agent-evals-browser-read-v1-pilot-20261018.md) retained an inconclusive result
 with zero fixture visits and a native driver startup failure. Separate model-free controls identified Chrome's
 Unix-socket path limit under deep private temporary roots. The native Linux library driver now uses a checked
