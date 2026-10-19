@@ -40,6 +40,10 @@ type PDFSourceFieldRead struct {
 	Fields         diagnostictrace.DocumentFieldsPayload `json:"fields"`
 }
 
+type pdfSourceCallIdentity struct {
+	id, generation string
+}
+
 func pdfSourceBinding(trial Trial, workspace string) (nativeModelBinding, bool) {
 	cancellation := trial.Cancellation
 	if cancellation == nil && trial.PDF != nil && trial.PDF.Cancellation != nil {
@@ -117,10 +121,11 @@ func (evidence *PDFSourceFieldsEvidence) valid(trial Trial, workspace string) bo
 		evidence.UnknownResults+evidence.ErrorResults+len(evidence.Reads) != evidence.DocumentResults {
 		return false
 	}
-	seen, sequences := map[string]bool{}, map[uint64]bool{}
+	seen, sequences := map[pdfSourceCallIdentity]bool{}, map[uint64]bool{}
 	var previous uint64
 	for _, read := range evidence.Reads {
-		if !boundedIdentity(read.CallID, 256) || !boundedIdentity(read.Generation, 256) || seen[read.CallID] ||
+		identity := pdfSourceCallIdentity{read.CallID, read.Generation}
+		if !boundedIdentity(read.CallID, 256) || !boundedIdentity(read.Generation, 256) || seen[identity] ||
 			!validDigest(read.ResultSHA256) || read.CallSequence <= 1 || read.CallSequence >= read.ResultSequence ||
 			read.ResultSequence >= evidence.TerminalSequence || read.ResultSequence <= previous ||
 			sequences[read.CallSequence] || sequences[read.ResultSequence] {
@@ -130,7 +135,7 @@ func (evidence *PDFSourceFieldsEvidence) valid(trial Trial, workspace string) bo
 			return false
 		}
 		previous = read.ResultSequence
-		seen[read.CallID], sequences[read.CallSequence], sequences[read.ResultSequence] = true, true, true
+		seen[identity], sequences[read.CallSequence], sequences[read.ResultSequence] = true, true, true
 	}
 	return true
 }

@@ -105,7 +105,7 @@ func sourceFieldsReaderFixture(t *testing.T) (admittedTarget, nativeModelBinding
 
 func TestPDFSourceFieldsRequiresExactNativeReadNotProse(t *testing.T) {
 	for _, mode := range []string{
-		"complete", "opaque-call-id", "no-document", "wrong-source", "partial-window", "wrong-count", "unknown-metadata", "error",
+		"complete", "opaque-call-id", "reused-call-id", "no-document", "wrong-source", "partial-window", "wrong-count", "unknown-metadata", "error",
 		"foreign-session", "foreign-call-scope", "generation", "result-before-call", "duplicate-result",
 		"missing-count", "truncated", "completed-not-suspended", "mode", "ambiguous", "spaced-id",
 	} {
@@ -168,6 +168,13 @@ func TestPDFSourceFieldsRequiresExactNativeReadNotProse(t *testing.T) {
 						trace.Records[len(trace.Records)-1],
 					)
 				}
+				if mode == "reused-call-id" {
+					call, completed := trace.Records[len(trace.Records)-3], *result
+					call.Correlation.ToolCallGeneration, completed.Correlation.ToolCallGeneration = "next-generation", "next-generation"
+					call.Origin.ID, completed.Origin.ID = "reused-call-origin", "reused-result-origin"
+					end := trace.Records[len(trace.Records)-1]
+					trace.Records = append(trace.Records[:len(trace.Records)-1], call, completed, end)
+				}
 			}
 			trace = finalizeSourceTrace(t, trace)
 			name := writeNativeModelTestTrace(t, store, trace)
@@ -185,7 +192,7 @@ func TestPDFSourceFieldsRequiresExactNativeReadNotProse(t *testing.T) {
 			check := gradePDFSourceFields("read", item.Case, trial)
 			want := Inconclusive
 			switch mode {
-			case "complete", "opaque-call-id":
+			case "complete", "opaque-call-id", "reused-call-id":
 				want = Pass
 			case "no-document", "wrong-source", "partial-window", "wrong-count", "error":
 				want = Fail

@@ -17,11 +17,10 @@ func projectPDFSourceFields(
 		TraceID: trace.TraceID, TraceSHA256: sha, SessionHash: turn.SessionHash, RecordCount: len(trace.Records),
 	}
 	type call struct {
-		sequence   uint64
-		generation string
-		completed  bool
+		sequence  uint64
+		completed bool
 	}
-	calls := map[string]call{}
+	calls := map[pdfSourceCallIdentity]call{}
 	terminal := false
 	for _, record := range trace.Records {
 		if record.Kind == diagnostictrace.RecordTurnEnd {
@@ -52,20 +51,22 @@ func projectPDFSourceFields(
 			return unavailablePDFSourceFields()
 		}
 		id, generation := record.Correlation.ToolCallID, record.Correlation.ToolCallGeneration
+		identity := pdfSourceCallIdentity{id, generation}
 		if record.Kind == diagnostictrace.RecordToolCall {
-			if _, duplicate := calls[id]; duplicate || payload.Status != "started" || payload.DocumentFields != nil ||
+			if _, duplicate := calls[identity]; duplicate || payload.Status != "started" ||
+				payload.DocumentFields != nil ||
 				!validDigest(payload.ArgsHash) {
 				return unavailablePDFSourceFields()
 			}
-			calls[id] = call{sequence: record.Sequence, generation: generation}
+			calls[identity] = call{sequence: record.Sequence}
 			continue
 		}
-		origin, found := calls[id]
-		if !found || origin.completed || origin.generation != generation || payload.Status != "completed" {
+		origin, found := calls[identity]
+		if !found || origin.completed || payload.Status != "completed" {
 			return unavailablePDFSourceFields()
 		}
 		origin.completed = true
-		calls[id] = origin
+		calls[identity] = origin
 		result.DocumentResults++
 		if payload.DocumentFields == nil {
 			if payload.IsError {
