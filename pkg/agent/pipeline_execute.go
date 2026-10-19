@@ -285,17 +285,19 @@ func mergeDeliverables(existing, additional *taskresult.Deliverable) *taskresult
 	}
 	out := taskresult.CloneDeliverable(existing)
 	replaceOutcome := shouldReplaceObjectiveOutcome(out.ObjectiveOutcome, additional.ObjectiveOutcome)
-	if additional.ObjectiveOutcome != nil && replaceOutcome {
+	mergeOutcome := additional.ObjectiveOutcome != nil && out.ObjectiveOutcome != nil &&
+		(additional.ObjectiveOutcome.Status == out.ObjectiveOutcome.Status ||
+			incompleteObjectiveOutcome(additional.ObjectiveOutcome))
+	if mergeOutcome {
+		out.ObjectiveOutcome = mergeCompatibleObjectiveOutcomes(out.ObjectiveOutcome, additional.ObjectiveOutcome)
+		out.Text = mergeDistinctOutcomeText(out.Text, additional.Text)
+	} else if additional.ObjectiveOutcome != nil && replaceOutcome {
 		out.ObjectiveOutcome = taskresult.CloneOutcome(additional.ObjectiveOutcome)
 		if strings.TrimSpace(additional.Text) != "" {
 			out.Text = additional.Text
 		} else if additional.ObjectiveOutcome.Status != taskresult.OutcomeSucceeded {
 			out.Text = ""
 		}
-	} else if additional.ObjectiveOutcome != nil && out.ObjectiveOutcome != nil &&
-		additional.ObjectiveOutcome.Status == out.ObjectiveOutcome.Status {
-		out.ObjectiveOutcome = mergeEqualSeverityObjectiveOutcomes(out.ObjectiveOutcome, additional.ObjectiveOutcome)
-		out.Text = mergeDistinctOutcomeText(out.Text, additional.Text)
 	} else if additional.ObjectiveOutcome == nil && !incompleteObjectiveOutcome(out.ObjectiveOutcome) &&
 		strings.TrimSpace(additional.Text) != "" {
 		out.Text = additional.Text
@@ -351,9 +353,12 @@ func shouldReplaceObjectiveOutcome(existing, additional *taskresult.Outcome) boo
 	return objectiveOutcomeSeverity(additional.Status) > objectiveOutcomeSeverity(existing.Status)
 }
 
-func mergeEqualSeverityObjectiveOutcomes(existing, additional *taskresult.Outcome) *taskresult.Outcome {
+func mergeCompatibleObjectiveOutcomes(existing, additional *taskresult.Outcome) *taskresult.Outcome {
 	out := taskresult.CloneOutcome(existing)
 	additional = taskresult.CloneOutcome(additional)
+	if shouldReplaceObjectiveOutcome(out, additional) {
+		out.Status = additional.Status
+	}
 	for _, item := range additional.CompletedItems {
 		duplicate := false
 		for _, existingItem := range out.CompletedItems {
@@ -364,10 +369,16 @@ func mergeEqualSeverityObjectiveOutcomes(existing, additional *taskresult.Outcom
 		}
 		if !duplicate {
 			out.CompletedItems = append(out.CompletedItems, item)
+			// Output coverage cannot certify newly retained receipt-only facts.
+			if item.Output == nil && len(item.Receipts) > 0 {
+				out.UserSummary = ""
+			}
 		}
 	}
 	out.MissingItems = mergeUniqueOutcomeStrings(out.MissingItems, additional.MissingItems)
+	out.NotNeededItems = mergeUniqueOutcomeStrings(out.NotNeededItems, additional.NotNeededItems)
 	out.Explanation = mergeDistinctOutcomeText(out.Explanation, additional.Explanation)
+	out.UserSummary = objectivePresentation(out.UserSummary, out)
 	return out
 }
 

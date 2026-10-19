@@ -160,6 +160,12 @@ The same bounded presentation phase covers validated partial and blocked results
 It preserves their incomplete status and the specific blocker verbatim, together
 with every retained output and receipt; formatting cannot certify missing work.
 
+When a child result is followed by incomplete work, a later blocked attachment
+or other follow-up does not replace the earlier task report. The shared merger
+retains both sets of completed facts, receipts, missing/not-needed items and
+blockers, with the more severe status. An old admitted summary must still cover
+the combined facts; otherwise only that summary is discarded, not its evidence.
+
 With `agent live --trace-evidence-agent browser`, canonical trace publication
 can follow the visible final response. The CLI waits up to 30 seconds for this
 passive evidence, also subject to its overall command context. Missing evidence

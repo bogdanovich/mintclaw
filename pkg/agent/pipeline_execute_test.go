@@ -247,7 +247,7 @@ func TestMergeDeliverablesDoesNotUpgradeVerifiedIncompleteOutcome(t *testing.T) 
 	}
 }
 
-func TestMergeDeliverablesAllowsOnlyMoreSevereVerifiedOutcome(t *testing.T) {
+func TestMergeDeliverablesRetainsFactsWhenSeverityIncreases(t *testing.T) {
 	partial := &taskresult.Deliverable{
 		Text: "some results are missing",
 		ObjectiveOutcome: &taskresult.Outcome{
@@ -261,9 +261,154 @@ func TestMergeDeliverablesAllowsOnlyMoreSevereVerifiedOutcome(t *testing.T) {
 	}
 
 	merged := mergeDeliverables(partial, blocked)
-	if merged.Text != "" || merged.ObjectiveOutcome == nil ||
-		merged.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
-		t.Fatalf("blocked outcome did not replace partial outcome: %#v", merged)
+	if merged.Text != partial.Text || merged.ObjectiveOutcome == nil ||
+		merged.ObjectiveOutcome.Status != taskresult.OutcomeBlocked ||
+		len(merged.ObjectiveOutcome.MissingItems) != 2 {
+		t.Fatalf("more severe outcome erased earlier verified facts: %#v", merged)
+	}
+}
+
+func TestMergeDeliverablesPreservesTaskFactsWhenFollowupIsIncomplete(t *testing.T) {
+	for _, firstStatus := range []taskresult.OutcomeStatus{
+		taskresult.OutcomeSucceeded, taskresult.OutcomePartial, taskresult.OutcomeBlocked,
+	} {
+		for _, secondStatus := range []taskresult.OutcomeStatus{taskresult.OutcomePartial, taskresult.OutcomeBlocked} {
+			t.Run(string(firstStatus)+"_then_"+string(secondStatus), func(t *testing.T) {
+				first := &taskresult.Deliverable{
+					Text:      "The requested change did not save; fresh verification found zero photos and a closed session.",
+					Artifacts: []taskresult.Artifact{{Ref: "media://verification", Kind: "image"}},
+					ObjectiveOutcome: &taskresult.Outcome{
+						Status: firstStatus,
+						CompletedItems: []taskresult.Item{{
+							Item: "verify the primary task", Kind: "result",
+							Output:   &taskresult.ObjectiveOutput{Kind: "text", Text: "Zero photos; session closed."},
+							Receipts: []taskresult.Receipt{{ID: "close-receipt"}},
+						}},
+						MissingItems:   []string{"save the requested change", "deliver the attachment"},
+						NotNeededItems: []string{"authentication handoff"},
+						Explanation:    "The upload had an unknown outcome.",
+						UserSummary:    "Zero photos; session closed. The upload had an unknown outcome.",
+					},
+				}
+				second := &taskresult.Deliverable{
+					Text: "Screenshot delivery is unavailable.",
+					ObjectiveOutcome: &taskresult.Outcome{
+						Status: secondStatus,
+						CompletedItems: []taskresult.Item{{
+							Item: "inspect attachment delivery", Kind: "result",
+							Output: &taskresult.ObjectiveOutput{Kind: "text", Text: "The screenshot file exists."},
+						}},
+						MissingItems:   []string{"deliver the attachment"},
+						NotNeededItems: []string{"retry upload"},
+						Explanation:    "Attachment delivery could not be completed.",
+					},
+				}
+				wantMissing := 2
+				if firstStatus == taskresult.OutcomeSucceeded {
+					first.Text = "The requested change saved three photos; the session is closed."
+					first.ObjectiveOutcome.CompletedItems[0].Output.Text = "Three photos; session closed."
+					first.ObjectiveOutcome.MissingItems = nil
+					first.ObjectiveOutcome.Explanation = ""
+					first.ObjectiveOutcome.UserSummary = "Three photos; session closed."
+					wantMissing = 1
+				}
+				before, err := json.Marshal([]*taskresult.Deliverable{first, second})
+				if err != nil {
+					t.Fatal(err)
+				}
+				merged := mergeDeliverables(first, second)
+				wantStatus := taskresult.OutcomeBlocked
+				if firstStatus != taskresult.OutcomeBlocked && secondStatus == taskresult.OutcomePartial {
+					wantStatus = taskresult.OutcomePartial
+				}
+				outcome := merged.ObjectiveOutcome
+				if outcome == nil || outcome.Status != wantStatus || len(outcome.CompletedItems) != 2 ||
+					len(outcome.MissingItems) != wantMissing || len(outcome.NotNeededItems) != 2 ||
+					outcome.UserSummary != "" || len(merged.Artifacts) != 1 ||
+					len(outcome.CompletedItems[0].Receipts) != 1 {
+					t.Fatalf("incomplete result lost proof, kept a stale summary, or changed severity: %#v", merged)
+				}
+				for _, fact := range []string{
+					first.Text, second.Text, first.ObjectiveOutcome.Explanation,
+					second.ObjectiveOutcome.Explanation,
+				} {
+					if !strings.Contains(merged.Text+"\n"+outcome.Explanation, fact) {
+						t.Fatalf("merged result omitted %q: %#v", fact, merged)
+					}
+				}
+				after, err := json.Marshal([]*taskresult.Deliverable{first, second})
+				if err != nil || !bytes.Equal(before, after) {
+					t.Fatalf("merge mutated source outcomes: %s, %v", after, err)
+				}
+			})
+		}
+	}
+}
+
+func TestMergeDeliverablesKeepsValidSummaryForDuplicateOutcome(t *testing.T) {
+	deliverable := &taskresult.Deliverable{
+		Text: "Complete primary facts. A required result is missing.",
+		ObjectiveOutcome: &taskresult.Outcome{
+			Status: taskresult.OutcomePartial,
+			CompletedItems: []taskresult.Item{{
+				Item: "primary facts", Kind: "result",
+				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: "Complete primary facts."},
+			}},
+			MissingItems: []string{"required result"},
+			Explanation:  "A required result is missing.",
+			UserSummary:  "Complete primary facts. A required result is missing.",
+		},
+	}
+	merged := mergeDeliverables(deliverable, deliverable)
+	if merged.ObjectiveOutcome.UserSummary != deliverable.ObjectiveOutcome.UserSummary ||
+		len(merged.ObjectiveOutcome.CompletedItems) != 1 || len(merged.ObjectiveOutcome.MissingItems) != 1 {
+		t.Fatalf("unchanged validated summary or deduplicated facts lost: %#v", merged)
+	}
+}
+
+func TestMergeDeliverablesRetainsReceiptOnlyFactsBehindEarlierSummary(t *testing.T) {
+	for _, kind := range []string{taskresult.ObjectiveKindExternalAction, taskresult.ObjectiveKindLiveHandoff} {
+		t.Run(kind, func(t *testing.T) {
+			const fact = "The first page was inspected."
+			const blocker = "The second account requires sign-in."
+			const action = "The requested action completed and was independently verified."
+			first := &taskresult.Deliverable{Text: fact + " " + blocker, ObjectiveOutcome: &taskresult.Outcome{
+				Status: taskresult.OutcomeBlocked, Explanation: blocker, UserSummary: fact + " " + blocker,
+				CompletedItems: []taskresult.Item{{
+					Item: "inspect the first page", Kind: "result",
+					Output: &taskresult.ObjectiveOutput{Kind: "text", Text: fact},
+				}},
+				MissingItems: []string{"verify the second account"},
+			}}
+			additional := &taskresult.Deliverable{ObjectiveOutcome: &taskresult.Outcome{
+				Status: taskresult.OutcomePartial, Explanation: blocker,
+				MissingItems: []string{"verify the second account"},
+				CompletedItems: []taskresult.Item{{
+					Item: "complete the authorized action", Kind: kind,
+					Receipts: []taskresult.Receipt{{ID: "verified-action", Kind: kind, Summary: action}},
+				}},
+			}}
+			merged := mergeDeliverables(first, additional)
+			if merged.ObjectiveOutcome.Status != taskresult.OutcomeBlocked ||
+				merged.ObjectiveOutcome.UserSummary != "" {
+				t.Fatalf("new receipt fact stayed hidden behind stale summary: %#v", merged)
+			}
+			rendered := objectiveOutcomeUserContent(merged.Text, merged.ObjectiveOutcome)
+			for _, want := range []string{fact, blocker, action} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("merged presentation omitted %q: %s", want, rendered)
+				}
+			}
+			if first.ObjectiveOutcome.UserSummary != fact+" "+blocker {
+				t.Fatal("source summary was mutated")
+			}
+			merged.ObjectiveOutcome.UserSummary = fact + " " + action + " " + blocker
+			repeated := mergeDeliverables(merged, additional)
+			if repeated.ObjectiveOutcome.UserSummary != merged.ObjectiveOutcome.UserSummary ||
+				len(repeated.ObjectiveOutcome.CompletedItems) != 2 {
+				t.Fatalf("duplicate receipt invalidated an already complete summary: %#v", repeated)
+			}
+		})
 	}
 }
 
