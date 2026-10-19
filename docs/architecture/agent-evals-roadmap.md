@@ -131,8 +131,14 @@ The [native-model v1 experiment](../operations/manual-agent-evals-native-models-
 passed one unchanged context task, independent judge, regrade and comparison, but retained a partial native
 observation with two invalid scopes. Actual traces omitted provider names and contained explicit failed-attempt
 retries before successful replacement requests, exposing overly strict consumer assumptions absent from its
-fixtures. Preserve the original partial report; a focused native-shape fix and regression controls are next, not
+fixtures. Preserve the original partial report; a focused native-shape fix and regression controls were required, not
 invented provider identities, retroactive usage backfill or a promoted native-observer qualification.
+
+That focused fix merged in #1820, with [retained-source validation](../operations/manual-agent-evals-native-retry-validation-20261019.md).
+Both the reviewed head and exact merge source accepted the actual v1 metadata in a read-only control: four
+requests, two responses and two bound retries, available 4,707 input / 28 output tokens, provider/failed-attempt/
+all-call usage still unknown. No additional model task ran and original reports stayed partial and byte-identical.
+This validates the consumer contract, not a new canonical live run, loaded-skill proof or completion of E0-E5.
 
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
 prerequisites when necessary. Do not reimplement protected intake, browser sessions, approval, or delivery in the harness.
