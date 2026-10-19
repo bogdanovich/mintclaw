@@ -1,0 +1,51 @@
+name: Native X11 Input Lease
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/computer-x11-lease.yml'
+      - 'pkg/computer/desktop/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch: { }
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-x11-input-lease-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-lease:
+    name: X11 input lease native lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install ephemeral isolated X11 fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth
+
+      - name: Deterministic contract and transaction tests
+        run: go test -race -tags goolm,stdjson ./pkg/computer/desktop -count=1
+
+      - name: Two-screen cross-process native lifecycle, twenty repetitions
+        run: |
+          # Fixture teardown must not reset the server while the next case authenticates.
+          # This changes only the disposable CI server, not any attached desktop.
+          xvfb-run -a --server-args='-screen 0 640x480x24 -screen 1 640x480x24 -nolisten tcp -noreset' \
+            env MINTCLAW_NATIVE_X11_GUARD_TEST=1 MINTCLAW_NATIVE_X11_LEASE_TEST=1 \
+            go test -race -tags goolm,stdjson ./pkg/computer/desktop \
+              -run '^TestNativeX11InputLease' -count=20 -timeout=5m -v

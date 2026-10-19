@@ -74,3 +74,7 @@ Before exposing input, subsequent slices must provide:
 No legacy read-only API is widened by this foundation. The full requirements and
 remaining native/model/pilot gates are tracked in the
 [computer-use roadmap](computer-use-roadmap.md).
+
+The separate [native ownership primitive](computer-input-ownership.md) starts
+OS-local cross-process exclusion on Linux X11. It is not an executor or grant,
+and its loss notification is not a held-key/button cleanup receipt.
