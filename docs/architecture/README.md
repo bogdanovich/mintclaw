@@ -11,7 +11,7 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   outbox, MCP, frontend, measured storage and dependency work, with explicit remaining limits.
 - [October 18 Code Health Second Sweep](reliability-code-health-20261018-sweep.md): merged computer cleanup
   and fixed-alias login fixes, merged regression evidence, and conditional follow-up priorities.
-- [Architecture Soundness and Robustness Review](architecture-robustness-review-20261019.md): admitted terminal outcome consistency, task registry readiness, and bounded contention qualification.
+- [Architecture Soundness and Robustness Review](architecture-robustness-review-20261019.md): merged terminal consistency and task registry readiness fixes, bounded contention qualification, and remaining production budgets.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Manual Agent Evals Design](agent-evals-design.md): proposed on-demand multi-turn task evaluation, isolated targets,
   independent artifact/state checks, LLM user simulation, and separate rubric judging; approved for implementation.
