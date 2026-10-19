@@ -94,3 +94,25 @@ func TestTaskRegistryReadinessPrecedesPublication(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskRegistryReadinessAllowsCacheReconstruction(t *testing.T) {
+	workspace := normalizeRuntimeWorkspace(t.TempDir())
+	owner := newInteractionCoordinator(t.TempDir())
+	coordinator := newTaskCoordinator(nil, nil, &owner)
+	original := coordinator.configuredRegistry(workspace)
+	if err := original.Create(tasks.Record{TaskID: "old-owner-task", Status: tasks.StatusRunning}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.registries.Delete(workspace)
+	restored := coordinator.configuredRegistry(workspace)
+	if restored == nil || restored == original {
+		t.Fatal("registry was not reconstructed")
+	}
+	record, ok := restored.Get("old-owner-task")
+	if !ok || record.Status != tasks.StatusLost {
+		t.Fatalf("reconstructed registry did not finish restoration: %#v", record)
+	}
+	if restored != coordinator.configuredRegistry(workspace) {
+		t.Fatal("ready reconstructed registry was replaced")
+	}
+}
