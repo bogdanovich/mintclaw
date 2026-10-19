@@ -214,9 +214,9 @@ deployment remain separately authorized operations.
 | Phase | Status on October 18 | Remaining gate |
 | --- | --- | --- |
 | CU-0 | Read-only contracts, canonical catalogs, default-disabled composition and generic resource disposition are implemented. | Preserve these invariants as input commands are introduced. |
-| CU-1 | Read-only paths and native incarnation guards qualify on selected Linux GNOME X11 and unlocked macOS 26.6.2. Private semantic-input fixtures now pass with the corrected Linux candidate and original Mac driver through the actual app. | Generic exact-root input, cancellation/held-state cleanup, pixel/key/scroll/drag, geometry and alternative-driver comparisons remain incomplete. |
+| CU-1 | Read-only paths and native incarnation guards qualify on selected Linux GNOME X11 and unlocked macOS 26.6.2. Private semantic-input fixtures include seven nonempty Unicode caret cases on both platforms, with the original Mac driver through the actual app. | Generic exact-root input, cancellation/held-state cleanup, pixel/key/scroll/drag, geometry and alternative-driver comparisons remain incomplete. |
 | CU-2 | Merged in [#1672](https://github.com/bogdanovich/mintclaw/pull/1672) and [#1683](https://github.com/bogdanovich/mintclaw/pull/1683). | Requalify supported platform tuples after driver, OS or signing changes. |
-| CU-3 | Side-effect-free bounded input contracts merged in [#1771](https://github.com/bogdanovich/mintclaw/pull/1771); no executor, public input tool or production enablement. | Implement and qualify native execution, ephemeral invocation binding, shared OS-wide arbitration, no-replay outcomes, cancellation and independent verification. |
+| CU-3 | Bounded input contracts merged in [#1771](https://github.com/bogdanovich/mintclaw/pull/1771), and a native Linux X11 cooperative lease primitive in [#1787](https://github.com/bogdanovich/mintclaw/pull/1787); no executor, public input tool or production enablement. | Implement and qualify Mac arbitration, guarded native execution, ephemeral invocation binding, no-replay outcomes, cancellation and independent verification. |
 | CU-4 | Read-only localized handoff, same-target fresh resume and typed finish/release are implemented. | Extend interlocks to input, held-state cancellation and overlapping capabilities; evaluate interactive continuity. |
 | CU-5 | Function tools and protected one-shot vision context are implemented for observations. | Complete action planning and budgets, representative full-task evaluation and adversarial task tests on both OSes. |
 | CU-6 | Not deployed or enabled in production. | Prepare explicit profiles, health, rollback and recovery evidence; obtain deployment/enablement approval before a pilot. |
@@ -245,6 +245,24 @@ See [Linux artifact provenance](computer-linux-unicode-build.md) and
 code PRs passed CI and automated review before authorized merge. These narrow
 mechanism passes do not expose input, establish a full task score, install a
 driver, alter the app/OS grants or authorize a production pilot.
+
+The expanded Mac corpus in merged
+[#1788](https://github.com/bogdanovich/mintclaw/pull/1788) passes through that
+same approved app in 102.72 seconds, now including seven nonempty Unicode
+caret/prefix/suffix cases and unchanged guard state. A final-head Linux repeat
+passes in 3.07 seconds. Both platforms also verify replacement, click and scope
+denial. The old 41.47/47.83-second Mac runs remain empty-field measurements, not
+evidence for the expanded corpus. All 15 CI checks and automated review passed
+before the expanded corpus's authorized merge.
+
+The [Linux native ownership primitive](computer-input-ownership.md) separately
+passes twenty repetitions on the selected attached X11 desktop and twenty in
+race-enabled two-screen CI. This is cross-process lease evidence only: it sends
+no input and does not establish held-state cleanup, Mac exclusion or the full
+twenty-task evaluation. The existing in-process read-only arbiter is unchanged.
+The [pinned Peekaboo source audit](computer-peekaboo-qualification.md) also records
+why a private config directory alone cannot isolate a stock CLI snapshot run;
+that candidate has not been executed or qualified.
 
 ### Remaining implementation sequence
 
