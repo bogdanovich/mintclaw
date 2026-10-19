@@ -16,11 +16,12 @@ import (
 // admission. Runner generations share this state while retaining their own
 // delivery wiring.
 type taskCoordinator struct {
-	registries       sync.Map
-	completionClaims sync.Map
-	currentConfig    func() *config.Config
-	codingProfile    *CodingRuntimeProfile
-	interactions     *interactionCoordinator
+	registries        sync.Map
+	registryLoadLocks sync.Map
+	completionClaims  sync.Map
+	currentConfig     func() *config.Config
+	codingProfile     *CodingRuntimeProfile
+	interactions      *interactionCoordinator
 }
 
 func newTaskCoordinator(
@@ -119,20 +120,27 @@ func (c *taskCoordinator) loadRegistry(
 	if c == nil {
 		return nil
 	}
+	workspace = normalizeRuntimeWorkspace(workspace)
+	if workspace == "" {
+		return nil
+	}
 	if registry := c.registry(workspace); registry != nil {
 		return registry
 	}
-	candidate := taskregistry.NewRegistryWithOptions(storePath, options)
-	actual, loaded := c.registries.LoadOrStore(workspace, candidate)
-	registry, _ := actual.(*taskregistry.Registry)
-	if registry == nil {
-		registry = candidate
+	// Construction can prune and persist. Serialize it with restoration, then
+	// publish only the ready registry. Different workspaces initialize independently.
+	loadLock, _ := c.registryLoadLocks.LoadOrStore(workspace, &sync.Mutex{})
+	lock := loadLock.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+	if registry := c.registry(workspace); registry != nil {
+		return registry
 	}
-	if !loaded {
-		c.reconcileActiveTasksAfterRegistryRestore(workspace, registry, interactions)
-		c.reconcilePendingTerminalTaskDelivery(workspace, registry)
-		logTaskRegistryStats(workspace, registry)
-	}
+	registry := taskregistry.NewRegistryWithOptions(storePath, options)
+	c.reconcileActiveTasksAfterRegistryRestore(workspace, registry, interactions)
+	c.reconcilePendingTerminalTaskDelivery(workspace, registry)
+	logTaskRegistryStats(workspace, registry)
+	c.registries.Store(workspace, registry)
 	return registry
 }
 
