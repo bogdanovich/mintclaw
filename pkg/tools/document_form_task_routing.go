@@ -225,6 +225,7 @@ func (tool *DocumentTool) routeFormTaskWorkflow(
 				"Follow only this newly authorized request (and its attached media); ask its purpose if unstated:\n" + handoff.Text
 			result.ContextMedia = handoff.Media
 			result.ContextMediaRequiresVision = requiresVision
+			result.ContextInput = &toolshared.ToolContextInput{Text: handoff.Text, Media: handoff.Media}
 		}
 		return result
 	}

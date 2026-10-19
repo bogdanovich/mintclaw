@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 const protectedLocalPDFSelectorReceipt = "[local PDF selector omitted]"
@@ -183,6 +184,19 @@ func projectDocumentUserMessageForDurableBoundary(message string) string {
 	return projectDocumentLocalPathsForDurableMessage(message, localPDFPathCandidates(message))
 }
 
+// A native task grant authorizes only its new input. Reuse normal document
+// admission without changing the protected root message or its durable form.
+func (p *Pipeline) prepareDocumentHandoff(ts *turnState, input *toolshared.ToolContextInput) {
+	if input == nil || ts == nil {
+		return
+	}
+	userMessage, media := ts.userMessage, ts.media
+	ts.userMessage, ts.media = input.Text, input.Media
+	ts.documentProjections, ts.documentRejections, ts.documentLocalPaths = nil, nil, nil
+	p.prepareDocumentTurn(ts)
+	ts.userMessage, ts.media = userMessage, media
+}
+
 func isDocumentPathSpace(value byte) bool {
 	switch value {
 	case ' ', '\t', '\n', '\r', '\v', '\f':
@@ -271,7 +285,7 @@ func projectDocumentAttachments(
 	projected := append([]providers.Message(nil), messages...)
 	start := normalizeCurrentTurnStart(projected, currentTurnStart)
 	for index := start; index < len(projected); index++ {
-		if projected[index].Role != "user" || len(projected[index].Media) == 0 {
+		if (projected[index].Role != "user" && projected[index].Role != "tool") || len(projected[index].Media) == 0 {
 			continue
 		}
 		var promptProjections []documentPromptProjection

@@ -1839,6 +1839,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
 	} else {
 		liveContextText := runner.takeLiveToolContextText(toolResult)
+		p.prepareDocumentHandoff(ts, toolResult.ContextInput)
 		hasLiveContextMedia := len(toolResult.ContextMedia) > 0
 		modelContextResult := toolResultForModelContext(toolName, toolResult)
 		toolResultMsg := buildToolResultJournalMessage(
@@ -2406,6 +2407,7 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	journalResult := *result
 	journalResult.ContextText = ""
 	journalResult.ContextMedia = nil
+	journalResult.ContextInput = nil
 	msg := buildToolResultJournalMessage(
 		toolCall.ID,
 		&journalResult,
