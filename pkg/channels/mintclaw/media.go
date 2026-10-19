@@ -101,6 +101,7 @@ func (c *MintClawChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMe
 		AgentID: msg.AgentID, SessionKey: msg.SessionKey, TraceScopes: msg.TraceScopes,
 		Context: msg.Context, Metadata: msg.Metadata,
 	})
+	setOutboundControlPayload(outMsg.Payload, msg.Metadata)
 	if deliveryID := strings.TrimSpace(msg.DeliveryID); deliveryID != "" {
 		outMsg.Payload[PayloadKeyDeliveryID] = deliveryID
 	}
