@@ -47,10 +47,11 @@ async function prepareWebsiteStep(page, request) {
     capsule = await page.evaluateHandle(({origin, step, keys, handles}) => {
       const elements = Object.fromEntries(keys.map((key, index) => [key, handles[index]]));
       const originalDocument = document;
-      const live = element => element instanceof HTMLElement && element.ownerDocument === originalDocument &&
-        element.isConnected && element.getClientRects().length > 0 && !element.matches(':disabled') &&
-        element.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}) &&
-        element.getAttribute('aria-disabled') !== 'true';
+      const visible = element => element instanceof HTMLElement && element.ownerDocument === originalDocument &&
+        element.isConnected && element.getClientRects().length > 0 &&
+        element.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
+      const enabled = element => !element.matches(':disabled') && element.getAttribute('aria-disabled') !== 'true';
+      const live = element => visible(element) && enabled(element);
       const input = (element, types) => live(element) && element instanceof HTMLInputElement &&
         !element.readOnly && types.includes(element.type);
       const submit = elements.submit_ref;
@@ -62,10 +63,11 @@ async function prepareWebsiteStep(page, request) {
         const label = (element.getAttribute('aria-label') || element.innerText || '').trim().replace(/\s+/g, ' ');
         return /^(?:log\s*out|sign\s*out|выйти|выход|cerrar sesión|déconnexion|abmelden)(?:$|\s)/iu.test(label);
       };
-      const ready = () => {
+      const ready = (requireSubmitEnabled = true) => {
         if (location.origin !== origin || document !== originalDocument) return false;
         if (step === 'verify') return logout();
-        if (!live(submit) || !(submit instanceof HTMLButtonElement || submit instanceof HTMLInputElement ||
+        if (!visible(submit) || (requireSubmitEnabled && !enabled(submit)) ||
+            !(submit instanceof HTMLButtonElement || submit instanceof HTMLInputElement ||
             submit.getAttribute('role') === 'button')) return false;
         if (['credentials', 'username'].includes(step) && !input(elements.username_ref, ['text', 'email'])) return false;
         if (['credentials', 'password'].includes(step) && !input(elements.password_ref, ['password'])) return false;
@@ -80,7 +82,10 @@ async function prepareWebsiteStep(page, request) {
         } else if (submit.type !== 'button' && submit.getAttribute('role') !== 'button') return false;
         return true;
       };
-      return ready() ? {elements, step, form, submit, ready} : null;
+      // Validation-driven forms enable submission only after private input.
+      // Controls and destination must already be valid; activation is checked
+      // again after filling without changing the site's disabled state.
+      return ready(false) ? {elements, step, form, submit, ready} : null;
     }, {origin: request.origin, step: request.step, keys, handles});
     if (!(await capsule.evaluate(value => value !== null))) {
       await capsule.dispose();
@@ -97,8 +102,8 @@ async function prepareWebsiteStep(page, request) {
 
 // Both login paths use the same private field/event/recheck/submit operation.
 async function submitCredentialForm(capsule, values) {
-  return capsule.evaluate((state, values) => {
-    if (!state?.ready()) return false;
+  return capsule.evaluate(async (state, values) => {
+    if (!state?.ready(false)) return false;
     const fill = [];
     if (['credentials', 'username'].includes(state.step)) fill.push([state.elements.username_ref, values.username]);
     if (['credentials', 'password'].includes(state.step)) fill.push([state.elements.password_ref, values.password]);
@@ -111,14 +116,20 @@ async function submitCredentialForm(capsule, values) {
       set.call(element, value);
       element.dispatchEvent(new Event('input', {bubbles: true}));
       element.dispatchEvent(new Event('change', {bubbles: true}));
-      if (!state.ready() || element.value !== value) {
+      if (!state.ready(false) || element.value !== value) {
         for (const [target] of fill) set.call(target, '');
         return false;
       }
     }
-    if (!state.ready() || fill.some(([element, value]) => element.value !== value)) {
-      for (const [element] of fill) set.call(element, '');
-      return false;
+    const deadline = Date.now() + (values.timeout ?? 5000);
+    while (true) {
+      if (Date.now() >= deadline || !state.ready(false) ||
+          fill.some(([element, value]) => element.value !== value)) {
+        for (const [element] of fill) set.call(element, '');
+        return false;
+      }
+      if (state.ready()) break;
+      await new Promise(resolve => setTimeout(resolve, 16));
     }
     if (state.submit.type === 'submit') HTMLFormElement.prototype.requestSubmit.call(state.form, state.submit);
     else HTMLElement.prototype.click.call(state.submit);
@@ -142,7 +153,8 @@ async function performWebsiteStep(page, capsule, request) {
     const navigation = page.waitForURL(url => url.href !== entryURL,
       {timeout, waitUntil: 'domcontentloaded'}).catch(() => null);
     attempted = true;
-    const dispatched = await submitCredentialForm(capsule, {username: request.username, password: request.password});
+    const dispatched = await submitCredentialForm(capsule,
+      {username: request.username, password: request.password, timeout});
     if (!dispatched) throw new Error();
     await navigation;
     if (!sameWebsite(new URL(page.url()), request)) throw new Error();
