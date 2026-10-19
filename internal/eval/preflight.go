@@ -23,6 +23,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/pid"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 var ErrUnsafeTarget = errors.New("eval: prepared isolated target not admitted")
@@ -162,6 +163,7 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 	}
 	for _, tool := range agent.ToolPolicy.Allow {
 		if tool != "request_user_input" && (tool != "document" || !pdfEnabled) &&
+			(tool != tools.BM25SearchToolName || !pdfEnabled) &&
 			(!browserEnabled || !slices.Contains(browserEvalTools, tool)) {
 			return ErrUnsafeTarget
 		}
@@ -194,7 +196,8 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		return ErrUnsafeTarget
 	}
 	if pdfEnabled && (!slices.Contains(preset.Capabilities, "interactions") ||
-		!slices.Contains(agent.ToolPolicy.Allow, "document") || !names[cfg.Tools.Document.AuditModel] ||
+		!slices.Contains(agent.ToolPolicy.Allow, "document") ||
+		!slices.Contains(agent.ToolPolicy.Allow, tools.BM25SearchToolName) || !names[cfg.Tools.Document.AuditModel] ||
 		len(cfg.Tools.Document.AuditEquivalentFallbacks) != 0) {
 		return ErrUnsafeTarget
 	}

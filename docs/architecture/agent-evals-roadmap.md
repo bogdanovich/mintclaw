@@ -63,6 +63,11 @@ is **not qualified**. Repair the missing native discovery admission and source-b
 with no-document negative controls, before claiming the empty case or rerunning a changed contract. No task/prompt
 tuning or historical upgrade is authorized by that coverage gap.
 
+The focused discovery repair admits/requires only the native BM25 tool for PDF profiles. Native composition and
+actual search-promotion controls replace the previous unusable tool allowlist; broad tools remain refused before
+probes or preparation effects. This prerequisite does not qualify source inspection, change the empty case, or
+authorize replay of its retained used profile. Its source-use evidence repair remains mandatory.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 

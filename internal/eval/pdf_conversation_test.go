@@ -9,6 +9,7 @@ import (
 
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 func TestPDFConversationSuppliesPrivateHandleWithoutReportingValueOrClaimingArtifact(t *testing.T) {
@@ -164,7 +165,9 @@ func enableAdmissionPDF(t *testing.T, fixture *admissionFixture) {
 	t.Helper()
 	fixture.preset.Capabilities = append(fixture.preset.Capabilities, "pdf")
 	fixture.cfg.Tools.Document.Enabled, fixture.cfg.Tools.Document.AuditModel = true, "eval-model"
-	fixture.cfg.Agents.List[0].ToolPolicy.Allow = append(fixture.cfg.Agents.List[0].ToolPolicy.Allow, "document")
+	fixture.cfg.Agents.List[0].ToolPolicy.Allow = append(
+		fixture.cfg.Agents.List[0].ToolPolicy.Allow, "document", tools.BM25SearchToolName,
+	)
 	fixture.writeConfig(t)
 	profile, err := readPreparedProfile(fixture.preset, fixture.home)
 	if err != nil {
