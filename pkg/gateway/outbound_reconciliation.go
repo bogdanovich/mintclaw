@@ -285,7 +285,7 @@ func restoreRecoveredOutboundPrerequisite(
 	if intent.Media == nil || intent.Media.Recovery == nil {
 		return nil
 	}
-	for _, recovery := range append([]bus.OutboundRecovery{*intent.Media.Recovery}, intent.Media.Recovery.Additional...) {
+	for _, recovery := range append([]bus.OutboundRecovery{*intent.Media.Recovery}, intent.Media.AdditionalRecovery...) {
 		if err := restoreMediaPrerequisite(nodeRuntime, artifactWorkspace, recovery); err != nil {
 			return err
 		}
@@ -313,7 +313,7 @@ func restoreMediaPrerequisite(
 // ClaimArtifactDelivery restores a retained browser attachment without needing
 // its now-closed browser session or a live tool callback.
 func (source *gatewayBrowserToolSource) ClaimArtifactDelivery(_ context.Context, recovery bus.OutboundRecovery) error {
-	if source == nil || source.services == nil || source.workspace == "" || len(recovery.Additional) != 0 ||
+	if source == nil || source.services == nil || source.workspace == "" ||
 		(recovery.Kind != bus.OutboundRecoveryBrowserScreenshot && recovery.Kind != bus.OutboundRecoveryBrowserDownload) {
 		return errors.New("retained browser attachment delivery is unavailable")
 	}

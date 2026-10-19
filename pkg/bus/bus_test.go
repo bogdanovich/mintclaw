@@ -751,33 +751,33 @@ func TestNormalizeOutboundMediaRecoveryBatch(t *testing.T) {
 	}
 	second := first
 	second.ArtifactRef, second.MediaRef, second.ToolCallID = "transfer-artifact://second", "media://second", "capture-second"
-	first.Additional = []OutboundRecovery{second}
+	additional := []OutboundRecovery{second}
 	parts := []MediaPart{{Type: "image", Ref: first.MediaRef}, {Type: "image", Ref: second.MediaRef}}
-	message, err := NormalizeOutboundMediaMessage(OutboundMediaMessage{Parts: parts, Recovery: &first})
+	message, err := NormalizeOutboundMediaMessage(OutboundMediaMessage{
+		Parts: parts, Recovery: &first, AdditionalRecovery: additional,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.Additional[0].ActorID = "mutated"
-	if message.Recovery.Additional[0].ActorID != "actor" {
+	additional[0].ActorID = "mutated"
+	if message.AdditionalRecovery[0].ActorID != "actor" {
 		t.Fatal("normalized batch aliases caller memory")
 	}
-	for _, mutate := range []func(*OutboundRecovery){
-		func(r *OutboundRecovery) { r.Additional[0].Additional = []OutboundRecovery{second} },
-		func(r *OutboundRecovery) { r.Additional[0].MediaRef = r.MediaRef },
-		func(r *OutboundRecovery) { r.Additional[0].ArtifactRef = r.ArtifactRef },
-		func(r *OutboundRecovery) { r.Additional[0].MediaRef = "media://not-attached" },
-		func(r *OutboundRecovery) { r.Additional[0].ActorID = "another-actor" },
-		func(r *OutboundRecovery) { r.Additional[0].RouteID = "another-route" },
-		func(r *OutboundRecovery) { r.Additional[0].WorkspaceID = "another-workspace" },
-		func(r *OutboundRecovery) { r.Additional[0].Kind = OutboundRecoveryDocumentFill },
-		func(r *OutboundRecovery) { r.Additional = make([]OutboundRecovery, 16) },
+	for _, mutate := range []func(*OutboundMediaMessage){
+		func(m *OutboundMediaMessage) { m.Recovery = nil },
+		func(m *OutboundMediaMessage) { m.AdditionalRecovery[0].MediaRef = m.Recovery.MediaRef },
+		func(m *OutboundMediaMessage) { m.AdditionalRecovery[0].ArtifactRef = m.Recovery.ArtifactRef },
+		func(m *OutboundMediaMessage) { m.AdditionalRecovery[0].MediaRef = "media://not-attached" },
+		func(m *OutboundMediaMessage) { m.AdditionalRecovery[0].ActorID = "another-actor" },
+		func(m *OutboundMediaMessage) { m.AdditionalRecovery[0].RouteID = "another-route" },
+		func(m *OutboundMediaMessage) { m.AdditionalRecovery[0].WorkspaceID = "another-workspace" },
+		func(m *OutboundMediaMessage) { m.AdditionalRecovery[0].Kind = OutboundRecoveryDocumentFill },
+		func(m *OutboundMediaMessage) { m.AdditionalRecovery = make([]OutboundRecovery, 16) },
 	} {
-		candidate := *message.Recovery
-		candidate.Additional = append([]OutboundRecovery(nil), message.Recovery.Additional...)
+		candidate := message
+		candidate.AdditionalRecovery = append([]OutboundRecovery(nil), message.AdditionalRecovery...)
 		mutate(&candidate)
-		if _, err = NormalizeOutboundMediaMessage(
-			OutboundMediaMessage{Parts: parts, Recovery: &candidate},
-		); err == nil {
+		if _, err = NormalizeOutboundMediaMessage(candidate); err == nil {
 			t.Fatalf("invalid batch accepted: %#v", candidate)
 		}
 	}

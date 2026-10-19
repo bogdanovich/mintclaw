@@ -18,7 +18,7 @@ func retainSuppressedMedia(ts *turnState, cfg *config.Config, result *toolshared
 		return nil
 	}
 	out := result.Delivery.Outbound
-	if out.Recovery == nil || len(out.Recovery.Additional) != 0 || !browserMediaRecovery(*out.Recovery) {
+	if out.Recovery == nil || len(out.AdditionalRecovery) != 0 || !browserMediaRecovery(*out.Recovery) {
 		return nil
 	}
 	if !routedMediaRecovery(ts, browserMediaWorkspace(ts, cfg), *out.Recovery) {
@@ -68,6 +68,15 @@ type browserMediaDeliverySource interface {
 	ClaimArtifactDelivery(context.Context, bus.OutboundRecovery) error
 }
 
+func hasRetainedToolMedia(result *toolshared.ToolResult) bool {
+	for _, artifact := range toolResultArtifacts(result) {
+		if !artifact.Delivered && artifact.Recovery != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // Bind the same source claims used by direct browser output to the existing
 // durable publication boundary. Nothing is claimed when a child is suppressed.
 func (al *AgentLoop) bindRetainedMediaDelivery(ts *turnState, result *toolshared.ToolResult) error {
@@ -77,7 +86,7 @@ func (al *AgentLoop) bindRetainedMediaDelivery(ts *turnState, result *toolshared
 			continue
 		}
 		recovery := artifact.Recovery
-		if recovery.MediaRef != artifact.Ref || len(recovery.Additional) != 0 ||
+		if recovery.MediaRef != artifact.Ref ||
 			!browserMediaRecovery(*recovery) || !routedMediaRecovery(ts, browserMediaWorkspace(ts, al.cfg), *recovery) {
 			return errors.New("retained attachment delivery authority is invalid")
 		}
@@ -100,16 +109,16 @@ func (al *AgentLoop) bindRetainedMediaDelivery(ts *turnState, result *toolshared
 		return errors.New("retained attachment delivery source is unavailable")
 	}
 	recovery := taskresult.CloneArtifactRecovery(&recoveries[0])
-	recovery.Additional = append([]bus.OutboundRecovery(nil), recoveries[1:]...)
 	out := result.Delivery.Outbound
 	message, err := bus.NormalizeOutboundMediaMessage(bus.OutboundMediaMessage{
 		Channel: ts.channel, ChatID: ts.chatID, Context: bus.NewOutboundContext(ts.channel, ts.chatID, ""),
-		Parts: out.Media, Recovery: recovery,
+		Parts: out.Media, Recovery: recovery, AdditionalRecovery: recoveries[1:],
 	})
 	if err != nil {
 		return err
 	}
 	out.Recovery = message.Recovery
+	out.AdditionalRecovery = message.AdditionalRecovery
 	result.Delivery.Commit = func(ctx context.Context) error {
 		for _, item := range recoveries {
 			if err := source.ClaimArtifactDelivery(ctx, item); err != nil {

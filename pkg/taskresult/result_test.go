@@ -55,16 +55,15 @@ func TestCloneDeliverableRetainsPrivateRecoveryWithoutPathsOrAliases(t *testing.
 		Ref: "media://retained", LocalPath: "/private/runtime/image.png",
 		Recovery: &ArtifactRecovery{
 			Kind: "browser_screenshot_claim", MediaRef: "media://retained",
-			Additional: []ArtifactRecovery{{MediaRef: "media://second"}},
 		},
 	}}}
 	clone := CloneDeliverable(original)
 	if clone.Artifacts[0].LocalPath != "" || clone.Artifacts[0].Recovery == original.Artifacts[0].Recovery {
 		t.Fatalf("clone exposed a path or aliased private recovery: %#v", clone)
 	}
-	clone.Artifacts[0].Recovery.Additional[0].MediaRef = "mutated"
-	if original.Artifacts[0].Recovery.Additional[0].MediaRef != "media://second" {
-		t.Fatal("clone aliases the recovery batch")
+	clone.Artifacts[0].Recovery.MediaRef = "mutated"
+	if original.Artifacts[0].Recovery.MediaRef != "media://retained" {
+		t.Fatal("clone aliases the recovery prerequisite")
 	}
 	encoded, err := json.Marshal(clone)
 	if err != nil {

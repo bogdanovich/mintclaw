@@ -362,12 +362,13 @@ type PlanStepObservation = codingplan.Step
 type PlanObservation = codingplan.State
 
 type OutboundDelivery struct {
-	Channel          string                `json:"channel,omitempty"`
-	ChatID           string                `json:"chat_id,omitempty"`
-	ReplyToMessageID string                `json:"reply_to_message_id,omitempty"`
-	Text             string                `json:"text,omitempty"`
-	Media            []bus.MediaPart       `json:"media,omitempty"`
-	Recovery         *bus.OutboundRecovery `json:"recovery,omitempty"`
+	Channel            string                 `json:"channel,omitempty"`
+	ChatID             string                 `json:"chat_id,omitempty"`
+	ReplyToMessageID   string                 `json:"reply_to_message_id,omitempty"`
+	Text               string                 `json:"text,omitempty"`
+	Media              []bus.MediaPart        `json:"media,omitempty"`
+	Recovery           *bus.OutboundRecovery  `json:"recovery,omitempty"`
+	AdditionalRecovery []bus.OutboundRecovery `json:"additional_recovery,omitempty"`
 }
 
 type WriteAuditEntry struct {

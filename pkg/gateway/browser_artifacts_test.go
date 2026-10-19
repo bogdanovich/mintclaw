@@ -984,7 +984,7 @@ func TestGatewayOutboundRecoveryUsesGatewayWorkspaceBeforePublication(t *testing
 	if err != nil || second.Recovery == nil {
 		t.Fatalf("retain second screenshot: %#v, %v", second, err)
 	}
-	recovery.Additional = []bus.OutboundRecovery{{
+	additionalRecovery := []bus.OutboundRecovery{{
 		Kind: bus.OutboundRecoveryBrowserScreenshot, ArtifactRef: second.Ref, MediaRef: second.MediaRef,
 		WorkspaceID: second.Recovery.WorkspaceID, AgentID: second.Recovery.AgentID,
 		ActorID: second.Recovery.ActorID, RouteID: second.Recovery.RouteID,
@@ -1002,7 +1002,7 @@ func TestGatewayOutboundRecoveryUsesGatewayWorkspaceBeforePublication(t *testing
 	admission, err := first.AdmitMedia(ownerWorkspace, identity, bus.OutboundMediaMessage{
 		Channel: "telegram", ChatID: "chat-1", SessionKey: "session-1",
 		Parts:    []bus.MediaPart{{Type: "image", Ref: artifact.MediaRef}, {Type: "image", Ref: second.MediaRef}},
-		Recovery: recovery,
+		Recovery: recovery, AdditionalRecovery: additionalRecovery,
 	})
 	if err != nil || !admission.Dispatch {
 		t.Fatalf("AdmitMedia() = %+v, %v", admission, err)
@@ -1039,13 +1039,13 @@ func TestGatewayOutboundRecoveryUsesGatewayWorkspaceBeforePublication(t *testing
 	if err != nil || !found || secondReplay.DeliveryState != browser.ScreenshotDeliveryAlreadyClaimed {
 		t.Fatalf("second recovered claim = %#v, %t, %v", secondReplay, found, err)
 	}
-	if err = source.ClaimArtifactDelivery(ctx, recovery.Additional[0]); err != nil {
+	if err = source.ClaimArtifactDelivery(ctx, additionalRecovery[0]); err != nil {
 		t.Fatalf("same retained claim was not idempotent: %v", err)
 	}
 	select {
 	case message := <-msgBus.OutboundMediaChan():
 		if message.DeliveryID != admission.Intent.ID || message.Recovery == nil ||
-			message.Recovery.ArtifactRef != artifact.Ref || len(message.Recovery.Additional) != 1 {
+			message.Recovery.ArtifactRef != artifact.Ref || len(message.AdditionalRecovery) != 1 {
 			t.Fatalf("recovered outbound media = %+v", message)
 		}
 	case <-time.After(time.Second):

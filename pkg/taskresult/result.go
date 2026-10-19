@@ -65,32 +65,30 @@ type Artifact struct {
 }
 
 // ArtifactRecovery preserves an existing media-delivery prerequisite across a
-// durable delegated result. Additional entries form a bounded, flat batch.
+// durable delegated result. Each artifact carries one non-recursive claim.
 type ArtifactRecovery struct {
-	Kind              string             `json:"kind"`
-	ArtifactRef       string             `json:"artifact_ref"`
-	MediaRef          string             `json:"media_ref"`
-	WorkspaceID       string             `json:"workspace_id"`
-	AgentID           string             `json:"agent_id"`
-	ActorID           string             `json:"actor_id"`
-	RouteID           string             `json:"route_id"`
-	SessionID         string             `json:"session_id"`
-	ToolCallID        string             `json:"tool_call_id"`
-	AuthorityKind     string             `json:"authority_kind,omitempty"`
-	OperationID       string             `json:"operation_id,omitempty"`
-	DomainDeliveryID  string             `json:"domain_delivery_id,omitempty"`
-	DomainJobID       string             `json:"domain_job_id,omitempty"`
-	DomainOwnerDigest string             `json:"domain_owner_digest,omitempty"`
-	Additional        []ArtifactRecovery `json:"additional,omitempty"`
+	Kind              string `json:"kind"`
+	ArtifactRef       string `json:"artifact_ref"`
+	MediaRef          string `json:"media_ref"`
+	WorkspaceID       string `json:"workspace_id"`
+	AgentID           string `json:"agent_id"`
+	ActorID           string `json:"actor_id"`
+	RouteID           string `json:"route_id"`
+	SessionID         string `json:"session_id"`
+	ToolCallID        string `json:"tool_call_id"`
+	AuthorityKind     string `json:"authority_kind,omitempty"`
+	OperationID       string `json:"operation_id,omitempty"`
+	DomainDeliveryID  string `json:"domain_delivery_id,omitempty"`
+	DomainJobID       string `json:"domain_job_id,omitempty"`
+	DomainOwnerDigest string `json:"domain_owner_digest,omitempty"`
 }
 
-// CloneArtifactRecovery copies a validated flat recovery batch.
+// CloneArtifactRecovery copies one runtime-owned delivery prerequisite.
 func CloneArtifactRecovery(input *ArtifactRecovery) *ArtifactRecovery {
 	if input == nil {
 		return nil
 	}
 	out := *input
-	out.Additional = append([]ArtifactRecovery(nil), input.Additional...)
 	return &out
 }
 

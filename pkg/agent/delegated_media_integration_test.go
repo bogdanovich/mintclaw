@@ -52,7 +52,9 @@ func (tool *routedCaptureFixture) Execute(ctx context.Context, _ map[string]any)
 
 func TestDelegateRetainedScreenshotReachesChannelWithCompleteReport(t *testing.T) {
 	for _, channel := range []string{"telegram", "discord"} {
-		for _, mode := range []toolshared.AsyncDeliveryMode{toolshared.AsyncDeliveryUserOnly, toolshared.AsyncDeliveryParentOnly} {
+		for _, mode := range []toolshared.AsyncDeliveryMode{
+			toolshared.AsyncDeliveryUserOnly, toolshared.AsyncDeliveryParentOnly, toolshared.AsyncDeliveryUserAndParent,
+		} {
 			t.Run(channel+"/"+string(mode), func(t *testing.T) {
 				const report = "Fresh verification found zero product photos. The upload did not save. The browser is closed."
 				outcome, err := json.Marshal(reportedObjectiveOutcome{
@@ -150,7 +152,11 @@ func TestDelegateRetainedScreenshotReachesChannelWithCompleteReport(t *testing.T
 				}
 				adapter.mu.Lock()
 				defer adapter.mu.Unlock()
-				if len(adapter.sentMedia) != 1 || len(adapter.sentMessages) != 0 || len(source.claims) != 1 {
+				wantText := 0
+				if mode == toolshared.AsyncDeliveryUserAndParent {
+					wantText = 1 // The declared mode also requests the parent's continuation.
+				}
+				if len(adapter.sentMedia) != 1 || len(adapter.sentMessages) != wantText || len(source.claims) != 1 {
 					t.Fatalf("expected one receipt-backed final media: media=%#v text=%#v claims=%#v",
 						adapter.sentMedia, adapter.sentMessages, source.claims)
 				}

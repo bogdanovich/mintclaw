@@ -507,7 +507,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			runtimeevents.NewTraceScope(ts.workspace, ts.turnID),
 		}
 	}
-	if err := al.ensureFinalHandledOutbound(ts, result); err != nil {
+	if err := al.ensureResolvedToolOutbound(ts, result); err != nil {
 		return nil, toolResultDeliveryNone, channels.DefiniteNotSentDeliveryError(err)
 	}
 
@@ -659,11 +659,12 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	return nil, toolResultDeliveryQueued, nil
 }
 
-func (al *AgentLoop) ensureFinalHandledOutbound(
+func (al *AgentLoop) ensureResolvedToolOutbound(
 	ts *turnState,
 	result *toolshared.ToolResult,
 ) error {
-	if al == nil || ts == nil || result == nil || result.Delivery.Outbound != nil || !isFinalHandledDelivery(result) {
+	if al == nil || ts == nil || result == nil || result.Delivery.Outbound != nil ||
+		(!isFinalHandledDelivery(result) && !hasRetainedToolMedia(result)) {
 		return nil
 	}
 	mediaRefs := toolResultMediaRefs(result)
@@ -672,10 +673,8 @@ func (al *AgentLoop) ensureFinalHandledOutbound(
 		return nil
 	}
 	if len(mediaRefs) > 0 && !supportsDurableDeliveryReceipts(al.channelManager) {
-		for _, artifact := range toolResultArtifacts(result) {
-			if artifact.Recovery != nil && !artifact.Delivered {
-				return errors.New("retained attachment delivery requires durable channel receipts")
-			}
+		if hasRetainedToolMedia(result) {
+			return errors.New("retained attachment delivery requires durable channel receipts")
 		}
 		return nil
 	}
@@ -722,15 +721,16 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 	}
 	if len(out.Media) > 0 {
 		outboundMedia := bus.OutboundMediaMessage{
-			Channel:    channel,
-			ChatID:     chatID,
-			Context:    outboundCtx,
-			Metadata:   metadata,
-			AgentID:    agentID,
-			SessionKey: ts.sessionKey,
-			Scope:      outboundScopeFromSessionScope(ts.opts.Dispatch.SessionScope),
-			Parts:      append([]bus.MediaPart(nil), out.Media...),
-			Recovery:   out.Recovery,
+			Channel:            channel,
+			ChatID:             chatID,
+			Context:            outboundCtx,
+			Metadata:           metadata,
+			AgentID:            agentID,
+			SessionKey:         ts.sessionKey,
+			Scope:              outboundScopeFromSessionScope(ts.opts.Dispatch.SessionScope),
+			Parts:              append([]bus.MediaPart(nil), out.Media...),
+			Recovery:           out.Recovery,
+			AdditionalRecovery: out.AdditionalRecovery,
 		}
 		outboundMedia.Transcript = al.maybeOutboundTranscriptProjection(
 			ctx,

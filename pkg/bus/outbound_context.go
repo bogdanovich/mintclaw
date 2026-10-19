@@ -69,14 +69,28 @@ func NormalizeOutboundMessage(msg OutboundMessage) (OutboundMessage, error) {
 	return msg, err
 }
 
-func validateOutboundRecovery(recovery OutboundRecovery, parts []MediaPart) error {
-	if len(recovery.Additional) > 15 {
+func validateOutboundRecoveries(
+	primary *OutboundRecovery,
+	additionalClaims []OutboundRecovery,
+	parts []MediaPart,
+) error {
+	if primary == nil {
+		if len(additionalClaims) != 0 {
+			return errors.New("outbound recovery batch has no primary prerequisite")
+		}
+		return nil
+	}
+	if err := validateOutboundRecovery(*primary, parts); err != nil {
+		return err
+	}
+	if len(additionalClaims) > 15 {
 		return errors.New("too many outbound recovery prerequisites")
 	}
+	recovery := *primary
 	seen := map[string]bool{recovery.MediaRef: true}
 	artifacts := map[string]bool{recovery.ArtifactRef: true}
-	for _, additional := range recovery.Additional {
-		if len(additional.Additional) != 0 || seen[additional.MediaRef] ||
+	for _, additional := range additionalClaims {
+		if seen[additional.MediaRef] ||
 			artifacts[additional.ArtifactRef] || additional.WorkspaceID != recovery.WorkspaceID ||
 			additional.ActorID != recovery.ActorID || additional.RouteID != recovery.RouteID ||
 			(recovery.Kind != OutboundRecoveryBrowserScreenshot && recovery.Kind != OutboundRecoveryBrowserDownload) ||
@@ -89,6 +103,10 @@ func validateOutboundRecovery(recovery OutboundRecovery, parts []MediaPart) erro
 		seen[additional.MediaRef] = true
 		artifacts[additional.ArtifactRef] = true
 	}
+	return nil
+}
+
+func validateOutboundRecovery(recovery OutboundRecovery, parts []MediaPart) error {
 	if !strings.HasPrefix(recovery.MediaRef, "media://") {
 		return errors.New("invalid outbound recovery prerequisite")
 	}
@@ -219,12 +237,11 @@ func NormalizeOutboundMediaMessage(msg OutboundMediaMessage) (OutboundMediaMessa
 		return msg, err
 	}
 	msg.Metadata = NormalizeOutboundMetadata(msg.Metadata)
-	if msg.Recovery != nil {
-		if recoveryErr := validateOutboundRecovery(*msg.Recovery, msg.Parts); recoveryErr != nil {
-			return msg, recoveryErr
-		}
-		msg.Recovery = taskresult.CloneArtifactRecovery(msg.Recovery)
+	if recoveryErr := validateOutboundRecoveries(msg.Recovery, msg.AdditionalRecovery, msg.Parts); recoveryErr != nil {
+		return msg, recoveryErr
 	}
+	msg.Recovery = taskresult.CloneArtifactRecovery(msg.Recovery)
+	msg.AdditionalRecovery = append([]OutboundRecovery(nil), msg.AdditionalRecovery...)
 	msg.TraceScopes, err = NormalizeTraceScopes(msg.TraceScopes)
 	if len(msg.TraceScopes) == 0 {
 		msg.TraceSettlement = false

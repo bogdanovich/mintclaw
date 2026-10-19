@@ -183,7 +183,7 @@ func TestRetainedMediaFinalPublicationClaimsAllArtifactsAndPreservesReport(t *te
 			result := (&toolshared.ToolResult{ForUser: report}).WithDeliverable(deliverable).
 				WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 			ctx := withOutboundTransaction(t.Context(), "retained-final")
-			if err := loop.ensureFinalHandledOutbound(ts, result); err != nil {
+			if err := loop.ensureResolvedToolOutbound(ts, result); err != nil {
 				t.Fatal(err)
 			}
 			if len(source.claims) != 0 || result.Delivery.Outbound.Text != report {
@@ -192,6 +192,7 @@ func TestRetainedMediaFinalPublicationClaimsAllArtifactsAndPreservesReport(t *te
 			message := bus.OutboundMediaMessage{
 				Channel: channel, ChatID: ts.chatID, Context: bus.NewOutboundContext(channel, ts.chatID, ""),
 				Parts: result.Delivery.Outbound.Media, Recovery: result.Delivery.Outbound.Recovery,
+				AdditionalRecovery: result.Delivery.Outbound.AdditionalRecovery,
 			}
 			publication, err := loop.publishTransactionMediaReceiptAtBoundary(
 				ctx,
@@ -205,7 +206,7 @@ func TestRetainedMediaFinalPublicationClaimsAllArtifactsAndPreservesReport(t *te
 			select {
 			case delivered := <-loop.bus.(*bus.MessageBus).OutboundMediaChan():
 				if len(delivered.Parts) != 2 || delivered.Parts[0].Caption != report ||
-					delivered.Recovery == nil || len(delivered.Recovery.Additional) != 1 {
+					delivered.Recovery == nil || len(delivered.AdditionalRecovery) != 1 {
 					t.Fatalf("incomplete final media: %#v", delivered)
 				}
 			default:
