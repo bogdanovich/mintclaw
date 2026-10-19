@@ -91,7 +91,8 @@ func newDocumentIntakeContinuationState(
 		return protectedAnswerContinuationState{setupErr: errors.New("protected document continuation is unavailable")}
 	}
 	arguments, err := provider.ProtectedAnswerContinuationArguments(reference)
-	if err != nil || !strings.HasPrefix(reference, "form_intake.") {
+	if err != nil || (!strings.HasPrefix(reference, "form_intake.") && !strings.HasPrefix(reference, "form_route.") &&
+		!strings.HasPrefix(reference, "form_route_answer.")) {
 		return protectedAnswerContinuationState{setupErr: errors.New("protected document continuation is invalid")}
 	}
 	return protectedAnswerContinuationState{

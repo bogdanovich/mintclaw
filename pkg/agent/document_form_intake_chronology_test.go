@@ -39,7 +39,8 @@ func TestDocumentIntakePrivateWireDistinguishesLaterClarificationFromEarlierUtte
 }
 
 func TestDocumentIntakePrivateChronologyRejectsInconsistentAndUnboundedOrders(t *testing.T) {
-	for _, orders := range [][2]int{{-1, 1}, {257, 1}, {1, -1}, {1, 257}, {1, 1}, {1, 0}, {0, 1}} {
+	tooLarge := document.MaxFormIntakeAdmissionOrder + 1
+	for _, orders := range [][2]int{{-1, 1}, {tooLarge, 1}, {1, -1}, {1, tooLarge}, {1, 1}, {1, 0}, {0, 1}} {
 		view := privateIntakeTestView()
 		view.Pass.Input.JobID, view.Pass.Input.ModeID, view.Pass.Input.Reference = "job", "mode", "current"
 		view.Pass.Input.AdmissionOrder = orders[0]

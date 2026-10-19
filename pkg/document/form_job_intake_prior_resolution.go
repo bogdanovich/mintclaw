@@ -59,7 +59,14 @@ func (store *FormJobStore) resolvePriorFormIntakeLiterals(
 		for _, prior := range proposal.Resolves {
 			jobID, inputID, err := parseFormIntakeReceipt(prior.Reference)
 			index := formIntakeInputIndex(source.Intake, inputID)
-			if err != nil || jobID != record.Public.JobID || index < 0 || index >= currentIndex {
+			if err != nil || jobID != record.Public.JobID || index < 0 ||
+				formIntakeAdmissionOrder(
+					source.Intake,
+					index,
+				) >= formIntakeAdmissionOrder(
+					source.Intake,
+					currentIndex,
+				) {
 				return ErrFormJobAnswerConflict
 			}
 			input := source.Intake.Inputs[index]
@@ -102,7 +109,7 @@ func (store *FormJobStore) resolvePriorFormIntakeLiterals(
 	}
 	outcome.PriorResolutions = settlements
 	// Bookkeeping never reserves another extraction or mutates an older outcome.
-	for index := 0; index < currentIndex; index++ {
+	for index := range source.Intake.Inputs {
 		item := resolved[index]
 		if item == nil {
 			continue

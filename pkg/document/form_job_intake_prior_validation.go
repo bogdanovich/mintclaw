@@ -25,7 +25,8 @@ func validateFormIntakePriorResolutions(mode *formIntakeStoredMode) error {
 			for _, prior := range pass.Outcome.PriorResolutions {
 				index := formIntakeInputIndex(mode, prior.InputID)
 				span := prior.Span
-				if index < 0 || index >= currentIndex || pass.ReceiptCount <= currentIndex ||
+				if index < 0 || pass.ReceiptCount <= index || pass.ReceiptCount <= currentIndex ||
+					formIntakeAdmissionOrder(mode, index) >= formIntakeAdmissionOrder(mode, currentIndex) ||
 					prior.ThroughPasses < 1 || prior.ThroughPasses > len(mode.Inputs[index].Reservations) ||
 					prior.ThroughPasses > MaxFormIntakeExtractionPasses {
 					return ErrFormJobRecordCorrupt

@@ -42,6 +42,10 @@ func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 	)
 	toolCtx = toolshared.WithToolExecutionIdentity(toolCtx, target.Agent.Workspace, "form-ingress")
 	progress, err := documentTool.FindProtectedFormIntake(toolCtx)
+	if guarded && (strings.HasPrefix(msg.Context.DocumentIntake.Reference, "form_route.") ||
+		strings.HasPrefix(msg.Context.DocumentIntake.Reference, "form_route_answer.")) {
+		progress, err = documentTool.BoundProtectedFormIntake(toolCtx, msg.Context.DocumentIntake)
+	}
 	if err != nil {
 		c.rejectDocumentIntakeInbound(
 			ctx,
@@ -110,7 +114,9 @@ func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 		}
 		return true
 	}
-	if len(msg.Media) != 0 || strings.TrimSpace(msg.Content) == "" {
+	routeTask := documentTool.ProtectedFormTaskRoutingConfigured() &&
+		!strings.HasPrefix(guard.Reference, "form_intake.")
+	if (!routeTask && len(msg.Media) != 0) || (strings.TrimSpace(msg.Content) == "" && len(msg.Media) == 0) {
 		c.rejectDocumentIntakeInbound(
 			ctx,
 			msg,
@@ -134,7 +140,11 @@ func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 			)
 			return true
 		}
-		reference, err = documentTool.AdmitProtectedFormIntake(toolCtx, guard, identity, msg.Content)
+		if routeTask {
+			reference, err = documentTool.AdmitProtectedFormTask(toolCtx, guard, identity, msg.Content, msg.Media)
+		} else {
+			reference, err = documentTool.AdmitProtectedFormIntake(toolCtx, guard, identity, msg.Content)
+		}
 	}
 	if err != nil || guard.Reference != "" && guard.Reference != reference {
 		c.rejectDocumentIntakeInbound(

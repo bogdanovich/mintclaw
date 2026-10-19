@@ -55,7 +55,7 @@ func (tool *DocumentTool) ControlProtectedFormIntake(
 	if err != nil {
 		return document.ErrFormJobUnauthorized
 	}
-	progress, err := tool.formJobs.FindFormIntake(ctx, owner)
+	progress, err := tool.formJobs.FormIntakeForJob(ctx, guard.JobID, owner)
 	if err != nil || progress == nil || progress.JobID != guard.JobID || progress.ModeID != guard.ModeID {
 		return document.ErrFormJobConflict
 	}
@@ -88,7 +88,7 @@ func (tool *DocumentTool) setFormIntakeWorkflowState(
 	if err != nil {
 		return documentFormToolError(err)
 	}
-	progress, err := tool.formJobs.FindFormIntake(ctx, owner)
+	progress, err := tool.formJobs.FormIntakeForJob(ctx, record.JobID, owner)
 	if err != nil || progress == nil || progress.JobID != record.JobID {
 		return documentFormToolError(document.ErrFormJobConflict)
 	}
@@ -96,13 +96,22 @@ func (tool *DocumentTool) setFormIntakeWorkflowState(
 	if err = tool.ControlProtectedFormIntake(ctx, guard, action); err != nil {
 		return documentFormToolError(err)
 	}
-	progress, err = tool.formJobs.FindFormIntake(ctx, owner)
+	progress, err = tool.formJobs.FormIntakeForJob(ctx, record.JobID, owner)
 	if err != nil || progress == nil {
 		return documentFormToolError(document.ErrFormJobConflict)
 	}
 	record, err = tool.formJobs.Get(ctx, record.JobID, owner)
 	if err != nil {
 		return documentFormToolError(err)
+	}
+	if action == "resume" {
+		work, workErr := tool.formJobs.FormTaskRouteWork(ctx, record.JobID, owner)
+		if workErr != nil {
+			return documentFormToolError(workErr)
+		}
+		if len(work) > 0 {
+			return tool.nextFormTaskResult(ctx, owner, work[0])
+		}
 	}
 	return tool.formIntakeResult(ctx, owner, schema, record, action, safeDocumentFormIntake{Progress: *progress})
 }
@@ -120,6 +129,23 @@ func (tool *DocumentTool) FindProtectedFormIntake(ctx context.Context) (*documen
 	return tool.formJobs.FindFormIntake(ctx, owner)
 }
 
+func (tool *DocumentTool) BoundProtectedFormIntake(
+	ctx context.Context, guard bus.InboundDocumentIntakeGuard,
+) (*document.FormIntakeProgress, error) {
+	if !guard.Valid() || tool == nil || tool.formJobs == nil {
+		return nil, document.ErrFormJobConflict
+	}
+	owner, err := documentFormOwner(ctx)
+	if err != nil {
+		return nil, document.ErrFormJobUnauthorized
+	}
+	progress, err := tool.formJobs.FormIntakeForJob(ctx, guard.JobID, owner)
+	if err != nil || progress == nil || progress.ModeID != guard.ModeID {
+		return nil, document.ErrFormJobConflict
+	}
+	return progress, nil
+}
+
 // RetryProtectedFormIntake resolves an existing receipt for a typed same-route
 // recovery control. It never admits input or resets the extraction budget.
 func (tool *DocumentTool) RetryProtectedFormIntake(
@@ -133,8 +159,24 @@ func (tool *DocumentTool) RetryProtectedFormIntake(
 		return "", document.ErrFormJobUnauthorized
 	}
 	progress, err := tool.formJobs.FindFormIntake(ctx, owner)
-	if err != nil || progress == nil || progress.State != document.FormIntakeActive ||
+	if err != nil || progress == nil ||
 		progress.JobID != guard.JobID || progress.ModeID != guard.ModeID {
+		return "", document.ErrFormJobConflict
+	}
+	if tool.ProtectedFormTaskRoutingConfigured() {
+		work, workErr := tool.formJobs.FormTaskRouteWork(ctx, guard.JobID, owner)
+		if workErr != nil {
+			return "", workErr
+		}
+		if guard.Reference != "" {
+			if slices.Contains(work, guard.Reference) {
+				return guard.Reference, nil
+			}
+		} else if len(work) > 0 {
+			return work[0], nil
+		}
+	}
+	if progress.State != document.FormIntakeActive {
 		return "", document.ErrFormJobConflict
 	}
 	references, err := tool.formJobs.FormIntakeReferences(ctx, guard.JobID, guard.ModeID, owner)

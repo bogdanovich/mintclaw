@@ -261,6 +261,9 @@ func (sink *FormProtectedAnswerSink) Accept(
 	if envelope.Kind == formIntakeBindingKind {
 		return sink.acceptFormIntake(ctx, request, envelope)
 	}
+	if envelope.Kind == formTaskQuestionBindingKind {
+		return sink.acceptFormTaskQuestion(ctx, request, envelope)
+	}
 	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
 		return interactions.ProtectedAnswerReceipt{}, err
@@ -824,6 +827,9 @@ func (sink *FormProtectedAnswerSink) Commit(
 	if envelope.Kind == formIntakeBindingKind {
 		return sink.commitFormIntake(ctx, request, envelope)
 	}
+	if envelope.Kind == formTaskQuestionBindingKind {
+		return sink.commitFormTaskQuestion(ctx, request, envelope)
+	}
 	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
 		return err
@@ -862,6 +868,9 @@ func (sink *FormProtectedAnswerSink) Discard(
 	}
 	if envelope.Kind == formIntakeBindingKind {
 		return sink.discardFormIntake(ctx, request, envelope)
+	}
+	if envelope.Kind == formTaskQuestionBindingKind {
+		return sink.discardFormTaskQuestion(ctx, request, envelope)
 	}
 	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
@@ -1127,6 +1136,9 @@ func (sink *FormProtectedAnswerSink) Cancel(
 	if intakeEnvelope.Kind == formIntakeBindingKind {
 		return sink.cancelFormIntake(ctx, request, intakeEnvelope)
 	}
+	if intakeEnvelope.Kind == formTaskQuestionBindingKind {
+		return sink.cancelFormTaskQuestion(ctx, request, intakeEnvelope)
+	}
 	owner, err := FormJobOwnerFromProtectedRoute(request.Workspace, request.Route)
 	if err != nil {
 		return err
@@ -1235,9 +1247,11 @@ func decodeFormProtectedBindingEnvelope(token string) (formJobEnvelope, error) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return envelope, ErrFormJobRecordCorrupt
 	}
-	if (envelope.Kind != "answer_binding" && envelope.Kind != formIntakeBindingKind) ||
-		!validFormIntakeJobID(envelope.JobID) || envelope.Revision <= 0 ||
-		(envelope.Kind == formIntakeBindingKind && (!validFormIntakeJobID(envelope.EventID) || envelope.FieldID != "")) {
+	if (envelope.Kind != "answer_binding" && envelope.Kind != formIntakeBindingKind && envelope.Kind != formTaskQuestionBindingKind) ||
+		!validFormIntakeJobID(envelope.JobID) ||
+		envelope.Revision <= 0 ||
+		((envelope.Kind == formIntakeBindingKind || envelope.Kind == formTaskQuestionBindingKind) &&
+			(!validFormIntakeJobID(envelope.EventID) || envelope.FieldID != "")) {
 		return envelope, ErrFormJobRecordCorrupt
 	}
 	return envelope, nil

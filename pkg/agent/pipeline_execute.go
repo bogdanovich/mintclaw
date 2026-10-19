@@ -1190,6 +1190,10 @@ func (runner *toolLoopRunner) approveToolCall(
 	call.protectedResult = toolRegistry.ProtectedDurableResult(toolName, toolArgs)
 
 	execCtx := toolExecutionContextForTurn(turnCtx, ts)
+	execCtx = toolshared.WithToolLiveContextTextAllowance(
+		execCtx,
+		maxLiveToolContextTextBytes-runner.exec.liveToolContextTextBytes,
+	)
 	execCtx = runner.exec.protectedAnswerContinuation.documentIntakeProcessingContext(execCtx)
 	execCtx = toolshared.WithToolCallID(execCtx, tc.ID)
 	approvalBypass, trustedExecution := toolApprovalBypass(p.Cfg, toolRegistry, toolName, toolArgs)
@@ -1913,7 +1917,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				durableToolResultMsg,
 				liveContextText != "",
 				hasLiveContextMedia,
-				hasLiveContextMedia && (toolName == "document" || toolResult.ContextMediaRequiresVision),
+				hasLiveContextMedia && toolResult.ContextMediaRequiresVision,
 			)
 		}
 	}

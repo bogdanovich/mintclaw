@@ -219,6 +219,17 @@ func (store *FormJobStore) admitFormIntake(
 		if err != nil {
 			return false, err
 		}
+		admissionContext, admissionOrder := mode.Context, 0
+		if len(mode.TaskRoutes) > 0 {
+			admissionOrder = nextFormIntakeAdmissionOrder(mode)
+		}
+		if routed != "" {
+			admissionContext, admissionOrder, err = routedFormIntakeOrigin(record.Public.JobID, mode, routed)
+			if err != nil {
+				return false, err
+			}
+			origin.Context = cloneFormIntakeContext(admissionContext)
+		}
 		messageDigest := keyedDigest(store.profileKey, "intake_message", record.Public.JobID, mode.ID, identity)
 		for _, input := range mode.Inputs {
 			if !constantTimeStringEqual(input.MessageDigest, messageDigest) {
@@ -243,7 +254,7 @@ func (store *FormJobStore) admitFormIntake(
 			len(record.PendingEvents) != 0 || record.Public.Revision == math.MaxInt64 ||
 			!equalFormIntakeOrigin(origin, formIntakeBindingPayload{
 				Version: FormIntakeVersion, JobID: record.Public.JobID, ModeID: mode.ID,
-				SchemaDigest: mode.SchemaDigest, ExpectedRevision: record.Public.Revision, Context: mode.Context,
+				SchemaDigest: mode.SchemaDigest, ExpectedRevision: record.Public.Revision, Context: admissionContext,
 			}) {
 			return false, ErrFormJobConflict
 		}
@@ -266,7 +277,8 @@ func (store *FormJobStore) admitFormIntake(
 			return false, err
 		}
 		input := formIntakeStoredInput{
-			ID: "form_input_" + messageDigest[:32], MessageDigest: messageDigest, BodyDigest: bodyDigest,
+			AdmissionOrder: admissionOrder,
+			ID:             "form_input_" + messageDigest[:32], MessageDigest: messageDigest, BodyDigest: bodyDigest,
 			InteractionID: interactionID, State: formIntakeInputStaged, Intent: intent, Text: text,
 			Origin: origin, CreatedAt: now.UnixMilli(),
 		}
@@ -516,6 +528,12 @@ func formIntakeProgress(record FormJobRecord, mode *formIntakeStoredMode) FormIn
 		if formTaskRoutePending(route) {
 			progress.PendingTasks++
 		}
+		for _, answer := range route.Answers {
+			progress.TaskBytes += formTaskAnswerTextBytes(answer.Text)
+			if answer.ForForm && answer.Text != "" {
+				progress.PendingTasks++
+			}
+		}
 	}
 	return progress
 }
@@ -573,7 +591,7 @@ func (store *FormJobStore) formIntakeInput(
 		}
 	}
 	return FormIntakeInput{
-		AdmissionOrder:        formIntakeInputIndex(mode, input.ID) + 1,
+		AdmissionOrder:        formIntakeAdmissionOrder(mode, formIntakeInputIndex(mode, input.ID)),
 		JobID:                 record.JobID,
 		ModeID:                mode.ID,
 		Reference:             formIntakeReceiptPrefix + record.JobID + "." + input.ID,
@@ -693,6 +711,9 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 	if err := validateStoredFormTaskRoutes(record, mode); err != nil {
 		return err
 	}
+	if err := validateFormIntakeAdmissionOrders(mode); err != nil {
+		return err
+	}
 	envelope, err := decodeFormProtectedBindingEnvelope(mode.InitialBinding.Token)
 	if err != nil || envelope.Kind != formIntakeBindingKind || envelope.JobID != record.JobID ||
 		envelope.EventID != mode.ID || envelope.Revision != mode.StartRevision {
@@ -751,6 +772,13 @@ func validateStoredFormIntake(record FormJobRecord, mode *formIntakeStoredMode) 
 		}
 	}
 	progress := formIntakeProgress(record, mode)
+	for _, route := range mode.TaskRoutes {
+		for _, answer := range route.Answers {
+			if answer.State == "staged" {
+				staged++
+			}
+		}
+	}
 	if err := validateFormIntakePriorResolutions(mode); err != nil {
 		return err
 	}
@@ -800,12 +828,27 @@ func requireNoStagedFormIntake(record formJobStoredRecord, key []byte) error {
 	if err != nil {
 		return err
 	}
-	if source.Intake != nil {
-		for _, input := range source.Intake.Inputs {
-			if input.State == formIntakeInputStaged {
-				return ErrFormJobConflict
+	if hasStagedFormIntake(source.Intake) {
+		return ErrFormJobConflict
+	}
+	return nil
+}
+
+func hasStagedFormIntake(mode *formIntakeStoredMode) bool {
+	if mode == nil {
+		return false
+	}
+	for _, input := range mode.Inputs {
+		if input.State == formIntakeInputStaged {
+			return true
+		}
+	}
+	for _, route := range mode.TaskRoutes {
+		for _, answer := range route.Answers {
+			if answer.State == "staged" {
+				return true
 			}
 		}
 	}
-	return nil
+	return false
 }

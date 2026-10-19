@@ -154,7 +154,13 @@ func (guard InboundDocumentIntakeGuard) Valid() bool {
 		return true
 	}
 	parts := strings.Split(guard.Reference, ".")
-	return len(parts) == 3 && parts[0] == "form_intake" && parts[1] == guard.JobID && validID(parts[2], "form_input_")
+	if len(parts) == 4 {
+		return parts[0] == "form_route_answer" && parts[1] == guard.JobID &&
+			validID(parts[2], "form_route_") && validID(parts[3], "form_task_answer_")
+	}
+	return len(parts) == 3 && parts[1] == guard.JobID &&
+		((parts[0] == "form_intake" && validID(parts[2], "form_input_")) ||
+			(parts[0] == "form_route" && validID(parts[2], "form_route_")))
 }
 
 type InboundMessage struct {
