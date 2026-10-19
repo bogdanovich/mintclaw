@@ -30,6 +30,30 @@ func inputFixture(t *testing.T) (Session, InputEvidence, InputRequest, time.Time
 	return session, evidence, request, now
 }
 
+func TestInputEnvelopeIsNotHostEvidenceOrGeometryAuthority(t *testing.T) {
+	for _, kind := range []string{"outside-geometry", "expired", "human-control", "wrong-generation"} {
+		t.Run(kind, func(t *testing.T) {
+			session, evidence, request, now := inputFixture(t)
+			switch kind {
+			case "outside-geometry":
+				request.Action.Click.Target.Point.X = float64(evidence.Geometry.Width)
+			case "expired":
+				now = evidence.ExpiresAt.Add(time.Second)
+			case "human-control":
+				session.Control = ControlHuman
+			case "wrong-generation":
+				session.Binding.Generation++
+			}
+			if request.ValidateMetadata() != nil || request.ValidateEnvelope() != nil {
+				t.Fatal("wire-only shape validation was made into host admission")
+			}
+			if request.Validate(session, evidence, now) == nil {
+				t.Fatal("metadata/payload replaced host geometry, freshness or control authority")
+			}
+		})
+	}
+}
+
 func TestInputActionShapesAndGeometry(t *testing.T) {
 	geometry := Geometry{Width: 200, Height: 100, OriginX: -300, OriginY: -100, Scale: 2}
 	for _, action := range []InputAction{
