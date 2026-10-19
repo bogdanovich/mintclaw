@@ -1,15 +1,16 @@
 package interactions
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 )
 
-// This bounded qualification checks delivery after a controlled stalled
-// observer. Queue measurements are observations, not a production queue limit.
+// This qualification enforces the production count limit, including a stalled
+// callback, while retained records/events stay small. Durable rollback and byte
+// admission are exercised separately in notification_budget_test.go.
 func TestRegistryContentionQualificationStalledObserver(t *testing.T) {
 	for attempt := range 3 {
 		t.Run(fmt.Sprintf("attempt-%d", attempt+1), qualifyRegistryStalledObserver)
@@ -17,9 +18,9 @@ func TestRegistryContentionQualificationStalledObserver(t *testing.T) {
 }
 
 func qualifyRegistryStalledObserver(t *testing.T) {
-	_, clock, path := newTestRegistry(t)
+	_, clock, _ := newTestRegistry(t)
 	registry := NewRegistryWithOptions(
-		path,
+		"",
 		Options{
 			Now:               clock.Now,
 			TerminalRetention: time.Millisecond,
@@ -55,7 +56,7 @@ func qualifyRegistryStalledObserver(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("observer did not enter")
 	}
-	const records = 128
+	const records = 127
 	start := time.Now()
 	produce := func() error {
 		for i := range records {
@@ -94,28 +95,31 @@ func qualifyRegistryStalledObserver(t *testing.T) {
 		t.Fatal("producer burst exceeded its deadline while the callback was stalled")
 	}
 	commitsElapsed := time.Since(start)
-	registry.mu.RLock()
-	queued := len(registry.notifications)
-	observations := make([]EventObservation, 0, queued)
-	for _, notification := range registry.notifications {
-		observations = append(observations, notification.observation)
-	}
-	encoded, err := json.Marshal(observations)
-	registry.mu.RUnlock()
+	last, err := registry.Create(validCreate(clock, "interaction_99999999qualify", "session-last"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := registry.Cancel(last.ID, last.Revision, "over_budget"); !errors.Is(err, ErrObserverBacklog) {
+		t.Fatalf("count admission: %v", err)
+	}
 	stats := registry.Stats()
+	if stats.PendingObservations != DefaultMaxPendingObservations ||
+		stats.PendingObservationBytes > DefaultMaxPendingObservationBytes {
+		t.Fatalf("outstanding work escaped bounds: %+v", stats)
+	}
+	if got, _ := registry.Get(last.ID); got.Revision != last.Revision {
+		t.Fatal("rejected mutation changed record")
+	}
 	t.Logf(
-		"stalled observer: concurrent_commits=%d elapsed=%s queued=%d queue_json_bytes=%d retained_records=%d retained_events=%d snapshot_bytes=%d snapshot_limit=%d",
-		2*records,
+		"stalled observer: admitted=%d elapsed=%s outstanding=%d accounted_payload_bytes=%d count_limit=%d byte_limit=%d retained_records=%d retained_events=%d",
+		2+2*records,
 		commitsElapsed,
-		queued,
-		len(encoded),
+		stats.PendingObservations,
+		stats.PendingObservationBytes,
+		stats.MaxPendingObservations,
+		stats.MaxPendingObservationBytes,
 		stats.RecordCount,
 		stats.EventCount,
-		stats.SnapshotBytes,
-		stats.MaxSnapshotBytes,
 	)
 	// Removing a subscriber must return while its callback is blocked. Already
 	// committed notifications still belong to it; later commits do not.
@@ -137,13 +141,19 @@ func qualifyRegistryStalledObserver(t *testing.T) {
 	}
 	observedMu.Lock()
 	defer observedMu.Unlock()
-	if len(sequences) != 1+2*records {
-		t.Fatalf("lost committed notifications: got=%d want=%d", len(sequences), 1+2*records)
+	if len(sequences) != 2+2*records {
+		t.Fatalf("lost committed notifications: got=%d want=%d", len(sequences), 2+2*records)
 	}
 	for index, sequence := range sequences {
 		if sequence != uint64(index+1) {
 			t.Fatalf("reordered notification: index=%d sequence=%d", index, sequence)
 		}
+	}
+	if stats := registry.Stats(); stats.PendingObservations != 0 || stats.PendingObservationBytes != 0 {
+		t.Fatalf("budget leak: %+v", stats)
+	}
+	if _, err := registry.Cancel(last.ID, last.Revision, "retry_after_drain"); err != nil {
+		t.Fatal(err)
 	}
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
