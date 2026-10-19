@@ -67,13 +67,14 @@ const (
 )
 
 const (
-	SnapshotSchemaVersion = "interaction_snapshot.v1"
-	EventSchemaVersion    = "interaction_event.v1"
-	DefaultRetention      = 7 * 24 * time.Hour
-	DefaultMaxRecords     = 1000
-	DefaultMaxEvents      = 5000
-	DefaultMaxBytes       = 2 * 1024 * 1024
-	MaxFinalDeliveries    = 16
+	SnapshotSchemaVersion   = "interaction_snapshot.v1"
+	EventSchemaVersion      = "interaction_event.v1"
+	DefaultStoreLockTimeout = time.Second
+	DefaultRetention        = 7 * 24 * time.Hour
+	DefaultMaxRecords       = 1000
+	DefaultMaxEvents        = 5000
+	DefaultMaxBytes         = 2 * 1024 * 1024
+	MaxFinalDeliveries      = 16
 
 	MaxQuestions            = 3
 	MaxOptions              = 3
@@ -104,6 +105,7 @@ var (
 )
 
 var (
+	ErrStoreBusy          = errors.New("interaction store busy")
 	ErrStoreUnavailable   = errors.New("interaction store unavailable")
 	ErrNotFound           = errors.New("interaction not found")
 	ErrConflict           = errors.New("interaction revision conflict")
