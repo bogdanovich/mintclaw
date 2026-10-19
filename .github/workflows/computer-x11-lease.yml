@@ -43,7 +43,9 @@ jobs:
 
       - name: Two-screen cross-process native lifecycle, twenty repetitions
         run: |
-          xvfb-run -a --server-args='-screen 0 640x480x24 -screen 1 640x480x24 -nolisten tcp' \
+          # Fixture teardown must not reset the server while the next case authenticates.
+          # This changes only the disposable CI server, not any attached desktop.
+          xvfb-run -a --server-args='-screen 0 640x480x24 -screen 1 640x480x24 -nolisten tcp -noreset' \
             env MINTCLAW_NATIVE_X11_GUARD_TEST=1 MINTCLAW_NATIVE_X11_LEASE_TEST=1 \
             go test -race -tags goolm,stdjson ./pkg/computer/desktop \
               -run '^TestNativeX11InputLease' -count=20 -timeout=5m -v
