@@ -149,6 +149,9 @@ there is no demonstrated need for a new registry service.
 
 ## A3 Contention and notification budgets
 
+The bounded qualification harness and next admission contract are documented in
+[Interaction Contention Qualification](../operations/architecture-robustness-20261019-qualification.md).
+
 [Interaction store locking](https://github.com/bogdanovich/mintclaw/blob/77c79cd50e61ce50d75b8fe0e4b60a63f56b5fda/pkg/interactions/filelock_unix.go#L11) uses
 blocking `Flock(LOCK_EX)` without a deadline. Persistence acquires that lock
 while holding the registry mutex. A slow or hung live peer can therefore stall
