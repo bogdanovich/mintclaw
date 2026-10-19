@@ -1,6 +1,7 @@
 package interactions
 
 import (
+	"context"
 	"strings"
 	"time"
 )
@@ -95,6 +96,11 @@ func (r *Registry) ListEvents(id string) []Event {
 }
 
 func (r *Registry) Prune(now time.Time) error {
+	return r.PruneContext(context.Background(), now)
+}
+
+// PruneContext bounds store admission by the earlier caller or registry budget.
+func (r *Registry) PruneContext(ctx context.Context, now time.Time) error {
 	if r == nil {
 		return ErrStoreUnavailable
 	}
@@ -102,14 +108,8 @@ func (r *Registry) Prune(now time.Time) error {
 	if now.IsZero() {
 		nowMillis = r.nowMillis()
 	}
-	r.mu.Lock()
-	if err := r.availableLocked(); err != nil {
-		r.mu.Unlock()
-		return err
-	}
-	releaseStore, err := r.lockAndReloadLocked()
+	releaseStore, err := r.lockAndReload(ctx)
 	if err != nil {
-		r.mu.Unlock()
 		return err
 	}
 	before := r.snapshotLocked()

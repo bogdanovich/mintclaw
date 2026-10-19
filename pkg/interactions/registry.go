@@ -1,6 +1,7 @@
 package interactions
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -9,6 +10,8 @@ import (
 )
 
 type Options struct {
+	// StoreLockTimeout bounds admission, including local writer contention.
+	StoreLockTimeout  time.Duration
 	TerminalRetention time.Duration
 	MaxRecords        int
 	MaxEvents         int
@@ -57,6 +60,9 @@ func NewRegistry(storePath string) *Registry {
 }
 
 func NewRegistryWithOptions(storePath string, opts Options) *Registry {
+	if opts.StoreLockTimeout <= 0 {
+		opts.StoreLockTimeout = DefaultStoreLockTimeout
+	}
 	if opts.TerminalRetention <= 0 {
 		opts.TerminalRetention = DefaultRetention
 	}
@@ -78,8 +84,7 @@ func NewRegistryWithOptions(storePath string, opts Options) *Registry {
 		records:   make(map[string]Record),
 	}
 	if r.storePath != "" {
-		r.mu.Lock()
-		release, err := r.lockAndReloadLocked()
+		release, err := r.lockAndReload(context.Background())
 		if err != nil {
 			r.loadErr = err
 		} else {
@@ -87,8 +92,8 @@ func NewRegistryWithOptions(storePath string, opts Options) *Registry {
 				r.loadErr = r.saveLocked()
 			}
 			release()
+			r.mu.Unlock()
 		}
-		r.mu.Unlock()
 	}
 	return r
 }

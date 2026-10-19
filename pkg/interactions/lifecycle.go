@@ -2,6 +2,7 @@ package interactions
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,6 +12,12 @@ import (
 )
 
 func (r *Registry) Create(req CreateRequest) (Record, error) {
+	return r.CreateContext(context.Background(), req)
+}
+
+// CreateContext observes caller cancellation while admitting a durable write.
+// Cancellation after admission does not roll back a committed mutation.
+func (r *Registry) CreateContext(ctx context.Context, req CreateRequest) (Record, error) {
 	if r == nil {
 		return Record{}, ErrStoreUnavailable
 	}
@@ -20,14 +27,8 @@ func (r *Registry) Create(req CreateRequest) (Record, error) {
 		return Record{}, err
 	}
 
-	r.mu.Lock()
-	if availableErr := r.availableLocked(); availableErr != nil {
-		r.mu.Unlock()
-		return Record{}, availableErr
-	}
-	releaseStore, err := r.lockAndReloadLocked()
+	releaseStore, err := r.lockAndReload(ctx)
 	if err != nil {
-		r.mu.Unlock()
 		return Record{}, err
 	}
 	if len(r.records) >= r.options.MaxRecords {
@@ -250,14 +251,8 @@ func (r *Registry) ClaimOverdue(now time.Time) ([]Record, error) {
 		nowMillis = r.nowMillis()
 	}
 
-	r.mu.Lock()
-	if err := r.availableLocked(); err != nil {
-		r.mu.Unlock()
-		return nil, err
-	}
-	releaseStore, err := r.lockAndReloadLocked()
+	releaseStore, err := r.lockAndReload(context.Background())
 	if err != nil {
-		r.mu.Unlock()
 		return nil, err
 	}
 	eventsBefore := append([]Event(nil), r.events...)
@@ -681,14 +676,8 @@ func (r *Registry) update(
 		return Record{}, ErrStoreUnavailable
 	}
 	id = strings.TrimSpace(id)
-	r.mu.Lock()
-	if err := r.availableLocked(); err != nil {
-		r.mu.Unlock()
-		return Record{}, err
-	}
-	releaseStore, err := r.lockAndReloadLocked()
+	releaseStore, err := r.lockAndReload(context.Background())
 	if err != nil {
-		r.mu.Unlock()
 		return Record{}, err
 	}
 	rec, ok := r.records[id]
