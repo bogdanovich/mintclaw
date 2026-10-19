@@ -761,6 +761,7 @@ type toolCallState struct {
 	invocationOK                bool
 	invocationSuspendOK         bool
 	resourceDispositionVerified bool
+	documentFields              toolshared.DocumentFieldsObservation
 	continuationFollowup        *toolshared.ToolOnlyFollowup
 	continuationFollowupErr     error
 	toolResultFollowup          *toolshared.ToolOnlyFollowup
@@ -1671,6 +1672,9 @@ func (runner *toolLoopRunner) invokeToolCall(
 	call.invocationSuspendOK = toolResult != nil && !toolResult.IsError &&
 		!toolResult.Control.Async && toolResult.Control.Suspension != nil && !call.taskSuspended
 	call.resourceDispositionVerified = call.invocationOK && toolResult.Control.ResourceDispositionVerified
+	if call.invocationOK && toolName == "document" {
+		call.documentFields = toolResult.DocumentFields
+	}
 	if toolResult != nil && toolResult.Control.Async && asyncAckDelivery.ParentHandled {
 		toolResult.Delivery.Intent = toolshared.DeliveryFinalHandled
 	}
@@ -2008,8 +2012,9 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			DiagnosticResult: diagnosticTextPreview(
 				p.Cfg, durableContent, diagnosticToolResultBytes,
 			),
-			WriteAudit:  append([]toolshared.WriteAuditEntry(nil), toolResult.WriteAudit...),
-			Observation: codingToolObservationWithLoopDecision(ts, toolResult.Observation, loopDecision),
+			WriteAudit:     append([]toolshared.WriteAuditEntry(nil), toolResult.WriteAudit...),
+			Observation:    codingToolObservationWithLoopDecision(ts, toolResult.Observation, loopDecision),
+			DocumentFields: call.documentFields,
 		},
 	)
 	p.refreshCodingWorkspaceAfterTool(ts, toolName, toolResult)

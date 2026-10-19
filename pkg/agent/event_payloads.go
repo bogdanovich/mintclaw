@@ -306,6 +306,7 @@ type ToolExecEndPayload struct {
 	DiagnosticResult   string
 	WriteAudit         []toolshared.WriteAuditEntry
 	Observation        *toolshared.ToolObservation
+	DocumentFields     toolshared.DocumentFieldsObservation `json:"-"`
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.

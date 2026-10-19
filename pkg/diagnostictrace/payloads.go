@@ -64,18 +64,45 @@ type ModelPayload struct {
 }
 
 type ToolPayload struct {
-	Tool             string `json:"tool"`
-	ArgsHash         string `json:"args_hash,omitempty"`
-	ResultHash       string `json:"result_hash,omitempty"`
-	Status           string `json:"status,omitempty"`
-	Executed         bool   `json:"executed,omitempty"`
-	IsError          bool   `json:"is_error,omitempty"`
-	Action           string `json:"action,omitempty"`
-	DecisionCode     string `json:"decision_code,omitempty"`
-	Count            int    `json:"count,omitempty"`
-	Threshold        int    `json:"threshold,omitempty"`
-	ArgumentsPreview string `json:"arguments_preview,omitempty"`
-	ResultPreview    string `json:"result_preview,omitempty"`
+	Tool             string                 `json:"tool"`
+	ArgsHash         string                 `json:"args_hash,omitempty"`
+	ResultHash       string                 `json:"result_hash,omitempty"`
+	Status           string                 `json:"status,omitempty"`
+	Executed         bool                   `json:"executed,omitempty"`
+	IsError          bool                   `json:"is_error,omitempty"`
+	Action           string                 `json:"action,omitempty"`
+	DecisionCode     string                 `json:"decision_code,omitempty"`
+	Count            int                    `json:"count,omitempty"`
+	Threshold        int                    `json:"threshold,omitempty"`
+	ArgumentsPreview string                 `json:"arguments_preview,omitempty"`
+	ResultPreview    string                 `json:"result_preview,omitempty"`
+	DocumentFields   *DocumentFieldsPayload `json:"document_fields,omitempty"`
+}
+
+// DocumentFieldsPayload is a native read observation, not approval authority or
+// a claim that the model received every schema field or understood its meaning.
+type DocumentFieldsPayload struct {
+	Operation       string `json:"operation"`
+	SourceSHA256    string `json:"source_sha256"`
+	SchemaFields    int    `json:"schema_fields"`
+	ReturnedFields  int    `json:"returned_fields"`
+	RequiredFields  int    `json:"required_fields"`
+	ValuesPresent   int    `json:"values_present"`
+	DefaultsPresent int    `json:"defaults_present"`
+}
+
+// Valid checks the bounded, content-free native field-read contract.
+func (p DocumentFieldsPayload) Valid() bool {
+	if p.Operation != "fields" && p.Operation != "form.discover" || !validHexRange(p.SourceSHA256, 64, 64) ||
+		p.SchemaFields < 1 || p.SchemaFields > 256 || p.ReturnedFields < 0 || p.ReturnedFields > p.SchemaFields {
+		return false
+	}
+	for _, count := range []int{p.RequiredFields, p.ValuesPresent, p.DefaultsPresent} {
+		if count < 0 || count > p.SchemaFields {
+			return false
+		}
+	}
+	return p.Operation != "fields" || p.ReturnedFields == p.SchemaFields
 }
 
 type SteeringPayload struct {

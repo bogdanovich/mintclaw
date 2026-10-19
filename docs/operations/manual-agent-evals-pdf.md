@@ -262,6 +262,29 @@ fixtures are conservatively retained while native settlement is unknown. Only th
 contract above is currently eligible for judge-only regrading. Later write/delivery/private-value witnesses must
 replace the other explicit unknowns before E3 exits.
 
+## Native Field-Read Metadata
+
+Opt-in native diagnostic capture can retain a `tool.result.document_fields` observation for a successful,
+synchronous `document` `fields` or `form.discover` invocation. The document tool projects its typed native report,
+not model prose, tool arguments, result previews, or a second PDF parser. The observation contains only the exact
+source SHA-256, operation, schema/returned field counts, and counts of required fields, saved values and defaults.
+It contains no field IDs/names/options/values, source refs, paths, or document text. The native field ceiling is
+256. Unknown/failed/asynchronous/suspended reads, capabilities, inspect-only calls and hook-only responses do not
+produce this observation. The originating scalar observation is captured before `AfterTool` can replace it.
+
+`schema_fields` counts the complete schema read by the native tool. `returned_fields` counts the native result's
+field window; `fields` returns the full schema, while `form.discover` may return fewer or zero candidates. Schema
+aggregates are not aggregates of that smaller window. This is read evidence, not proof of model comprehension,
+model-visible completeness after hook transformation, write/approval authority, or successful output creation.
+The transient observation is excluded from canonical tool results and ordinary runtime-event JSON; only the
+existing diagnostic projector emits the bounded metadata when capture is explicitly enabled. Capture defaults,
+source authorization, document execution, delivery and question handling are unchanged.
+
+The eval consumer must still validate the native trace's source, complete routed trial/turn/call scope, integrity,
+limits and privacy before checking the exact fixture SHA and applicable read facts. Missing old metadata must not
+be treated as success. This producer alone does not repair the empty-fields case contract or qualify a new live
+PDF run; the retained v1 coverage false positive remains unchanged.
+
 ## Question Cancellation Receipts
 
 An ordinary `request_user_input` cancellation uses the shared native question observer. A protected document
