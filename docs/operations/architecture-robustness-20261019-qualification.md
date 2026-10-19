@@ -9,9 +9,12 @@ incident, an OOM reproduction, or implemented production queue/deadline limits.
 The tests use a temporary interaction store, a real Unix file lock, and
 controlled subscriber callbacks. They do not contact external services or run
 production effects. Each wait has a test deadline and each producer burst is
-finite. Each test contains three independent repetitions, including when run
-by the existing full normal and race CI suites. Test deadlines protect the harness; the current runtime APIs still have
-no matching production deadline or queue cap.
+finite. The producer worker has a ten-second harness deadline; on timeout the
+callback is released before producer cleanup or test failure. Other coordination
+waits have three-second guards. Each test contains three independent repetitions,
+including when run by the existing full normal and race CI suites. Test
+deadlines protect the harness; the current runtime APIs still have no matching
+production deadline or queue cap.
 
 Run from the repository root:
 

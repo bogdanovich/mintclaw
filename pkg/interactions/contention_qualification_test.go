@@ -43,7 +43,8 @@ func qualifyRegistryStalledObserver(t *testing.T) {
 		sequences = append(sequences, observation.Event.CommitSequence)
 		observedMu.Unlock()
 	})
-	defer unsubscribe()
+	// Unsubscribe is awaited with a deadline below. A synchronous deferred
+	// unsubscribe could block failure reporting behind a stalled producer.
 	firstDone := make(chan error, 1)
 	go func() {
 		_, err := registry.Create(validCreate(clock, "interaction_00000000qualify", "session-first"))
@@ -56,20 +57,41 @@ func qualifyRegistryStalledObserver(t *testing.T) {
 	}
 	const records = 128
 	start := time.Now()
-	for i := range records {
-		record, err := registry.Create(
-			validCreate(clock, fmt.Sprintf("interaction_%08dqualify", i+1), fmt.Sprintf("session-%d", i)),
-		)
+	produce := func() error {
+		for i := range records {
+			record, err := registry.Create(
+				validCreate(clock, fmt.Sprintf("interaction_%08dqualify", i+1), fmt.Sprintf("session-%d", i)),
+			)
+			if err != nil {
+				return fmt.Errorf("create interaction %d: %w", i, err)
+			}
+			if _, err := registry.Cancel(record.ID, record.Revision, "qualification_cancel"); err != nil {
+				return fmt.Errorf("cancel interaction %d: %w", i, err)
+			}
+			clock.Advance(2 * time.Millisecond)
+			if err := registry.Prune(clock.Now()); err != nil {
+				return fmt.Errorf("prune interaction %d: %w", i, err)
+			}
+		}
+		return nil
+	}
+	producerDone := make(chan error, 1)
+	go func() { producerDone <- produce() }()
+	select {
+	case err := <-producerDone:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := registry.Cancel(record.ID, record.Revision, "qualification_cancel"); err != nil {
-			t.Fatal(err)
+	case <-time.After(10 * time.Second):
+		// A blocked observer must not prevent the harness from reporting failure.
+		// Release it before waiting for producer cleanup or failing the subtest.
+		unblock()
+		select {
+		case <-producerDone:
+		case <-time.After(3 * time.Second):
+			t.Fatal("producer did not settle after releasing the stalled callback")
 		}
-		clock.Advance(2 * time.Millisecond)
-		if err := registry.Prune(clock.Now()); err != nil {
-			t.Fatal(err)
-		}
+		t.Fatal("producer burst exceeded its deadline while the callback was stalled")
 	}
 	commitsElapsed := time.Since(start)
 	registry.mu.RLock()
