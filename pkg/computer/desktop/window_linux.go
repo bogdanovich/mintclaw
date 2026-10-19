@@ -30,6 +30,7 @@ type x11Window struct {
 	root       xproto.Window
 	closed     bool
 	lost       atomic.Bool
+	input      atomic.Pointer[x11InputLease]
 	eventStop  chan struct{}
 	eventDone  chan struct{}
 	fences     chan chan struct{}
@@ -73,12 +74,25 @@ func watchNativeWindow(ctx context.Context, request WindowRequest) (windowBacken
 	if err != nil {
 		return nil, computer.ErrUnavailable
 	}
+	// XGB's PollForEvent deliberately hides ordinary transport errors as an
+	// empty event. Observe its actual retained connection instead: a terminal
+	// reader/writer or explicit close must revoke authority without a new call.
+	guard.socket = &x11ObservedTransport{Conn: guard.socket, guard: guard}
 	deadline, _ := openCtx.Deadline()
 	if err = guard.socket.SetDeadline(deadline); err != nil {
 		return nil, computer.ErrUnavailable
 	}
-	stopOpening := context.AfterFunc(openCtx, func() { _ = guard.socket.SetDeadline(time.Now()) })
-	defer stopOpening()
+	openingInterrupted := make(chan struct{})
+	stopOpening := context.AfterFunc(openCtx, func() {
+		defer close(openingInterrupted)
+		_ = guard.socket.SetDeadline(time.Now())
+	})
+	finishOpening := sync.OnceFunc(func() {
+		if !stopOpening() {
+			<-openingInterrupted
+		}
+	})
+	defer finishOpening()
 	guard.connection, err = xgb.NewConnNetWithCookieHex(guard.socket, cookie)
 	if err != nil {
 		return nil, computer.ErrDenied
@@ -116,6 +130,10 @@ func watchNativeWindow(ctx context.Context, request WindowRequest) (windowBacken
 	if !guard.alive(openCtx) {
 		return nil, computer.ErrStale
 	}
+	finishOpening()
+	if openCtx.Err() != nil {
+		return nil, openCtx.Err()
+	}
 	if err = guard.socket.SetDeadline(time.Time{}); err != nil {
 		return nil, computer.ErrUnavailable
 	}
@@ -128,9 +146,41 @@ func ownedByCurrentUser(info os.FileInfo) bool {
 	return ok && stat.Uid == uint32(os.Getuid())
 }
 
+type x11ObservedTransport struct {
+	net.Conn
+	guard *x11Window
+}
+
+func (transport *x11ObservedTransport) Read(value []byte) (int, error) {
+	n, err := transport.Conn.Read(value)
+	if err != nil {
+		_ = transport.Close()
+	}
+	return n, err
+}
+
+func (transport *x11ObservedTransport) Write(value []byte) (int, error) {
+	n, err := transport.Conn.Write(value)
+	if err != nil {
+		_ = transport.Close()
+	}
+	return n, err
+}
+
+func (transport *x11ObservedTransport) Close() error {
+	// Never call XGB.Close here: it can wait for the very reader/writer that
+	// reported this error. Closing only our socket also releases our X11 tokens.
+	transport.guard.invalidate()
+	return transport.Conn.Close()
+}
+
 func (guard *x11Window) alive(ctx context.Context) bool {
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
+	return guard.aliveLocked(ctx)
+}
+
+func (guard *x11Window) aliveLocked(ctx context.Context) bool {
 	if guard.closed || guard.lost.Load() || ctx.Err() != nil {
 		return false
 	}
@@ -138,20 +188,29 @@ func (guard *x11Window) alive(ctx context.Context) bool {
 	defer cancel()
 	if !pidfdAlive(checkCtx, guard.pidfd, unix.Poll) {
 		if ctx.Err() == nil {
-			guard.lost.Store(true)
+			guard.invalidate()
 		}
 		return false
 	}
 	deadline, _ := checkCtx.Deadline()
 	if err := guard.socket.SetDeadline(deadline); err != nil {
-		guard.lost.Store(true)
+		guard.invalidate()
 		return false
 	}
-	stop := context.AfterFunc(checkCtx, func() { _ = guard.socket.SetDeadline(time.Now()) })
-	defer func() { stop(); _ = guard.socket.SetDeadline(time.Time{}) }()
+	interrupted := make(chan struct{})
+	stop := context.AfterFunc(checkCtx, func() {
+		defer close(interrupted)
+		_ = guard.socket.SetDeadline(time.Now())
+	})
+	defer func() {
+		if !stop() {
+			<-interrupted
+		}
+		_ = guard.socket.SetDeadline(time.Time{})
+	}()
 	if reply, err := xproto.GetGeometry(guard.connection, xproto.Drawable(guard.window)).Reply(); err != nil ||
 		reply == nil || reply.Root != guard.root {
-		guard.lost.Store(true)
+		guard.invalidate()
 		return false
 	}
 	// The event consumer continuously drains XGB's bounded queue. Fence its
@@ -163,7 +222,7 @@ func (guard *x11Window) alive(ctx context.Context) bool {
 	case <-checkCtx.Done():
 		return false
 	case <-guard.eventDone:
-		guard.lost.Store(true)
+		guard.invalidate()
 		return false
 	}
 	select {
@@ -171,7 +230,7 @@ func (guard *x11Window) alive(ctx context.Context) bool {
 	case <-checkCtx.Done():
 		return false
 	case <-guard.eventDone:
-		guard.lost.Store(true)
+		guard.invalidate()
 		return false
 	}
 	if guard.lost.Load() {
@@ -204,17 +263,29 @@ func (guard *x11Window) pumpEvents() {
 		for range 1024 {
 			event, eventErr := guard.connection.PollForEvent()
 			if eventErr != nil {
-				guard.lost.Store(true)
+				guard.invalidate()
 			}
 			if event == nil {
 				return
 			}
 			if destroyed, ok := event.(xproto.DestroyNotifyEvent); ok && destroyed.Window == guard.window {
-				guard.lost.Store(true)
+				guard.invalidate()
+			}
+			if lease := guard.input.Load(); lease != nil {
+				switch event := event.(type) {
+				case xproto.SelectionClearEvent:
+					if event.Owner == lease.window && event.Selection == lease.selection {
+						lease.invalidate()
+					}
+				case xproto.DestroyNotifyEvent:
+					if event.Window == lease.window {
+						lease.invalidate()
+					}
+				}
 			}
 		}
 		// An unbounded event flood cannot establish a drained identity fence.
-		guard.lost.Store(true)
+		guard.invalidate()
 	}
 	for {
 		select {
@@ -226,7 +297,21 @@ func (guard *x11Window) pumpEvents() {
 			close(ack)
 		case <-ticker.C:
 			drain()
+			guard.pollInputProcess(unix.Poll)
 		}
+	}
+}
+
+func (guard *x11Window) pollInputProcess(poll func([]unix.PollFd, int) (int, error)) {
+	if guard.input.Load() == nil {
+		return
+	}
+	// An app may retain X resources after process exit. Supplement destruction
+	// events with the original kernel handle. EINTR is unknown, never exit.
+	process := []unix.PollFd{{Fd: int32(guard.pidfd), Events: unix.POLLIN}}
+	_, err := poll(process, 0)
+	if err == nil && process[0].Revents != 0 || err != nil && !errors.Is(err, unix.EINTR) {
+		guard.invalidate()
 	}
 }
 
@@ -237,6 +322,7 @@ func (guard *x11Window) close() error {
 		return nil
 	}
 	guard.closed = true
+	guard.invalidate()
 	// Force bounded teardown before asking XGB to stop: its graceful Close
 	// otherwise performs a round trip that can wait on a stalled server.
 	if guard.socket != nil {
