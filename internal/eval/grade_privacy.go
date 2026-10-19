@@ -14,7 +14,7 @@ func offlineGradeFactsEligible(item Case) bool {
 	if len(item.Driver.Facts) == 0 {
 		return true
 	}
-	if !isBrowserForm(item) {
+	if !isBrowserForm(item) && (item.PDF == nil || item.PDF.Output != "required") {
 		return false
 	}
 	for _, value := range item.Driver.Facts {

@@ -11,8 +11,8 @@ downloaded PDF for independent field/structure/appearance checks. Delivery uniqu
 coverage, and complete owned-resource cleanup remain pending. Owned post-stop census can establish a scoped no-write
 check and remove a verified settled source fixture. The finalized cancellation/no-write contract below
 can additionally admit judging/regrading without private facts or output artifacts. The distinct finalized-output
-contract below admits live judging only after all of its independent witnesses; output/private-value regrade and
-the complete six-case qualification remain pending.
+contract below admits live judging only after all of its independent witnesses. Newly eligible output reports can
+also be regraded under the generated-fact and retained-binary contract below; complete six-case qualification remains pending.
 Required missing evidence still prevents a passing trial;
 a first question, caption, or oracle control is not qualification.
 
@@ -161,11 +161,23 @@ unchanged source and owned-source removal permit the output scope. Hard artifact
 authoritative. The tools-disabled judge receives only the permitted conversation/rubric, never PDF bytes, private
 answers or hidden field expectations. Private or uninspectable judge output revokes the scope/privacy claim.
 
-This scope can produce a live trial verdict but deliberately leaves `evidence_eligible: false`: private-value and
-output offline-regrade admission is still pending. `grade` refuses such sources before model billing rather than
-reusing a live privacy claim without its private guard. Older no-write receipts and incomplete output pilots are
-not upgraded. Deterministic controls with stubbed oracle/profile/process receipts are not real-worker qualification;
-the required first live output attempt and remaining PDF/browser cases stay part of the active goal.
+New complete output assessments retain `evidence_eligible: true`; that flag alone never admits a regrade.
+`grade` still requires the complete frozen output/native/oracle/delivery/cleanup witnesses and either no private
+facts or exclusively v1 generation markers. Literal facts and older `evidence_eligible: false` reports remain refused.
+The shared `generated_canary_format_v1` guard scans original JSON before decoding and both full typed judge
+boundaries, including other trials' generated values, without retaining the actual values. Unscannable evidence
+refuses admission; bounded JSON-escape coverage is not arbitrary-encoding or raw-provider-traffic certification.
+
+Before any judge call, regrade reads the private regular 0600 artifact under the existing 64 MiB file and 128 MiB
+cohort bounds, verifies the native size/SHA-256, and preserves the exact binary in its new private result directory.
+A known current credential literal in those bytes is refused. Binary PDF evidence may intentionally contain
+synthetic answers; it is never treated as model/JSON content. This reuses the frozen independent oracle witness,
+not a new field/appearance inspection or an arbitrary-binary privacy certificate. No gateway, source fixture,
+document worker, PDF parser or oracle is reopened, and original reports/native stores are not changed.
+All selected evidence is admitted before billing; a positive judge still cannot override a hard failure.
+
+Older no-write receipts and incomplete output pilots are not upgraded. Deterministic controls with stubbed
+oracle/profile/process receipts are not real-worker qualification; remaining live PDF/browser cases stay part of the active goal.
 Offline controls do not establish a real-model cancellation result or qualify the remaining five PDF cases.
 
 ## Post-Stop Raw File Observation

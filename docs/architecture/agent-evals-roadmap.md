@@ -242,11 +242,14 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    inspection includes earlier trials' retained facts. Neither grants future delivery uniqueness or full privacy.
    Owned PDF finalization now retains bounded native baselines through shutdown and raw scan, publishes canonical
    trial reports afterward, checks scoped no-write evidence and removes only verified settled source fixtures.
-   Full private-surface/temporary-resource coverage, positive delivery qualification and PDF judge/regrade eligibility
-   still require completion. A bounded cancellation/no-write contract can now admit post-stop judging
+   Full private-surface/temporary-resource and positive delivery qualification still require completion.
+   A bounded cancellation/no-write contract can now admit post-stop judging
    and offline regrade only with valid raw-profile/typed-role/joined-frame evidence, unchanged source, zero native
    effects and verified source removal. Protected questions additionally bind both canceled native records.
-   Private-fact/output cases remain gated; deterministic controls
+   Complete output assessments can now retain offline eligibility, but regrade separately requires exclusively v1
+   generated facts (or no private facts), all frozen native/oracle witnesses and unchanged bounded private PDF bytes.
+   The shared raw/typed format guard protects JSON and judge context without retaining values; the authorized binary
+   remains separate from model content. Literal and historical ineligible reports stay refused. Deterministic controls
    are not live PDF qualification. Native cleanup completes for the cohort before suite-budgeted judging begins.
    One ordinary cancellation/no-write live path and offline regrade now passed on merged #1731; the other five PDF
    cases and protected/private-value/worker/output behavior still require actual qualification.
@@ -283,8 +286,9 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    Trials require owned startup and explicit metadata capture before any probe/model work. Offline controls are not
    live qualification: fresh identified private-form experiments remain mandatory. Private offline regrade now admits
    only otherwise eligible browser forms with exclusively v1 generated facts, using a conservative public-format
-   guard on raw reports and typed judge boundaries rather than retaining values. Literal/private-PDF facts remain
-   gated; this feature does not make either failed private-form pilot eligible or qualify a live regrade.
+   guard on raw reports and typed judge boundaries rather than retaining values. Literal facts remain gated;
+   generated PDF output has its own native/artifact contract. These features do not make either failed private-form
+   pilot eligible or qualify a live regrade.
    Ordinary chat substitution and a new value/vault/approval engine remain forbidden.
    Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a
    read-only native transfer inspection API rather than constructing/reconciling a store. This receipt does not
