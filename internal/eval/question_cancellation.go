@@ -4,7 +4,12 @@ import "github.com/bogdanovich/mintclaw/pkg/bus"
 
 // Regrading uses operator-owned retained evidence, never current native state.
 func validQuestionCancellation(trial Trial, reply Event, workspace string) bool {
-	proof := trial.Cancellation
+	return validInteractionCancellation(trial.Cancellation, trial, reply, workspace, "question")
+}
+
+func validInteractionCancellation(
+	proof *InteractionCancellationEvidence, trial Trial, reply Event, workspace, kind string,
+) bool {
 	if proof == nil || proof.Version != Version || proof.AgentID != trial.AgentID ||
 		proof.SessionKey != trial.SessionKey || proof.Workspace != workspace ||
 		!validID(proof.InteractionID) || !boundedIdentity(proof.ShortID, 64) ||
@@ -13,7 +18,7 @@ func validQuestionCancellation(trial Trial, reply Event, workspace string) bool 
 		!validID(proof.OriginTurnID) || !validID(proof.PromptRequestID) || !validID(proof.CancelRequestID) ||
 		proof.CancelRequestID != reply.RequestID || proof.WaitingRevision <= 0 ||
 		proof.TerminalRevision <= proof.WaitingRevision || proof.ResolvedAt < trial.StartedAt.UnixMilli() ||
-		reply.Controls != bus.OutboundInteractionControlsRemove || reply.InteractionKind != "question" {
+		reply.Controls != bus.OutboundInteractionControlsRemove || reply.InteractionKind != kind {
 		return false
 	}
 	promptMatched, inputMatched, cancellations := false, false, 0
@@ -21,7 +26,7 @@ func validQuestionCancellation(trial Trial, reply Event, workspace string) bool 
 		if event.Kind == "canceled" {
 			cancellations++
 		}
-		if event.Kind == "question" && event.InteractionID == proof.InteractionID &&
+		if event.Kind == kind && event.InteractionID == proof.InteractionID &&
 			event.InteractionShortID == proof.ShortID && event.MessageID == proof.PromptMessageID &&
 			event.RequestID == proof.PromptRequestID && event.Turn < reply.Turn &&
 			event.AgentID == proof.AgentID && event.SessionKey == proof.SessionKey {

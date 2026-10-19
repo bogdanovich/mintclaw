@@ -271,6 +271,7 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||
 		!trial.TransportClosed || !trial.EvidenceEligible || trial.ExecutionVerdict != Pass ||
 		len(item.Case.Driver.Facts) != 0 || item.Case.PDF == nil && len(item.Case.Fixtures) != 0 ||
+		(item.Case.Browser == nil) != (trial.Browser == nil) ||
 		len(item.Case.Rubric) == 0 ||
 		len(trial.Events) == 0 || len(trial.Events) > 256 {
 		return false
@@ -308,7 +309,8 @@ func validTrialConversation(trial Trial, agent, workspace string) bool {
 				return false
 			}
 		}
-		if event.Kind == "canceled" && !validQuestionCancellation(trial, event, workspace) {
+		if event.Kind == "canceled" && !validQuestionCancellation(trial, event, workspace) &&
+			!validBrowserCancellation(trial, event, workspace) {
 			return false
 		}
 		if event.Kind != "stream" && (event.AgentID == "" || event.SessionKey == "" ||

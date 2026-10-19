@@ -50,6 +50,10 @@ func browserApprovalControl(
 		t.Fatal(err)
 	}
 	registry := interactions.NewRegistry(interactions.WorkspaceStorePath(control.fixture.workspace))
+	description := "Download the fixture report"
+	if control.item.Case.Browser.Scenario == "denied" {
+		description = "Remove the fixture account"
+	}
 	route := interactions.Route{
 		AgentID:         control.trial.AgentID,
 		SessionKey:      control.trial.SessionKey,
@@ -67,7 +71,7 @@ func browserApprovalControl(
 				Channel: route.Channel, ChatID: route.ChatID, ChatType: route.ChatType, SenderID: route.SenderID,
 				ActorID: "mintclaw-user", MessageID: requestID, ClientSessionID: control.trial.SessionID,
 			},
-		}, ApprovalAction: "Download the fixture report", ExpiresAt: time.Now().Add(time.Minute),
+		}, ApprovalAction: description, ExpiresAt: time.Now().Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +79,7 @@ func browserApprovalControl(
 	intent, err := outbox.NewMessageIntent(control.fixture.workspace, outbox.Identity{
 		SourceID: "download-prompt", Channel: route.Channel, ChatID: route.ChatID, SessionKey: route.SessionKey,
 	}, bus.OutboundMessage{
-		AgentID: route.AgentID, SessionKey: route.SessionKey, Content: "Download the fixture report?",
+		AgentID: route.AgentID, SessionKey: route.SessionKey, Content: description + "?",
 		TraceScopes: []events.TraceScope{scope},
 		Metadata: bus.OutboundMetadata{
 			InteractionID: record.ID, InteractionShortID: record.ShortID, InteractionKind: "approval",

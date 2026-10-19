@@ -156,7 +156,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			trial.Verdict, trial.Code = Skipped, "browser_evidence_unavailable"
 		case item.Case.Browser != nil && len(item.Case.Driver.Facts) != 0:
 			trial.Verdict, trial.Code = Skipped, "browser_private_input_unavailable"
-		case item.Case.Browser != nil && item.Case.Browser.Scenario != "read" && item.Case.Browser.Scenario != "artifact":
+		case item.Case.Browser != nil && item.Case.Browser.Scenario != "read" &&
+			item.Case.Browser.Scenario != "artifact" && item.Case.Browser.Scenario != "denied":
 			trial.Verdict, trial.Code = Skipped, "browser_action_evidence_unavailable"
 		case !containsAll(preset.Capabilities, item.Case.Requires):
 			trial.Verdict, trial.Code = Skipped, "capability_unavailable"

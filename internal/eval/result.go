@@ -68,9 +68,9 @@ type Trial struct {
 	Cancellation     *QuestionCancellationEvidence `json:"question_cancellation,omitempty"`
 }
 
-// This records one native question's terminal state, not runtime quiescence
+// This records one native interaction's terminal state, not runtime quiescence
 // or cleanup of every resource owned by the session.
-type QuestionCancellationEvidence struct {
+type InteractionCancellationEvidence struct {
 	Version          int    `json:"version"`
 	InteractionID    string `json:"interaction_id"`
 	ShortID          string `json:"short_id"`
@@ -87,6 +87,8 @@ type QuestionCancellationEvidence struct {
 	TerminalRevision int64  `json:"terminal_revision"`
 	ResolvedAt       int64  `json:"resolved_at"`
 }
+
+type QuestionCancellationEvidence = InteractionCancellationEvidence
 
 type PDFTrialEvidence struct {
 	Version      int                      `json:"version"`

@@ -40,6 +40,7 @@ type BrowserTrialEvidence struct {
 	Read            *BrowserTaskEvidence     `json:"read,omitempty"`
 	Download        *BrowserDownloadEvidence `json:"download,omitempty"`
 	Artifact        *BrowserArtifactEvidence `json:"artifact,omitempty"`
+	Denial          *BrowserDenialEvidence   `json:"denial,omitempty"`
 }
 
 type browserRun struct {
@@ -136,8 +137,10 @@ func (run *browserRun) finish(
 		oracle, err := inspectBrowserFixture(pending.item, pending.fixture, trial.Events, data)
 		clear(data)
 		var artifact *BrowserArtifactEvidence
+		var denial *BrowserDenialEvidence
 		if trial.Browser != nil {
 			artifact = trial.Browser.Artifact
+			denial = trial.Browser.Denial
 		}
 		trial.Browser = &BrowserTrialEvidence{
 			Version:         Version,
@@ -145,6 +148,7 @@ func (run *browserRun) finish(
 			NativeAuthority: "unavailable",
 			NativeCleanup:   "unavailable",
 			Artifact:        artifact,
+			Denial:          denial,
 		}
 		if err == nil {
 			trial.Browser.Fixture = &oracle
@@ -171,6 +175,10 @@ func (run *browserRun) finish(
 				failBrowserArtifact(&trial, Fail, "private_media_evidence")
 			}
 		}
+		var denialErr error
+		if observationErr == nil && pending.item.Browser.Scenario == "denied" {
+			denialErr = finalizeBrowserDenial(&trial, pending, target, observed, temporaryEmpty)
+		}
 		trial.EvidenceEligible = false
 		for checkIndex, check := range pending.item.Checks {
 			if checkIndex >= len(trial.Checks) {
@@ -190,6 +198,7 @@ func (run *browserRun) finish(
 			case "private_surfaces":
 				if report.PrivateSurfaces != nil && report.PrivateSurfaces.LeakObserved ||
 					errors.Is(observationErr, ErrPrivateEvidence) || errors.Is(transferErr, ErrPrivateEvidence) ||
+					errors.Is(denialErr, ErrPrivateEvidence) ||
 					trial.Browser.Artifact != nil && trial.Browser.Artifact.Code == "private_media_evidence" {
 					*result = CheckResult{
 						ID:          check.ID,
@@ -202,6 +211,9 @@ func (run *browserRun) finish(
 				proof, source := trial.Browser.Read, "browser.read"
 				if trial.Browser.Artifact != nil {
 					proof, source = trial.Browser.Artifact.Native, "browser.artifact"
+				}
+				if trial.Browser.Denial != nil {
+					proof, source = trial.Browser.Denial.Native, "browser.denial"
 				}
 				if proof != nil && proof.ForbiddenActionAccepted {
 					*result = CheckResult{
