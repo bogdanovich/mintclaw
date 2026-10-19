@@ -10545,6 +10545,9 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 	history := agent.Sessions.GetHistory(sessionKey)
 	toolResults := 0
 	for _, message := range history {
+		if strings.Contains(message.Content, "# Active human-interaction continuation") {
+			t.Fatal("live continuation context entered canonical history")
+		}
 		if message.Role == "tool" && message.ToolCallID == "call-question" {
 			toolResults++
 			if !strings.Contains(message.Content, `"deploy_mode":"Canary"`) {
@@ -10556,6 +10559,7 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 		t.Fatalf("matching tool results = %d, want 1", toolResults)
 	}
 	var systemPrompt string
+	var continuationPrompt string
 	var sawVoiceTranscript bool
 	provider.mu.Lock()
 	providerRequests := append([][]providers.Message(nil), provider.requests...)
@@ -10564,6 +10568,10 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 		for _, message := range messages {
 			if message.Role == "system" {
 				systemPrompt += message.Content
+			}
+			if message.Role == "user" && message.PromptLayer == string(PromptLayerContext) &&
+				message.PromptSlot == string(PromptSlotRuntime) && message.PromptSource == string(PromptSourceRuntime) {
+				continuationPrompt += message.Content
 			}
 			if message.Role == "user" && strings.Contains(message.Content, "[voice: deploy this release]") {
 				sawVoiceTranscript = true
@@ -10578,8 +10586,11 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 		"[voice: ...] marker is a successful transcription",
 		"Interaction kind: question. Recorded outcome: answered.",
 	} {
-		if !strings.Contains(systemPrompt, required) {
-			t.Errorf("continuation system prompt missing %q: %s", required, systemPrompt)
+		if !strings.Contains(continuationPrompt, required) {
+			t.Errorf("live continuation context missing %q: %s", required, continuationPrompt)
+		}
+		if strings.Contains(systemPrompt, required) {
+			t.Errorf("live continuation context rewrote system prompt with %q", required)
 		}
 	}
 	if !sawVoiceTranscript {
