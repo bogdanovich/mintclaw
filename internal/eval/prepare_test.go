@@ -63,8 +63,8 @@ func TestPrepareProfileCopiesOnlyPinnedInputsAndNativeCredentials(t *testing.T) 
 	}
 	result, err := PrepareProfile(t.Context(), fixture.preset, fixture.home, parent)
 	if err != nil || result.Outcome != "prepared" || result.RuntimeRun || result.PDFJournalPrepared ||
-		result.WorkspaceFileCount != 3 || !validDigest(result.PublicConfigSHA256) || !pathWithin(parent, result.Home) ||
-		fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 ||
+		result.ModelMetadataPrepared || result.WorkspaceFileCount != 3 || !validDigest(result.PublicConfigSHA256) ||
+		!pathWithin(parent, result.Home) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 ||
 		config.GetHome() != fixture.home {
 		t.Fatal("preparation did not remain isolated/offline", err, result)
 	}

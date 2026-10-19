@@ -195,6 +195,31 @@ outside git. Judge-only regrading preserves source lifecycle uncertainty without
 distinguishes owned and attached modes. Automatic per-trial provisioning, effective-input and post-settlement
 domain witnesses remain later E5/qualification work.
 
+### Opt-In Model Metadata Capture
+
+An isolated seed preset may set `"capture_model_metadata": true` before `eval prepare`. The default is false.
+Preparation enables native diagnostic capture only in its fresh output and records
+`model_metadata_prepared: true`; it copies neither old traces nor any native runtime state. The seed configuration
+is unchanged. Use the returned profile with `eval run --start-target`: attachment is refused before a runtime
+probe, and a disabled seed is not silently enabled at startup.
+
+The only admitted enabled configuration is exactly `metadata_only`, empty `state_dir` (native default
+`workspace/state/diagnostics/traces`), 512 KiB native trace budget, 512 records, 16 KiB per record, sixteen retained
+traces and one-hour retention. Unknown/defaulted settings, alternate roots, content previews and opt-out enabled
+capture are refused. These are native capture/retention bounds, not a hard disk, billing or completeness guarantee.
+Fresh owned admission still refuses any existing workspace state, including an old trace directory or alias.
+
+After stopping/reaping the owned child, the existing bounded raw-profile privacy observation includes these files,
+even for general cases without private facts. No trace is decoded, projected into judge context or exempted from
+privacy inspection by this opt-in. Known leaks fail; incomplete raw inspection remains inconclusive. Retain private
+files under the same evidence policy and never restart the used profile.
+
+This is a capture prerequisite, not an eval trace collector. Native capture can truncate/drop/prune records or fail
+to persist them. Returned-final usage remains separately scoped; all-call coverage and effective loaded-input
+identity remain unknown until a collector validates exact native turn/agent/session/source joins, completeness and
+provider-usage presence. Metadata hashes describe provider-neutral effective requests, not provider wire bytes or
+individually attested skill revisions. Capture presence alone cannot establish any of those stronger claims.
+
 Use a new private profile, not the production profile or a copy of its sessions, memory, ledgers, or auth store.
 Both runner and gateway must use the same explicit `MINTCLAW_HOME`. Keep configuration and profile files immutable
 for the run. Admission is an operator-prepared profile check, not protection from a hostile concurrent filesystem
@@ -235,7 +260,7 @@ operator-admitted provider credential. Do not copy a production OAuth refresh st
 resolution owns these references; evals do not implement another secret store.
 
 Only `request_user_input` is allowed by the agent's deny-default tool policy; MCP is deny-default. External channels,
-hooks, cron, exec, browser, document, nodes, remote coding, heartbeat, deploy, hot reload, trace capture, broad path
+hooks, cron, exec, browser, document, nodes, remote coding, heartbeat, deploy, hot reload, unadmitted trace capture, broad path
 exceptions, subagents, dispatch/routing overrides, and custom provider bodies are refused in this first profile.
 The active gateway log level must be `warn`, `error`, or `fatal`, not a debug override. Check inherited MintClaw
 environment overrides in both processes. Adding a capability name to a preset does not enable that capability.

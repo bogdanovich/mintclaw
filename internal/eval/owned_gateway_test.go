@@ -57,7 +57,7 @@ func runOwnedGatewayTestChild() int {
 		os.Getenv("MINTCLAW_LOG_FORMAT") != "json" {
 		return 8
 	}
-	if control.Mode == "early_exit" {
+	if control.Mode == "early_exit" || control.Mode == "metadata_early_exit" {
 		return 9
 	}
 	switch control.Mode {
@@ -287,6 +287,17 @@ func runOwnedGatewayTestChild() int {
 		}
 		if os.WriteFile(filepath.Join(os.TempDir(), "late-runtime.json"),
 			data, 0o600) != nil {
+			return 8
+		}
+	}
+	if strings.HasPrefix(control.Mode, "metadata_") {
+		traceRoot := filepath.Join(cfg.WorkspacePath(), "state", "diagnostics", "traces")
+		data := []byte(`{"metadata":"public"}`)
+		if control.Mode == "metadata_leak" {
+			data = []byte(`{"metadata":"\u0073ynthetic-preparation-api-key-not-a-live-credential"}`)
+		}
+		if !cfg.Diagnostics.TraceCapture.Enabled || os.MkdirAll(traceRoot, 0o700) != nil ||
+			os.WriteFile(filepath.Join(traceRoot, "post-stop.json"), data, 0o600) != nil {
 			return 8
 		}
 	}

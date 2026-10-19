@@ -33,6 +33,9 @@ type admittedTarget struct {
 }
 
 func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admittedTarget, error) {
+	if preset.CaptureModelMetadata {
+		return admittedTarget{}, ErrUnsafeTarget
+	}
 	return admitPreparedTargetWithBrowser(ctx, preset, home, nil)
 }
 
@@ -48,7 +51,8 @@ func admitPreparedTargetWithBrowser(
 		return target, ErrUnsafeTarget
 	}
 	cfg, physicalHome := profile.config, profile.home
-	if validateConversationProfile(cfg, preset, profile.workspace) != nil || !browserFixtureMatches(cfg, fixture) {
+	if validateConversationProfile(cfg, preset, profile.workspace) != nil ||
+		cfg.Diagnostics.TraceCapture.Enabled != preset.CaptureModelMetadata || !browserFixtureMatches(cfg, fixture) {
 		return target, ErrUnsafeTarget
 	}
 	root, err := os.OpenRoot(physicalHome)
@@ -106,7 +110,7 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		cfg.Nodes.TerminalEnabled || cfg.Heartbeat.Enabled || cfg.Devices.Enabled || cfg.Hooks.Enabled ||
 		cfg.Tools.Cron.Enabled || cfg.Tools.Exec.Enabled || cfg.Tools.MCP.Enabled ||
 		cfg.Tools.Browser.Enabled != browserEnabled || cfg.Tools.Document.Enabled != pdfEnabled ||
-		cfg.Diagnostics.TraceCapture.Enabled ||
+		!admittedModelMetadataPolicy(cfg.Diagnostics.TraceCapture, preset) ||
 		cfg.Tools.Approval.EffectiveMode() != config.ToolApprovalModeRequired ||
 		len(cfg.Tools.Approval.BypassNodeTargets) != 0 || len(cfg.Tools.AllowReadPaths) != 0 ||
 		len(cfg.Tools.AllowWritePaths) != 0 || len(cfg.Session.IdentityLinks) != 0 ||

@@ -87,7 +87,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		pendingBrowser.close(lifecycle)
 		// Even report I/O failures must not discard the only private fact set
 		// before attempting the post-stop raw observation.
-		if options.StartTarget && retainedFacts.values != nil && privateSurfaces == nil {
+		if options.StartTarget && target.config != nil &&
+			(retainedFacts.values != nil || preset.CaptureModelMetadata) && privateSurfaces == nil {
 			scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer scanCancel()
 			observePrivateSurfaces(
@@ -204,7 +205,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	result.WorkspaceInputs.After = observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter)
 	stopTarget()
 	result.BrowserFixtures = pendingBrowser.close(lifecycle)
-	if options.StartTarget && retainedFacts.values != nil {
+	if options.StartTarget && (retainedFacts.values != nil || preset.CaptureModelMetadata) {
 		scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		observation := observePrivateSurfaces(scanCtx, home, retainedFacts.values, filter, retainedFacts.documents,
 			pendingBrowser.approvalKeyWitness(home))

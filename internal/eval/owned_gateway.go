@@ -118,6 +118,7 @@ func startOwnedGatewayWithBrowser(
 	}
 	profile, err := readPreparedProfile(preset, home)
 	if err != nil || validateConversationProfile(profile.config, preset, profile.workspace) != nil ||
+		profile.config.Diagnostics.TraceCapture.Enabled != preset.CaptureModelMetadata ||
 		validateFreshOwnedProfile(profile) != nil ||
 		!browserFixtureMatches(profile.config, fixture) ||
 		!slices.Contains([]string{"warn", "error", "fatal"}, config.EffectiveGatewayLogLevel(profile.config)) {
