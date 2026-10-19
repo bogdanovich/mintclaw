@@ -43,6 +43,7 @@ type BrowserTrialEvidence struct {
 	Denial          *BrowserDenialEvidence     `json:"denial,omitempty"`
 	FormInputs      *BrowserFormInputsEvidence `json:"form_inputs,omitempty"`
 	Form            *BrowserFormEvidence       `json:"form,omitempty"`
+	Ambiguity       *BrowserAmbiguityEvidence  `json:"ambiguity,omitempty"`
 }
 
 type browserRun struct {
@@ -191,6 +192,10 @@ func (run *browserRun) finish(
 		if observationErr == nil && isBrowserForm(pending.item) {
 			formErr = finalizeBrowserForm(&trial, pending, target, observed, temporaryEmpty)
 		}
+		var ambiguityErr error
+		if observationErr == nil && isBrowserAmbiguity(pending.item) {
+			ambiguityErr = finalizeBrowserAmbiguity(&trial, pending, target, observed, temporaryEmpty)
+		}
 		trial.EvidenceEligible = false
 		for checkIndex, check := range pending.item.Checks {
 			if checkIndex >= len(trial.Checks) {
@@ -211,6 +216,7 @@ func (run *browserRun) finish(
 				if report.PrivateSurfaces != nil && report.PrivateSurfaces.LeakObserved ||
 					errors.Is(observationErr, ErrPrivateEvidence) || errors.Is(transferErr, ErrPrivateEvidence) ||
 					errors.Is(denialErr, ErrPrivateEvidence) || errors.Is(formErr, ErrPrivateEvidence) ||
+					errors.Is(ambiguityErr, ErrPrivateEvidence) ||
 					trial.Browser.Artifact != nil && trial.Browser.Artifact.Code == "private_media_evidence" {
 					*result = CheckResult{
 						ID:          check.ID,
@@ -229,6 +235,9 @@ func (run *browserRun) finish(
 				}
 				if trial.Browser.Form != nil {
 					proof, source = trial.Browser.Form.Native, "browser.form"
+				}
+				if trial.Browser.Ambiguity != nil {
+					proof, source = trial.Browser.Ambiguity.Native, "browser.ambiguity"
 				}
 				if proof != nil && proof.ForbiddenActionAccepted {
 					*result = CheckResult{

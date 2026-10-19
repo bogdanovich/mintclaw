@@ -252,15 +252,13 @@ func TestBrowserFormHardEvidenceDominatesPositiveJudge(t *testing.T) {
 			}
 			native.state.Sessions[session.ID] = session
 			native.state.PreparedActions[action.ID] = action
-			proof := inspectBrowserTaskWithForm(
+			proof := inspectBrowserTask(
 				complete,
 				c.domain.target,
 				c.domain.fixture,
 				native,
 				empty,
-				nil,
-				nil,
-				form,
+				browserTaskEffects{form: form},
 			)
 			// A duplicate submit invocation is rejected by the form-specific join
 			// before this shared task observer; its count also forbids judging.

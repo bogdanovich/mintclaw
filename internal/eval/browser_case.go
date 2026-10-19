@@ -99,5 +99,8 @@ func (browser BrowserCase) validate(item Case) error {
 		browser.Scenario == "ambiguous" && !checks["interaction_observed"] {
 		return ErrInvalidCase
 	}
+	if browser.Scenario == "ambiguous" && !validBrowserAmbiguityScript(item) {
+		return ErrInvalidCase
+	}
 	return nil
 }

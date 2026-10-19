@@ -47,6 +47,12 @@ func observedBrowserQuestionPrompt(
 	intent outbox.Intent,
 	target admittedTarget,
 ) bool {
+	return observedBrowserInteractionPrompt(prompt, interactionID, shortID, "question", intent, target)
+}
+
+func observedBrowserInteractionPrompt(
+	prompt Event, interactionID, shortID, kind string, intent outbox.Intent, target admittedTarget,
+) bool {
 	if intent.Message == nil || len(intent.PlatformMessageIDs) != 1 ||
 		intent.PlatformMessageIDs[0] != prompt.MessageID {
 		return false
@@ -65,6 +71,6 @@ func observedBrowserQuestionPrompt(
 	)
 	return projected.Content == prompt.Content && slices.Equal(message.TraceScopes, prompt.TraceScopes) &&
 		message.Metadata.InteractionID == interactionID &&
-		message.Metadata.InteractionShortID == shortID && message.Metadata.InteractionKind == "question" &&
+		message.Metadata.InteractionShortID == shortID && message.Metadata.InteractionKind == kind &&
 		message.Metadata.InteractionControls == bus.OutboundInteractionControlsPrompt
 }

@@ -147,7 +147,8 @@ func (c Case) Validate() error {
 		if step.Action.Kind == "confirm" || step.Action.Kind == "allow_once" {
 			pdfOutput := c.PDF != nil && c.PDF.Output == "required"
 			browserDownload := c.Browser != nil && c.Browser.Scenario == "artifact" && step.Action.Kind == "allow_once"
-			if !pdfOutput && !browserDownload ||
+			browserRemoval := isBrowserAmbiguity(c) && step.Action.Kind == "allow_once"
+			if !pdfOutput && !browserDownload && !browserRemoval ||
 				step.Action.Kind == "confirm" && step.WaitFor.Kind != "final" ||
 				step.Action.Kind == "allow_once" && step.WaitFor.Kind != "approval" {
 				return ErrInvalidCase

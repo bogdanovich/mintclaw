@@ -56,7 +56,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			containsAll(preset.Capabilities, item.Case.Requires) && !preset.CaptureModelMetadata {
 			return RunReport{}, ErrUnsafeTarget
 		}
-		if isBrowserForm(item.Case) && containsAll(preset.Capabilities, item.Case.Requires) &&
+		if (isBrowserForm(item.Case) || isBrowserAmbiguity(item.Case)) &&
+			containsAll(preset.Capabilities, item.Case.Requires) &&
 			(!preset.CaptureModelMetadata || !options.StartTarget) {
 			return RunReport{}, ErrUnsafeTarget
 		}
@@ -180,7 +181,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		case item.Case.Browser != nil && len(item.Case.Driver.Facts) != 0 && !isBrowserForm(item.Case):
 			trial.Verdict, trial.Code = Skipped, "browser_private_input_unavailable"
 		case item.Case.Browser != nil && item.Case.Browser.Scenario != "read" &&
-			item.Case.Browser.Scenario != "artifact" && item.Case.Browser.Scenario != "denied" && !isBrowserForm(item.Case):
+			item.Case.Browser.Scenario != "artifact" && item.Case.Browser.Scenario != "denied" &&
+			!isBrowserForm(item.Case) && !isBrowserAmbiguity(item.Case):
 			trial.Verdict, trial.Code = Skipped, "browser_action_evidence_unavailable"
 		case !containsAll(preset.Capabilities, item.Case.Requires):
 			trial.Verdict, trial.Code = Skipped, "capability_unavailable"

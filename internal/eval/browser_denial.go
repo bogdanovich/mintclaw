@@ -169,7 +169,14 @@ func finalizeBrowserDenial(
 			return nil
 		}
 	}
-	proof.Native = inspectBrowserTask(*trial, target, pending.fixture, observed, empty, nil, proof)
+	proof.Native = inspectBrowserTask(
+		*trial,
+		target,
+		pending.fixture,
+		observed,
+		empty,
+		browserTaskEffects{denial: proof},
+	)
 	if proof.Native.Code == "native_post_stop_observed" && trial.Browser.Fixture != nil &&
 		trial.Browser.Fixture.Effects == Pass {
 		proof.Code = "denial_observed"
