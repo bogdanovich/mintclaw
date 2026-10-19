@@ -101,9 +101,14 @@ neither follows symlinks nor repairs unsafe existing objects. It retains the
 original file/directory identity and subscribes to vnode events before claiming
 the kernel lock, then revalidates both the retained and named objects.
 
-Kernel events make rename/delete/revoke, attribute/link changes and content
-changes terminal, even if restored before the next check. An independent native
-process watch supplements the original AX window observer; exit/exec, window
+Kernel events make file rename/delete/revoke, attribute/link changes and content
+changes terminal, even if restored before the next check. Directory rename,
+deletion and revoke events are also terminal. Harmless directory timestamp
+changes and unrelated file activity do not revoke ownership: the root's retained
+and named identity, owner and mode are independently revalidated on every check.
+Restored privileged root-permission changes between checks are not attested by
+this cooperative mechanism; it is not a security boundary against root. An
+independent native process watch supplements the original AX window observer; exit/exec, window
 destruction or guard close revokes ownership without rebinding a numeric PID or
 window ID. Acquisition cancellation after success does not release early. The
 lease's monitor uses no AX polling, screenshot, clipboard, mouse or keyboard
@@ -119,7 +124,9 @@ See Apple's [flock manual](https://developer.apple.com/library/archive/documenta
 
 Desktop-free real-process and race tests repeat contention, crash, cancellation,
 file/root replacement, restored attributes/links/content, unsafe files,
-close-on-exec and stale cleanup twenty times. A separate actual-app suite is:
+close-on-exec and stale cleanup, plus benign directory timestamp/file churn and
+terminal root authority changes. The CI repetition count is sixty within the
+unchanged two-minute budget. A separate actual-app suite is:
 
 ```bash
 scripts/computer-companion-native-smoke.sh --suite ownership \

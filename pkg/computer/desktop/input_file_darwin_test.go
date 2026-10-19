@@ -142,6 +142,62 @@ func TestDarwinInputFileExcludesSameAndOtherProcesses(t *testing.T) {
 	}
 }
 
+func TestDarwinInputFileIgnoresUnrelatedDirectoryMetadata(t *testing.T) {
+	root := privateDarwinInputRoot(t)
+	lease := privateDarwinFileLease(t, root)
+	// Directory timestamps are not native lock identity or permission authority.
+	// Filesystem housekeeping can change them without touching the protocol file.
+	stamp := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(root, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.check(); err != nil {
+		t.Fatal("unrelated directory timestamp change revoked ownership", err)
+	}
+	unrelated := filepath.Join(root, "unrelated-fixture")
+	if err := os.WriteFile(unrelated, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.check(); err != nil {
+		t.Fatal("unrelated file creation revoked ownership", err)
+	}
+	if err := os.Remove(unrelated); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.check(); err != nil {
+		t.Fatal("unrelated file removal revoked ownership", err)
+	}
+	if next, err := openDarwinFileLease(t.Context(), root, uint32(os.Getuid()), 0o700); next != nil ||
+		!errors.Is(err, computer.ErrBusy) {
+		t.Fatal("benign directory metadata change released kernel exclusion", err)
+	}
+}
+
+func TestDarwinInputFileRootAuthorityChangesRemainTerminal(t *testing.T) {
+	for _, change := range []string{"mode", "rename_restore"} {
+		t.Run(change, func(t *testing.T) {
+			root := privateDarwinInputRoot(t)
+			lease := privateDarwinFileLease(t, root)
+			if change == "mode" {
+				if err := os.Chmod(root, 0o750); err != nil {
+					t.Fatal(err)
+				}
+			} else if os.Rename(root, root+".moved") != nil || os.Rename(root+".moved", root) != nil {
+				t.Fatal("owned directory rename/restore failed")
+			}
+			if !errors.Is(lease.check(), computer.ErrStale) {
+				t.Fatal("changed root authority was not revoked")
+			}
+			if err := os.Chmod(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if !errors.Is(lease.check(), computer.ErrStale) {
+				t.Fatal("restored root authority resurrected a lost lease")
+			}
+		})
+	}
+}
+
 func TestDarwinInputFileCrashReleasesWithoutPIDRecovery(t *testing.T) {
 	root := privateDarwinInputRoot(t)
 	child, _ := startDarwinLockChild(t, root, "hold")

@@ -86,8 +86,11 @@ func openDarwinFileLease(
 	changes := []unix.Kevent_t{
 		{
 			Ident: uint64(lease.root), Filter: unix.EVFILT_VNODE,
-			Flags:  unix.EV_ADD | unix.EV_ENABLE | unix.EV_CLEAR | unix.EV_RECEIPT,
-			Fflags: unix.NOTE_DELETE | unix.NOTE_RENAME | unix.NOTE_REVOKE | unix.NOTE_ATTRIB,
+			Flags: unix.EV_ADD | unix.EV_ENABLE | unix.EV_CLEAR | unix.EV_RECEIPT,
+			// Directory NOTE_ATTRIB also covers harmless timestamp changes.
+			// Revalidate root identity/owner/mode below; only namespace loss
+			// events revoke continuously. Keep all file tampering events.
+			Fflags: unix.NOTE_DELETE | unix.NOTE_RENAME | unix.NOTE_REVOKE,
 		},
 		{
 			Ident: uint64(lease.file), Filter: unix.EVFILT_VNODE,
@@ -141,8 +144,9 @@ func (lease *darwinFileLease) check() (err error) {
 			lease.lost = true
 		}
 	}()
-	// Drain before and after identity checks. Even delete/restore or chmod/restore
+	// Drain before and after identity checks. File delete/restore or chmod/restore
 	// is terminal; matching numbers at the end must not resurrect authority.
+	// Root timestamps are not authority; current root identity/owner/mode are.
 	if err = lease.checkEvents(); err != nil {
 		return err
 	}
