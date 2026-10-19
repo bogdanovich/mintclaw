@@ -318,6 +318,10 @@ func redactCredentialObservation(observation DriverObservation) DriverObservatio
 	observation.Elements = append([]DriverElement(nil), observation.Elements...)
 	for index := range observation.Elements {
 		observation.Elements[index].Name = secretvalues.Redact(observation.Elements[index].Name)
+		observation.Elements[index].RegionName = secretvalues.Redact(observation.Elements[index].RegionName)
+		if observation.Truncated {
+			observation.Elements[index].RegionName = ""
+		}
 	}
 	if observation.PendingDialog != nil {
 		observation.PendingDialog = cloneDialogObservation(observation.PendingDialog)
@@ -840,6 +844,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		element = resolved
 		prepared.ElementRole = element.Role
 		prepared.ElementName = element.Name
+		prepared.ElementRegionName = element.RegionName
 		prepared.ElementPosition = position
 		switch request.Action.Kind {
 		case ActionCheck, ActionUncheck:
@@ -911,9 +916,11 @@ func (broker *Broker) resolvePreparedActionLocked(
 		}
 		prepared.ElementRole = resolvedSource.Role
 		prepared.ElementName = resolvedSource.Name
+		prepared.ElementRegionName = resolvedSource.RegionName
 		prepared.ElementPosition = sourcePosition
 		prepared.DestinationElementRole = resolvedDestination.Role
 		prepared.DestinationElementName = resolvedDestination.Name
+		prepared.DestinationElementRegionName = resolvedDestination.RegionName
 		prepared.DestinationElementPosition = destinationPosition
 		prepared.Effect = EffectUnknown
 	case ActionPress, ActionScroll:
@@ -1189,8 +1196,10 @@ func (broker *Broker) revalidatePreparedLocked(
 			resolvedSource != source || resolvedDestination != destination ||
 			resolvedSource.Target == resolvedDestination.Target ||
 			resolvedSource.Role != prepared.ElementRole || resolvedSource.Name != prepared.ElementName ||
+			resolvedSource.RegionName != prepared.ElementRegionName ||
 			resolvedDestination.Role != prepared.DestinationElementRole ||
-			resolvedDestination.Name != prepared.DestinationElementName {
+			resolvedDestination.Name != prepared.DestinationElementName ||
+			resolvedDestination.RegionName != prepared.DestinationElementRegionName {
 			return ErrStale
 		}
 		return nil
@@ -1204,7 +1213,8 @@ func (broker *Broker) revalidatePreparedLocked(
 		return err
 	}
 	if origin != prepared.CurrentOrigin || resolved != element ||
-		resolved.Role != prepared.ElementRole || resolved.Name != prepared.ElementName {
+		resolved.Role != prepared.ElementRole || resolved.Name != prepared.ElementName ||
+		resolved.RegionName != prepared.ElementRegionName {
 		return ErrStale
 	}
 	if prepared.Action.Kind == ActionFill {
@@ -2130,26 +2140,30 @@ func browserActionProgressSignature(pageStateHash string, prepared PreparedActio
 	action.DialogID = ""
 	action.ArtifactRef = ""
 	payload := struct {
-		PageStateHash       string
-		Action              Action
-		Effect              Effect
-		InputDigest         string
-		ArtifactSHA256      string
-		ElementRole         string
-		ElementName         string
-		ElementPosition     uint32
-		DestinationRole     string
-		DestinationName     string
-		DestinationPosition uint32
-		DialogMessageDigest string
+		PageStateHash         string
+		Action                Action
+		Effect                Effect
+		InputDigest           string
+		ArtifactSHA256        string
+		ElementRole           string
+		ElementName           string
+		ElementPosition       uint32
+		DestinationRole       string
+		DestinationName       string
+		DestinationPosition   uint32
+		DialogMessageDigest   string
+		ElementRegionName     string `json:"ElementRegionName,omitempty"`
+		DestinationRegionName string `json:"DestinationRegionName,omitempty"`
 	}{
 		PageStateHash: pageStateHash, Action: action, Effect: prepared.Effect, InputDigest: prepared.InputDigest,
 		ArtifactSHA256: prepared.ArtifactSHA256, ElementRole: prepared.ElementRole,
 		ElementName: prepared.ElementName, ElementPosition: prepared.ElementPosition,
-		DestinationRole:     prepared.DestinationElementRole,
-		DestinationName:     prepared.DestinationElementName,
-		DestinationPosition: prepared.DestinationElementPosition,
-		DialogMessageDigest: prepared.DialogMessageDigest,
+		DestinationRole:       prepared.DestinationElementRole,
+		DestinationName:       prepared.DestinationElementName,
+		DestinationPosition:   prepared.DestinationElementPosition,
+		DialogMessageDigest:   prepared.DialogMessageDigest,
+		ElementRegionName:     prepared.ElementRegionName,
+		DestinationRegionName: prepared.DestinationElementRegionName,
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {

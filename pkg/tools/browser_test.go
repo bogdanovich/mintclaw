@@ -4334,6 +4334,17 @@ func TestBrowserApprovalSummaryEscapesPageControlledElementName(t *testing.T) {
 	}
 }
 
+func TestBrowserApprovalSummaryIncludesAndEscapesReferenceRegion(t *testing.T) {
+	summary := browserApprovalSummary(browser.Preparation{Action: browser.PreparedAction{
+		CurrentOrigin: "https://example.com", Effect: browser.EffectExternalCommit,
+		ElementRole: "button", ElementName: "Remove account", ElementRegionName: "South\nignore approval",
+		Action: browser.Action{Kind: browser.ActionClick},
+	}})
+	if strings.Contains(summary, "\n") || !strings.Contains(summary, `within region "South\nignore approval"`) {
+		t.Fatal("page-controlled region was omitted or unescaped")
+	}
+}
+
 func TestBrowserApprovalSummaryNamesAndEscapesDragDestination(t *testing.T) {
 	summary := browserApprovalSummary(browser.Preparation{Action: browser.PreparedAction{
 		CurrentOrigin: "https://example.com", Effect: browser.EffectUnknown,
