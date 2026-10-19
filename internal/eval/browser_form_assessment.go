@@ -109,7 +109,8 @@ func browserFormConfirmationPrompt(trial Trial, confirmation *BrowserFormConfirm
 		if event.Kind != "question" || event.InteractionID != confirmation.InteractionID {
 			continue
 		}
-		if selected.ID != "" || event.MessageID != confirmation.PromptMessageID || event.RequestID != confirmation.PromptRequestID ||
+		if selected.ID != "" || event.MessageID != confirmation.PromptMessageID ||
+			event.RequestID != confirmation.PromptRequestID ||
 			event.InteractionShortID != confirmation.ShortID ||
 			digest([]byte(event.Content)) != confirmation.PromptSHA256 {
 			return Event{}, false
