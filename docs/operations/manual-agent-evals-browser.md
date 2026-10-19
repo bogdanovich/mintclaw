@@ -416,8 +416,13 @@ successful invocations, delivered final reply, owned exit, privacy and empty tem
 
 There is no automatic grant, new vault or runner-owned browser executor. A readiness final that closes the browser,
 an ordinary private answer, a changed reviewed page, a stale/foreign approval or an uncertain send is not repaired
-by retargeting/replay. Offline private regrade remains unavailable until its generated-canary privacy boundary can
-be preserved; do not remove that gate merely because a live trial passed. Actual merged-source private-form runs,
+by retargeting/replay. Offline private regrade admits only already eligible submit/followup reports with exclusively
+v1 generated facts. All regrades guard complete `MC_EVAL_` plus sixteen lowercase-hex tokens, including other trials'
+values, before raw report decoding and at both typed judge boundaries. The `generated_canary_format_v1` receipt is
+not an original-value or provider-wire privacy claim; bounds/uncertainty still refuse evidence. A public complete
+token is conservatively rejected, but a bare prefix or `MC_EVAL_CONTEXT_7C9` is allowed. No value store or runtime
+access is needed. Arbitrary literal facts and private PDF regrade remain unavailable. Failed/incomplete native
+evidence remains ineligible. Actual merged-source private-form runs,
 ambiguity and the remaining domain qualification remain mandatory, and earlier negative reports remain unchanged.
 
 Real qualification must record the actual platform, browser driver and gateway/companion placement, plus retained

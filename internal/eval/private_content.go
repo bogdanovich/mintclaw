@@ -15,10 +15,14 @@ type privateContentScan struct {
 	filter    *strings.Replacer
 	tokens    int
 	uncertain bool
+	generated bool
 }
 
 func (scan *privateContentScan) text(text string, layer int) bool {
 	if scan.filter != nil && scan.filter.Replace(text) != text {
+		return true
+	}
+	if scan.generated && generatedPrivateFactPattern.MatchString(text) {
 		return true
 	}
 	for _, value := range scan.facts {
@@ -26,7 +30,7 @@ func (scan *privateContentScan) text(text string, layer int) bool {
 			return true
 		}
 	}
-	if len(scan.facts) == 0 && scan.filter == nil || !strings.ContainsRune(text, '\\') {
+	if len(scan.facts) == 0 && scan.filter == nil && !scan.generated || !strings.ContainsRune(text, '\\') {
 		return false
 	}
 	if layer >= 8 || len(text) > MaxInputBytes {

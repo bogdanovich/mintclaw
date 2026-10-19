@@ -145,8 +145,17 @@ Canonical run JSON hashes are `73418c13d911be6e8e98f9201c335b3bb1a1186f3ba8c2a83
 `dc2c831c40d4481ef518840aecf81c1bc44a25e10b132e4284afb4171d5a56bc` and
 `084b6a9deec960e0e755b00095dc25bc93a64c20bbffaf2fad227c22c0da3c46`, respectively.
 
-Investigate actual protected-tool exposure/selection separately from the natural ordinary-question choice and
-the unavailable user provider; a declared allowlist is not effective-catalog proof. No automatic prompt tuning,
-grant, replay or target-repair loop follows from these negatives. Protected fill/correction/confirmation/approval
+Subsequent offline exposure inspection found the same nine-tool schema hash on all fourteen `model.request`
+records: `7ea7c3e65b05a33eda151c8e9c45ef6bd5327f0c81435600b95f1a41aa5cf9b1`. Native tool constructors and
+`ToolToSchema`, sorted and serialized through the native provider definition types, reproduced that exact hash
+with `browser_input` included and download/file-chooser capabilities enabled. The relevant tool/fingerprint source
+files were unchanged from the reviewed head. Four capability combinations were inspected without executing tools;
+only the enabled/enabled combination matched. This establishes the provider-neutral native schema exposure, not
+provider-wire attestation or why the model chose an ordinary question. The one-off local probe made no model,
+browser or target call and did not alter these reports. Missing registration no longer explains this pilot.
+
+Investigate tool selection and the unavailable user provider separately if target triage is later authorized.
+No automatic prompt tuning, grant, replay or target-repair loop follows from these negatives.
+Protected fill/correction/confirmation/approval
 live qualification, ambiguity selected-account evidence, remaining PDF/browser cases and frozen E5 work remain
 mandatory. The passing offline native controls and these actual negative attempts do not complete the goal.

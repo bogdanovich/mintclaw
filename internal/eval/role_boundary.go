@@ -23,7 +23,7 @@ func (observation *RoleBoundaryObservation) valid(attempted bool) bool {
 	}
 	if observation.Scope != roleBoundaryScope ||
 		observation.FactScope != "run_retained_facts" && observation.FactScope != "call_facts" &&
-			observation.FactScope != "credentials_only" {
+			observation.FactScope != "credentials_only" && observation.FactScope != generatedFactGuardScope {
 		return false
 	}
 	validInput := observation.Input == "not_observed" || observation.Input == "observed" ||
@@ -67,7 +67,7 @@ func (role *ModelRole) inspectBoundary(ctx context.Context, value any, facts map
 	inspection.scans = append(inspection.scans, &privateContentScan{facts: facts, filter: role.filter, tokens: 32768})
 	if role.retained != nil {
 		inspection.scans = append(inspection.scans,
-			&privateContentScan{facts: role.retained.values, tokens: 32768})
+			&privateContentScan{facts: role.retained.values, generated: role.retained.generated, tokens: 32768})
 	}
 	err := inspection.walk(reflect.ValueOf(value), 0)
 	if err == nil && inspection.uncertain {

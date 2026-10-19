@@ -32,10 +32,17 @@ func Grade(
 	ctx, cancel := context.WithTimeout(ctx, options.SuiteTimeout)
 	defer cancel()
 	filter := cfg.SensitiveDataReplacer()
+	factGuard := newGradeFactGuard()
+	defer factGuard.clear()
 	selected := make(map[string]LoadedCase, len(cases))
 	for _, item := range cases {
 		if item.Case.Validate() != nil || !validDigest(item.Digest) || selected[item.Case.ID].Digest != "" ||
-			credentialJSONValue(item.Case, filter) {
+			credentialJSONValue(item.Case, filter) || !offlineGradeFactsEligible(item.Case) {
+			return RunReport{}, ErrGrade
+		}
+		public := item.Case
+		public.Driver.Facts = nil
+		if generatedFactJSONValue(public) {
 			return RunReport{}, ErrGrade
 		}
 		selected[item.Case.ID] = item
@@ -52,7 +59,7 @@ func Grade(
 		return RunReport{}, ErrGrade
 	}
 	defer func() { _ = root.Close() }()
-	data, err := readPrivateReportFile(root, "run.json")
+	data, err := readGradeEvidence(ctx, root, "run.json", filter)
 	if err != nil {
 		return RunReport{}, ErrGrade
 	}
@@ -98,7 +105,7 @@ func Grade(
 			summary.File != "trial-"+summary.ID+".json" {
 			return RunReport{}, ErrGrade
 		}
-		data, err = readPrivateReportFile(root, summary.File)
+		data, err = readGradeEvidence(ctx, root, summary.File, filter)
 		if err != nil {
 			return RunReport{}, ErrGrade
 		}
@@ -153,7 +160,8 @@ func Grade(
 		return RunReport{}, ErrGrade
 	}
 	defer judge.Close()
-	if credentialJSONValue(judge.identity, filter) {
+	judge.retained = &factGuard
+	if credentialJSONValue(judge.identity, filter) || generatedFactJSONValue(judge.identity) {
 		return RunReport{}, ErrGrade
 	}
 	result := RunReport{
@@ -286,7 +294,7 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||
 		!trial.TransportClosed || !trial.EvidenceEligible || trial.ExecutionVerdict != Pass ||
-		len(item.Case.Driver.Facts) != 0 || item.Case.PDF == nil && len(item.Case.Fixtures) != 0 ||
+		!offlineGradeFactsEligible(item.Case) || item.Case.PDF == nil && len(item.Case.Fixtures) != 0 ||
 		(item.Case.Browser == nil) != (trial.Browser == nil) ||
 		len(item.Case.Rubric) == 0 ||
 		len(trial.Events) == 0 || len(trial.Events) > 256 {
