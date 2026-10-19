@@ -273,6 +273,11 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    for an open-ended target-repair loop. The other three scenarios
    previously remained gated. Submit/followup now have the scoped workflow described below; ambiguity retains its
    native-action evidence gate.
+   A [native reference-region producer](browser-reference-regions.md) now binds
+   direct-library main-document button refs to bounded unique ARIA-region context,
+   including approval hashes and fresh revalidation. It grants no permission and
+   does not remove the ambiguity skip: the owned-fixture clarification/approval
+   consumer and post-stop wrong-account oracle remain required.
    No local fixture pass qualifies native browser behavior.
    The [private-input prerequisite](agent-evals-browser-private-input.md) separates the missing native ingress from
    already protected model-produced fill. B1 adds only generation-bound, value-free broker target bindings and

@@ -12,6 +12,7 @@ const dns = require('node:dns').promises;
 const net = require('node:net');
 const { randomBytes } = require('node:crypto');
 const { prepareCredentialLogin, performCredentialLogin } = require('./credential-login.cjs');
+const { referenceRegions, findSnapshotRef } = require('./reference-regions.cjs');
 const { Worker } = require('node:worker_threads');
 const { chromium, firefox, webkit } = require('playwright');
 
@@ -577,13 +578,14 @@ class Driver {
     }
   }
 
-  async snapshot(target = '') {
+  async snapshot(target = '', regionContext = false) {
     const page = this.selectedPage();
     if (page.url() === 'about:blank') {
       return '- Page URL: about:blank\n- Page Title: \n### Snapshot\n```yaml\n\n```';
     }
     const scope = target ? this.locatorFor(target) : page.locator(':root');
-    const tree = await scope.ariaSnapshotJSON({ mode: 'ai' });
+    const wholeDocument = target && regionContext;
+    let tree = await (wholeDocument ? page.locator(':root') : scope).ariaSnapshotJSON({ mode: 'ai' });
     const redactControls = async nodes => {
       await Promise.all(nodes.map(async node => {
         if (typeof node === 'string') return;
@@ -631,6 +633,13 @@ class Driver {
       }));
     };
     await redactControls(tree);
+    let regions = referenceRegions(tree);
+    if (wholeDocument) {
+      const selected = findSnapshotRef(tree, target);
+      if (!selected) throw new Error('reference context is unavailable');
+      tree = [selected];
+      regions = { ...regions, entries: regions.entries.filter(entry => entry.ref === target) };
+    }
     const lines = renderAriaNodes(tree);
     // Unlabelled images can be meaningful even when intentionally absent from
     // ARIA. Keep a bounded, non-actionable inventory without inventing img
@@ -683,7 +692,7 @@ class Driver {
         return '';
       });
     }
-    return `- Page URL: ${page.url()}\n- Page Title: ${title}\n- Snapshot encoding: json-names-v1\n- Navigation evidence: ${JSON.stringify(evidence)}\n### Snapshot\n\`\`\`yaml\n${lines.join('\n')}\n\`\`\``;
+    return `- Page URL: ${page.url()}\n- Page Title: ${title}\n- Snapshot encoding: json-names-v1\n- Navigation evidence: ${JSON.stringify(evidence)}\n- Reference regions: ${JSON.stringify(regions)}\n### Snapshot\n\`\`\`yaml\n${lines.join('\n')}\n\`\`\``;
   }
 
   async call(tool, args, credentialAccess = false) {
@@ -727,7 +736,7 @@ class Driver {
           break;
         case 'browser_snapshot':
           response = await this.actionOrDialog(() =>
-            this.snapshot(args.target ? String(args.target) : ''));
+            this.snapshot(args.target ? String(args.target) : '', args.region_context === true));
           response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
         case 'browser_tabs':

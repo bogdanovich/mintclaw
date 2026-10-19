@@ -3362,10 +3362,16 @@ func browserApprovalDescription(action browser.PreparedAction) string {
 		if action.ElementName != "" {
 			description += fmt.Sprintf(" %q", action.ElementName)
 		}
+		if action.ElementRegionName != "" {
+			description += fmt.Sprintf(" within region %q", action.ElementRegionName)
+		}
 		if action.Action.Kind == browser.ActionDrag {
 			description += " to " + action.DestinationElementRole
 			if action.DestinationElementName != "" {
 				description += fmt.Sprintf(" %q", action.DestinationElementName)
+			}
+			if action.DestinationElementRegionName != "" {
+				description += fmt.Sprintf(" within region %q", action.DestinationElementRegionName)
 			}
 		}
 	}
