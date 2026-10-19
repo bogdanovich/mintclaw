@@ -213,7 +213,9 @@ using the existing bounded literal/JSON-escape guards. The role receipt says `ge
 original-value or raw-provider-traffic coverage. Unscannable evidence refuses admission. A complete matching token is
 reserved even in public text; a bare prefix or the existing `MC_EVAL_CONTEXT_7C9` public marker is not a token.
 This contract can reject a harmless matching mention; arbitrary encodings are not certified.
-Literal-fact cases and private PDF regrade remain gated. Existing native form, fixture, privacy, cleanup, case/route
+Literal-fact cases remain gated; generated PDF output uses its separate
+[complete output contract](../operations/manual-agent-evals-pdf.md#finalized-output-assessment).
+Existing native form, fixture, privacy, cleanup, case/route
 and execution checks still apply; a judge cannot upgrade incomplete evidence or either retained failed pilot.
 This bounded regrade contract adds no target/tool work or persistence; adding a secret vault or silently judging
 without that guard is not an acceptable shortcut. Ambiguity/stale-account action

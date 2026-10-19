@@ -120,8 +120,15 @@ func Grade(
 			sessions[trial.SessionID] || credentialJSONValue(trial, filter) {
 			return RunReport{}, ErrGrade
 		}
-		if item.Case.Browser != nil && item.Case.Browser.Scenario == "artifact" {
-			raw, artifactErr := browserArtifactForGrade(root, trial, filter)
+		if item.Case.PDF != nil && item.Case.PDF.Output == "required" ||
+			item.Case.Browser != nil && item.Case.Browser.Scenario == "artifact" {
+			var raw []byte
+			var artifactErr error
+			if item.Case.PDF != nil {
+				raw, artifactErr = pdfOutputArtifactForGrade(root, trial, filter)
+			} else {
+				raw, artifactErr = browserArtifactForGrade(root, trial, filter)
+			}
 			if artifactErr != nil {
 				return RunReport{}, ErrGrade
 			}
@@ -186,7 +193,12 @@ func Grade(
 	for _, trial := range trials {
 		result.TargetUsage.addTrial(trial)
 		if raw := artifacts[trial.ID]; raw != nil {
-			if _, err = writer.retainBrowserArtifact(trial.ID, raw); err != nil {
+			if trial.PDF != nil {
+				_, err = writer.retainPDFArtifact(trial.ID, raw)
+			} else {
+				_, err = writer.retainBrowserArtifact(trial.ID, raw)
+			}
+			if err != nil {
 				return result, ErrReport
 			}
 		}
@@ -305,7 +317,9 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 	}
 	if item.Case.PDF != nil {
 		return validPDFNoWriteEvidence(trial, item.Case, workspace) &&
-			trial.PDF.PostStop.AssessmentScope == pdfNoWriteAssessmentScope
+			trial.PDF.PostStop.AssessmentScope == pdfNoWriteAssessmentScope ||
+			validPDFOutputEvidence(trial, item.Case, workspace) &&
+				trial.PDF.PostStop.AssessmentScope == pdfOutputAssessmentScope
 	}
 	if item.Case.Browser != nil {
 		return validBrowserEvidence(trial, item.Case, workspace)

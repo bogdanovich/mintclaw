@@ -421,7 +421,8 @@ v1 generated facts. All regrades guard complete `MC_EVAL_` plus sixteen lowercas
 values, before raw report decoding and at both typed judge boundaries. The `generated_canary_format_v1` receipt is
 not an original-value or provider-wire privacy claim; bounds/uncertainty still refuse evidence. A public complete
 token is conservatively rejected, but a bare prefix or `MC_EVAL_CONTEXT_7C9` is allowed. No value store or runtime
-access is needed. Arbitrary literal facts and private PDF regrade remain unavailable. Failed/incomplete native
+access is needed. Arbitrary literal facts remain unavailable; generated PDF output has a separate
+[native/artifact admission contract](manual-agent-evals-pdf.md#finalized-output-assessment). Failed/incomplete native
 evidence remains ineligible. Actual merged-source private-form runs,
 ambiguity and the remaining domain qualification remain mandatory, and earlier negative reports remain unchanged.
 
