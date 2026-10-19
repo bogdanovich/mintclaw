@@ -22,8 +22,8 @@ func validBrowserReadEvidence(trial Trial, item Case, workspace string) bool {
 }
 
 func validBrowserConversation(trial Trial, item Case, workspace string) bool {
-	if item.Browser == nil || trial.Browser == nil || len(item.Driver.Facts) != 0 ||
-		trial.Browser.FormInputs != nil ||
+	if item.Browser == nil || trial.Browser == nil || !isBrowserForm(item) &&
+		(len(item.Driver.Facts) != 0 || trial.Browser.FormInputs != nil || trial.Browser.Form != nil) ||
 		trial.PDF != nil || trial.Cancellation != nil ||
 		trial.Browser.Version != Version || trial.Browser.Scope != "owned_fixture_execution_v1" ||
 		trial.Browser.NativeAuthority != "observed" || trial.Browser.NativeCleanup != "observed" ||
@@ -72,12 +72,15 @@ func observedBrowserHost(evidence *BrowserTrialEvidence, host *BrowserFixtureHos
 	if evidence.Denial != nil {
 		proof = evidence.Denial.Native
 	}
+	if evidence.Form != nil {
+		proof = evidence.Form.Native
+	}
 	return proof != nil && host.OriginSHA256 == proof.OriginSHA256
 }
 
 func validBrowserEvidence(trial Trial, item Case, workspace string) bool {
 	return validBrowserReadEvidence(trial, item, workspace) || validBrowserArtifactEvidence(trial, item, workspace) ||
-		validBrowserDenialEvidence(trial, item, workspace)
+		validBrowserDenialEvidence(trial, item, workspace) || validBrowserFormEvidence(trial, item, workspace)
 }
 
 func gradeFinalizedBrowserChecks(item Case, trial Trial) []CheckResult {
@@ -89,9 +92,17 @@ func gradeFinalizedBrowserChecks(item Case, trial Trial) []CheckResult {
 	if item.Browser != nil && item.Browser.Scenario == "denied" {
 		source = "browser.denial"
 	}
+	if isBrowserForm(item) {
+		source = "browser.form"
+	}
 	for index, check := range item.Checks {
 		switch check.Kind {
-		case "browser_state", "browser_no_write", "browser_authority", "browser_cleanup", "browser_artifact":
+		case "browser_state",
+			"browser_no_write",
+			"browser_authority",
+			"browser_cleanup",
+			"browser_artifact",
+			"browser_context":
 			checks[index] = booleanCheck(check.ID, true, []string{"browser.fixture", source})
 		case "private_surfaces":
 			checks[index] = booleanCheck(check.ID, true, []string{"run.private_surfaces", source})

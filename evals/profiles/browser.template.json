@@ -12,7 +12,7 @@
       "default": true,
       "tool_policy": {
         "default": "deny",
-        "allow": ["request_user_input", "browser_targets", "browser_session", "browser_observe", "browser_act", "browser_contexts", "browser_capture", "browser_diagnostics"]
+        "allow": ["request_user_input", "browser_targets", "browser_session", "browser_observe", "browser_act", "browser_input", "browser_contexts", "browser_capture", "browser_diagnostics"]
       },
       "mcp_server_policy": {"default": "deny"}
     }]

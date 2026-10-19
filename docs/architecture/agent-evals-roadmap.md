@@ -261,7 +261,8 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    the changed case revision was actually run in v2 and failed before a permission checkpoint, so neither
    cancellation branch gained positive live qualification. This is a recorded negative result, not permission
    for an open-ended target-repair loop. The other three scenarios
-   remain gated. Submit/followup retain private-input gates; ambiguity retains its native-action evidence gate.
+   previously remained gated. Submit/followup now have the scoped workflow described below; ambiguity retains its
+   native-action evidence gate.
    No local fixture pass qualifies native browser behavior.
    The [private-input prerequisite](agent-evals-browser-private-input.md) separates the missing native ingress from
    already protected model-produced fill. B1 adds only generation-bound, value-free broker target bindings and
@@ -269,8 +270,12 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    live qualification. B2 connects native protected questions/claims/resource retention/resume; B3 must add the
    eval private-fact consumer and independent mutation/context evidence before enabling either required case.
    B3 now adds pre-answer native question/trace/current-session joins and explicit per-field initial/corrected
-   fact-handle mapping. This admission component does not enable trials: fresh cohort generation, native
-   mutation/approval/context and post-stop assessment remain mandatory, as do the actual private-form experiments.
+   fact-handle mapping. The complete workflow now connects fresh per-trial cohort generation, actual accepted fills
+   and correction, native question confirmation followed by exact HMAC-bound submit allow-once, unchanged reviewed
+   page/context, independent submitted values and post-stop native/delivery/privacy/cleanup assessment before judging.
+   Trials require owned startup and explicit metadata capture before any probe/model work. Offline controls are not
+   live qualification: fresh identified private-form experiments remain mandatory. Private offline regrade also
+   remains gated until its canary/privacy contract can be preserved without a new secret store.
    Ordinary chat substitution and a new value/vault/approval engine remain forbidden.
    Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a
    read-only native transfer inspection API rather than constructing/reconciling a store. This receipt does not

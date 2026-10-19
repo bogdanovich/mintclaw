@@ -17,7 +17,7 @@ import (
 const browserRuntimeDirectory = ".eval-browser"
 
 var browserEvalTools = []string{
-	"browser_targets", "browser_session", "browser_observe", "browser_act",
+	"browser_targets", "browser_session", "browser_observe", "browser_act", "browser_input",
 	"browser_contexts", "browser_capture", "browser_diagnostics",
 }
 

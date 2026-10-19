@@ -64,13 +64,19 @@ type BrowserFormInputsEvidence struct {
 }
 
 func (domain *browserConversation) readFormInputs() (*BrowserFormInputsEvidence, error) {
+	proof, _, err := domain.readFormInputState()
+	return proof, err
+}
+
+func (domain *browserConversation) readFormInputState() (*BrowserFormInputsEvidence, browser.StateSnapshot, error) {
 	proof := &BrowserFormInputsEvidence{Scope: "native_browser_form_inputs_v1", Code: "unavailable"}
+	state := browser.StateSnapshot{}
 	if len(domain.inputAttempts) == 0 || len(domain.inputAttempts) > 64 {
-		return proof, errBrowserEvidence
+		return proof, state, errBrowserEvidence
 	}
 	records, sha, err := domain.questions.records()
 	if err != nil {
-		return proof, err
+		return proof, state, err
 	}
 	raw, err := domain.questions.read(
 		domain.questions.workspace,
@@ -78,12 +84,12 @@ func (domain *browserConversation) readFormInputs() (*BrowserFormInputsEvidence,
 		browser.DefaultFileStoreBytes,
 	)
 	if err != nil {
-		return proof, err
+		return proof, state, err
 	}
 	defer clear(raw)
-	state, err := browser.InspectStateSnapshot(raw)
+	state, err = browser.InspectStateSnapshot(raw)
 	if err != nil {
-		return proof, errBrowserEvidence
+		return proof, state, errBrowserEvidence
 	}
 	byID := make(map[string]interactions.Record, len(records))
 	for _, record := range records {
@@ -93,12 +99,12 @@ func (domain *browserConversation) readFormInputs() (*BrowserFormInputsEvidence,
 	for _, attempt := range domain.inputAttempts {
 		fill, err := projectBrowserInputFill(attempt, byID[attempt.observation.record.ID], state, time.Now())
 		if err != nil {
-			return proof, err
+			return proof, state, err
 		}
 		fills = append(fills, *fill)
 	}
 	proof.Code, proof.RegistrySHA256, proof.StateSHA256, proof.Fills = "native_inputs_observed", sha, digest(raw), fills
-	return proof, nil
+	return proof, state, nil
 }
 
 func (domain *browserConversation) inputAttempted(id string) bool {

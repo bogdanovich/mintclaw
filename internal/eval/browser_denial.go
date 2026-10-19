@@ -40,6 +40,8 @@ func (domain *browserConversation) matchesApprovalAction(action browser.Prepared
 			action.PolicyEffect == browser.EffectUnknown
 	case "denied":
 		return fixtureRemovalAction(action)
+	case "submit", "followup":
+		return fixtureSubmitAction(action)
 	default:
 		return false
 	}

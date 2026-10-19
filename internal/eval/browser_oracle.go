@@ -38,7 +38,7 @@ func inspectBrowserFixture(
 		value := field.Value
 		if field.Fact != "" {
 			value = item.Driver.Facts[field.Fact]
-			if value == "{{generate}}" {
+			if privateFactPlaceholder(value) {
 				return browserFixtureOracle{}, ErrBrowserFixture
 			}
 		}

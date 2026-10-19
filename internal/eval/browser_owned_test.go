@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -229,27 +230,39 @@ func TestOwnedBrowserRunExecutesFreshFixturesButCannotPassFromHTTPOrProse(t *tes
 	}
 }
 
-func TestOwnedBrowserRunKeepsPrivateAndActionCasesVisiblyGated(t *testing.T) {
+func TestOwnedBrowserRunKeepsAmbiguousActionCaseVisiblyGated(t *testing.T) {
 	fixture := newOwnedGatewayFixture(t, "browser_read")
 	enableAdmissionBrowser(t, fixture)
-	cases := []LoadedCase{
-		browserCorpusCase(t, "submit"), browserCorpusCase(t, "followup"),
-		browserCorpusCase(t, "ambiguous"),
-	}
+	cases := []LoadedCase{browserCorpusCase(t, "ambiguous")}
 	result, err := Run(t.Context(), fixture.preset, cases, RunOptions{
 		Home: fixture.home, OutputParent: fixture.output, StartTarget: true,
 	})
-	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 3 || result.Coverage[Skipped] != 3 ||
+	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 1 || result.Coverage[Skipped] != 1 ||
 		result.BrowserFixtures == nil || result.BrowserFixtures.Trials != 0 {
 		t.Fatal("gated mandatory browser coverage was omitted or attempted", err)
 	}
-	for index, trial := range result.Trials {
+	for _, trial := range result.Trials {
 		code := "browser_action_evidence_unavailable"
-		if index < 2 {
-			code = "browser_private_input_unavailable"
-		}
 		if trial.Code != code {
 			t.Fatal("missing native prerequisite was not recorded precisely")
+		}
+	}
+}
+
+func TestBrowserPrivateFormsRequireOwnedCaptureBeforeAnyProbe(t *testing.T) {
+	for _, scenario := range []string{"submit", "followup"} {
+		for _, start := range []bool{false, true} {
+			t.Run(scenario+"/owned-"+strconv.FormatBool(start), func(t *testing.T) {
+				fixture := newAdmissionFixture(t)
+				enableAdmissionBrowser(t, fixture)
+				fixture.preset.CaptureModelMetadata = !start
+				_, err := Run(t.Context(), fixture.preset, []LoadedCase{browserCorpusCase(t, scenario)}, RunOptions{
+					Home: fixture.home, OutputParent: fixture.output, StartTarget: start,
+				})
+				if !errors.Is(err, ErrUnsafeTarget) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+					t.Fatal("private forms started without owned metadata evidence", err)
+				}
+			})
 		}
 	}
 }

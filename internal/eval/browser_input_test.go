@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +30,8 @@ import (
 type browserInputWorker struct {
 	*browserReadWorker
 	values map[string]string
+	form   bool
+	title  string
 }
 
 func (worker *browserInputWorker) AuthorizeFill(ctx context.Context, expected, target string) error {
@@ -38,6 +43,29 @@ func (worker *browserInputWorker) AuthorizeFill(ctx context.Context, expected, t
 }
 
 func (worker *browserInputWorker) Execute(ctx context.Context, action browser.DriverAction) error {
+	if worker.form && action.Kind == browser.DriverSelect && action.Target == "color" {
+		worker.values["color"] = action.Value
+		return nil
+	}
+	if worker.form && action.Kind == browser.DriverClick && action.Target == "submit" {
+		data := url.Values{"nonce": {worker.page.nonce}}
+		for _, field := range []string{"name", "color", "note"} {
+			data.Set(field, worker.values[field])
+		}
+		request := httptest.NewRequest(
+			http.MethodPost,
+			worker.page.origin+worker.page.path+"submit",
+			strings.NewReader(data.Encode()),
+		)
+		request.Header.Set("Origin", worker.page.origin)
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response := httptest.NewRecorder()
+		worker.page.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			return browser.ErrWorkerUnavailable
+		}
+		return nil
+	}
 	if action.Kind == browser.DriverFill && (action.Target == "name" || action.Target == "note") {
 		if worker.values == nil {
 			worker.values = map[string]string{}
@@ -66,19 +94,36 @@ func (worker *browserInputWorker) Observe(context.Context) (browser.DriverObserv
 	if worker.origin == "about:blank" {
 		return browser.DriverObservation{URL: worker.origin, Origin: worker.origin}, nil
 	}
-	return browser.DriverObservation{
-		URL: worker.page.origin + worker.page.path, Origin: worker.origin,
+	observation := browser.DriverObservation{
+		URL: worker.page.origin + worker.page.path, Origin: worker.origin, Title: worker.title,
 		Snapshot: "- textbox \"Name\" [ref=name]\n- textbox \"Note\" [ref=note]",
 		Elements: []browser.DriverElement{
 			{Target: "name", Role: "textbox", Name: "Name"},
 			{Target: "note", Role: "textbox", Name: "Note"},
 		},
-	}, nil
+	}
+	if worker.form {
+		observation.Snapshot += "\n- combobox \"Color\" [ref=color]\n- button \"Submit form\" [ref=submit]"
+		observation.Elements = append(observation.Elements,
+			browser.DriverElement{Target: "color", Role: "combobox", Name: "Color"},
+			browser.DriverElement{Target: "submit", Role: "button", Name: "Submit form"})
+	}
+	return observation, nil
 }
 
 func (worker *browserInputWorker) Resolve(_ context.Context, target string) (browser.DriverElement, string, error) {
 	var label string
 	switch target {
+	case "color":
+		if worker.form {
+			return browser.DriverElement{Target: target, Role: "combobox", Name: "Color"}, worker.origin, nil
+		}
+		return browser.DriverElement{}, "", browser.ErrNotFound
+	case "submit":
+		if worker.form {
+			return browser.DriverElement{Target: target, Role: "button", Name: "Submit form"}, worker.origin, nil
+		}
+		return browser.DriverElement{}, "", browser.ErrNotFound
 	case "name":
 		label = "Name"
 	case "note":

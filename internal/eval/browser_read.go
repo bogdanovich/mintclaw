@@ -47,10 +47,25 @@ func inspectBrowserTask(
 	trial Trial, target admittedTarget, fixture *browserFixture, observed browserNativeSnapshot, temporaryEmpty bool,
 	download *BrowserDownloadEvidence, denial *BrowserDenialEvidence,
 ) *BrowserTaskEvidence {
+	return inspectBrowserTaskWithForm(trial, target, fixture, observed, temporaryEmpty, download, denial, nil)
+}
+
+func inspectBrowserTaskWithForm(
+	trial Trial, target admittedTarget, fixture *browserFixture, observed browserNativeSnapshot, temporaryEmpty bool,
+	download *BrowserDownloadEvidence, denial *BrowserDenialEvidence, form *BrowserFormEvidence,
+) *BrowserTaskEvidence {
 	proof := &BrowserTaskEvidence{
 		Version: Version, Scope: browserReadAssessmentScope, Code: "native_scope_unavailable",
 		StateSHA256: observed.stateSHA256, OutboxSHA256: observed.outboxSHA256,
 		SessionScope: browser.OpaqueSessionKey(trial.SessionKey), TemporaryEmpty: temporaryEmpty,
+	}
+	if form != nil {
+		proof.Scope = browserFormAssessmentScope
+		if download != nil || denial != nil || trial.Browser == nil || trial.Browser.FormInputs == nil ||
+			len(trial.Browser.FormInputs.Fills) == 0 ||
+			form.Approval == nil || form.Approval.Scope != browserFormApprovalScope {
+			return proof
+		}
 	}
 	if download != nil {
 		proof.Scope = browserArtifactAssessmentScope
@@ -99,6 +114,13 @@ func inspectBrowserTask(
 			session.CreatedAt < trial.StartedAt.UnixNano() || session.UpdatedAt > now {
 			return proof
 		}
+		if form != nil {
+			target := trial.Browser.FormInputs.Fills[0].Target
+			if session.ID != target.SessionID || session.TabID != target.TabID || session.FrameID != "" ||
+				session.Owner.ExecutionID != target.ExecutionID || session.ControllerGeneration != target.ControllerGeneration {
+				return proof
+			}
+		}
 		sessions[id] = session
 	}
 	proof.Sessions = len(sessions)
@@ -113,7 +135,8 @@ func inspectBrowserTask(
 		}
 		decision := browserpolicy.DecisionAllow
 		if download != nil && action.ID == download.PreparedActionID ||
-			denial != nil && action.ID == denial.PreparedActionID {
+			denial != nil &&
+				action.ID == denial.PreparedActionID || form != nil && action.ID == form.SubmissionActionID {
 			decision = browserpolicy.DecisionAsk
 		}
 		if !action.Owner.Equal(session.Owner) || action.Target != session.Target ||
@@ -125,6 +148,9 @@ func inspectBrowserTask(
 			action.RestrictedPolicyRevision != restrictedPolicy ||
 			action.RestrictedDecision != decision ||
 			action.LocalRestrictedDecision != decision || action.WorkerRestrictedDecision != "" {
+			return proof
+		}
+		if form != nil && (action.ControllerGeneration != session.ControllerGeneration || action.FrameID != "") {
 			return proof
 		}
 		prepared[id] = action
@@ -167,6 +193,9 @@ func inspectBrowserTask(
 				invocation.SafeFailure == "session_closed" && invocation.CompletedAt/1_000_000 >= denial.CancelRequestedAt
 			canceled = allowed
 		}
+		if form != nil && !allowed {
+			allowed = browserFormMutationAllowed(action, invocation, trial.Browser.FormInputs, form)
+		}
 		if !allowed {
 			proof.ForbiddenActionAccepted = invocation.AcceptedAt != 0
 			proof.Code = "native_read_scope_mismatch"
@@ -177,7 +206,8 @@ func inspectBrowserTask(
 		}
 	}
 	if proof.Sessions == 0 || proof.Navigations == 0 || len(used) != len(prepared) ||
-		denial != nil && denial.Scope == browserDenialAssessmentScope && !canceled {
+		denial != nil && denial.Scope == browserDenialAssessmentScope &&
+			!canceled || form != nil && proof.Sessions != 1 {
 		return proof
 	}
 	proof.Code = "native_delivery_unavailable"

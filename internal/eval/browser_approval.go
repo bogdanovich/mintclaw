@@ -49,7 +49,7 @@ type browserApprovalObservation struct {
 func (domain *browserConversation) observeApproval(ctx context.Context, prompt Event) error {
 	if domain.item.Browser == nil ||
 		domain.item.Browser.Scenario != "artifact" &&
-			domain.item.Browser.Scenario != "denied" || prompt.Kind != "approval" ||
+			domain.item.Browser.Scenario != "denied" && !isBrowserForm(domain.item) || prompt.Kind != "approval" ||
 		domain.approval != nil {
 		return errBrowserEvidence
 	}
@@ -153,6 +153,9 @@ func (domain *browserConversation) readApproval(prompt Event) (*browserApprovalO
 	if selected == nil {
 		return nil, errBrowserEvidence
 	}
+	if isBrowserForm(domain.item) && !domain.formApprovalMatches(record, *selected, snapshot) {
+		return nil, errBrowserEvidence
+	}
 	root, err := os.OpenRoot(domain.questions.workspace)
 	if err != nil {
 		return nil, errBrowserEvidence
@@ -182,6 +185,13 @@ func (domain *browserConversation) approveDownload(prompt Event) (protocol.MintC
 	if domain.item.Browser == nil || domain.item.Browser.Scenario != "artifact" {
 		return protocol.MintClawMessage{}, errBrowserEvidence
 	}
+	return domain.allowReviewedBrowserAction(prompt, "Allow this reviewed fixture download once.")
+}
+
+func (domain *browserConversation) allowReviewedBrowserAction(
+	prompt Event,
+	content string,
+) (protocol.MintClawMessage, error) {
 	previous := domain.approval
 	if previous == nil || previous.requestID != "" || prompt.MessageID != previous.prompt.MessageID ||
 		prompt.InteractionID != previous.record.ID {
@@ -197,7 +207,7 @@ func (domain *browserConversation) approveDownload(prompt Event) (protocol.MintC
 	request := protocol.MintClawMessage{
 		Type: protocol.TypeMessageSend, ID: uuid.NewString(), SessionID: domain.questions.sessionID,
 		Timestamp: time.Now().UnixMilli(), Payload: map[string]any{
-			protocol.PayloadKeyContent:            "Allow this reviewed fixture download once.",
+			protocol.PayloadKeyContent:            content,
 			protocol.PayloadKeyInteractionChoice:  string(bus.InboundInteractionChoiceAllowOnce),
 			protocol.PayloadKeyInteractionShortID: prompt.InteractionShortID,
 			protocol.PayloadKeyInteractionPrompt:  prompt.MessageID,
@@ -233,8 +243,12 @@ func (domain *browserConversation) consumedApproval() (*BrowserApprovalEvidence,
 		current.Answer.Choice != "" || current.Answer.Text != string(bus.InboundInteractionChoiceAllowOnce) {
 		return nil, errBrowserEvidence
 	}
+	scope := browserApprovalScope
+	if isBrowserForm(domain.item) {
+		scope = browserFormApprovalScope
+	}
 	return &BrowserApprovalEvidence{
-		Scope:             browserApprovalScope,
+		Scope:             scope,
 		Code:              "native_allow_once_consumed",
 		InteractionID:     current.ID,
 		PromptMessageID:   before.prompt.MessageID,

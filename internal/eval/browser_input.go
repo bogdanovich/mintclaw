@@ -199,7 +199,7 @@ func (domain *browserConversation) protectedInputRequest(
 		}
 	}
 	value, found := domain.item.Driver.Facts[handle]
-	if !admitted || !found || value == "" || value == generatePrivateFact {
+	if !admitted || !found || value == "" || privateFactPlaceholder(value) {
 		return protocol.MintClawMessage{}, errBrowserEvidence
 	}
 	now := time.Now()
