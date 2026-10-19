@@ -93,8 +93,25 @@ type ToolResult struct {
 	// model-visible nor persisted in canonical tool-result history.
 	Observation *ToolObservation `json:"-"`
 
+	// DocumentFields is transient, content-free evidence from native field discovery.
+	// It grants no write/approval authority and is not canonical or model context.
+	DocumentFields DocumentFieldsObservation `json:"-"`
+
 	Control  ToolControl  `json:"control,omitzero"`
 	Delivery ToolDelivery `json:"delivery,omitzero"`
+}
+
+// DocumentFieldsObservation counts the schema read by the tool, independently
+// of a potentially smaller result window. It does not prove model understanding.
+// Scalar fields keep the originating observation independent of hook copies.
+type DocumentFieldsObservation struct {
+	Operation       string
+	SourceSHA256    string
+	SchemaFields    int
+	ReturnedFields  int
+	RequiredFields  int
+	ValuesPresent   int
+	DefaultsPresent int
 }
 
 type ToolContextInput struct {

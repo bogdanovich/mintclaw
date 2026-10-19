@@ -775,12 +775,13 @@ func runtimeEventRecord(
 			)
 		}
 		payload = diagnostictrace.ToolPayload{
-			Tool:          value.Tool,
-			ResultHash:    value.ResultHash,
-			Status:        "completed",
-			Executed:      true,
-			IsError:       value.IsError,
-			ResultPreview: resultPreview,
+			Tool:           value.Tool,
+			ResultHash:     value.ResultHash,
+			Status:         "completed",
+			Executed:       true,
+			IsError:        value.IsError,
+			ResultPreview:  resultPreview,
+			DocumentFields: diagnosticDocumentFields(value),
 		}
 		toolCallID = firstNonEmptyString(toolCallID, value.ToolCallID)
 		toolCallGeneration = firstNonEmptyString(toolCallGeneration, value.ToolCallGeneration)

@@ -88,6 +88,21 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		discoveryProjection.Mapping == nil || len(discoveryProjection.Mapping.CandidateFields) != 1 {
 		t.Fatalf("discover projection = %#v result=%#v", discoveryProjection, discovered)
 	}
+	wantRead := toolshared.DocumentFieldsObservation{
+		Operation: "form.discover", SourceSHA256: schema.SourceSHA256,
+		SchemaFields: 1, ReturnedFields: 1, RequiredFields: 1,
+	}
+	if discovered.DocumentFields != wantRead {
+		t.Fatalf("native discovery observation = %#v", discovered.DocumentFields)
+	}
+	windowed := tool.Execute(
+		workflowToolContext(t, "execution-discover-window", "call-discover-window", []string{sourceRef}),
+		map[string]any{"action": "form", "form_action": "discover", "source": sourceRef, "pages": []int{2}},
+	)
+	wantRead.ReturnedFields = 0
+	if windowed.IsError || windowed.DocumentFields != wantRead {
+		t.Fatalf("empty result window lost native schema observation: %#v", windowed)
+	}
 
 	missingDiscovery := tool.Execute(
 		workflowToolContext(t, "execution-start-no-discovery", "call-start-no-discovery", []string{sourceRef}),

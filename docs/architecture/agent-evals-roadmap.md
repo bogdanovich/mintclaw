@@ -68,6 +68,13 @@ actual search-promotion controls replace the previous unusable tool allowlist; b
 probes or preparation effects. This prerequisite does not qualify source inspection, change the empty case, or
 authorize replay of its retained used profile. Its source-use evidence repair remains mandatory.
 
+The native field-read producer adds only content-free, source-SHA-bound `fields`/`form.discover` observations to
+opt-in existing diagnostic traces. Complete schema counts remain distinct from bounded returned windows; hook
+responses and unsuccessful invocations cannot invent a read. This is a producer prerequisite, not a new eval
+verdict: a follow-up consumer must reuse native trace privacy/integrity/routed-scope checks, add a fixture-bound
+hard check and no-document negatives, then run a new versioned empty-fields experiment. Do not upgrade the old
+pass, replay its used profile, or substitute successful `capabilities`/inspect-only calls for field use.
+
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
 
