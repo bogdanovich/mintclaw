@@ -45,7 +45,10 @@ func TestBrowserLoginToolUsesAuthenticatedOwnerAndOnlyAliasReferences(t *testing
 	tool := NewBrowserLoginTool(browserToolTestConfig(), source)
 	ctx := browserToolTestContext()
 	result := tool.Execute(ctx, credentialBrowserToolArguments())
-	var output browser.CredentialLoginResult
+	var output struct {
+		browser.CredentialLoginResult
+		ReceiptID string `json:"receipt_id"`
+	}
 	if result == nil || json.Unmarshal([]byte(result.ForLLM), &output) != nil ||
 		output.Alias != "ebay" || output.Outcome != "logged_in" || source.calls != 1 {
 		t.Fatal("alias login did not return its fixed public result")
@@ -69,6 +72,9 @@ func TestBrowserLoginToolUsesAuthenticatedOwnerAndOnlyAliasReferences(t *testing
 		audit.Metadata["invocation_id"] == "" {
 		t.Fatal("login receipt did not describe its confirmed alias operation")
 	}
+	if output.ReceiptID == "" || output.ReceiptID != audit.Metadata["invocation_id"] {
+		t.Fatal("confirmed login did not expose its runtime-owned receipt ID for objective reporting")
+	}
 	second := tool.Execute(ctx, credentialBrowserToolArguments())
 	if len(second.WriteAudit) != 1 ||
 		second.WriteAudit[0].Metadata["invocation_id"] == audit.Metadata["invocation_id"] {
@@ -79,6 +85,7 @@ func TestBrowserLoginToolUsesAuthenticatedOwnerAndOnlyAliasReferences(t *testing
 func TestBrowserLoginToolDoesNotCertifyUnconfirmedLogin(t *testing.T) {
 	for _, outcome := range []string{
 		"approval_required", "handoff_required", "outcome_unknown", "denied", "failed",
+		"submitted", "unverified", "found", "not_found", "choice_required", "unavailable",
 	} {
 		t.Run(outcome, func(t *testing.T) {
 			source := &credentialBrowserToolFixture{
@@ -86,7 +93,11 @@ func TestBrowserLoginToolDoesNotCertifyUnconfirmedLogin(t *testing.T) {
 			}
 			result := NewBrowserLoginTool(browserToolTestConfig(), source).
 				Execute(browserToolTestContext(), credentialBrowserToolArguments())
-			if result == nil || len(result.WriteAudit) != 0 {
+			var output struct {
+				ReceiptID string `json:"receipt_id"`
+			}
+			if result == nil || len(result.WriteAudit) != 0 ||
+				json.Unmarshal([]byte(result.ForLLM), &output) != nil || output.ReceiptID != "" {
 				t.Fatal("unconfirmed login acquired an action receipt")
 			}
 		})
@@ -94,7 +105,9 @@ func TestBrowserLoginToolDoesNotCertifyUnconfirmedLogin(t *testing.T) {
 }
 
 func TestBrowserLoginToolRejectsValuesAndUnqualifiedRuntime(t *testing.T) {
-	for _, mode := range []string{"extra-password", "missing-ref", "invalid-generation", "disabled", "private-outcome"} {
+	for _, mode := range []string{
+		"extra-password", "extra-receipt", "missing-ref", "invalid-generation", "disabled", "private-outcome",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			source := &credentialBrowserToolFixture{
 				credentialAvailable: true, result: browser.CredentialLoginResult{Outcome: "logged_in"},
@@ -104,6 +117,8 @@ func TestBrowserLoginToolRejectsValuesAndUnqualifiedRuntime(t *testing.T) {
 			switch mode {
 			case "extra-password":
 				args["password"] = "synthetic-private-tool-value"
+			case "extra-receipt":
+				args["receipt_id"] = "model-supplied-receipt"
 			case "missing-ref":
 				delete(args, "password_ref")
 			case "invalid-generation":

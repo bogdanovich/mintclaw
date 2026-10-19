@@ -350,3 +350,43 @@ that principal or replay the failed attempt. Restart invalidated previous
 grants, so a new phone approval may be needed within the two-hour window. The
 twenty-hour grant still begins at approval. Deployment and synthetic TOTP
 acceptance do not certify the real account.
+
+## Confirmed Facebook login and its public receipt
+
+The next owner command on `77c79cd5` ran in the normal authenticated chat,
+task `subagent-50c5d148-8239-4a73-86b4-e3d0e0155ecb`, generation
+`fd6e57ce-4a39-47fd-9218-7581e395582a`. Origin trace
+`trace-turn-8b45afd537769111c1d0b877` suspended after closing the idle browser.
+Phone approval resolved the wait, with exactly one continuation. Trace
+`trace-turn-90dbe1f3de5128398f244476` opened a fresh browser, found the Login
+by Website, privately submitted credentials and the requested stored TOTP,
+then verified `logged_in` against a fresh authenticated control. Facebook
+showed its logged-in page and Log out. Native browser closure returned closed.
+
+The traces contain 65 and 120 records, matching source `77c79cd5`, schema
+`mintclaw.diagnostic_trace.v1`, `redacted_content` /
+`mintclaw.config_filter.v1`, and no truncation. In the continuation, protected
+credentials returned submitted at record 43, TOTP submitted at 85, fresh
+verification logged_in at 106, and native closure closed at 113. This is real
+authentication and stored-TOTP evidence; it is not evidence for SMS handoff.
+
+The delivered task nevertheless ended failed with a partial objective report:
+the model explicitly reported that `browser_login` had not supplied the
+confirmation receipt ID. The tool already created a successful trusted login
+audit, but its public result hid that audit's opaque ID. Runtime recovery
+deliberately preserves an honest partial report instead of promoting it.
+The historical task and its report remain unchanged; no real submission is
+replayed to repair that report.
+
+The correction adds `receipt_id` to confirmed `logged_in` tool results, using
+the same runtime-generated ID as the existing trusted audit. It conveys no
+credential authority or secret values. All other outcomes remain receipt-free;
+the model cannot supply its own receipt ID, and submission alone still cannot
+certify authentication. Objective validation and partial/blocked handling are
+unchanged. Tool regressions require exact public/audit ID equality, and the
+actual OpenAI-compatible/Codex website fixtures require a visible ID after
+fresh verification, including delayed phone continuation.
+
+At this stage the receipt correction still requires reviewed merge, deployment
+and a fresh normal-chat task that completes its formal report. The successful
+real authentication above does not by itself qualify that reporting fix.

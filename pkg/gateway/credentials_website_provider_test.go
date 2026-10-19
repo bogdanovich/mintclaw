@@ -83,10 +83,15 @@ func (script *credentialWebsiteProviderScript) next(phase int, decode func(any) 
 		args["credential_id"] = script.credentialID
 		return "browser_login", args, nil
 	case 8:
-		if !decode(&script.login) || script.login.Outcome != "logged_in" ||
-			script.login.CredentialID != script.credentialID {
+		var confirmed struct {
+			browser.CredentialLoginResult
+			ReceiptID string `json:"receipt_id"`
+		}
+		if !decode(&confirmed) || confirmed.Outcome != "logged_in" ||
+			confirmed.CredentialID != script.credentialID || confirmed.ReceiptID == "" {
 			return failed()
 		}
+		script.login = confirmed.CredentialLoginResult
 		return observe()
 	case 9:
 		var observation browser.Observation

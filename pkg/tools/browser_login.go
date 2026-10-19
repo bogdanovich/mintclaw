@@ -49,6 +49,7 @@ func (*BrowserLoginTool) Description() string {
 		"one website match is selected automatically. Omit account_alias for discovery. " +
 		"After submitted, observe the page for the next step or errors. To confirm authentication, expose a " +
 		"visible Log out/Sign out control and use verify with its authenticated_ref; a submit is not proof of login. " +
+		"Confirmed logged_in returns a receipt_id for reporting the completed external action. " +
 		"If an unsupported challenge appears, hand off without guessing codes or repeating failed logins. " +
 		"Values stay inside the trusted runtime. Phone approval is required when no current vault grant exists. " +
 		"Never supply passwords or tokens. Do not replay an outcome_unknown submission. " +
@@ -162,7 +163,14 @@ func (tool *BrowserLoginTool) Execute(ctx context.Context, args map[string]any) 
 		(result.Outcome == "logged_in" && request.Fields.Step != "verify") {
 		return denied()
 	}
-	output := tool.runtime.result(result)
+	receiptID := ""
+	if result.Outcome == "logged_in" {
+		receiptID = "browser_login_" + uuid.NewString()
+	}
+	output := tool.runtime.result(struct {
+		browser.CredentialLoginResult
+		ReceiptID string `json:"receipt_id,omitempty"`
+	}{CredentialLoginResult: result, ReceiptID: receiptID})
 	if result.Outcome == "approval_required" && result.ApprovalWait != nil {
 		if _, ok := tool.runtime.source.(BrowserCredentialApprovalSource); !ok ||
 			!result.ApprovalWait.Deadline.After(time.Now()) {
@@ -183,13 +191,13 @@ func (tool *BrowserLoginTool) Execute(ctx context.Context, args map[string]any) 
 
 	if result.Outcome == "logged_in" {
 		// Only the private consumer's confirmed outcome certifies the action.
-		// Keep the public result alias-only; normal runtime receipt recovery
-		// supplies this opaque ID when a declared action needs to claim it.
+		// The public opaque ID and trusted audit must name the same evidence;
+		// reporting it conveys no credential authority or private values.
 		output.WithWriteAudit(toolshared.WriteAuditEntry{
 			Kind: taskresult.ObjectiveKindExternalAction, Target: "account:" + result.Alias,
 			Action: "login", Tool: tool.Name(), Summary: "Account login confirmed.",
 			Metadata: map[string]string{
-				"invocation_id": "browser_login_" + uuid.NewString(), "outcome": result.Outcome,
+				"invocation_id": receiptID, "outcome": result.Outcome,
 			},
 		})
 	}
