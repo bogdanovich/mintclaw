@@ -743,6 +743,46 @@ func TestNormalizeOutboundMediaMessageValidatesRecoveryPrerequisite(t *testing.T
 	}
 }
 
+func TestNormalizeOutboundMediaRecoveryBatch(t *testing.T) {
+	first := OutboundRecovery{
+		Kind: OutboundRecoveryBrowserScreenshot, ArtifactRef: "transfer-artifact://first", MediaRef: "media://first",
+		WorkspaceID: "workspace", AgentID: "browser", ActorID: "actor", RouteID: "route",
+		SessionID: "closed-session", ToolCallID: "capture-first",
+	}
+	second := first
+	second.ArtifactRef, second.MediaRef, second.ToolCallID = "transfer-artifact://second", "media://second", "capture-second"
+	first.Additional = []OutboundRecovery{second}
+	parts := []MediaPart{{Type: "image", Ref: first.MediaRef}, {Type: "image", Ref: second.MediaRef}}
+	message, err := NormalizeOutboundMediaMessage(OutboundMediaMessage{Parts: parts, Recovery: &first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Additional[0].ActorID = "mutated"
+	if message.Recovery.Additional[0].ActorID != "actor" {
+		t.Fatal("normalized batch aliases caller memory")
+	}
+	for _, mutate := range []func(*OutboundRecovery){
+		func(r *OutboundRecovery) { r.Additional[0].Additional = []OutboundRecovery{second} },
+		func(r *OutboundRecovery) { r.Additional[0].MediaRef = r.MediaRef },
+		func(r *OutboundRecovery) { r.Additional[0].ArtifactRef = r.ArtifactRef },
+		func(r *OutboundRecovery) { r.Additional[0].MediaRef = "media://not-attached" },
+		func(r *OutboundRecovery) { r.Additional[0].ActorID = "another-actor" },
+		func(r *OutboundRecovery) { r.Additional[0].RouteID = "another-route" },
+		func(r *OutboundRecovery) { r.Additional[0].WorkspaceID = "another-workspace" },
+		func(r *OutboundRecovery) { r.Additional[0].Kind = OutboundRecoveryDocumentFill },
+		func(r *OutboundRecovery) { r.Additional = make([]OutboundRecovery, 16) },
+	} {
+		candidate := *message.Recovery
+		candidate.Additional = append([]OutboundRecovery(nil), message.Recovery.Additional...)
+		mutate(&candidate)
+		if _, err = NormalizeOutboundMediaMessage(
+			OutboundMediaMessage{Parts: parts, Recovery: &candidate},
+		); err == nil {
+			t.Fatalf("invalid batch accepted: %#v", candidate)
+		}
+	}
+}
+
 func TestNormalizeOutboundMediaMessageValidatesDocumentRecovery(t *testing.T) {
 	recovery := &OutboundRecovery{
 		Kind: OutboundRecoveryDocumentFill, MediaRef: "media://filled-document",

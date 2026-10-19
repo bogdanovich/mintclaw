@@ -70,6 +70,25 @@ func NormalizeOutboundMessage(msg OutboundMessage) (OutboundMessage, error) {
 }
 
 func validateOutboundRecovery(recovery OutboundRecovery, parts []MediaPart) error {
+	if len(recovery.Additional) > 15 {
+		return errors.New("too many outbound recovery prerequisites")
+	}
+	seen := map[string]bool{recovery.MediaRef: true}
+	artifacts := map[string]bool{recovery.ArtifactRef: true}
+	for _, additional := range recovery.Additional {
+		if len(additional.Additional) != 0 || seen[additional.MediaRef] ||
+			artifacts[additional.ArtifactRef] || additional.WorkspaceID != recovery.WorkspaceID ||
+			additional.ActorID != recovery.ActorID || additional.RouteID != recovery.RouteID ||
+			(recovery.Kind != OutboundRecoveryBrowserScreenshot && recovery.Kind != OutboundRecoveryBrowserDownload) ||
+			(additional.Kind != OutboundRecoveryBrowserScreenshot && additional.Kind != OutboundRecoveryBrowserDownload) {
+			return errors.New("invalid outbound recovery batch")
+		}
+		if err := validateOutboundRecovery(additional, parts); err != nil {
+			return err
+		}
+		seen[additional.MediaRef] = true
+		artifacts[additional.ArtifactRef] = true
+	}
 	if !strings.HasPrefix(recovery.MediaRef, "media://") {
 		return errors.New("invalid outbound recovery prerequisite")
 	}
@@ -201,11 +220,10 @@ func NormalizeOutboundMediaMessage(msg OutboundMediaMessage) (OutboundMediaMessa
 	}
 	msg.Metadata = NormalizeOutboundMetadata(msg.Metadata)
 	if msg.Recovery != nil {
-		recovery := *msg.Recovery
-		msg.Recovery = &recovery
-		if recoveryErr := validateOutboundRecovery(recovery, msg.Parts); recoveryErr != nil {
+		if recoveryErr := validateOutboundRecovery(*msg.Recovery, msg.Parts); recoveryErr != nil {
 			return msg, recoveryErr
 		}
+		msg.Recovery = taskresult.CloneArtifactRecovery(msg.Recovery)
 	}
 	msg.TraceScopes, err = NormalizeTraceScopes(msg.TraceScopes)
 	if len(msg.TraceScopes) == 0 {

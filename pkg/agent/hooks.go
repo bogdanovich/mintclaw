@@ -1147,8 +1147,7 @@ func cloneToolResult(result *toolshared.ToolResult) *toolshared.ToolResult {
 			Media: append([]bus.MediaPart(nil), result.Delivery.Outbound.Media...),
 		}
 		if result.Delivery.Outbound.Recovery != nil {
-			recovery := *result.Delivery.Outbound.Recovery
-			cloned.Delivery.Outbound.Recovery = &recovery
+			cloned.Delivery.Outbound.Recovery = taskresult.CloneArtifactRecovery(result.Delivery.Outbound.Recovery)
 		}
 	}
 	cloned.Deliverable = taskresult.CloneDeliverable(result.Deliverable)

@@ -417,6 +417,16 @@ func (tr *ToolResult) ContentForLLM() string {
 		}
 	}
 	content = appendUniqueLLMNote(content, tr.deliverableNoteForLLM())
+	if !tr.Delivery.IsFinalHandled() && tr.Deliverable != nil {
+		for _, artifact := range tr.Deliverable.Artifacts {
+			if !artifact.Delivered && artifact.Recovery != nil {
+				content = appendUniqueLLMNote(content,
+					"The runtime retained an attachment for final-result delivery. Return the complete task report; "+
+						"do not search for a local path, treat opaque artifact references as paths, or resend this attachment.")
+				break
+			}
+		}
+	}
 	if content != "" {
 		return content
 	}
@@ -444,6 +454,9 @@ func deliverableArtifactTags(deliverable *taskresult.Deliverable) []string {
 	seen := make(map[string]struct{}, len(deliverable.Artifacts))
 	tags := make([]string, 0, len(deliverable.Artifacts))
 	for _, artifact := range deliverable.Artifacts {
+		if artifact.Recovery != nil {
+			continue
+		}
 		path := strings.TrimSpace(artifact.LocalPath)
 		if path == "" && strings.HasPrefix(artifact.Ref, "file:") {
 			path = strings.TrimSpace(strings.TrimPrefix(artifact.Ref, "file:"))
@@ -484,7 +497,11 @@ func (tr *ToolResult) deliverableNoteForLLM() string {
 	if tr == nil || tr.Deliverable == nil {
 		return ""
 	}
-	payload := tr.Deliverable
+	payload := taskresult.CloneDeliverable(tr.Deliverable)
+	for index := range payload.Artifacts {
+		// Runtime delivery proofs survive task persistence, not model context.
+		payload.Artifacts[index].Recovery = nil
+	}
 	if strings.TrimSpace(payload.Text) == "" &&
 		len(payload.Artifacts) == 0 &&
 		len(payload.Metadata) == 0 &&

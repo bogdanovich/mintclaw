@@ -50,6 +50,32 @@ func TestDeliverableJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCloneDeliverableRetainsPrivateRecoveryWithoutPathsOrAliases(t *testing.T) {
+	original := &Deliverable{Artifacts: []Artifact{{
+		Ref: "media://retained", LocalPath: "/private/runtime/image.png",
+		Recovery: &ArtifactRecovery{
+			Kind: "browser_screenshot_claim", MediaRef: "media://retained",
+			Additional: []ArtifactRecovery{{MediaRef: "media://second"}},
+		},
+	}}}
+	clone := CloneDeliverable(original)
+	if clone.Artifacts[0].LocalPath != "" || clone.Artifacts[0].Recovery == original.Artifacts[0].Recovery {
+		t.Fatalf("clone exposed a path or aliased private recovery: %#v", clone)
+	}
+	clone.Artifacts[0].Recovery.Additional[0].MediaRef = "mutated"
+	if original.Artifacts[0].Recovery.Additional[0].MediaRef != "media://second" {
+		t.Fatal("clone aliases the recovery batch")
+	}
+	encoded, err := json.Marshal(clone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recovered Deliverable
+	if err = json.Unmarshal(encoded, &recovered); err != nil || recovered.Artifacts[0].Recovery == nil {
+		t.Fatalf("durable artifact recovery lost: %#v, %v", recovered, err)
+	}
+}
+
 func TestCloneOutcomeDetachesNotNeededItems(t *testing.T) {
 	original := &Outcome{
 		Status: OutcomeSucceeded, NotNeededItems: []string{"authentication handoff"}, UserSummary: "Already signed in.",

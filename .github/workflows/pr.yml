@@ -237,6 +237,15 @@ jobs:
           go test -count=1 -race -tags goolm,stdjson
           -run '^TestExternalWait' ./pkg/agent ./pkg/tools
 
+      - name: Run delegated browser attachment race regressions
+        run: >-
+          go test -count=1 -race -tags goolm,stdjson
+          -run '^(TestDelegateRetainedScreenshot|TestProtectedSuppressedMedia|TestRetainedMedia|TestUnavailableRetainedMedia|TestGatewayOutboundRecovery|TestCloneDeliverableRetainsPrivateRecovery|TestRetainedAttachmentModelNote)'
+          ./pkg/agent
+          ./pkg/gateway
+          ./pkg/taskresult
+          ./pkg/tools/shared
+
       - name: Run critical runtime race suites
         run: >-
           go test -count=1 -race -tags goolm,stdjson
