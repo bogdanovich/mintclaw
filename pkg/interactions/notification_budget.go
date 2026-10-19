@@ -1,6 +1,7 @@
 package interactions
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -30,6 +31,7 @@ type notificationBudget struct {
 	mu    sync.Mutex
 	count int
 	bytes int
+	idle  chan struct{}
 }
 
 func (b *notificationBudget) check(count, bytes, maxCount, maxBytes int) error {
@@ -51,6 +53,9 @@ func (b *notificationBudget) reserve(count, bytes, maxCount, maxBytes int) error
 	if err := b.checkLocked(count, bytes, maxCount, maxBytes); err != nil {
 		return err
 	}
+	if b.count == 0 && count > 0 {
+		b.idle = make(chan struct{})
+	}
 	b.count += count
 	b.bytes += bytes
 	return nil
@@ -61,6 +66,9 @@ func (b *notificationBudget) release(count, bytes int) {
 	defer b.mu.Unlock()
 	b.count -= count
 	b.bytes -= bytes
+	if b.count == 0 && count > 0 {
+		close(b.idle)
+	}
 }
 
 func (b *notificationBudget) usage() (int, int) {
@@ -80,14 +88,33 @@ type notificationBatch struct {
 	observers []*observerDelivery
 	items     []*queuedObservation
 	bytes     int
+	released  bool
 }
 
 func (r *Registry) newNotificationBatchLocked() *notificationBatch {
+	r.compactObserversLocked()
 	observers := make([]*observerDelivery, 0, len(r.observers))
-	for _, entry := range r.observers {
-		observers = append(observers, entry.delivery)
+	if !r.closed.Load() {
+		for _, delivery := range r.observers {
+			if delivery.beginAdmission() {
+				observers = append(observers, delivery)
+			}
+		}
 	}
 	return &notificationBatch{registry: r, observers: observers}
+}
+
+// Each batch owns a producer admission until it publishes committed work or
+// rolls back. Unsubscribe can therefore settle without taking the store mutex,
+// and cannot report idle while an accepted producer is still persisting.
+func (b *notificationBatch) releaseAdmissions() {
+	if b.released {
+		return
+	}
+	b.released = true
+	for _, delivery := range b.observers {
+		delivery.finishWork(1)
+	}
 }
 
 func (b *notificationBatch) append(event Event, record Record) error {
@@ -132,6 +159,7 @@ func (b *notificationBatch) append(event Event, record Record) error {
 
 func (r *Registry) commitEventsLocked(events []Event) (bool, error) {
 	batch := r.newNotificationBatchLocked()
+	defer batch.releaseAdmissions()
 	for _, event := range events {
 		if err := batch.append(event, r.records[event.InteractionID]); err != nil {
 			return false, err
@@ -141,6 +169,7 @@ func (r *Registry) commitEventsLocked(events []Event) (bool, error) {
 }
 
 func (r *Registry) commitNotificationBatchLocked(batch *notificationBatch) (bool, error) {
+	defer batch.releaseAdmissions()
 	if err := r.notificationBudget.reserve(len(batch.items), batch.bytes,
 		r.options.MaxPendingObservations, r.options.MaxPendingObservationBytes); err != nil {
 		return false, err
@@ -148,6 +177,9 @@ func (r *Registry) commitNotificationBatchLocked(batch *notificationBatch) (bool
 	if err := r.saveLocked(); err != nil {
 		r.notificationBudget.release(len(batch.items), batch.bytes)
 		return false, err
+	}
+	for _, delivery := range batch.observers {
+		delivery.addWork(len(batch.items))
 	}
 	r.notifications = append(r.notifications, batch.items...)
 	if len(batch.items) == 0 || r.notifying {
@@ -173,5 +205,24 @@ func (r *Registry) drainNotifications() {
 			delivery.enqueue(queued)
 		}
 		queued.done()
+	}
+}
+
+func (b *notificationBudget) wait(ctx context.Context) error {
+	b.mu.Lock()
+	if b.count == 0 {
+		b.mu.Unlock()
+		return nil
+	}
+	idle := b.idle
+	b.mu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		if count, _ := b.usage(); count == 0 {
+			return nil
+		}
+		return ctx.Err()
 	}
 }

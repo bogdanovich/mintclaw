@@ -75,7 +75,11 @@ func TestRegistryNotificationByteAdmissionAndGatedRecovery(t *testing.T) {
 
 func TestRegistryNotificationBudgetConcurrentAdmission(t *testing.T) {
 	_, clock, _ := newTestRegistry(t)
-	registry := NewRegistryWithOptions("", Options{Now: clock.Now, MaxPendingObservations: 32})
+	// Allow queued writers to reach notification admission under race-instrumented load.
+	registry := NewRegistryWithOptions(
+		"",
+		Options{Now: clock.Now, MaxPendingObservations: 32, StoreLockTimeout: 10 * time.Second},
+	)
 	var sequences []uint64
 	_, activate, unsubscribe := registry.SubscribeSnapshot(
 		func(o EventObservation) { sequences = append(sequences, o.Event.CommitSequence) },
