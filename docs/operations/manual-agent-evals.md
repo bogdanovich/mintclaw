@@ -210,7 +210,10 @@ capture are refused. These are native capture/retention bounds, not a hard disk,
 Fresh owned admission still refuses any existing workspace state, including an old trace directory or alias.
 
 After stopping/reaping the owned child, the existing bounded raw-profile privacy observation includes these files,
-even for general cases without private facts. No trace is decoded, projected into judge context or exempted from
+even for general cases without private facts or when the launched child fails readiness/admission. Inspection uses
+the validated owned profile, not a successfully admitted runtime. Failed startup remains unpublished/incomplete;
+a known leak additionally returns the static private-evidence error, never the value. No trace is decoded, projected
+into judge context or exempted from
 privacy inspection by this opt-in. Known leaks fail; incomplete raw inspection remains inconclusive. Retain private
 files under the same evidence policy and never restart the used profile.
 

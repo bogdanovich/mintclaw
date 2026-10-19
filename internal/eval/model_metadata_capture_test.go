@@ -133,7 +133,7 @@ func TestOwnedModelMetadataNeverAdoptsExistingTraceState(t *testing.T) {
 }
 
 func TestOwnedModelMetadataScansPostStopFilesWithoutPrivateFacts(t *testing.T) {
-	for _, mode := range []string{"metadata_safe", "metadata_leak", "metadata_early_exit"} {
+	for _, mode := range []string{"metadata_safe", "metadata_leak", "metadata_early_exit", "metadata_startup_leak"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := newOwnedGatewayFixture(t, mode)
 			fixture.preset.CaptureModelMetadata = true
@@ -169,6 +169,15 @@ func TestOwnedModelMetadataScansPostStopFilesWithoutPrivateFacts(t *testing.T) {
 			if mode == "metadata_early_exit" {
 				if !errors.Is(err, ErrOwnedGateway) {
 					t.Fatal("startup failure was not retained", err)
+				}
+				return
+			}
+			if mode == "metadata_startup_leak" {
+				if !errors.Is(err, ErrOwnedGateway) || !errors.Is(err, ErrPrivateEvidence) || result.Complete ||
+					result.Verdict != Fail || result.PrivateSurfaces == nil || !result.PrivateSurfaces.LeakObserved ||
+					result.TargetLifecycle == nil || result.TargetLifecycle.Admitted ||
+					!result.TargetLifecycle.ExitObserved || pid.ProcessRunning(result.TargetLifecycle.PID) {
+					t.Fatal("pre-readiness capture escaped post-stop privacy inspection", err)
 				}
 				return
 			}

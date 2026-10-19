@@ -75,6 +75,12 @@ func runOwnedGatewayTestChild() int {
 	if err != nil {
 		return 8
 	}
+	if control.Mode == "metadata_startup_leak" {
+		if writeOwnedTestMetadata(cfg, control.Mode) != nil {
+			return 8
+		}
+		return 9
+	}
 	temporary := filepath.Join(home, ownedGatewayTempDirectory)
 	if os.TempDir() != temporary || os.Getenv("TMPDIR") != temporary || os.Getenv("TMP") != temporary ||
 		os.Getenv("TEMP") != temporary {
@@ -291,13 +297,7 @@ func runOwnedGatewayTestChild() int {
 		}
 	}
 	if strings.HasPrefix(control.Mode, "metadata_") {
-		traceRoot := filepath.Join(cfg.WorkspacePath(), "state", "diagnostics", "traces")
-		data := []byte(`{"metadata":"public"}`)
-		if control.Mode == "metadata_leak" {
-			data = []byte(`{"metadata":"\u0073ynthetic-preparation-api-key-not-a-live-credential"}`)
-		}
-		if !cfg.Diagnostics.TraceCapture.Enabled || os.MkdirAll(traceRoot, 0o700) != nil ||
-			os.WriteFile(filepath.Join(traceRoot, "post-stop.json"), data, 0o600) != nil {
+		if writeOwnedTestMetadata(cfg, control.Mode) != nil {
 			return 8
 		}
 	}
@@ -305,6 +305,18 @@ func runOwnedGatewayTestChild() int {
 		return 9
 	}
 	return 0
+}
+
+func writeOwnedTestMetadata(cfg *config.Config, mode string) error {
+	traceRoot := filepath.Join(cfg.WorkspacePath(), "state", "diagnostics", "traces")
+	data := []byte(`{"metadata":"public"}`)
+	if mode == "metadata_leak" || mode == "metadata_startup_leak" {
+		data = []byte(`{"metadata":"\u0073ynthetic-preparation-api-key-not-a-live-credential"}`)
+	}
+	if !cfg.Diagnostics.TraceCapture.Enabled || os.MkdirAll(traceRoot, 0o700) != nil {
+		return ErrOwnedGateway
+	}
+	return os.WriteFile(filepath.Join(traceRoot, "post-stop.json"), data, 0o600)
 }
 
 func newOwnedGatewayFixture(t *testing.T, mode string) *admissionFixture {
