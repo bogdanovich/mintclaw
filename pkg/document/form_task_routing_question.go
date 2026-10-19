@@ -23,6 +23,16 @@ const (
 	MaxFormTaskAnswerBytes   = 8 * 1024
 )
 
+// IsFormTaskRouteQuestionBinding is a routing hint, not an authorization check.
+// The protected sink still validates the sealed binding and current native state.
+func IsFormTaskRouteQuestionBinding(binding *interactions.ProtectedAnswerBinding) bool {
+	if binding == nil || binding.Namespace != FormProtectedAnswerNamespace {
+		return false
+	}
+	envelope, err := decodeFormProtectedBindingEnvelope(binding.Token)
+	return err == nil && envelope.Kind == formTaskQuestionBindingKind
+}
+
 type formTaskRouteQuestion struct {
 	Round    int                                 `json:"round"`
 	Revision int64                               `json:"revision"`

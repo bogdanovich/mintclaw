@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/commands"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/document"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -332,6 +333,13 @@ func (al *AgentLoop) classifyProjectedInteractionAnswer(
 			continue
 		}
 		promptIdentity := al.projectedInteractionPromptIdentity(record, responseMessageID)
+		if shortID != "" && responseMessageID == "" && msg.Context.Interaction.Response != "" &&
+			document.IsFormTaskRouteQuestionBinding(record.ProtectedAnswer) {
+			// Ingress durably binds a bare task-scope reply by exact ID. Like
+			// /answer, it has no platform reply-to message; owner and native
+			// binding checks below still authorize and fence the answer.
+			promptIdentity = projectedInteractionPromptMatch
+		}
 		if promptIdentity == projectedInteractionPromptMismatch {
 			continue
 		}
