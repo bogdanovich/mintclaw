@@ -616,6 +616,7 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 			messageID:              message.LiveToolContextID,
 			durableContent:         durable.Content,
 			durableMedia:           append([]string(nil), durable.Media...),
+			durableAttachments:     append([]providers.Attachment(nil), durable.Attachments...),
 			requiresDocumentVision: requiresDocumentVision,
 		})
 		return
@@ -654,6 +655,7 @@ func consumeLiveToolContextMessages(
 			}
 			message.Content = projection.durableContent
 			message.Media = append([]string(nil), projection.durableMedia...)
+			message.Attachments = append([]providers.Attachment(nil), projection.durableAttachments...)
 			message.LiveToolContextID = ""
 		}
 	}

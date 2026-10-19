@@ -67,18 +67,27 @@ func TestDocumentFormTaskHandoffReadmitsOnlyNewPDFSelectorsAndMedia(t *testing.T
 		toolshared.ToolDocumentLocalPathAllowed(ctx, "/srv/OLD_PRIVATE_FORM.pdf") {
 		t.Fatal("new document selectors were not exact live tool authority")
 	}
-	messages := pipeline.resolveDocumentTurnMedia([]providers.Message{
+	messages := pipeline.resolveFollowupMedia([]providers.Message{
 		{Role: "user", Content: ts.userMessage},
 		{Role: "tool", ToolCallID: "native-task-handoff", Content: "new task", Media: []string{ref}},
 	}, ts, config.DefaultMaxMediaSize)
 	if len(messages[1].Media) != 0 || len(messages[1].Attachments) != 1 ||
 		messages[1].Attachments[0].Type != "document" ||
 		!strings.Contains(messages[1].Content, ref) ||
+		strings.Contains(messages[1].Content, path) ||
 		strings.Contains(messages[1].Content, "NEW_PRIVATE_SOURCE") {
 		t.Fatal("live handoff PDF was omitted or treated as an image rather than a document")
 	}
 	encoded, err := json.Marshal(&toolshared.ToolResult{ForLLM: "safe metadata", ContextInput: input})
 	if err != nil || strings.Contains(string(encoded), "PRIVATE_") || strings.Contains(string(encoded), ref) {
 		t.Fatal("new input handoff escaped ordinary result JSON")
+	}
+	messages[1].LiveToolContextID = "native-live-input"
+	consumeLiveToolContextMessages(messages, []liveToolContextProjection{{
+		toolCallID: "native-task-handoff", messageID: "native-live-input", durableContent: "safe native metadata",
+	}})
+	if len(messages[1].Attachments) != 0 || len(messages[1].Media) != 0 ||
+		messages[1].Content != "safe native metadata" {
+		t.Fatal("consumed live PDF descriptor survived in the model transcript")
 	}
 }

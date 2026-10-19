@@ -373,3 +373,18 @@ func (p *Pipeline) resolveDocumentTurnMedia(
 		start,
 	)
 }
+
+// Tool media arrives after the initial user-input projection. Preserve PDF
+// identity before the generic resolver can replace it with a backing path.
+// Historical image resolution keeps its existing behavior.
+func (p *Pipeline) resolveFollowupMedia(
+	messages []providers.Message, ts *turnState, maxMediaSize int,
+) []providers.Message {
+	projected := projectDocumentAttachments(
+		messages,
+		promptCurrentTurnStart(messages, ts.userMessage, ts.media),
+		ts.documentProjections,
+		ts.documentRejections,
+	)
+	return resolveMediaRefs(projected, p.Context.MediaResolver, p.Context.CodingMedia, maxMediaSize)
+}
