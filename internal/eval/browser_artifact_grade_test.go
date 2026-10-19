@@ -130,7 +130,8 @@ func TestGradeBrowserArtifactRequiresActualRetainedFileWithoutTargetWork(t *test
 				if mode == "mode" {
 					perm = 0o644
 				}
-				if os.WriteFile(path, control.page.file, perm) != nil {
+				// Preserve the negative mode even under a restrictive caller umask.
+				if os.WriteFile(path, control.page.file, perm) != nil || os.Chmod(path, perm) != nil {
 					t.Fatal("file control unavailable")
 				}
 			}

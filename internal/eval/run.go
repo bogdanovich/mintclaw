@@ -82,27 +82,42 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		receipt := child.stopAndWait(cleanupCtx)
 		lifecycle = &receipt
 	}
+	observeOwnedSurfaces := func() {
+		if child == nil || privateSurfaces != nil || retainedFacts.values == nil && !preset.CaptureModelMetadata {
+			return
+		}
+		scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer scanCancel()
+		observation := observePrivateSurfaces(scanCtx, child.profile.home, retainedFacts.values,
+			child.profile.config.SensitiveDataReplacer(), retainedFacts.documents,
+			pendingBrowser.approvalKeyWitness(child.profile.home))
+		privateSurfaces = &observation
+	}
 	defer func() {
 		stopTarget()
 		pendingBrowser.close(lifecycle)
 		// Even report I/O failures must not discard the only private fact set
 		// before attempting the post-stop raw observation.
-		if options.StartTarget && retainedFacts.values != nil && privateSurfaces == nil {
-			scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer scanCancel()
-			observePrivateSurfaces(
-				scanCtx,
-				options.Home,
-				retainedFacts.values,
-				target.config.SensitiveDataReplacer(),
-				retainedFacts.documents,
-				pendingBrowser.approvalKeyWitness(options.Home),
-			)
-		}
+		observeOwnedSurfaces()
 		pendingPDF.close()
 		retainedFacts.clear()
 	}()
 	if err != nil {
+		stopTarget()
+		pendingBrowser.close(lifecycle)
+		observeOwnedSurfaces()
+		if privateSurfaces != nil {
+			if privateSurfaces.LeakObserved {
+				err = errors.Join(err, ErrPrivateEvidence)
+			}
+			// No run was admitted or published. Retain partial cleanup/privacy
+			// observations without fabricating an admitted runtime or success.
+			return RunReport{
+				Version: Version, Mode: "run", Verdict: combineVerdicts(Error, privateSurfaces.verdict()),
+				Usage: "unknown", Cleanup: "owned_gateway_startup_failed",
+				TargetLifecycle: lifecycle, PrivateSurfaces: privateSurfaces,
+			}, err
+		}
 		return RunReport{}, err
 	}
 	joinFixtureWatch := watchBrowserFixture(suiteCtx, target.config, fixtures, child, cancel)
@@ -204,16 +219,12 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	result.WorkspaceInputs.After = observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter)
 	stopTarget()
 	result.BrowserFixtures = pendingBrowser.close(lifecycle)
-	if options.StartTarget && retainedFacts.values != nil {
-		scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		observation := observePrivateSurfaces(scanCtx, home, retainedFacts.values, filter, retainedFacts.documents,
-			pendingBrowser.approvalKeyWitness(home))
-		scanCancel()
-		privateSurfaces = &observation
+	observeOwnedSurfaces()
+	if privateSurfaces != nil {
 		result.PrivateSurfaces = privateSurfaces
-		if observation.LeakObserved {
+		if privateSurfaces.LeakObserved {
 			result.Verdict = combineVerdicts(result.Verdict, Fail)
-		} else if observation.Code != "observed" {
+		} else if privateSurfaces.Code != "observed" {
 			result.Verdict = combineVerdicts(result.Verdict, Inconclusive)
 		}
 	}

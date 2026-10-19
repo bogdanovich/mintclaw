@@ -52,7 +52,8 @@ func TestPrivateInteractionKeyRequiresExactVerifiedNativeWitness(t *testing.T) {
 			case "short":
 				data = data[:31]
 			}
-			if mode != "missing" && os.WriteFile(file, data, permission) != nil {
+			// Preserve the negative mode even under a restrictive caller umask.
+			if mode != "missing" && (os.WriteFile(file, data, permission) != nil || os.Chmod(file, permission) != nil) {
 				t.Fatal("native key unavailable")
 			}
 			if mode == "alias" {

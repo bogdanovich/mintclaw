@@ -75,6 +75,7 @@ func targetLifecycleMode(receipt *TargetLifecycle) string {
 
 type ownedGateway struct {
 	command  *exec.Cmd
+	profile  preparedProfile
 	done     chan struct{}
 	err      error
 	log      *boundedGatewayLog
@@ -118,6 +119,7 @@ func startOwnedGatewayWithBrowser(
 	}
 	profile, err := readPreparedProfile(preset, home)
 	if err != nil || validateConversationProfile(profile.config, preset, profile.workspace) != nil ||
+		profile.config.Diagnostics.TraceCapture.Enabled != preset.CaptureModelMetadata ||
 		validateFreshOwnedProfile(profile) != nil ||
 		!browserFixtureMatches(profile.config, fixture) ||
 		!slices.Contains([]string{"warn", "error", "fatal"}, config.EffectiveGatewayLogLevel(profile.config)) {
@@ -286,7 +288,7 @@ func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGatew
 		_ = root.Remove(".eval-gateway-owner")
 		return nil, ErrOwnedGateway
 	}
-	child := &ownedGateway{command: command, done: make(chan struct{}), log: log}
+	child := &ownedGateway{command: command, profile: profile, done: make(chan struct{}), log: log}
 	go func() {
 		defer close(child.done)
 		child.err = command.Wait()

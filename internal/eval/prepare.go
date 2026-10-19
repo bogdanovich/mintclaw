@@ -27,17 +27,18 @@ var ErrPreparation = errors.New("eval: isolated profile preparation failed; insp
 const maxPreparedInputBytes = 1024 * 1024
 
 type Preparation struct {
-	Version            int    `json:"version"`
-	Outcome            string `json:"outcome"`
-	Home               string `json:"home"`
-	ConfigPath         string `json:"config_path"`
-	Workspace          string `json:"workspace"`
-	PresetPath         string `json:"preset_path"`
-	PublicConfigSHA256 string `json:"public_config_sha256,omitempty"`
-	WorkspaceFileCount int    `json:"workspace_file_count"`
-	RuntimeRun         bool   `json:"runtime_run"`
-	PDFJournalPrepared bool   `json:"pdf_journal_prepared,omitempty"`
-	BrowserPrepared    bool   `json:"browser_prepared,omitempty"`
+	Version               int    `json:"version"`
+	Outcome               string `json:"outcome"`
+	Home                  string `json:"home"`
+	ConfigPath            string `json:"config_path"`
+	Workspace             string `json:"workspace"`
+	PresetPath            string `json:"preset_path"`
+	PublicConfigSHA256    string `json:"public_config_sha256,omitempty"`
+	WorkspaceFileCount    int    `json:"workspace_file_count"`
+	RuntimeRun            bool   `json:"runtime_run"`
+	PDFJournalPrepared    bool   `json:"pdf_journal_prepared,omitempty"`
+	BrowserPrepared       bool   `json:"browser_prepared,omitempty"`
+	ModelMetadataPrepared bool   `json:"model_metadata_prepared,omitempty"`
 }
 
 // PrepareProfile copies only an admitted isolated seed, never production state.
@@ -137,6 +138,10 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 	clone.Agents.Defaults.Workspace = result.Workspace
 	clone.Agents.List[0].Workspace = result.Workspace
 	clone.Gateway.Host, clone.Gateway.Port = "127.0.0.1", port
+	if preset.CaptureModelMetadata {
+		clone.Diagnostics.TraceCapture = evalModelMetadataCapture()
+		result.ModelMetadataPrepared = true
+	}
 	if prepareBrowserRuntime(root, clone, newHome) != nil {
 		return result, ErrPreparation
 	}

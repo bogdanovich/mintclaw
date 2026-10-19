@@ -57,7 +57,7 @@ func runOwnedGatewayTestChild() int {
 		os.Getenv("MINTCLAW_LOG_FORMAT") != "json" {
 		return 8
 	}
-	if control.Mode == "early_exit" {
+	if control.Mode == "early_exit" || control.Mode == "metadata_early_exit" {
 		return 9
 	}
 	switch control.Mode {
@@ -74,6 +74,12 @@ func runOwnedGatewayTestChild() int {
 	cfg, err := config.LoadConfigReadOnly(filepath.Join(home, "config.json"))
 	if err != nil {
 		return 8
+	}
+	if control.Mode == "metadata_startup_leak" {
+		if writeOwnedTestMetadata(cfg, control.Mode) != nil {
+			return 8
+		}
+		return 9
 	}
 	temporary := filepath.Join(home, ownedGatewayTempDirectory)
 	if os.TempDir() != temporary || os.Getenv("TMPDIR") != temporary || os.Getenv("TMP") != temporary ||
@@ -290,10 +296,27 @@ func runOwnedGatewayTestChild() int {
 			return 8
 		}
 	}
+	if strings.HasPrefix(control.Mode, "metadata_") {
+		if writeOwnedTestMetadata(cfg, control.Mode) != nil {
+			return 8
+		}
+	}
 	if control.Mode == "bad_exit" {
 		return 9
 	}
 	return 0
+}
+
+func writeOwnedTestMetadata(cfg *config.Config, mode string) error {
+	traceRoot := filepath.Join(cfg.WorkspacePath(), "state", "diagnostics", "traces")
+	data := []byte(`{"metadata":"public"}`)
+	if mode == "metadata_leak" || mode == "metadata_startup_leak" {
+		data = []byte(`{"metadata":"\u0073ynthetic-preparation-api-key-not-a-live-credential"}`)
+	}
+	if !cfg.Diagnostics.TraceCapture.Enabled || os.MkdirAll(traceRoot, 0o700) != nil {
+		return ErrOwnedGateway
+	}
+	return os.WriteFile(filepath.Join(traceRoot, "post-stop.json"), data, 0o600)
 }
 
 func newOwnedGatewayFixture(t *testing.T, mode string) *admissionFixture {
