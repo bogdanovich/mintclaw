@@ -231,9 +231,21 @@ bounded exception, not complete E3 qualification.
 ## Dialogue Admission
 
 The prepared profile must declare `pdf` and `interactions`, enable the document tool with an enabled native audit
-model, and allow only `document` and `request_user_input` under a deny-default tool policy. Exec, MCP, browser,
-hooks, trace capture, external channels, reload/deploy, broad path permissions, and approval bypass remain refused.
+model, and explicitly allow `document`, `request_user_input` and `tool_search_tool_bm25` under a deny-default tool
+policy. The native gateway keeps `document` hidden until its existing BM25 discovery promotes it. A PDF policy
+without that search tool is unusable and is refused before gateway probes/tasks and before preparation opens the
+native repository or allocates a profile. Discovery is admitted only with `pdf`; regex search and general
+file/exec/MCP tools remain unadmitted. Preparation never silently widens an existing seed's policy.
+
+Exec, MCP, browser, hooks, unadmitted trace capture, external channels, reload/deploy, broad path permissions, and
+approval bypass remain refused. Fixed metadata-only capture has its separate explicit owned-profile admission.
 Undeclared document access and unadmitted audit fallbacks are refused before sending a task.
+
+Native composition controls construct the actual AgentLoop with a non-network stub provider, verify document is
+hidden, execute native BM25 discovery and require document promotion while unrelated tools stay absent. These are
+not PDF worker/source-use qualification. The [empty-fields v1 false positive](manual-agent-evals-pdf-empty-v1-pilot-20261019.md)
+still requires a source-bound inspection/field-use hard check before a new case experiment; a discovery fix alone
+cannot upgrade that frozen pass or establish that the PDF was read.
 
 The common conversation runner owns streaming, request correlation and follow-ups. The PDF adapter substitutes
 the owned source path, admits native public or protected question prompts, and binds all protected answers to one
