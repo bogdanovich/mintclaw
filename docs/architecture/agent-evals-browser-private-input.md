@@ -131,6 +131,29 @@ remain separate. A binding digest only correlates the exact token; it does not a
 
 ### Eval Admission And Trials
 
+The next B3 packet implements only the pre-answer eval consumer. It joins the delivered native protected
+question to one complete identified-source suspended trace, an exact tool-call/generation pair and the current
+owned browser session/snapshot/controller/profile/policy. The value-free target must name the exact trial URL
+and origin and the fixture's unique Name or Note textbox. This initial consumer supports the fixture's main
+document only; framed/context-catalog input remains unavailable rather than being guessed.
+
+`browser.fields[].input_facts` optionally enumerates the private handles admitted to that one semantic field,
+including both initial and corrected handles. It defaults to the existing final `fact`; an explicit list must
+include that final fact, remain bounded and contain existing, nonduplicated handles not shared with another field.
+The fixture's independent final-value oracle still uses `fact`, not `input_facts`. Neither mapping reaches the
+LLM-user or judge. Question prose and handle spelling cannot choose a field. Values expand only into a freshly
+rechecked explicit native answer, never ordinary chat. An attempted answer is not retried after send uncertainty.
+
+Native registry, outbox, trace and browser-state bytes are privacy-scanned before decoding, and a raw leak in a
+later trace still dominates an earlier invalid file. The existing post-stop trace reader retains its owned-exit
+and private-census gates; sharing its bounded snapshot reader does not qualify live observations for grading.
+Deterministic tests use real broker/registry/outbox producers with a synthetic worker/trace. They prove admission
+and refusal contracts, not browser effects, retained context, accepted claims or cleanup.
+
+The runner's private submit/followup gates remain closed. Native mutation/approval/context evidence, fresh fact
+generation/cohort retention and post-stop privacy/cleanup assessment must be connected before any live private
+trial is admitted. No production deployment or successful live private-form result follows from this packet.
+
 Only after B2 is reviewed and merged, generate fresh facts for the existing required browser cases and retain them
 in the runner's bounded private cohort. Expand a fact handle only at a freshly observed native protected prompt.
 Use registry/outbox/route/owner/operation bindings, not text-extracted IDs or an unauthenticated token decoder.

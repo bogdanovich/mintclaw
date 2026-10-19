@@ -29,6 +29,20 @@ func visitBoundNativeTraces(
 	if surfaces == nil || !surfaces.valid() || surfaces.Code != "observed" {
 		return "private_coverage_unknown"
 	}
+	return visitNativeTraceSnapshots(ctx, target, bindings, facts, filter, visit)
+}
+
+// Reads bounded immutable file snapshots only. This is neither lifecycle nor
+// privacy-census authority: post-stop grading must use visitBoundNativeTraces.
+func visitNativeTraceSnapshots(
+	ctx context.Context, target admittedTarget, bindings []nativeModelBinding,
+	facts map[string]string, filter *strings.Replacer,
+	visit func(int, diagnostictrace.Trace, string),
+) string {
+	if ctx == nil || ctx.Err() != nil || target.config == nil ||
+		target.config.Diagnostics.TraceCapture != evalModelMetadataCapture() {
+		return "native_evidence_unavailable"
+	}
 	if !nativeModelSourceKnown(target.probe) {
 		return "source_unknown"
 	}

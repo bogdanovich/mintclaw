@@ -16,9 +16,20 @@ type BrowserCase struct {
 }
 
 type BrowserField struct {
-	Name  string `json:"name"`
-	Fact  string `json:"fact,omitempty"`
-	Value string `json:"value,omitempty"`
+	Name       string   `json:"name"`
+	Fact       string   `json:"fact,omitempty"`
+	Value      string   `json:"value,omitempty"`
+	InputFacts []string `json:"input_facts,omitempty"`
+}
+
+func (field BrowserField) inputFacts() []string {
+	if len(field.InputFacts) != 0 {
+		return field.InputFacts
+	}
+	if field.Fact != "" {
+		return []string{field.Fact}
+	}
+	return nil
 }
 
 func (browser BrowserCase) validate(item Case) error {
@@ -36,12 +47,23 @@ func (browser BrowserCase) validate(item Case) error {
 		return ErrInvalidCase
 	}
 	seen := make(map[string]bool)
+	inputFacts := make(map[string]bool)
 	for _, field := range browser.Fields {
 		if !slices.Contains([]string{"name", "color", "note"}, field.Name) || seen[field.Name] ||
 			field.Fact != "" && (!validID(field.Fact) || item.Driver.Facts[field.Fact] == "" || field.Value != "") {
 			return ErrInvalidCase
 		}
 		seen[field.Name] = true
+		if len(field.InputFacts) > 8 || len(field.InputFacts) != 0 &&
+			(field.Fact == "" || !slices.Contains(field.InputFacts, field.Fact)) {
+			return ErrInvalidCase
+		}
+		for _, handle := range field.inputFacts() {
+			if !validID(handle) || item.Driver.Facts[handle] == "" || inputFacts[handle] {
+				return ErrInvalidCase
+			}
+			inputFacts[handle] = true
+		}
 		switch field.Name {
 		case "color":
 			if field.Fact != "" || !slices.Contains([]string{"green", "red", "blue"}, field.Value) {
@@ -58,8 +80,10 @@ func (browser BrowserCase) validate(item Case) error {
 			if len(field.Value) > maximum || field.Value != "" && !boundedText(field.Value, maximum) {
 				return ErrInvalidCase
 			}
-			if field.Fact != "" && len(item.Driver.Facts[field.Fact]) > maximum {
-				return ErrInvalidCase
+			for _, handle := range field.inputFacts() {
+				if len(item.Driver.Facts[handle]) > maximum {
+					return ErrInvalidCase
+				}
 			}
 		}
 	}
