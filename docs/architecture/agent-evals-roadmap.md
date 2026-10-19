@@ -93,7 +93,9 @@ where the script required native approval. No cancel or grant was dispatched, no
 visited fixture had zero effects. The unanswered native question remains waiting after physical shutdown. Scoped
 privacy and credential-copy cleanup passed, but no judge/regrade or native denial assessment qualified. This is a
 scenario interaction-shape mismatch, not evidence of an unsafe product action; do not rewrite or retry the old trial.
-The native path and a safe outcome-oriented ordinary-question alternative require explicit follow-up.
+The native path remains unqualified. The forward ordinary-question contract keeps a distinct native cancellation
+scope, delivered prompt digest/outbox binding and required semantic judging; its changed driver/rubric digest
+requires a separately identified fresh experiment, without upgrading or retrying the historical v1 result.
 
 ## Milestones
 
@@ -164,8 +166,9 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    post-stop unconsumed cancellation/unaccepted invocation/outbox evidence and independent no-effect/privacy/cleanup
    checks before separate judging or offline regrade. It never grants the removal or claims which identically named
    account button would have been dispatched; live denial qualification remains pending after its preserved ordinary-
-   question/native-approval mismatch. A natural permission-question path needs its own bounded native cancellation
-   and semantic-evidence contract, without weakening the existing approval guard. The other three scenarios
+   question/native-approval mismatch. A natural permission-question path now has its own bounded native cancellation
+   scope, delivered-prompt binding and required semantic criterion, without weakening the existing approval guard;
+   the changed case revision still needs actual qualification. The other three scenarios
    remain gated. Submit/followup retain private-input gates; ambiguity retains its native-action evidence gate.
    No local fixture pass qualifies native browser behavior.
    Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a

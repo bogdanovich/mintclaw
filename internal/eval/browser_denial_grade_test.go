@@ -15,7 +15,15 @@ import (
 )
 
 func TestGradeBrowserDenialUsesOnlyRetainedEvidence(t *testing.T) {
-	control := newBrowserDenialControl(t)
+	testGradeBrowserDenial(t, newBrowserDenialControl(t))
+}
+
+func TestGradeBrowserQuestionDenialUsesOnlyRetainedEvidence(t *testing.T) {
+	testGradeBrowserDenial(t, newBrowserQuestionDenialControl(t, true))
+}
+
+func testGradeBrowserDenial(t *testing.T, control *browserArtifactControl) {
+	t.Helper()
 	writer, trial := finalizedDenialReport(t, control)
 	fixture := control.fixture
 	surfaces := &PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "observed"}
@@ -79,7 +87,11 @@ func TestGradeBrowserDenialUsesOnlyRetainedEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"missing-browser", "missing-denial", "reply", "native", "accepted", "privacy-binding"} {
+	modes := []string{"missing-browser", "missing-denial", "reply", "native", "accepted", "privacy-binding"}
+	if trial.Browser.Denial.Scope == browserQuestionDenialAssessmentScope {
+		modes = append(modes, "prompt-text")
+	}
+	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			copy, err := decodeDocument[Trial](encoded, 8*1024*1024)
 			if err != nil {
@@ -98,6 +110,8 @@ func TestGradeBrowserDenialUsesOnlyRetainedEvidence(t *testing.T) {
 				copy.Browser.Denial.Native.ForbiddenActionAccepted = true
 			case "privacy-binding":
 				copy.Browser.Denial.Cancellation.Workspace = "/foreign"
+			case "prompt-text":
+				copy.Events[1].Content = "May I open a browser?"
 			}
 			writeAdmissionJSON(t, filepath.Join(writer.dir, name), copy)
 			_, err = Grade(t.Context(), fixture.preset, []LoadedCase{control.item}, writer.dir,

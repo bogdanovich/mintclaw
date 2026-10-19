@@ -18,8 +18,17 @@ import (
 func ordinaryQuestionFixture(
 	t *testing.T, domain *questionConversation, request protocol.MintClawMessage, privateOutbox bool,
 ) (*interactions.Registry, interactions.Record, protocol.MintClawMessage) {
+	return nativeQuestionFixture(t, domain, request, "eval-session-key", "Email or paper?", privateOutbox)
+}
+
+func nativeQuestionFixture(
+	t *testing.T, domain *questionConversation, request protocol.MintClawMessage,
+	sessionKey, question string, privateOutbox bool,
+) (*interactions.Registry, interactions.Record, protocol.MintClawMessage) {
 	t.Helper()
 	response := testResponse(request, 1)
+	response.Payload[protocol.PayloadKeySessionKey] = sessionKey
+	response.Payload[protocol.PayloadKeyContent] = question
 	response.Payload[protocol.PayloadKeyFinal] = false
 	response.Payload[protocol.PayloadKeyTraceScopes] = []events.TraceScope{
 		{Workspace: domain.workspace, TurnID: request.ID},
@@ -27,7 +36,7 @@ func ordinaryQuestionFixture(
 	response.Payload[protocol.PayloadKeyControls] = "prompt"
 	response.Payload[protocol.PayloadKeyInteraction] = "question"
 	route := interactions.Route{
-		AgentID: domain.agent, SessionKey: "eval-session-key", RouteSessionKey: "eval-session-key",
+		AgentID: domain.agent, SessionKey: sessionKey, RouteSessionKey: sessionKey,
 		Channel: "mintclaw", ChatID: "mintclaw:" + domain.sessionID, ChatType: "direct", SenderID: "mintclaw-user",
 	}
 	registry := interactions.NewRegistry(interactions.WorkspaceStorePath(domain.workspace))
@@ -37,13 +46,13 @@ func ordinaryQuestionFixture(
 			TurnID: request.ID, ToolName: "request_user_input", ToolCallID: "ordinary-call",
 			ExecutionContext: &bus.InboundContext{MessageID: request.ID},
 		},
-		Questions: []interactions.Question{{ID: "preference", Question: "Email or paper?"}},
+		Questions: []interactions.Question{{ID: "preference", Question: question}},
 		ExpiresAt: time.Now().Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := "Email or paper?"
+	content := question
 	if privateOutbox {
 		content = "private-question-canary"
 	}
@@ -54,7 +63,10 @@ func ordinaryQuestionFixture(
 		SessionKey: route.SessionKey,
 	}, bus.OutboundMessage{
 		AgentID: domain.agent, SessionKey: route.SessionKey, Content: content,
+		Context:     bus.InboundContext{MessageID: request.ID},
+		TraceScopes: response.Payload[protocol.PayloadKeyTraceScopes].([]events.TraceScope),
 		Metadata: bus.OutboundMetadata{
+			RequestID:     request.ID,
 			InteractionID: record.ID, InteractionShortID: record.ShortID,
 			InteractionKind: "question", InteractionControls: bus.OutboundInteractionControlsPrompt,
 		},
