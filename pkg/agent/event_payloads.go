@@ -3,6 +3,7 @@ package agent
 import (
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -307,6 +308,7 @@ type ToolExecEndPayload struct {
 	WriteAudit         []toolshared.WriteAuditEntry
 	Observation        *toolshared.ToolObservation
 	DocumentFields     toolshared.DocumentFieldsObservation `json:"-"`
+	BrowserInputTarget browseraction.InputTargetObservation `json:"-"`
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.

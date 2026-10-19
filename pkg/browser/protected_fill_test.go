@@ -17,9 +17,77 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
+
+func TestProtectedFillTargetObservationUsesAuthenticatedNativeSnapshot(t *testing.T) {
+	broker, store, worker, request := protectedFillTestFixture(t, admittedBrowserConfig())
+	const privateLabel = "PRIVATE_NATIVE_LABEL_0318"
+	const privateURL = "https://example.com/form?private=PRIVATE_NATIVE_QUERY_8913"
+	worker.observation.URL = privateURL
+	worker.observation.Elements[0].Name = privateLabel
+	worker.resolveElement = worker.observation.Elements[0]
+	worker.observation.Snapshot = "- textbox \"" + privateLabel + "\" [ref=e1]"
+	observed, err := broker.Observe(t.Context(), request.Owner, request.SessionID, request.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SnapshotID, request.SnapshotGeneration = observed.SnapshotID, observed.SnapshotGeneration
+	request.Action.Ref = onlyVisibleRef(t, observed.Snapshot)
+	before := protectedFillTestState(t, store)
+	token, err := broker.CreateProtectedFillBinding(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := broker.InspectProtectedFillBinding(t.Context(), request.Owner, token)
+	if err != nil || !target.Observation.Valid() || target.Request != request ||
+		target.Observation.Version != browseraction.InputTargetVersion || !target.Observation.MatchesToken(token) {
+		t.Fatal("native bound target observation unavailable", err)
+	}
+	metadata := target.Observation
+	if metadata.ActorID != request.Owner.ActorID || metadata.AgentID != request.Owner.AgentID ||
+		metadata.SessionKey != request.Owner.SessionKey || metadata.ExecutionID != request.Owner.ExecutionID ||
+		metadata.RequestID != request.RequestID || metadata.SessionID != request.SessionID ||
+		metadata.SnapshotID != observed.SnapshotID || metadata.SnapshotGeneration != observed.SnapshotGeneration ||
+		metadata.TabID != request.TabID || metadata.Ref != request.Action.Ref || metadata.ElementRole != "textbox" ||
+		metadata.ElementNameSHA256 != protectedFillTextSHA256(privateLabel) || metadata.ElementPosition != 1 ||
+		metadata.URLSHA256 != protectedFillTextSHA256(privateURL) ||
+		metadata.OriginSHA256 != protectedFillTextSHA256(observed.Origin) ||
+		metadata.PageStateSHA256 != observed.PageStateHash || metadata.CatalogRevision != worker.CatalogRevision() {
+		t.Fatal("target observation did not preserve exact native owner/field/URL authority")
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil || bytes.Contains(encoded, []byte(privateLabel)) || bytes.Contains(encoded, []byte(privateURL)) ||
+		bytes.Contains(encoded, []byte(token)) || !bytes.Equal(before, protectedFillTestState(t, store)) ||
+		len(worker.actions) != 0 {
+		t.Fatal("target observation exposed content or changed native state")
+	}
+	payload, _, _ := strings.Cut(token, ".")
+	cleartext, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil || bytes.Contains(cleartext, []byte(privateLabel)) || bytes.Contains(cleartext, []byte(privateURL)) {
+		t.Fatal("opaque binding retained raw field label or URL")
+	}
+	if _, err := broker.Observe(t.Context(), request.Owner, request.SessionID, request.TabID); err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := broker.InspectProtectedFillBinding(t.Context(), request.Owner, token)
+	if err != nil || frozen != target {
+		t.Fatal("inspection silently retargeted an old question", err)
+	}
+	if _, err := broker.PrepareProtectedFill(
+		t.Context(),
+		request.Owner,
+		token,
+		"private-answer",
+	); !errors.Is(
+		err,
+		ErrStale,
+	) {
+		t.Fatal("frozen observation became current execution authority", err)
+	}
+}
 
 func TestProtectedFillBindingStagesOnlyExistingNativePreparation(t *testing.T) {
 	broker, store, worker, request := protectedFillTestFixture(t, admittedBrowserConfig())

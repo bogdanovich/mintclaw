@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -762,6 +763,7 @@ type toolCallState struct {
 	invocationSuspendOK         bool
 	resourceDispositionVerified bool
 	documentFields              toolshared.DocumentFieldsObservation
+	browserInputTarget          browseraction.InputTargetObservation
 	continuationFollowup        *toolshared.ToolOnlyFollowup
 	continuationFollowupErr     error
 	toolResultFollowup          *toolshared.ToolOnlyFollowup
@@ -1390,6 +1392,7 @@ func (runner *toolLoopRunner) approveToolCall(
 						},
 						argumentHash,
 						approval.ActionSummary,
+						browseraction.InputTargetObservation{},
 					)
 					if suspended {
 						return stopToolBatch(ToolLoopOutcome{
@@ -1680,6 +1683,13 @@ func (runner *toolLoopRunner) invokeToolCall(
 	if call.invocationOK && toolName == "document" {
 		call.documentFields = toolResult.DocumentFields
 	}
+	if call.invocationSuspendOK && call.resultSource == toolResultInvoked {
+		call.browserInputTarget = browserInputObservationForSuspension(
+			toolName,
+			toolResult,
+			toolResult.BrowserInputTarget,
+		)
+	}
 	if toolResult != nil && toolResult.Control.Async && asyncAckDelivery.ParentHandled {
 		toolResult.Delivery.Intent = toolshared.DeliveryFinalHandled
 	}
@@ -1784,6 +1794,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 			toolResult,
 			argumentHash,
 			approvalAction,
+			call.browserInputTarget,
 		)
 		if suspended {
 			return stopToolBatch(ToolLoopOutcome{
@@ -3128,6 +3139,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	result *toolshared.ToolResult,
 	argumentHash string,
 	approvalAction string,
+	browserInputTarget browseraction.InputTargetObservation,
 ) (turnStep, bool, *toolshared.ToolResult) {
 	if result == nil || result.Control.Suspension == nil {
 		return turnStepContinue, false, result
@@ -3323,6 +3335,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 			Duration:           duration,
 			Suspended:          true,
 			InteractionID:      disposition.InteractionID,
+			BrowserInputTarget: browserInputObservationForSuspension(toolName, result, browserInputTarget),
 		},
 	)
 	return turnStepSuspend, true, nil

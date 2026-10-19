@@ -4,9 +4,10 @@
 
 The [manual eval goal](agent-evals-goal.md) requires private fact handles for browser submit and multi-turn cases.
 Those cases currently stop before execution with `browser_private_input_unavailable`. This gate is intentional:
-ordinary `request_user_input` answers enter durable input/history, while protected-answer consumers are currently
-registered only for document forms. Existing browser fill protects model-produced tool arguments and transient
-driver input; it does not turn an ordinary chat answer into protected ingress.
+ordinary `request_user_input` answers enter durable input/history. B1/B2 now provide native protected browser
+input, but the eval consumer still requires the B3 evidence bindings below before expanding private facts.
+Protecting model-produced browser arguments or transient driver input alone does not turn an ordinary chat answer
+into protected ingress.
 
 Do not resolve generated browser facts into ordinary messages, pass them through model-driver JSON, use a document
 binding for another domain, or mutate the fixture directly to complete the target's task. Keep both mandatory
@@ -104,6 +105,31 @@ stale/generation changes, competing answers, separate approval, forced cleanup a
 are runtime integration tests, not a live browser/LLM qualification or admission of private eval cases.
 
 ## B3: Eval Consumer And Mutation Evidence
+
+### Native Target Observation
+
+The first B3 packet produces a bounded `browser_input_target.v1` observation through the existing native trace
+path, following the document-field-read pattern. It adds no store, pending map, persistent signing key or new
+interaction state machine. The broker includes field-role/name-digest/position, URL/origin digests and page-state
+hash in its existing generation-authenticated value-free binding. Inspection returns those immutable scalars with
+the original owner, request, ref, snapshot/context/controller/catalog identities, deadlines and a binding digest.
+It never returns field values, raw labels, URL text or the opaque token as trace metadata.
+
+The tool returns this observation outside model-visible/durable tool content. The AgentLoop copies the actual
+successful synchronous invocation's scalar observation before result hooks run. Only after the runtime durably
+owns a protected question does it publish `tool.result.browser_input_target` with the resulting interaction ID;
+the final tool/namespace/token must still match the captured observation. Failed, async, hook-only, retargeted,
+dropped and non-durable suspensions cannot produce this evidence. Both metadata-only and redacted capture modes
+retain the bounded observation, without argument/result previews or ordinary runtime-log serialization.
+
+This proves an original target observation, not current freshness, accepted input, permission, mutation or
+completion. Consumers must independently join an untruncated identified-source suspended trace and its exact
+tool-call/generation to the native registry/outbox delivered prompt, owner/session/config revisions and current
+snapshot/context. URL/origin and field-name digests must match the owned fixture's exact route and expected
+semantic field, not question prose. Native preparation, accepted-claim, approval, effect and cleanup evidence
+remain separate. A binding digest only correlates the exact token; it does not authenticate arbitrary metadata.
+
+### Eval Admission And Trials
 
 Only after B2 is reviewed and merged, generate fresh facts for the existing required browser cases and retain them
 in the runner's bounded private cohort. Expand a fact handle only at a freshly observed native protected prompt.

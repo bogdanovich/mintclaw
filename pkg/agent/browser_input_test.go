@@ -346,6 +346,9 @@ func TestBrowserInputAgentLoopProtectedAnswerAndCancellation(t *testing.T) {
 				cfg.Diagnostics.TraceCapture = config.DiagnosticTraceCaptureConfig{
 					Enabled: true, ContentMode: "redacted_content",
 				}
+				if test.name == "accepted" {
+					cfg.Diagnostics.TraceCapture.ContentMode = "metadata_only"
+				}
 			})
 			source, worker := newBrowserInputTestSource(t, fixture.Config, fixture.Agent.Workspace)
 			provider.source = source
@@ -397,6 +400,7 @@ func TestBrowserInputAgentLoopProtectedAnswerAndCancellation(t *testing.T) {
 			if record.Status != interactions.StatusWaiting {
 				t.Fatal("native prompt delivery did not reach waiting state")
 			}
+			assertBrowserInputWaitingTargetTrace(t, fixture.Agent.Workspace, source, record)
 			answer := msg
 			answer.Content = answerCommand + " " + record.ShortID + " " + browserInputCanary
 			answer.SpoolID = "browser-private-answer"
@@ -472,6 +476,52 @@ func TestBrowserInputAgentLoopProtectedAnswerAndCancellation(t *testing.T) {
 			}
 			assertBrowserInputPrivateState(t, fixture.Agent.Workspace, history)
 		})
+	}
+}
+
+func assertBrowserInputWaitingTargetTrace(
+	t *testing.T, workspace string, source *browserInputTestSource, interaction interactions.Record,
+) {
+	t.Helper()
+	native, err := source.InspectProtectedFillBinding(
+		t.Context(),
+		source.latestSession.Owner,
+		interaction.ProtectedAnswer.Token,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, path := range waitForTraceFiles(t, workspace, 1) {
+		trace := readCapturedTrace(t, path)
+		if trace.Outcome == nil || trace.Outcome.Status != "suspended" || trace.Truncation.Incomplete ||
+			trace.Truncation.DroppedRecords != 0 {
+			t.Fatal("waiting input target had no complete suspended trace")
+		}
+		for _, record := range trace.Records {
+			if record.Kind != diagnostictrace.RecordToolResult {
+				continue
+			}
+			var payload diagnostictrace.ToolPayload
+			if err := json.Unmarshal(record.Data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.BrowserInputTarget == nil {
+				continue
+			}
+			if payload.Tool != "browser_input" || !payload.BrowserInputTarget.Valid() ||
+				payload.BrowserInputTarget.InteractionID != interaction.ID ||
+				payload.BrowserInputTarget.Target != native.Observation ||
+				record.Correlation.ToolCallID != interaction.Origin.ToolCallID ||
+				record.Scope.TurnID != interaction.Origin.TurnID || payload.IsError || !payload.Executed ||
+				payload.ArgumentsPreview != "" || payload.ResultPreview != "" {
+				t.Fatal("trace target diverged from the actual native question and broker binding")
+			}
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatal("waiting question did not publish exactly one native bound-target observation")
 	}
 }
 

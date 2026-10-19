@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
@@ -96,6 +97,9 @@ type ToolResult struct {
 	// DocumentFields is transient, content-free evidence from native field discovery.
 	// It grants no write/approval authority and is not canonical or model context.
 	DocumentFields DocumentFieldsObservation `json:"-"`
+	// BrowserInputTarget is native, value-free target evidence. The runtime
+	// publishes it only after owning the corresponding protected suspension.
+	BrowserInputTarget browseraction.InputTargetObservation `json:"-"`
 
 	Control  ToolControl  `json:"control,omitzero"`
 	Delivery ToolDelivery `json:"delivery,omitzero"`
