@@ -219,3 +219,63 @@ Facebook authentication. The denial is being investigated without replaying
 the real submission. The
 updated [private explainer](https://mintclaw-credentials-explained.freecedar10.chatgpt.site)
 shows the two-hour wait with rendered diagrams and preserves owner-only access.
+
+## Submit controls enabled by private input
+
+The pilot denial was investigated without replaying its real submission.
+The generic readiness check required an enabled submit control before any
+private input, while the observed Facebook challenge's Continue control was
+disabled with an empty code field. A native synthetic regression reproduced
+that rejection. This is evidence for a compatibility defect, not a more
+specific private error code from the real attempt.
+
+[PR #1776](https://github.com/bogdanovich/mintclaw/pull/1776) now permits
+preparation of a visible initially disabled submit control when the selected
+inputs, native elements and destination are already valid. Private filling
+waits within its bounded operation for the site's own validation to enable
+that same control. It never removes the site's disabled state. Input values,
+visibility, enabled inputs, document and destination remain checked. Expiry
+is checked before accepting enablement; an invalid or expired attempted step
+closes the session without automatic replay.
+
+Review found a late-enable deadline-ordering defect. A real Chromium regression
+reproduced submission after a delayed site callback exceeded the deadline.
+The correction requires zero posts and context closure. After resolving a
+concurrent main refactor, both private login paths retain one shared sequential
+field/event/submit helper. All 28 pinned Chromium form/protocol/navigation
+tests passed. Current-head Linux CI also passed every credential qualification
+step, including actual provider output paths, native alias/discovery/TOTP and
+delayed phone continuation. The merged-base macOS gateway race executable
+stalled in `_dyld_start` before Go startup and was stopped; that attempt is not
+counted as passing. Formatting, full lint with unchanged rules and documentation
+validation passed.
+
+The final head `2f166acaa32b39ebb4a28039e5590a48eb3c98c2` had thirteen
+successful CI checks and one skipped check, clean current-head review, no
+unresolved threads and owner PR-level rocket approval. Normal merge produced
+`51426f6ac5e6ad9ee6cc977b1012834ee572af66`.
+
+Deployment fast-forwarded the existing clean main checkout, preserving another
+operator's intervening deployment. Core, node and launcher candidates had
+verified provenance. All five configurations loaded with unchanged doctor
+findings; configuration hashes and protected token/owner-key identities were
+preserved. Only main was stopped and started. The private timestamped backup
+contains rollback instructions and 33 verified checksum entries. Do not restore
+mutable browser, grant, interaction or conversation state automatically after
+new writes.
+
+All ten services were active, with zero failed units, legacy processes and
+error-level journal entries in the checked ten-minute window. The public phone
+page returned HTML/HTTP 200 with the expected script; external operator
+enrollment remained denied/HTTP 403. The stateless no-tool smoke produced its
+exact reply and trace `trace-turn-b4b6787cee74f65dd59f5e1b`: schema
+`mintclaw.diagnostic_trace.v1`, source matching the merge, completed, six
+records, zero tools, no truncation and verified input/reply hashes.
+
+A fresh owner-initiated Facebook pilot is still required. Deployment and
+synthetic TOTP acceptance do not certify the real account. The gateway restart
+invalidated earlier grants; the new attempt may require a fresh phone approval
+within the two-hour window. A code provided after the previous browser closed
+cannot complete that retired session. SMS remains an explicitly permitted
+ordinary-chat exception, separately unqualified; private stored TOTP handling
+is unchanged.

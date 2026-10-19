@@ -2,8 +2,9 @@
 
 Status: reviewed, qualified and deployed on 2026-10-18 at merge
 `80f00e37a0a915444fe1a8d65af7f65a402d0adf`. The owner's fresh Facebook
-pilot resumed automatically but stopped at TOTP; authentication remains a
-separate gate. See the
+pilot resumed automatically but stopped at TOTP. The generic submit-readiness
+correction is also deployed at `51426f6ac5e6ad9ee6cc977b1012834ee572af66`;
+authentication remains a separate gate. See the
 [rollout evidence](credential-website-login-rollout.md).
 
 ## User behavior
