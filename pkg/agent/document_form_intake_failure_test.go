@@ -68,3 +68,73 @@ func TestDocumentIntakeSeparatesModelViewAndResponseFailures(t *testing.T) {
 		t.Fatal("invalid response was not distinguished without exposing its content")
 	}
 }
+
+func TestDocumentIntakeClassifiesSecondPrivateBooleanVerificationFailure(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		failure  error
+		response *providers.LLMResponse
+		want     error
+		calls    int
+	}{
+		{name: "authentication", failure: &providers.ProviderError{
+			Kind: "authentication", SafeMessage: "PRIVATE_VERIFICATION_ERROR",
+		}, want: document.ErrFormIntakeProviderAuth},
+		{name: "billing", failure: &providers.ProviderError{
+			Kind: "billing", SafeMessage: "PRIVATE_VERIFICATION_ERROR",
+		}, want: document.ErrFormIntakeProviderBilling},
+		{name: "invalid request", failure: &providers.ProviderError{
+			Kind: "invalid_request", SafeMessage: "PRIVATE_VERIFICATION_ERROR",
+		}, want: document.ErrFormIntakeProviderRequest},
+		{name: "limited", failure: &providers.ProviderError{
+			Kind: "rate_limit", SafeMessage: "PRIVATE_VERIFICATION_ERROR",
+		}, want: document.ErrFormIntakeProviderLimited},
+		{name: "temporary", failure: &providers.ProviderError{
+			Kind: "transient", SafeMessage: "PRIVATE_VERIFICATION_ERROR",
+		}, want: document.ErrFormIntakeProviderTemp, calls: 3},
+		{
+			name: "canceled", failure: fmt.Errorf("PRIVATE_VERIFICATION_ERROR: %w", context.Canceled),
+			want: context.Canceled,
+		},
+		{
+			name: "deadline", failure: fmt.Errorf("PRIVATE_VERIFICATION_ERROR: %w", context.DeadlineExceeded),
+			want: context.DeadlineExceeded,
+		},
+		{name: "missing response", want: document.ErrFormIntakeInvalidResponse},
+		{
+			name: "malformed response", response: &providers.LLMResponse{Content: "PRIVATE_INVALID_VERIFICATION"},
+			want: document.ErrFormIntakeInvalidResponse,
+		},
+		{name: "unexpected tool", response: &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{{Name: "unexpected"}},
+		}, want: document.ErrFormIntakeInvalidResponse},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wantCalls := test.calls
+			if wantCalls == 0 {
+				wantCalls = 2
+			}
+			provider := &documentBooleanVerificationTestProvider{
+				private:   true,
+				verifyErr: test.failure,
+				responses: []*providers.LLMResponse{
+					{Content: booleanAssertionTestResponse},
+					test.response,
+					test.response,
+				},
+			}
+			auditor := &documentFormAuditor{models: map[string]documentFormAuditModel{
+				"configured": {provider: provider, model: "configured-model"},
+			}}
+			result, err := auditor.InterpretFormIntake(t.Context(), "configured", booleanAssertionTestView())
+			if provider.calls != wantCalls || !provider.private || len(result.Proposals) != 0 ||
+				!errors.Is(err, test.want) || !errors.Is(err, document.ErrFormAuditUnavailable) ||
+				!errors.Is(
+					err,
+					errDocumentIntakeInterpretationUnavailable,
+				) || strings.Contains(err.Error(), "PRIVATE_") {
+				t.Fatal("second private request lost its closed cause, returned proposals or disclosed private details")
+			}
+		})
+	}
+}

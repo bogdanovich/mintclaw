@@ -44,7 +44,9 @@ func verifyDocumentIntakeBooleanAssertions(
 			return field.ID == proposal.FieldID && field.Kind == document.FormFieldCheckbox && !field.ReadOnly
 		})
 		if field < 0 || proposal.Disposition != "" || len(proposal.Literals) != 1 {
-			return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+			return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(
+				document.ErrFormIntakeInvalidResponse,
+			)
 		}
 		literal := proposal.Literals[0]
 		ids = append(ids, proposal.FieldID)
@@ -62,15 +64,24 @@ func verifyDocumentIntakeBooleanAssertions(
 	}{privateContext, assertions})
 	defer clear(payload)
 	if err != nil || len(payload) > maxDocumentIntakeWireBytes {
-		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+		return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(
+			document.ErrFormIntakeInvalidContext,
+		)
 	}
 	response, err := callDocumentPrivateModel(ctx, model, documentBooleanAssertionVerificationPrompt, payload)
-	if err != nil || response == nil || len(response.ToolCalls) != 0 {
-		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+	if err != nil {
+		return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(documentIntakeProviderFailure(err))
+	}
+	if response == nil || len(response.ToolCalls) != 0 {
+		return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(
+			document.ErrFormIntakeInvalidResponse,
+		)
 	}
 	verified, findings, err := decodeDocumentIntakeBooleanVerification(response.Content, ids)
 	if err != nil {
-		return document.FormIntakeInterpretation{}, err
+		return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(
+			document.ErrFormIntakeInvalidResponse,
+		)
 	}
 	kept := make([]document.FormIntakeProposal, 0, len(result.Proposals))
 	for _, proposal := range result.Proposals {
