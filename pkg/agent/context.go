@@ -1288,7 +1288,8 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	}
 	personalPrompt := !cb.codingPrompt
 
-	appendPromptOverlays := func(parts []PromptPart) {
+	validPromptOverlays := func(parts []PromptPart) []PromptPart {
+		var valid []PromptPart
 		for _, overlay := range sortPromptParts(parts) {
 			if strings.TrimSpace(overlay.Content) == "" {
 				continue
@@ -1303,14 +1304,14 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 				})
 				continue
 			}
-			stringParts = append(stringParts, overlay.Content)
-			contentBlocks = append(
-				contentBlocks,
-				promptContentBlock(overlay, cacheControlForPromptPart(overlay)),
-			)
+			valid = append(valid, overlay)
 		}
+		return valid
 	}
-	appendPromptOverlays(promptParts)
+	for _, overlay := range validPromptOverlays(promptParts) {
+		stringParts = append(stringParts, overlay.Content)
+		contentBlocks = append(contentBlocks, promptContentBlock(overlay, cacheControlForPromptPart(overlay)))
+	}
 
 	dynamicChars := 0
 	if !req.SuppressDefaultSystemPrompt {
@@ -1406,9 +1407,6 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 		contentBlocks = append(contentBlocks, promptContentBlock(fallbackPart, nil))
 	}
 
-	// Live continuation decisions follow the stable prefix without replacing
-	// or refreshing the originating turn's immutable context.
-	appendPromptOverlays(req.ExecutionOverlays)
 	fullSystemPrompt := strings.Join(stringParts, "\n\n---\n\n")
 
 	// Log system prompt summary for debugging (debug mode only).
@@ -1477,6 +1475,14 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			messages,
 			currentMessage,
 		)
+	}
+	// Current execution facts extend the transcript without rewriting any
+	// previously sent message or the originating turn's immutable context.
+	for _, overlay := range validPromptOverlays(req.ExecutionOverlays) {
+		messages = append(messages, promptMessageWithMetadata(
+			providers.Message{Role: "user", Content: overlay.Content},
+			overlay.Layer, overlay.Slot, overlay.Source.ID,
+		))
 	}
 	if len(messages) == 0 {
 		messages = append(messages, userPromptMessage("", nil))

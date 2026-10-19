@@ -102,8 +102,9 @@ including the current `ready` decision's instructions and cleanup receipts.
 
 Preserve the original envelope, admission time and goal. Render the trusted
 current continuation decision and receipt references as execution-owned prompt
-overlays after the stable provider prefix. They must remain uncached and must
-not become part of the durable root envelope. Ordinary turn context keeps its
+overlays after the historical transcript. They must remain uncached, preserve
+every previously sent message (including the system message), and must not
+become part of the durable root envelope. Ordinary turn context keeps its
 existing ownership. This supplies the existing fresh-resource instructions to
 the model; it neither replays the paused call nor creates approval authority.
 
@@ -111,3 +112,8 @@ Qualification must cover a resumed frozen envelope, unchanged original context,
 current uncached guidance/receipts and the actual OpenAI-compatible/Codex
 requests after delayed phone approval. Real Facebook authentication remains a
 separate deployment/pilot gate.
+
+Native coding-question and remote handoff integration checks also enforce
+byte-for-byte extension of the provider's historical messages. Adding the live
+decision to the system message violated that existing contract; appending
+execution context after the transcript preserves it without relaxing checks.

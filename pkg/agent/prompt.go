@@ -132,8 +132,8 @@ type PromptBuildRequest struct {
 	SelectedSkills []skills.SelectedSkill
 	Overlays       []PromptPart
 	// ExecutionOverlays are trusted current-execution facts, such as a resumed
-	// interaction decision. They are rendered even when root context is frozen
-	// and are never captured in the immutable root-turn envelope.
+	// interaction decision. They extend the request transcript even when root
+	// context is frozen and are never captured in the immutable root envelope.
 	ExecutionOverlays []PromptPart
 
 	SuppressDefaultSystemPrompt bool

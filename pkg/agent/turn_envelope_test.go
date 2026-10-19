@@ -281,17 +281,27 @@ func TestSetupTurnInteractionContinuationReusesOriginatingEnvelope(t *testing.T)
 		strings.Contains(exec.messages[0].Content, "fresh goal must not enter") {
 		t.Fatalf("continuation recomputed dynamic context: %q", exec.messages[0].Content)
 	}
+	executionMessages := exec.messages[1+len(history):]
+	if len(executionMessages) != 2 {
+		t.Fatalf("continuation execution messages = %d, want guidance and receipts", len(executionMessages))
+	}
+	var executionText strings.Builder
+	for _, message := range executionMessages {
+		if message.Role != "user" || message.PromptLayer != string(PromptLayerContext) ||
+			message.PromptSlot != string(PromptSlotRuntime) || message.PromptSource != string(PromptSourceRuntime) ||
+			message.TurnEnvelope != nil || len(message.SystemParts) != 0 {
+			t.Fatal("live execution facts must be uncached runtime context outside the root envelope")
+		}
+		executionText.WriteString(message.Content)
+	}
 	for _, expected := range []string{
 		"Recorded outcome: ready.", "Open fresh resources", "cleanup-before-wait",
 	} {
-		if !strings.Contains(exec.messages[0].Content, expected) {
+		if !strings.Contains(executionText.String(), expected) {
 			t.Fatalf("frozen continuation lost current execution guidance %q", expected)
 		}
-	}
-	for _, block := range exec.messages[0].SystemParts {
-		if (strings.Contains(block.Text, "Recorded outcome: ready.") ||
-			strings.Contains(block.Text, "cleanup-before-wait")) && block.CacheControl != nil {
-			t.Fatal("live continuation guidance entered the stable provider cache prefix")
+		if strings.Contains(exec.messages[0].Content, expected) {
+			t.Fatal("live continuation guidance changed the previously sent system message")
 		}
 	}
 	projected := projectTurnEnvelopesForProvider(exec.messages)
