@@ -403,6 +403,54 @@ func TestBrowserDenialRejectsUnsettledOrAcceptedNativeInvocation(t *testing.T) {
 	}
 }
 
+func TestBrowserDenialRequiresNativeCancellationControls(t *testing.T) {
+	control := newBrowserDenialControl(t)
+	trial := control.trial
+	observed, err := observeBrowserNative(t.Context(), control.fixture.workspace, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := trial.Browser.Denial
+	encoded, err := json.Marshal(observed.intents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"missing", "missing-kind", "missing-controls", "wrong-kind", "wrong-controls"} {
+		t.Run(mode, func(t *testing.T) {
+			copy := observed
+			copy.intents = nil
+			if json.Unmarshal(encoded, &copy.intents) != nil {
+				t.Fatal("native outbox control unavailable")
+			}
+			found := false
+			for _, intent := range copy.intents {
+				if len(intent.PlatformMessageIDs) != 1 ||
+					intent.PlatformMessageIDs[0] != lastOutcome(trial.Events).MessageID {
+					continue
+				}
+				found = true
+				metadata := &intent.Message.Metadata
+				switch mode {
+				case "missing":
+					metadata.InteractionKind, metadata.InteractionControls = "", ""
+				case "missing-kind":
+					metadata.InteractionKind = ""
+				case "missing-controls":
+					metadata.InteractionControls = ""
+				case "wrong-kind":
+					metadata.InteractionKind = "question"
+				case "wrong-controls":
+					metadata.InteractionControls = bus.OutboundInteractionControlsPrompt
+				}
+			}
+			native := inspectBrowserTask(trial, control.target(), control.page, copy, true, nil, proof)
+			if !found || native.Code == "native_post_stop_observed" || native.FinalDeliveries != 0 {
+				t.Fatal("native cancellation without matching approval/remove metadata was accepted", mode)
+			}
+		})
+	}
+}
+
 func TestBrowserDenialConversationDispatchesOnlyPromptBoundCancel(t *testing.T) {
 	control := browserDenialControl(t, false)
 	transport := newFakeConversation()

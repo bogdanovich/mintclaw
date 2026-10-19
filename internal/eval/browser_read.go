@@ -227,6 +227,10 @@ func inspectBrowserTask(
 			!slices.Equal(message.TraceScopes, event.TraceScopes) {
 			return proof
 		}
+		if event.Kind == "canceled" && (message.Metadata.InteractionKind != event.InteractionKind ||
+			message.Metadata.InteractionControls != event.Controls) {
+			return proof
+		}
 		seen[id] = true
 	}
 	proof.FinalDeliveries = len(seen)
