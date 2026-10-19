@@ -479,14 +479,14 @@ func attachMediaArtifacts(result *toolshared.ToolResult, store mediaResolver) {
 }
 
 func mergeDeliverableArtifacts(existing, additional []taskresult.Artifact) []taskresult.Artifact {
-	out := append([]taskresult.Artifact(nil), existing...)
+	out := taskresult.CloneArtifacts(existing)
 	byRef := make(map[string]int, len(out))
 	for index, artifact := range out {
 		if ref := strings.TrimSpace(artifact.Ref); ref != "" {
 			byRef[ref] = index
 		}
 	}
-	for _, artifact := range additional {
+	for _, artifact := range taskresult.CloneArtifacts(additional) {
 		ref := strings.TrimSpace(artifact.Ref)
 		if ref == "" {
 			continue
@@ -502,7 +502,7 @@ func mergeDeliverableArtifacts(existing, additional []taskresult.Artifact) []tas
 }
 
 func mergeArtifactHints(target *taskresult.Artifact, source taskresult.Artifact) {
-	if target.LocalPath == "" {
+	if target.LocalPath == "" && target.Recovery == nil && source.Recovery == nil {
 		target.LocalPath = source.LocalPath
 	}
 	if target.Kind == "" || target.Kind == "media" {
@@ -513,6 +513,12 @@ func mergeArtifactHints(target *taskresult.Artifact, source taskresult.Artifact)
 	}
 	if target.ContentType == "" {
 		target.ContentType = source.ContentType
+	}
+	if target.Recovery == nil {
+		target.Recovery = taskresult.CloneArtifactRecovery(source.Recovery)
+	}
+	if target.Recovery != nil {
+		target.LocalPath = ""
 	}
 	target.Delivered = target.Delivered || source.Delivered
 }
@@ -1933,6 +1939,9 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				hasLiveContextMedia && toolResult.ContextMediaRequiresVision,
 			)
 		}
+	}
+	if protectedResult && call.resultSource != toolResultHook {
+		recordDeliverable(exec, retainSuppressedMedia(ts, p.Cfg, toolResult))
 	}
 	if !protectedResult && toolResult.Deliverable != nil {
 		recordDeliverable(exec, toolResult.Deliverable)

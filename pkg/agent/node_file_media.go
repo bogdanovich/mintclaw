@@ -120,6 +120,13 @@ func inboundMediaOwnerForTarget(
 }
 
 func nodeFileMediaOwnerForTurn(ts *turnState) (media.MediaOwner, error) {
+	if ts == nil {
+		return media.MediaOwner{}, errors.New("turn media owner is unavailable")
+	}
+	return nodeFileMediaOwnerForWorkspace(ts, ts.workspace)
+}
+
+func nodeFileMediaOwnerForWorkspace(ts *turnState, workspace string) (media.MediaOwner, error) {
 	if ts == nil || ts.agent == nil {
 		return media.MediaOwner{}, errors.New("turn media owner is unavailable")
 	}
@@ -129,7 +136,7 @@ func nodeFileMediaOwnerForTurn(ts *turnState) (media.MediaOwner, error) {
 			return media.MediaOwner{}, errors.New("coding turn media owner is unavailable")
 		}
 		return media.NewRuntimeMediaOwner(
-			ts.workspace,
+			workspace,
 			string(principal.Runtime),
 			principal.AgentID,
 			principal.ActorID,
@@ -160,7 +167,7 @@ func nodeFileMediaOwnerForTurn(ts *turnState) (media.MediaOwner, error) {
 		effectiveSession = routeSession
 	}
 	return media.NewMediaOwner(
-		ts.workspace,
+		workspace,
 		ts.agent.ID,
 		actorID,
 		routeSession,
