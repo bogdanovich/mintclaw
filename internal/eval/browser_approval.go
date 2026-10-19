@@ -49,7 +49,8 @@ type browserApprovalObservation struct {
 func (domain *browserConversation) observeApproval(ctx context.Context, prompt Event) error {
 	if domain.item.Browser == nil ||
 		domain.item.Browser.Scenario != "artifact" &&
-			domain.item.Browser.Scenario != "denied" && !isBrowserForm(domain.item) || prompt.Kind != "approval" ||
+			domain.item.Browser.Scenario != "denied" && !isBrowserForm(domain.item) &&
+			!isBrowserAmbiguity(domain.item) || prompt.Kind != "approval" ||
 		domain.approval != nil {
 		return errBrowserEvidence
 	}
@@ -156,6 +157,9 @@ func (domain *browserConversation) readApproval(prompt Event) (*browserApprovalO
 	if isBrowserForm(domain.item) && !domain.formApprovalMatches(record, *selected, snapshot) {
 		return nil, errBrowserEvidence
 	}
+	if isBrowserAmbiguity(domain.item) && !domain.ambiguityApprovalMatches(record, *selected, snapshot) {
+		return nil, errBrowserEvidence
+	}
 	root, err := os.OpenRoot(domain.questions.workspace)
 	if err != nil {
 		return nil, errBrowserEvidence
@@ -246,6 +250,9 @@ func (domain *browserConversation) consumedApproval() (*BrowserApprovalEvidence,
 	scope := browserApprovalScope
 	if isBrowserForm(domain.item) {
 		scope = browserFormApprovalScope
+	}
+	if isBrowserAmbiguity(domain.item) {
+		scope = browserAmbiguityApprovalScope
 	}
 	return &BrowserApprovalEvidence{
 		Scope:             scope,

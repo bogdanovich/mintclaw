@@ -12,7 +12,6 @@ import (
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
-	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
 
@@ -23,7 +22,7 @@ func (domain *browserConversation) confirmForm(ctx context.Context, prompt Event
 	if err := domain.questions.observe(ctx, prompt); err != nil {
 		return protocol.MintClawMessage{}, err
 	}
-	if err := domain.formPromptMatches(prompt, domain.questions.waiting); err != nil {
+	if err := domain.browserQuestionPromptMatches(prompt, domain.questions.waiting); err != nil {
 		return protocol.MintClawMessage{}, err
 	}
 	inputs, state, err := domain.readFormInputState()
@@ -54,27 +53,6 @@ func (domain *browserConversation) confirmForm(ctx context.Context, prompt Event
 		inputSetSHA256: browserFormInputSet(inputs), requestID: request.ID, requestedAt: now,
 	}
 	return request, nil
-}
-
-func (domain *browserConversation) formPromptMatches(prompt Event, record interactions.Record) error {
-	raw, err := domain.questions.read(
-		domain.questions.workspace,
-		"state/outbox/"+record.PromptDeliveryID+".json",
-		outbox.MaxInspectionBytes,
-	)
-	if err != nil {
-		return err
-	}
-	defer clear(raw)
-	intent, err := outbox.InspectIntent(raw, record.PromptDeliveryID)
-	if err != nil || intent.OwnerWorkspace != domain.questions.workspace || intent.Status != outbox.StatusDelivered ||
-		intent.Identity.SessionKey != record.Route.SessionKey || intent.Identity.Channel != record.Route.Channel ||
-		intent.Identity.ChatID != record.Route.ChatID || intent.Message == nil || intent.Message.AgentID != record.Route.AgentID ||
-		intent.Message.SessionKey != record.Route.SessionKey ||
-		!observedBrowserQuestionPrompt(prompt, record.ID, record.ShortID, intent, domain.target) {
-		return errBrowserEvidence
-	}
-	return nil
 }
 
 // Check only passive native records. This is not a new browser engine or grant;
@@ -124,16 +102,7 @@ func (domain *browserConversation) formStateReady(
 			continue
 		}
 		action, exists := state.PreparedActions[invocation.PreparedActionID]
-		if !exists || action.Owner != session.Owner || invocation.Owner != session.Owner ||
-			action.SessionID != session.ID || invocation.SessionID != session.ID || action.DryRun ||
-			action.Profile != session.Profile || action.ProfileRevision != session.ProfileRevision ||
-			action.PolicyRevision != policy || action.ControllerGeneration != session.ControllerGeneration ||
-			action.FrameID != "" || action.TabID != session.TabID || invocation.ActionHash != action.ActionHash ||
-			invocation.Execution != nil || invocation.Effect != action.Effect ||
-			action.CapabilityMode != browserpolicy.CapabilityRestricted || action.ApprovalMode != browserpolicy.ApprovalPolicy ||
-			action.RestrictedPolicyRevision != restricted || action.WorkerRestrictedDecision != "" ||
-			action.CreatedAt < session.CreatedAt || invocation.CreatedAt < action.CreatedAt ||
-			invocation.UpdatedAt > time.Now().UnixNano() {
+		if !exists || !browserInvocationMatchesSession(action, invocation, session, policy, restricted, time.Now()) {
 			return false
 		}
 		used[action.ID] = true
@@ -195,24 +164,13 @@ func projectBrowserFormConfirmation(
 	if before == nil || before.requestID == "" {
 		return nil, errBrowserEvidence
 	}
-	answer := current.Answer
-	if current.ID != before.record.ID || current.Kind != interactions.KindQuestion || current.ProtectedAnswer != nil ||
-		(current.Status != interactions.StatusResuming && current.Status != interactions.StatusResolved) ||
-		current.Outcome != interactions.OutcomeAnswered || current.FailureCode != "" || current.Revision <= before.record.Revision ||
-		current.Route != before.record.Route || !reflect.DeepEqual(current.Origin, before.record.Origin) ||
-		!reflect.DeepEqual(current.Questions, before.record.Questions) ||
-		current.ShortID != before.record.ShortID || current.CreatedAt != before.record.CreatedAt ||
-		current.ExpiresAt != before.record.ExpiresAt || current.UpdatedAt > now.UnixMilli() ||
-		current.ApprovalConsumedAt != 0 ||
-		current.PromptDeliveryID != before.record.PromptDeliveryID || answer == nil || answer.Protected != nil ||
-		answer.MessageID != before.requestID || answer.Text != browserFormConfirmationText || answer.Superseded ||
-		answer.ResponseMessageID != "" && answer.ResponseMessageID != before.prompt.MessageID ||
-		len(answer.Values) != 0 || len(answer.Media) != 0 || answer.Choice != "" ||
-		answer.ReceivedAt < before.requestedAt.UnixMilli() || answer.ReceivedAt >= current.ExpiresAt ||
-		answer.ReceivedAt > current.UpdatedAt || current.Status == interactions.StatusResolved &&
-		(current.ResolvedAt < answer.ReceivedAt || current.ResolvedAt > now.UnixMilli()) {
+	if !browserQuestionAnswerMatches(browserQuestionReply{
+		prompt: before.prompt, record: before.record, requestID: before.requestID,
+		requestedAt: before.requestedAt, text: browserFormConfirmationText,
+	}, current, now) {
 		return nil, errBrowserEvidence
 	}
+	answer := current.Answer
 	return &BrowserFormConfirmationEvidence{
 		Scope:                "native_fixture_form_confirmation_v1",
 		InteractionID:        current.ID,
