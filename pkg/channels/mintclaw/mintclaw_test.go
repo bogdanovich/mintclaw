@@ -1592,6 +1592,56 @@ func TestSendMedia_IncludesCaptionAndAttachmentsInSinglePayload(t *testing.T) {
 	}
 }
 
+func TestSendMediaPreservesTerminalControlOnWebSocket(t *testing.T) {
+	for _, kind := range []string{"", bus.OutboundKindInterim, bus.OutboundKindFinal} {
+		t.Run("outbound_"+kind, func(t *testing.T) {
+			ch := newTestMintClawChannel(t)
+			ch.SetRunning(true)
+			store := media.NewFileMediaStore()
+			ch.SetMediaStore(store)
+			clientConn, received, cleanup := newTestMintClawWebSocket(t)
+			defer cleanup()
+			ch.addConnForTest(&mintclawConn{id: "conn-1", conn: clientConn, sessionID: "sess-1"})
+			imagePath := filepath.Join(t.TempDir(), "verification.png")
+			if err := os.WriteFile(imagePath, []byte("png-body"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ref, err := store.Store(imagePath, media.MediaMeta{ContentType: "image/png"}, "test-scope")
+			if err != nil {
+				t.Fatal(err)
+			}
+			const report = "Verified listing.\n\nOriginal files obtained.\n\nBrowser closed. END-OF-REPORT."
+			_, err = ch.sendMedia(t.Context(), bus.OutboundMediaMessage{
+				ChatID: "mintclaw:sess-1", Context: bus.InboundContext{MessageID: "request-1"},
+				Metadata: bus.OutboundMetadata{OutboundKind: kind},
+				Parts:    []bus.MediaPart{{Ref: ref, Type: "image", Caption: report}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case message := <-received:
+				payload := message.Payload
+				if message.Type != TypeMessageCreate || message.SessionID != "sess-1" ||
+					payload[PayloadKeyRequestID] != "request-1" || payload[PayloadKeyContent] != report {
+					t.Fatal("media lost its route, request or complete caption", message)
+				}
+				if final, _ := payload[PayloadKeyFinal].(bool); final != (kind == bus.OutboundKindFinal) {
+					t.Fatal("media lost or invented terminal control", payload)
+				}
+				if outbound, _ := payload[PayloadKeyOutbound].(string); outbound != kind {
+					t.Fatal("media changed outbound control", payload)
+				}
+				if attachments, ok := payload["attachments"].([]any); !ok || len(attachments) != 1 {
+					t.Fatal("media lost its attachment", payload)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("expected WebSocket media payload")
+			}
+		})
+	}
+}
+
 func TestSendMediaUsesNativeRequestFallbackWithoutInventingMetadata(t *testing.T) {
 	ch := newTestMintClawChannel(t)
 	ch.SetRunning(true)
