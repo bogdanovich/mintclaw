@@ -14,6 +14,18 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
+type documentTaskHandoffResolver struct {
+	*media.FileMediaStore
+	observe func()
+}
+
+func (resolver *documentTaskHandoffResolver) OpenOwned(
+	reference string, owner media.MediaOwner,
+) (*media.OwnedMediaSource, error) {
+	resolver.observe()
+	return resolver.FileMediaStore.OpenOwned(reference, owner)
+}
+
 func TestDocumentFormTaskHandoffReadmitsOnlyNewPDFSelectorsAndMedia(t *testing.T) {
 	workspace := t.TempDir()
 	writePDFSkillForTest(t, workspace)
@@ -54,9 +66,16 @@ func TestDocumentFormTaskHandoffReadmitsOnlyNewPDFSelectorsAndMedia(t *testing.T
 		Text:  `Read the new "/srv/NEW_PRIVATE_FORM.pdf" instead.`,
 		Media: []string{ref},
 	}
-	pipeline := &Pipeline{Context: PipelineContextServices{MediaResolver: store}}
+	observations := 0
+	resolver := &documentTaskHandoffResolver{FileMediaStore: store, observe: func() {
+		observations++
+		if ts.snapshot().UserMessage != "Protected form input is ready." {
+			t.Fatal("active-turn snapshot exposed live-only handoff input during document admission")
+		}
+	}}
+	pipeline := &Pipeline{Context: PipelineContextServices{MediaResolver: resolver}}
 	pipeline.prepareDocumentHandoff(ts, input)
-	if ts.userMessage != "Protected form input is ready." || len(ts.media) != 0 ||
+	if observations != 1 || ts.userMessage != "Protected form input is ready." || len(ts.media) != 0 ||
 		len(ts.documentProjections) != 1 || ts.documentProjections[0].Ref != ref ||
 		len(ts.documentLocalPaths) != 1 || ts.documentLocalPaths[0] != "/srv/NEW_PRIVATE_FORM.pdf" {
 		t.Fatal("handoff changed canonical root input, inherited an old selector, or failed new PDF admission")

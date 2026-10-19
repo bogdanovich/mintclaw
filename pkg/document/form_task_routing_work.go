@@ -13,13 +13,18 @@ func (store *FormJobStore) QuestionFormTaskRoute(
 	return store.updateFormTaskRoute(ctx, reference, owner, func(
 		record *FormJobRecord, mode *formIntakeStoredMode, route *formTaskRouteStored,
 	) (bool, error) {
+		staleReady := route.State == FormTaskReady && formTaskGrantRevision(*route) != record.Revision
 		if !formIntakeCapturesRoute(mode) || record.Revision != revision ||
 			(route.State != FormTaskPending && route.State != FormTaskVerify && route.State != FormTaskQuestion &&
-				(route.State != FormTaskCurrent || route.FieldReference != "")) || hasStagedFormIntake(mode) {
+				(route.State != FormTaskCurrent || route.FieldReference != "") && !staleReady) || hasStagedFormIntake(mode) {
 			return false, ErrFormJobConflict
 		}
 		if route.State == FormTaskQuestion {
 			return false, nil
+		}
+		if staleReady {
+			// Retain the payload, but require fresh consent at the current revision.
+			route.ConsentAnswerID, route.Question = "", nil
 		}
 		route.State = FormTaskQuestion
 		return true, nil

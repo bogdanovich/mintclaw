@@ -190,6 +190,15 @@ func (tool *DocumentTool) routeFormTaskWorkflow(
 			return documentFormToolError(err)
 		}
 	}
+	if view.State == document.FormTaskReady && view.GrantRevision != view.Revision {
+		if err = tool.formJobs.QuestionFormTaskRoute(ctx, view.Reference, view.Revision, owner); err != nil {
+			return documentFormToolError(err)
+		}
+		view, err = tool.formJobs.ReadFormTaskRoute(ctx, view.Reference, owner)
+		if err != nil {
+			return documentFormToolError(err)
+		}
+	}
 	if view.State == document.FormTaskReady {
 		// Protected continuation starts with one native routing call. Keep the
 		// entire newly authorized request within the existing live-text ceiling.

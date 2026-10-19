@@ -184,6 +184,32 @@ func TestDocumentFormTaskSwitchBudgetDraftPreservationAndNoReplay(t *testing.T) 
 	}
 }
 
+func TestDocumentFormTaskBudgetRefusalThenResumeRefreshesReadyConsent(t *testing.T) {
+	tool, ctx, owner, guard, model := taskWorkflowFixture(t, document.FormTaskSwitch)
+	ref, err := tool.AdmitProtectedFormTask(ctx, guard, "deferred-switch", "PRIVATE_NEW_TASK", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited := executeTaskRoute(tool, toolshared.WithToolLiveContextTextAllowance(ctx, 0), ref)
+	if limited.IsError || !strings.Contains(limited.ForLLM, "handoff_context_capacity") {
+		t.Fatal("fixture did not retain ready handoff after context refusal")
+	}
+	for _, action := range []string{"pause", "resume"} {
+		result := tool.Execute(ctx, map[string]any{"action": "form", "form_action": action, "job_id": guard.JobID})
+		if result.IsError {
+			t.Fatal("normal lifecycle transition failed")
+		}
+	}
+	result := executeTaskRoute(tool, ctx, ref)
+	if result.IsError || result.ContextText != "" || result.Control.Suspension == nil || model.calls != 2 {
+		t.Fatal("stale ready handoff was lost, released, or privately reclassified instead of asking fresh consent")
+	}
+	view, err := tool.formJobs.ReadFormTaskRoute(ctx, ref, owner)
+	if err != nil || view.State != document.FormTaskQuestion || view.Text != "PRIVATE_NEW_TASK" {
+		t.Fatal("fresh protected question lost the original retained request")
+	}
+}
+
 func TestDocumentFormTaskSameFormClarificationsRemainProtected(t *testing.T) {
 	tool, ctx, owner, guard, model := taskWorkflowFixture(t, document.FormTaskContinue)
 	for index, text := range []string{

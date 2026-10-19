@@ -49,6 +49,21 @@ func routedFormIntakeOrigin(
 	return FormIntakeContext{}, 0, ErrFormJobAnswerConflict
 }
 
+func isRoutedFormIntakeInput(jobID string, mode *formIntakeStoredMode, inputID string) bool {
+	reference := formIntakeReceiptPrefix + jobID + "." + inputID
+	for _, route := range mode.TaskRoutes {
+		if route.FieldReference == reference {
+			return true
+		}
+		for _, answer := range route.Answers {
+			if answer.FieldReference == reference {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func validateFormIntakeAdmissionOrders(mode *formIntakeStoredMode) error {
 	seen := make(map[int]string)
 	linked := make(map[string]bool)

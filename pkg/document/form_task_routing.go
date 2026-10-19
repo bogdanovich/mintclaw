@@ -62,6 +62,7 @@ type FormTaskRouteSnapshot struct {
 	ModeID           string               `json:"mode_id"`
 	Revision         int64                `json:"revision"`
 	AdmittedRevision int64                `json:"-"`
+	GrantRevision    int64                `json:"-"`
 	State            FormTaskRouteState   `json:"state"`
 	Passes           int                  `json:"passes"`
 	FieldReference   string               `json:"field_reference,omitempty"`
@@ -410,6 +411,7 @@ func formTaskRouteSnapshot(
 	}
 	return FormTaskRouteSnapshot{
 		HandoffTextBytes: handoffBytes,
+		GrantRevision:    formTaskGrantRevision(route),
 		Reference:        formTaskRoutePrefix + record.JobID + "." + route.ID,
 		JobID:            record.JobID, ModeID: mode.ID, Revision: record.Revision, AdmittedRevision: route.Revision,
 		State: route.State, Passes: route.Passes, FieldReference: route.FieldReference, Reused: reused,

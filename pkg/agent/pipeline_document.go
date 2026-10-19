@@ -35,6 +35,13 @@ type documentPromptRejection struct {
 }
 
 func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
+	if ts == nil {
+		return
+	}
+	p.prepareDocumentInput(ts, ts.userMessage, ts.media)
+}
+
+func (p *Pipeline) prepareDocumentInput(ts *turnState, message string, mediaRefs []string) {
 	if p == nil || ts == nil || ts.agent == nil {
 		return
 	}
@@ -43,12 +50,12 @@ func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
 	if turnProfileSkillAllowed(ts.profile, "pdf") && ts.agent.ContextBuilder != nil {
 		_, skillAvailable = ts.agent.ContextBuilder.ResolveSkillName("pdf")
 	}
-	localPaths := localPDFPathCandidates(ts.userMessage)
+	localPaths := localPDFPathCandidates(message)
 	ts.documentLocalPaths = append([]string(nil), localPaths...)
 	if workflowAllowed && skillAvailable && len(localPaths) > 0 {
 		ts.activeSkills = appendUniqueString(ts.activeSkills, "pdf")
 	}
-	if p.Context.MediaResolver == nil || len(ts.media) == 0 {
+	if p.Context.MediaResolver == nil || len(mediaRefs) == 0 {
 		return
 	}
 	resolver, ok := p.Context.MediaResolver.(document.OwnedMediaResolver)
@@ -59,7 +66,7 @@ func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
 	if err != nil {
 		return
 	}
-	for _, candidate := range ts.media {
+	for _, candidate := range mediaRefs {
 		ref := strings.TrimSpace(candidate)
 		if !strings.HasPrefix(ref, "media://") {
 			continue
@@ -190,11 +197,8 @@ func (p *Pipeline) prepareDocumentHandoff(ts *turnState, input *toolshared.ToolC
 	if input == nil || ts == nil {
 		return
 	}
-	userMessage, media := ts.userMessage, ts.media
-	ts.userMessage, ts.media = input.Text, input.Media
 	ts.documentProjections, ts.documentRejections, ts.documentLocalPaths = nil, nil, nil
-	p.prepareDocumentTurn(ts)
-	ts.userMessage, ts.media = userMessage, media
+	p.prepareDocumentInput(ts, input.Text, input.Media)
 }
 
 func isDocumentPathSpace(value byte) bool {

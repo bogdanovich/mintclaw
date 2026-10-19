@@ -67,6 +67,20 @@ func TestFormTaskRoutingDelayedPromotionKeepsOriginalContextAndIngressOrder(t *t
 		a.Context.RoleContext != originalContext.RoleContext || b.Context.Question != laterRequest.Context.Question {
 		t.Fatal("interpretation completion time replaced native ingress order or the original question context")
 	}
+	passRequest := FormIntakePassRequest{
+		Reference: first.Receipt, ExpectedRevision: route.Revision, Owner: request.Owner, Schema: request.Schema,
+		CandidateIDs: request.Context.CandidateFieldIDs, IdempotencyKey: "routed-original-context",
+	}
+	for range 2 {
+		pass, reserveErr := store.ReserveFormIntakePass(t.Context(), passRequest)
+		if reserveErr != nil {
+			t.Fatal(reserveErr)
+		}
+		if pass.Input.Context.Question != originalContext.Question ||
+			pass.Input.Context.RoleContext != originalContext.RoleContext || pass.Input.AdmissionOrder != 1 {
+			t.Fatal("actual reserved extraction replaced the routed input's original question or role")
+		}
+	}
 	encoded, err := json.Marshal([]FormIntakeInput{a, b})
 	if err != nil || strings.Contains(string(encoded), "PRIVATE_") ||
 		strings.Contains(string(encoded), "role context") {

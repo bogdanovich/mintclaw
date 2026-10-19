@@ -438,9 +438,12 @@ func (store *FormJobStore) ReserveFormIntakePass(
 			ID: reservation.ID, Revision: reservation.Revision,
 			CandidateIDs: slices.Clone(reservation.CandidateIDs), Reused: reused,
 		}
-		// This ephemeral interpretation sees the question at its reserved
-		// revision. The receipt's persisted origin remains immutable.
-		result.Input.Context = cloneFormIntakeContext(source.Intake.Context)
+		// Ordinary retries see the current collection question. Routed input
+		// was already bound before delayed promotion: its original role and
+		// question remain the interpretation authority, not the later prompt.
+		if !isRoutedFormIntakeInput(record.Public.JobID, source.Intake, input.ID) {
+			result.Input.Context = cloneFormIntakeContext(source.Intake.Context)
+		}
 		return !reused, nil
 	})
 	if err != nil {
