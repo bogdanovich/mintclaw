@@ -1,6 +1,7 @@
 # Website Login discovery: rollout evidence
 
-Status: implementation and deployment qualified on 2026-10-18. The owner's
+Status: implementation and deployment qualified; the latest correction was
+verified on 2026-10-19 UTC. The owner's
 confirmed Facebook login and stored-code use remain pending. The first
 owner-approved attempt ended unknown; the follow-up is recorded below. This
 records D3 of the [replacement roadmap](credential-discovery-redesign.md);
@@ -279,3 +280,73 @@ within the two-hour window. A code provided after the previous browser closed
 cannot complete that retired session. SMS remains an explicitly permitted
 ordinary-chat exception, separately unqualified; private stored TOTP handling
 is unchanged.
+
+
+## Live continuation context after approval
+
+The next owner pilot on `51426f6a`, task `delegate-1792370674148-1`, generation
+`c7788a31-a1b5-4b5b-a22d-2be5f8cbc8dd`, again received phone approval and
+resumed exactly once. The originating trace
+`trace-turn-24717f53c6c3d5bdf54134db` suspended after closing its idle browser.
+The continuation `trace-turn-8530ccbf90b2930a58765d7b` only checked that old
+session (records 5/7: status/closed) and closed it again (12/15: close/already
+closed). It opened no new browser and read or submitted no new credential
+values. The task failed before a new form or second-factor challenge.
+
+Both traces used `mintclaw.diagnostic_trace.v1`, the matching source commit,
+`redacted_content` / `config_filter.v1`, and no truncation or dropped records.
+The originating and continuation traces had 65 and 20 records respectively.
+Prompt assembly discarded non-stable overlays when reusing the frozen root
+context, which removed the current ready/fresh-resource guidance. The frozen
+regression reproduced that loss; the actual provider requests had empty dynamic
+system/tail fingerprints.
+
+[PR #1792](https://github.com/bogdanovich/mintclaw/pull/1792), merge
+`77c79cd50e61ce50d75b8fe0e4b60a63f56b5fda`, separates current execution facts
+from root-owned context. Ready/decision guidance and verified receipt IDs
+extend the transcript as uncached runtime context; every previously sent
+message, the original envelope, goal and admission time remain unchanged. The
+live facts do not enter canonical history or create credential authority.
+There is no automatic replay of the paused browser call: the agent must open
+fresh resources, observe the current page and use the ordinary protected tools.
+
+The reviewed head `6f3e05c88b7a244147a48b619bb44615423832b2` had ten successful
+CI checks, two intentionally skipped checks, clean exact-head review, no
+unresolved threads and owner PR-level rocket approval. All five private
+credential gates passed in integration job `117862280188`, including actual
+OpenAI-compatible/Codex requests, native Chromium/TOTP and delayed approval
+with fresh continuation. Native coding and remote handoff retain their strict
+historical-prefix assertions. Real companion command, file-transfer and durable
+job scenarios also passed locally. Formatting, unchanged-rule full lint and
+documentation validation passed. Local pre-Go macOS loader stalls were not
+counted as executed tests; current-head CI completed the required suites.
+
+The merged correction was installed and verified on 2026-10-19 UTC. Core,
+node and launcher candidates matched the merged source and had clean VCS
+provenance. All five configurations loaded with unchanged doctor findings;
+configuration hashes and the protected token/owner-key identities were
+preserved. The previous runtime was `cf28ed1a071c797fc03aee110ab7adb837cf4937`,
+including another operator's updates. Only main was stopped and started.
+
+The first attempt restored the previous binaries after an early process
+verification failed. The retry used bounded verification of the exact running
+candidate, waited for registered owner tasks to finish, and succeeded. Both
+attempt backups remain; no mutable task, conversation, browser, grant or
+credential data was restored. The verified backup has 33 matching checksum
+entries and recorded instructions for rollback of binaries only.
+
+All ten services were active, with zero failed units, legacy processes and
+error-level journal entries in the checked ten-minute window. The public
+approval root returned HTML/HTTP 200 and its script matched the exact deployed
+source; external operator enrollment remained denied/HTTP 403. The no-tool
+stateless smoke produced trace `trace-turn-a4aea5b2f313b6338eacbc5d`: schema
+`mintclaw.diagnostic_trace.v1`, matching source, `redacted_content` /
+`mintclaw.config_filter.v1`, completed, six records, zero tools, no truncation
+and exact input/reply hashes.
+
+The real Facebook authentication gate remains open. A fresh command must come
+through the owner's normal MintClaw chat; the operator does not impersonate
+that principal or replay the failed attempt. Restart invalidated previous
+grants, so a new phone approval may be needed within the two-hour window. The
+twenty-hour grant still begins at approval. Deployment and synthetic TOTP
+acceptance do not certify the real account.

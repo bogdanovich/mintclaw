@@ -1,13 +1,17 @@
 # Website-discovered browser credentials
 
-Status: D0–D3 delivered on 2026-10-18; the first owner-approved Facebook attempt
-found the Login but ended unknown. The reviewed continuation fix is merged;
-D4 still requires fresh authentication evidence.
-The owner's two-hour, automatically resumed phone wait is also reviewed and
-deployed. The [composition](credential-approval-wait.md) resumed the fresh D4
-attempt automatically; that attempt stopped at the TOTP step. The generic
-readiness correction for initially disabled submit controls is reviewed and
-deployed; a fresh Facebook authentication check remains required.
+Status: D0-D3 are delivered; D4 still requires fresh Facebook authentication
+and private stored-code evidence if the site requests it. Two-hour phone
+approval, generic readiness for initially disabled submit controls and live
+continuation context are reviewed and deployed. The latest correction is
+`77c79cd50e61ce50d75b8fe0e4b60a63f56b5fda` (PR #1792), verified on
+2026-10-19 UTC.
+The previous approved task resumed but inspected its deliberately closed
+browser. Current continuation facts now extend the transcript without changing
+the frozen originating context; the agent receives its existing fresh-resource
+instructions. The [composition](credential-approval-wait.md) and
+[rollout evidence](credential-website-login-rollout.md) distinguish this
+qualification from the remaining owner pilot.
 This replaces the requirement to
 preconfigure each browser account's item UUID, allowed origins and site-specific
 success markers. The new path is reviewed, qualified and deployed; see the
