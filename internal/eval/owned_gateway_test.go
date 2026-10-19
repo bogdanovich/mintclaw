@@ -134,7 +134,7 @@ func runOwnedGatewayTestChild() int {
 		ConfigPathSHA256: admissionHash(filepath.Join(home, "config.json")), LogLevel: "warn",
 		GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
 	}
-	if control.Mode == "native_models" {
+	if control.Mode == "native_models" || control.Mode == "native_models_retry" {
 		probe.GitCommit, probe.BuildVersion = nativeModelTestCommit, "native-test"
 	}
 	var first atomic.Bool
@@ -218,11 +218,14 @@ func runOwnedGatewayTestChild() int {
 				response.Payload[protocol.PayloadKeyTraceScopes] = []events.TraceScope{{
 					Workspace: cfg.WorkspacePath(), TurnID: request.ID,
 				}}
-				if control.Mode == "native_models" {
+				if control.Mode == "native_models" || control.Mode == "native_models_retry" {
 					binding := nativeModelTestBinding(cfg.WorkspacePath())
 					binding.TraceScope.TurnID = request.ID
 					binding.SessionKey = payloadString(response.Payload, protocol.PayloadKeySessionKey)
 					trace, traceErr := makeNativeModelTestTrace(binding)
+					if control.Mode == "native_models_retry" {
+						trace, traceErr = makeNativeModelRetryTestTrace(binding)
+					}
 					trace.TraceID = "trace-turn-" + request.ID
 					store := diagnostictrace.Store{Root: diagnostictrace.ResolveStoreRoot("", cfg.WorkspacePath())}
 					if traceErr != nil {

@@ -58,7 +58,16 @@ func projectNativeModelTrace(
 			if err != nil || payload.Status != trace.Outcome.Status {
 				return result
 			}
-		case diagnostictrace.RecordModelRetry, diagnostictrace.RecordModelFallbackAttempt:
+		case diagnostictrace.RecordModelRetry:
+			position, exists := attempts[record.Correlation.ModelAttemptID]
+			payload, err := decodeDocument[diagnostictrace.ModelPayload](record.Data, 16*1024)
+			if terminal || !exists || calls[position].UsageState != "not_returned" || calls[position].RetryObserved ||
+				err != nil || payload.Status != "retry" || payload.Attempt < 1 {
+				return result
+			}
+			calls[position].RetryObserved = true
+			retries++
+		case diagnostictrace.RecordModelFallbackAttempt:
 			if terminal {
 				return result
 			}
@@ -118,7 +127,7 @@ func projectNativeModelTrace(
 	}
 	if trace.Outcome.Status != "error" && trace.Outcome.Status != "aborted" {
 		for _, call := range calls {
-			if call.UsageState == "not_returned" {
+			if call.UsageState == "not_returned" && !call.RetryObserved {
 				return result
 			}
 		}
