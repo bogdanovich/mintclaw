@@ -281,8 +281,10 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    and correction, native question confirmation followed by exact HMAC-bound submit allow-once, unchanged reviewed
    page/context, independent submitted values and post-stop native/delivery/privacy/cleanup assessment before judging.
    Trials require owned startup and explicit metadata capture before any probe/model work. Offline controls are not
-   live qualification: fresh identified private-form experiments remain mandatory. Private offline regrade also
-   remains gated until its canary/privacy contract can be preserved without a new secret store.
+   live qualification: fresh identified private-form experiments remain mandatory. Private offline regrade now admits
+   only otherwise eligible browser forms with exclusively v1 generated facts, using a conservative public-format
+   guard on raw reports and typed judge boundaries rather than retaining values. Literal/private-PDF facts remain
+   gated; this feature does not make either failed private-form pilot eligible or qualify a live regrade.
    Ordinary chat substitution and a new value/vault/approval engine remain forbidden.
    Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a
    read-only native transfer inspection API rather than constructing/reconciling a store. This receipt does not

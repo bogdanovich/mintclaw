@@ -135,6 +135,7 @@ func (worker *browserInputWorker) Resolve(_ context.Context, target string) (bro
 }
 
 type browserInputControl struct {
+	fixture  *admissionFixture
 	domain   *browserConversation
 	registry *interactions.Registry
 	record   interactions.Record
@@ -298,7 +299,8 @@ func browserInputControlWithLocalEdits(t *testing.T, allow bool) *browserInputCo
 		t.Fatal(err)
 	}
 	control := &browserInputControl{
-		domain: domain, registry: registry, record: record, broker: broker, request: request, worker: worker,
+		fixture: f,
+		domain:  domain, registry: registry, record: record, broker: broker, request: request, worker: worker,
 		store: filepath.Join(f.workspace, "state/diagnostics/traces"),
 		prompt: Event{
 			Kind: "question", MessageID: "input-message", RequestID: "input-request", AgentID: record.Route.AgentID,

@@ -204,9 +204,19 @@ form contract, the raw owned-profile privacy census and owned exit may admit the
 The existing runner finalizer publishes the canonical private report; a positive judge cannot repair missing hard
 evidence. Offline tests use actual broker/registry/outbox producers with a stub worker/trace and are not live results.
 
-Private offline regrade is deliberately still unavailable: the actual generated canaries are not persisted and a
-later judge input must not bypass their raw-value guard. A safe bounded regrade contract remains E5 work; adding a
-secret vault or silently judging without that guard is not an acceptable shortcut. Ambiguity/stale-account action
+Private offline regrade now admits only otherwise eligible submit/followup reports whose source-case facts are all
+v1 generation markers (`{{generate}}` or `MC_EVAL_GENERATE_PRIVATE_V1`). This format always emits `MC_EVAL_` plus
+sixteen lowercase hexadecimal characters. Regrade conservatively rejects any complete token of that public format,
+including every other trial's generated values, without reconstructing or storing any value. It scans original
+run/trial bytes before JSON decoding, then the full typed judge request and response before hashing or projection,
+using the existing bounded literal/JSON-escape guards. The role receipt says `generated_canary_format_v1`, not
+original-value or raw-provider-traffic coverage. Unscannable evidence refuses admission. A complete matching token is
+reserved even in public text; a bare prefix or the existing `MC_EVAL_CONTEXT_7C9` public marker is not a token.
+This contract can reject a harmless matching mention; arbitrary encodings are not certified.
+Literal-fact cases and private PDF regrade remain gated. Existing native form, fixture, privacy, cleanup, case/route
+and execution checks still apply; a judge cannot upgrade incomplete evidence or either retained failed pilot.
+This bounded regrade contract adds no target/tool work or persistence; adding a secret vault or silently judging
+without that guard is not an acceptable shortcut. Ambiguity/stale-account action
 admission and the fresh merged-source browser experiments also remain required. No production deployment follows
 from this workflow packet, and none of the preserved earlier negative results is upgraded.
 

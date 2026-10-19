@@ -4,9 +4,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"maps"
+	"regexp"
 )
 
-const generatePrivateFact = "MC_EVAL_GENERATE_PRIVATE_V1"
+const (
+	generatePrivateFact        = "MC_EVAL_GENERATE_PRIVATE_V1"
+	generatedPrivateFactPrefix = "MC_EVAL_"
+	generatedFactGuardScope    = "generated_canary_format_v1"
+)
+
+var generatedPrivateFactPattern = regexp.MustCompile(`MC_EVAL_[0-9a-f]{16}`)
 
 func privateFactPlaceholder(value string) bool {
 	return value == generatePrivateFact || value == "{{generate}}"
@@ -24,7 +31,7 @@ func materializePrivateFacts(facts map[string]string) (map[string]string, error)
 			clear(result)
 			return nil, err
 		}
-		result[handle] = "MC_EVAL_" + hex.EncodeToString(random[:])
+		result[handle] = generatedPrivateFactPrefix + hex.EncodeToString(random[:])
 	}
 	return result, nil
 }

@@ -1,6 +1,10 @@
 package eval
 
-import "testing"
+import (
+	"encoding/hex"
+	"strings"
+	"testing"
+)
 
 func TestMaterializePrivateFactsLeavesSourceAndTrialsIndependent(t *testing.T) {
 	source := map[string]string{"name": generatePrivateFact, "browser": "{{generate}}", "note": "fixed test value"}
@@ -17,5 +21,15 @@ func TestMaterializePrivateFactsLeavesSourceAndTrialsIndependent(t *testing.T) {
 	clear(first)
 	if second["note"] != "fixed test value" || source["note"] != "fixed test value" {
 		t.Fatal("trial aliases source")
+	}
+	for _, handle := range []string{"name", "browser"} {
+		value := second[handle]
+		// The public v1 family is also the value-free offline regrade guard.
+		if len(value) != 24 || !strings.HasPrefix(value, "MC_EVAL_") {
+			t.Fatal("generated fact no longer follows its v1 privacy contract")
+		}
+		if decoded, err := hex.DecodeString(value[8:]); err != nil || len(decoded) != 8 {
+			t.Fatal("generated fact is not the declared random v1 format")
+		}
 	}
 }

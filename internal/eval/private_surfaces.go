@@ -78,6 +78,8 @@ type privateFactRetention struct {
 	values    map[string]string
 	documents map[string]bool
 	bytes     int
+	// Offline grading retains only a public canary-family guard, not values.
+	generated bool
 }
 
 func (retained *privateFactRetention) add(facts map[string]string) bool {
