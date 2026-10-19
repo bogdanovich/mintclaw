@@ -127,6 +127,13 @@ available response usage across tool loops. It preserves missing/truncated/ambig
 presence and unknown internal attempts; per-trial isolation, loaded skill-version proof and domain cases remain
 mandatory. No historical run is backfilled or newly qualified by this prerequisite.
 
+The [native-model v1 experiment](../operations/manual-agent-evals-native-models-v1-20261019.md) on merged #1814
+passed one unchanged context task, independent judge, regrade and comparison, but retained a partial native
+observation with two invalid scopes. Actual traces omitted provider names and contained explicit failed-attempt
+retries before successful replacement requests, exposing overly strict consumer assumptions absent from its
+fixtures. Preserve the original partial report; a focused native-shape fix and regression controls are next, not
+invented provider identities, retroactive usage backfill or a promoted native-observer qualification.
+
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
 prerequisites when necessary. Do not reimplement protected intake, browser sessions, approval, or delivery in the harness.
 
