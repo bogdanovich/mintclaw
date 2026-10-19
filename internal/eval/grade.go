@@ -65,6 +65,7 @@ func Grade(
 			filter,
 		) || !original.TargetLifecycle.valid() || !original.WorkspaceInputs.valid() ||
 		!original.PrivateSurfaces.valid() || !original.BrowserFixtures.valid() || !original.TargetUsage.valid() ||
+		!original.NativeModels.valid(original.Runtime) || original.NativeModels.verdict() == Fail ||
 		original.PrivateSurfaces != nil && original.PrivateSurfaces.LeakObserved {
 		return RunReport{}, ErrGrade
 	}
@@ -74,6 +75,7 @@ func Grade(
 	}
 	// Admit every selected source before making a billable judge call.
 	trials := make([]Trial, 0, len(original.Trials))
+	modelBindings := []nativeModelBinding{}
 	seen := make(map[string]int)
 	identities := make(map[string]bool)
 	sessions := make(map[string]bool)
@@ -121,6 +123,13 @@ func Grade(
 			}
 		}
 		trials = append(trials, trial)
+		if original.NativeModels != nil {
+			bindings, valid := nativeModelBindings(trial, workspace)
+			if !valid {
+				return RunReport{}, ErrGrade
+			}
+			modelBindings = append(modelBindings, bindings...)
+		}
 		seen[summary.CaseID]++
 		identities[summary.ID] = true
 		sessions[trial.SessionID] = true
@@ -132,6 +141,10 @@ func Grade(
 		if count != repeat {
 			return RunReport{}, ErrGrade
 		}
+	}
+	models, valid := selectNativeModels(original.NativeModels, original.Runtime, modelBindings, identities)
+	if !valid {
+		return RunReport{}, ErrGrade
 	}
 	judge, err := NewModelRole(cfg, preset.JudgeModel, "judge")
 	if err != nil {
@@ -151,6 +164,7 @@ func Grade(
 		PrivateSurfaces: original.PrivateSurfaces,
 		BrowserFixtures: original.BrowserFixtures,
 		TargetUsage:     newTargetUsage(),
+		NativeModels:    models,
 	}
 	writer, err := newPrivateReport(options.OutputParent, home, workspace, result.ID)
 	if err != nil {

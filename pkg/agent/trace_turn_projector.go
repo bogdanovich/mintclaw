@@ -1214,14 +1214,7 @@ func safeRepositoryCommit(value string) string {
 }
 
 func safeHash(settings traceCaptureSettings, value string) string {
-	if value == "" {
-		return ""
-	}
-	if settings.filter != nil {
-		value = settings.filter(value)
-	}
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
+	return diagnostictrace.FilteredHash(value, settings.filter)
 }
 
 func diagnosticSafeHash(cfg *config.Config, value string) string {

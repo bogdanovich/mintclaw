@@ -38,6 +38,7 @@ type RunReport struct {
 	Usage           string                      `json:"usage"`
 	RoleUsage       []RoleUsage                 `json:"role_usage,omitempty"`
 	TargetUsage     *TargetUsage                `json:"target_usage,omitempty"`
+	NativeModels    *NativeModelObservation     `json:"native_models,omitempty"`
 	Mode            string                      `json:"mode,omitempty"`
 	Repeat          int                         `json:"repeat,omitempty"`
 	SourceRun       string                      `json:"source_run,omitempty"`
@@ -163,6 +164,17 @@ func (report *privateReport) finish(result RunReport) error {
 			_, writeErr = fmt.Fprintf(file,
 				"\nTarget returned finals: %s (%s); %d/%d finals returned usage.\n",
 				counts, usage.Coverage, usage.ReturnedUsage, usage.Finals)
+		}
+	}
+	if writeErr == nil {
+		if observation := result.NativeModels; observation != nil {
+			usage, counts := observation.Totals, "unknown"
+			if usage.Coverage == "observed_native_responses" || usage.Coverage == "partial_native_responses" {
+				counts = CompactTokens(usage.InputTokens) + " in, " + CompactTokens(usage.OutputTokens) + " out"
+			}
+			_, writeErr = fmt.Fprintf(file,
+				"\nRouted native model records: %s (%s, %s); %d requests, %d responses, %d observed usage.\n",
+				counts, observation.Code, usage.Coverage, usage.Requests, usage.Responses, usage.UsageResponses)
 		}
 	}
 	if writeErr == nil {

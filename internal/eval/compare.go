@@ -106,6 +106,7 @@ func Compare(baselineDirectory, currentDirectory string) (Comparison, error) {
 			result.EnvironmentChanges = append(result.EnvironmentChanges, difference.name)
 		}
 	}
+	compareNativeModels(&result, baseline.report, current.report)
 	ids := make([]string, 0, len(baseline.cases)+len(current.cases))
 	for id := range baseline.cases {
 		ids = append(ids, id)
@@ -177,6 +178,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		return result, ErrCompare
 	}
 	seen, sessions, roles := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	modelBindings := []nativeModelBinding{}
 	targetUsage := newTargetUsage()
 	coverage := map[Verdict]int{}
 	verdicts := make([]Verdict, 0, len(report.Trials))
@@ -210,6 +212,13 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 			}
 		}
 		targetUsage.addTrial(trial)
+		if report.NativeModels != nil {
+			bindings, valid := nativeModelBindings(trial, "")
+			if !valid {
+				return result, ErrCompare
+			}
+			modelBindings = append(modelBindings, bindings...)
+		}
 		if trial.Judge != nil && trial.Judge.Call != nil {
 			calls = append(slices.Clone(calls), *trial.Judge.Call)
 		}
@@ -241,6 +250,9 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 	if !report.TargetUsage.valid() || report.TargetUsage != nil && *report.TargetUsage != *targetUsage {
 		return result, ErrCompare
 	}
+	if _, valid := selectNativeModels(report.NativeModels, report.Runtime, modelBindings, seen); !valid {
+		return result, ErrCompare
+	}
 	for verdict, count := range report.Coverage {
 		if !validComparisonVerdict(verdict) || count < 0 || coverage[verdict] != count {
 			return result, ErrCompare
@@ -256,6 +268,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		report.TargetLifecycle.verdict(),
 		report.PrivateSurfaces.verdict(),
 		report.BrowserFixtures.verdict(),
+		report.NativeModels.verdict(),
 	)
 	if report.Verdict != combineVerdicts(verdicts...) {
 		return result, ErrCompare
