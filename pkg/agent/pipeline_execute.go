@@ -518,7 +518,6 @@ type toolLoopRunner struct {
 	iteration           int
 
 	messages                    []providers.Message
-	handledAttachments          []providers.Attachment
 	preservedToolVisibility     map[string]struct{}
 	suspendedInteractionID      string
 	journalErr                  error
@@ -1838,7 +1837,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		loopDecision = settlement.loopDecision
 		terminalBatch = settlement.completesToolBatch
 		terminalTurnErr = settlement.turnErr
-		runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
+		runner.llm.handledAttachments = append(runner.llm.handledAttachments, settlement.attachments...)
 	} else {
 		liveContextText := runner.takeLiveToolContextText(toolResult)
 		p.prepareDocumentHandoff(ts, toolResult.ContextInput)
@@ -1914,7 +1913,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			if isNonPublishableTurnError(toolResult.Err) {
 				terminalTurnErr = toolResult.Err
 			}
-			runner.handledAttachments = append(runner.handledAttachments, attachments...)
+			runner.llm.handledAttachments = append(runner.llm.handledAttachments, attachments...)
 			runner.registerLiveToolContext(
 				toolCallID,
 				durableToolResultMsg,
@@ -2152,7 +2151,6 @@ func codingToolSkippedPayload(
 
 func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOutcome {
 	p := runner.p
-	turnCtx := runner.turnCtx
 	ts := runner.ts
 	exec := runner.exec
 	llm := runner.llm
@@ -2209,33 +2207,6 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 	}
 
 	if llm.toolResponseDisposition == toolResponseHandled {
-		summaryMsg := providers.Message{
-			Role:        "assistant",
-			Content:     handledToolResponseSummary,
-			Attachments: append([]providers.Attachment(nil), runner.handledAttachments...),
-			Deliverable: taskresult.CloneDeliverable(exec.deliverable),
-		}
-		if !ts.opts.NoHistory {
-			writeErr := persistFullSessionMessage(
-				turnCtx,
-				ts.agent.Sessions,
-				ts.sessionKey,
-				&summaryMsg,
-			)
-			if writeErr != nil {
-				// The durable tool result already records the side-effect outcome;
-				// this assistant summary is only a passive transcript observation.
-				logger.WarnCF("agent", "Failed to persist handled tool summary", map[string]any{
-					"agent_id": ts.agent.ID,
-					"error":    writeErr.Error(),
-				})
-			} else {
-				ts.recordPersistedMessage(summaryMsg)
-				p.ingestMessage(turnCtx, ts, summaryMsg, nil)
-			}
-		}
-		ts.setPhase(TurnPhaseCompleted)
-		ts.setFinalContent("", false)
 		p.dismissToolFeedbackForTurn(ctx, ts)
 		logger.InfoCF("agent", "Tool output satisfied delivery; ending turn without follow-up LLM",
 			map[string]any{

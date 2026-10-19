@@ -387,6 +387,7 @@ type LLMIterationState struct {
 	response                     *providers.LLMResponse
 	normalizedToolCalls          []providers.ToolCall
 	toolResponseDisposition      toolResponseDisposition
+	handledAttachments           []providers.Attachment
 	streamingPublisher           *streamingChunkPublisher
 	streamingFallback            bool
 	suppressReasoning            bool
@@ -582,6 +583,7 @@ type turnState struct {
 	skillContextTrace   []SkillContextSnapshot
 	toolKinds           []string
 	toolExecutions      []ToolExecutionRecord
+	cleanup             turnResourceCleanup
 	turnCtx             *TurnContext
 	codingInstructions  *codingInstructionTurnState
 	runtimeCapabilities runtimecap.Context

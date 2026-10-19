@@ -38,6 +38,7 @@ type turnCleanupTestTool struct {
 	executionID  string
 	inbound      bus.InboundContext
 	result       tools.TurnCleanupResult
+	cleanupErr   error
 }
 
 func (tool *turnCleanupTestTool) CleanupTurnWithResult(
@@ -46,7 +47,7 @@ func (tool *turnCleanupTestTool) CleanupTurnWithResult(
 	tool.cleanupCalls++
 	tool.executionID = toolshared.ToolExecutionID(ctx)
 	tool.inbound = toolshared.ToolInboundContext(ctx)
-	return tool.result, nil
+	return tool.result, tool.cleanupErr
 }
 
 type afterToolHardAbortHook struct{}
