@@ -286,8 +286,12 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    The [ambiguity v1 pilot](../operations/manual-agent-evals-browser-ambiguity-v1-pilot-20261020.md) on merged #1853
    then reached clarification and exact South approval but failed before consumption: the harness's descriptive
    typed allow-once content violated the native channel's canonical-label contract. The sealed fixture retained
-   zero effects and a hard failure; no judge or used-profile retry ran. A bounded shared producer correction and
-   real-channel regression are required, not weaker channel validation or a promoted historical report.
+   zero effects and a hard failure; no judge or used-profile retry ran. The bounded canonical-label producer fix
+   and real-channel regression merged in #1854 without changing channel validation or approval authority.
+   Its [fresh v2 experiment](../operations/manual-agent-evals-browser-ambiguity-v2-pilot-20261020.md) completed the
+   script, consumed native approval and independently removed exactly South, but stayed inconclusive: the
+   collector mistook the native control-removing final for another prompt. A bounded native-predicate/final-identity
+   correction is required; neither old report is promoted and no source records may be filtered away.
    No local fixture pass qualifies native browser behavior.
    The [private-input prerequisite](agent-evals-browser-private-input.md) separates the missing native ingress from
    already protected model-produced fill. B1 adds only generation-bound, value-free broker target bindings and
