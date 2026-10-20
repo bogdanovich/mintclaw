@@ -49,7 +49,7 @@ func (domain *browserConversation) request(
 		return request, true, err
 	}
 	if isBrowserAmbiguity(domain.item) && action.Kind == "allow_once" && prompt.Kind == "approval" {
-		request, err := domain.allowReviewedBrowserAction(prompt, "Allow this clarified South account removal once.")
+		request, err := domain.allowReviewedBrowserAction(prompt)
 		return request, true, err
 	}
 	if isBrowserForm(domain.item) && action.Kind == "confirm" {
@@ -57,7 +57,7 @@ func (domain *browserConversation) request(
 		return request, true, err
 	}
 	if isBrowserForm(domain.item) && action.Kind == "allow_once" {
-		request, err := domain.allowReviewedBrowserAction(prompt, "Allow this confirmed fixture form submission once.")
+		request, err := domain.allowReviewedBrowserAction(prompt)
 		return request, true, err
 	}
 	if action.Kind == "protected_answer" {
