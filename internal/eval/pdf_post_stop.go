@@ -181,7 +181,7 @@ func (pending *pdfRunFinalization) finish(
 		if !found {
 			continue
 		}
-		data, err := readPrivateReportFile(report.root, "pending-trial-"+summary.ID+".json")
+		data, err := report.readTrialCheckpoint(summary.File, entry.prepared.sessionID)
 		if err != nil {
 			return ErrReport
 		}

@@ -348,10 +348,12 @@ func TestOwnedRunInspectsLateSourceChangesBeforePublishingFinalPDFTrial(t *testi
 		trial.PDF.PostStop.Census.SourceUnchanged == nil || *trial.PDF.PostStop.Census.SourceUnchanged {
 		t.Fatal("final trial did not retain the late native source failure", err, trial.PDF)
 	}
-	checkpoint, err := os.ReadFile(filepath.Join(result.ReportDir, "pending-trial-"+trial.ID+".json"))
-	var before Trial
-	if err != nil || json.Unmarshal(checkpoint, &before) != nil || before.PDF.PostStop != nil ||
-		before.Verdict == Fail {
-		t.Fatal("pre-stop checkpoint was overwritten or treated as the final verdict", err)
+	if result.TrialScratch == nil || len(result.TrialScratch.Trials) != 1 ||
+		result.TrialScratch.Trials[0].Code != "removed" || !result.TrialScratch.matches(trial) ||
+		!validDigest(result.TrialScratch.Trials[0].CheckpointSHA256) {
+		t.Fatal("pre-stop checkpoint was not retired after canonical failure evidence")
+	}
+	if _, err = os.Stat(filepath.Join(result.ReportDir, "scratch-"+trial.SessionID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("retired checkpoint directory remains", err)
 	}
 }

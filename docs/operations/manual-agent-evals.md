@@ -387,6 +387,36 @@ Stop only the gateway that the operator started for this profile. Evidence clean
 work; the runner does not delete profile sessions or infer that remote work stopped. Never remove a production
 profile to clean up an eval run.
 
+### Per-Trial Evidence Staging
+
+Each admitted trial allocates a new `0700` `scratch-SESSION_ID` directory inside its private run report before
+the trial's runtime recheck, fixture preparation or task. It is outside the target workspace and is not sent to
+the agent. Its exclusive `0600` `checkpoint.json` retains pending evidence, including PDF/browser evidence that
+cannot become canonical until native post-stop observations finish. A skipped/unattempted case allocates nothing.
+Allocation failure refuses the trial before new probe/task/model work; it is not permission to adopt an existing
+directory. Repetitions use distinct session-bound directories without holding a descriptor for each trial.
+
+The runner writes canonical `trial-ID.json` before retiring that trial's checkpoint. It reopens only its anchored
+directory and verifies checkpoint identity, private permissions and content hash. It removes only that exact
+checkpoint and the empty owned directory, never recursively deletes unknown files. Changed/replaced resources,
+extra entries or failed removal leave cleanup uncertain. A failed final evidence write preserves the pending
+checkpoint and prevents a complete report. A crash can leave private staging for operator inspection.
+
+New `run.json` files include `trial_scratch` with scope `private_trial_staging_v1` and trial/session/case-bound
+receipts. `removed` records observed local retirement; `retained` or `unavailable` prevents a passing suite even
+when the task passed. `not_attempted` is valid only for a non-passing trial with no events or model-role calls.
+The receipt retains creation time and checkpoint digest when available, never transcript or credential values.
+This is private evidence staging, not a native PDF/browser lease, remote cancellation, whole-profile freshness
+between trials, resistance to a hostile same-UID writer, or a promise that all resources are empty. Existing
+native fixture/action/settlement/cleanup evidence remains separate and is not upgraded by this local receipt.
+
+Offline `grade` validates and copies the selected historical receipts; it neither allocates trial staging nor
+retries cleanup. A present but unsettled/invalid receipt refuses the source before any judge call. `compare`
+checks the receipts against every retained trial and includes their cleanup uncertainty in the run verdict.
+Legacy reports without receipts retain their original eligibility, but comparison explicitly reports missing
+`baseline_trial_scratch`/`current_trial_scratch` and a scope change when only one source has receipts. They do not
+acquire new E5 resource coverage from regrading or comparison.
+
 ## Adaptive Users And Judging
 
 Add `user_model` and `judge_model` aliases to the non-secret preset. They select enabled HTTP model configurations
