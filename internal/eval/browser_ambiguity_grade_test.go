@@ -15,7 +15,7 @@ import (
 )
 
 func TestGradeBrowserAmbiguityUsesOnlyRetainedEvidence(t *testing.T) {
-	c := completeBrowserAmbiguityControl(t)
+	c := ambiguityControlWithNativeClosure(t)
 	writer, trial := finalizedAmbiguityControl(t, c)
 	f := c.fixture
 	surfaces := &PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "observed"}

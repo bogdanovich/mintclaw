@@ -276,8 +276,14 @@ func inspectBrowserTask(
 		if message == nil || message.AgentID != trial.AgentID || message.SessionKey != trial.SessionKey {
 			return proof
 		}
-		if ambiguity != nil && (message.Metadata.InteractionKind == "question" ||
-			message.Metadata.InteractionKind == "approval") {
+		if ambiguity != nil && message.Metadata.RemovesInteractionControls() &&
+			(!message.Metadata.IsFinalReply() && !message.Metadata.IsFinal() ||
+				message.Metadata.InteractionKind != "approval" ||
+				message.Metadata.InteractionID != ambiguity.Approval.InteractionID ||
+				message.Metadata.InteractionShortID != ambiguity.ApprovalShortID) {
+			return proof
+		}
+		if ambiguity != nil && (message.Metadata.IsQuestionPrompt() || message.Metadata.IsApprovalPrompt()) {
 			kind := message.Metadata.InteractionKind
 			delivery := ambiguity.Clarification.PromptDeliveryID
 			if kind == "approval" {
@@ -325,6 +331,11 @@ func inspectBrowserTask(
 		}
 		if event.Kind == "canceled" && (message.Metadata.InteractionKind != event.InteractionKind ||
 			message.Metadata.InteractionControls != event.Controls) {
+			return proof
+		}
+		if ambiguity != nil && (message.Metadata.InteractionKind != event.InteractionKind ||
+			message.Metadata.InteractionControls != event.Controls || message.Metadata.InteractionID != event.InteractionID ||
+			message.Metadata.InteractionShortID != event.InteractionShortID) {
 			return proof
 		}
 		seen[id] = true
