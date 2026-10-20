@@ -189,12 +189,11 @@ func (domain *browserConversation) approveDownload(prompt Event) (protocol.MintC
 	if domain.item.Browser == nil || domain.item.Browser.Scenario != "artifact" {
 		return protocol.MintClawMessage{}, errBrowserEvidence
 	}
-	return domain.allowReviewedBrowserAction(prompt, "Allow this reviewed fixture download once.")
+	return domain.allowReviewedBrowserAction(prompt)
 }
 
 func (domain *browserConversation) allowReviewedBrowserAction(
 	prompt Event,
-	content string,
 ) (protocol.MintClawMessage, error) {
 	previous := domain.approval
 	if previous == nil || previous.requestID != "" || prompt.MessageID != previous.prompt.MessageID ||
@@ -211,7 +210,7 @@ func (domain *browserConversation) allowReviewedBrowserAction(
 	request := protocol.MintClawMessage{
 		Type: protocol.TypeMessageSend, ID: uuid.NewString(), SessionID: domain.questions.sessionID,
 		Timestamp: time.Now().UnixMilli(), Payload: map[string]any{
-			protocol.PayloadKeyContent:            content,
+			protocol.PayloadKeyContent:            "Allow once",
 			protocol.PayloadKeyInteractionChoice:  string(bus.InboundInteractionChoiceAllowOnce),
 			protocol.PayloadKeyInteractionShortID: prompt.InteractionShortID,
 			protocol.PayloadKeyInteractionPrompt:  prompt.MessageID,

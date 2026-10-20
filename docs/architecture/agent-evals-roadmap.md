@@ -283,6 +283,11 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    independent South-only fixture oracle before judging/offline regrade. It
    activates the scripted question/approval case only on owned metadata-captured
    profiles; it does not qualify a live attempt or upgrade older skipped reports.
+   The [ambiguity v1 pilot](../operations/manual-agent-evals-browser-ambiguity-v1-pilot-20261020.md) on merged #1853
+   then reached clarification and exact South approval but failed before consumption: the harness's descriptive
+   typed allow-once content violated the native channel's canonical-label contract. The sealed fixture retained
+   zero effects and a hard failure; no judge or used-profile retry ran. A bounded shared producer correction and
+   real-channel regression are required, not weaker channel validation or a promoted historical report.
    No local fixture pass qualifies native browser behavior.
    The [private-input prerequisite](agent-evals-browser-private-input.md) separates the missing native ingress from
    already protected model-produced fill. B1 adds only generation-bound, value-free broker target bindings and
