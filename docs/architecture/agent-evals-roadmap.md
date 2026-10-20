@@ -8,6 +8,12 @@ implementation; an admission document alone is not a functioning eval engine.
 
 The roadmap builds a small manual quality harness, not a replacement runtime or an automatic self-improvement system.
 
+All fourteen minimum case definitions now have retained actual attempts across the pilot ledger, including the
+[three remaining PDF v1 pilots](../operations/manual-agent-evals-pdf-remaining-v1-pilots-20261020.md). Correction,
+conditional intent and large section each stayed inconclusive; no judge, regrade or used-profile retry ran.
+This is attempted coverage, not fourteen passes or complete domain qualification. E5 resources and the frozen
+requirement-by-requirement exit audit remain open; preserve every negative outcome.
+
 The [private browser v1 pilot](../operations/manual-agent-evals-browser-private-v1-pilot-20261019.md) after merged
 #1847 attempted submit and followup once each on separate fresh Linux profiles. Both failed with expected submissions
 missing: the target used ordinary `request_user_input`, and followup also had an unavailable LLM-user provider.
@@ -161,9 +167,9 @@ this negative checkpoint result instead of accepting arbitrary finals or retryin
 | E0 | Agree architecture and freeze first-goal acceptance | Operator review | Approved; admission recorded |
 | E1 | Run bounded scripted multi-turn cases and produce honest reports | E0 | Contracts/client/runtime admission merged; both required general scripted cases passed on Linux after #1598, with recorded platform/cleanup limits |
 | E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation/adaptive runner/grade merged (#1531, #1541); judge v2 live calibration passed 6/6; adaptive live qualification pending |
-| E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Fixtures/oracle, preparation, approval contracts, dialogue, write intent, native write observation, metadata settlement and artifact collection merged (#1544, #1546, #1547, #1550, #1552, #1553, #1557, #1558); uniqueness/privacy/cleanup and live qualification pending |
-| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Read trial/regrade passed after #1754; artifact first attempt inconclusive; denial assessment merged in #1786, first attempt failed an ordinary-question/native-approval mismatch; adaptive private input, remaining scenarios and domain qualification pending |
-| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Repeats/all-trial regrade/comparison (#1588), owned gateway (#1639), file observations (#1648) and explicit allowlisted seed provisioning (#1665) merged; Linux general repeats/regrade/error comparison exercised; per-trial/effective-input witnesses and domain qualification pending |
+| E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Native workflows/oracles and generated-only grade merged; all six cases attempted; cancellation/no-write passed; the other five retain nonpassing results, not positive output/private/correction/large qualification |
+| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | All six native workflows attempted; scoped Linux read and ambiguity run/regrade passed; artifact, denial and private forms retain nonpassing results; full positive domain qualification is not established |
+| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Allowlisted provisioning, repeats/all-trial grade/compare and scoped effective-input content witnesses merged and exercised; per-trial resources and exit audit remain; broader provenance is explicitly unknown |
 
 E5's explicit owned-profile metadata capture prerequisite merged in #1801, with
 [validation and preserved failures](../operations/manual-agent-evals-model-metadata-validation-20261019.md).
@@ -253,6 +259,10 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    are not live PDF qualification. Native cleanup completes for the cohort before suite-budgeted judging begins.
    One ordinary cancellation/no-write live path and offline regrade now passed on merged #1731; the other five PDF
    cases and protected/private-value/worker/output behavior still require actual qualification.
+   Correction, conditional and large now each have a fresh recorded v1 attempt on merged #1853: all inconclusive,
+   with no eligible PDF owner/delivery evidence; correction made three returned LLM-user calls. Native shutdown and
+   scoped raw privacy were observed, not positive PDF field/output/cleanup qualification. These are preserved
+   results, not permission for an open-ended target-repair loop.
    Preserve earlier failures and unknowns.
 3. E4: finish native browser admission, fixture execution, approval/artifact/context correlation and owned
    cleanup; qualify the other five cases, including adaptive and denied-action evidence. Read/artifact/denied tasks can run on
@@ -272,7 +282,7 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    cancellation branch gained positive live qualification. This is a recorded negative result, not permission
    for an open-ended target-repair loop. The other three scenarios
    previously remained gated. Submit/followup now have the scoped workflow described below; ambiguity now has
-   the owned clarification/approval/post-stop workflow, with a fresh identified live attempt still required.
+   the owned clarification/approval/post-stop workflow and the scoped Linux qualification described below.
    A [native reference-region producer](browser-reference-regions.md) now binds
    direct-library main-document button refs to bounded unique ARIA-region context,
    including approval hashes and fresh revalidation. It grants no permission by itself.
@@ -291,7 +301,11 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    Its [fresh v2 experiment](../operations/manual-agent-evals-browser-ambiguity-v2-pilot-20261020.md) completed the
    script, consumed native approval and independently removed exactly South, but stayed inconclusive: the
    collector mistook the native control-removing final for another prompt. A bounded native-predicate/final-identity
-   correction is required; neither old report is promoted and no source records may be filtered away.
+   correction merged in #1855 without filtering source records or promoting either old report. Its
+   [fresh v3 qualification](../operations/manual-agent-evals-browser-ambiguity-v3-pilot-20261020.md) passed all hard
+   checks, the separate judge, offline grade and comparison. Exactly South was removed after native consumption;
+   question/approval/final deliveries, raw privacy and scoped cleanup were observed. This qualifies one Linux
+   local-owned path, not the entire browser suite, whole-host resources or remaining E5/exit work.
    No local fixture pass qualifies native browser behavior.
    The [private-input prerequisite](agent-evals-browser-private-input.md) separates the missing native ingress from
    already protected model-produced fill. B1 adds only generation-bound, value-free broker target bindings and
