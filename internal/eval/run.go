@@ -154,6 +154,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	defer func() { _ = writer.root.Close() }()
 	result.ReportDir = writer.dir
+	if writer.startTrialStaging() != nil {
+		return result, ErrReport
+	}
 	result.WorkspaceInputs = &WorkspaceInputs{
 		Scope:  workspaceInputScope,
 		Before: observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter),
@@ -213,14 +216,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		})
 		result.Coverage[trial.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, trial.Verdict)
-		checkpoint := name
-		if _, pending := pendingPDF.trials[trial.ID]; pending {
-			checkpoint = "pending-trial-" + trial.ID + ".json"
-		}
-		if _, pending := pendingBrowser.trials[trial.ID]; pending {
-			checkpoint = "pending-trial-" + trial.ID + ".json"
-		}
-		if writer.write(checkpoint, trial) != nil {
+		_, pdfPending := pendingPDF.trials[trial.ID]
+		_, browserPending := pendingBrowser.trials[trial.ID]
+		if writer.checkpointTrial(name, trial, pdfPending || browserPending) != nil {
 			result.Trials[len(result.Trials)-1].File = ""
 			result.Verdict = combineVerdicts(result.Verdict, Error)
 			result.DurationMS = time.Since(result.StartedAt).Milliseconds()
@@ -293,6 +291,11 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 		return result, ErrReport
 	}
+	result.TrialScratch, err = writer.finishTrialStaging(result)
+	if err != nil {
+		result.Verdict = combineVerdicts(result.Verdict, Error)
+		return result, ErrReport
+	}
 	if preset.CaptureModelMetadata {
 		bindings, bindingErr := readRunModelBindings(writer, result, preset.ExpectedWorkspace)
 		if errors.Is(bindingErr, ErrReport) {
@@ -310,7 +313,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	result.Coverage = map[Verdict]int{}
 	result.Verdict = combineVerdicts(result.TargetLifecycle.verdict(), result.PrivateSurfaces.verdict(),
-		result.BrowserFixtures.verdict(), result.NativeModels.verdict())
+		result.BrowserFixtures.verdict(), result.NativeModels.verdict(), result.TrialScratch.verdict())
 	for _, summary := range result.Trials {
 		result.Coverage[summary.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, summary.Verdict)
@@ -371,6 +374,10 @@ func runAdmittedTrial(
 	caseTimeout, _ := time.ParseDuration(item.Case.Limits.CaseTimeout)
 	caseCtx, cancel := context.WithTimeout(ctx, caseTimeout)
 	defer cancel()
+	if report.beginTrialStaging(caseCtx, sessionID, item.Digest) != nil {
+		trial.Verdict, trial.Code = Inconclusive, "trial_scratch_unavailable"
+		return trial
+	}
 	// Recheck the running instance between trials before any new task is sent.
 	probe, err := requestRuntimeProbe(caseCtx, target.config, target.serviceToken)
 	if err != nil || probe != target.probe {

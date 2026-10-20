@@ -122,7 +122,7 @@ func (run *browserRun) finish(
 		if !ok {
 			continue
 		}
-		data, err := readPrivateReportFile(writer.root, "pending-"+summary.File)
+		data, err := writer.readTrialCheckpoint(summary.File, pending.sessionID)
 		if err != nil {
 			return ErrReport
 		}
@@ -265,7 +265,10 @@ func (run *browserRun) finish(
 			return ErrReport
 		}
 		summary.Verdict, summary.Code, summary.DurationMS = trial.Verdict, trial.Code, trial.DurationMS
-		if writer.write(summary.File, trial) != nil || writer.root.Remove("pending-"+summary.File) != nil {
+		if writer.write(summary.File, trial) != nil {
+			return ErrReport
+		}
+		if writer.staging == nil && writer.root.Remove("pending-"+summary.File) != nil {
 			return ErrReport
 		}
 		delete(run.trials, trial.ID)

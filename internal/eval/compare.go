@@ -67,6 +67,14 @@ func Compare(baselineDirectory, currentDirectory string) (Comparison, error) {
 	compareWorkspaceInputs(&result, baseline.report.WorkspaceInputs, current.report.WorkspaceInputs)
 	for _, source := range []struct {
 		name        string
+		observation *TrialScratchObservation
+	}{{"baseline", baseline.report.TrialScratch}, {"current", current.report.TrialScratch}} {
+		if source.observation == nil || source.observation.verdict() != Pass {
+			result.EnvironmentUnknowns = append(result.EnvironmentUnknowns, source.name+"_trial_scratch")
+		}
+	}
+	for _, source := range []struct {
+		name        string
 		observation *PrivateSurfaceObservation
 	}{{"baseline", baseline.report.PrivateSurfaces}, {"current", current.report.PrivateSurfaces}} {
 		if (baseline.report.PrivateSurfaces != nil || current.report.PrivateSurfaces != nil) &&
@@ -101,6 +109,7 @@ func Compare(baselineDirectory, currentDirectory string) (Comparison, error) {
 		{"repetitions", effectiveRepeat(baseline.report) != effectiveRepeat(current.report)},
 		{"target_lifecycle_mode", targetLifecycleMode(baseline.report.TargetLifecycle) !=
 			targetLifecycleMode(current.report.TargetLifecycle)},
+		{"trial_scratch_scope", (baseline.report.TrialScratch == nil) != (current.report.TrialScratch == nil)},
 	} {
 		if difference.changed {
 			result.EnvironmentChanges = append(result.EnvironmentChanges, difference.name)
@@ -174,7 +183,8 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		report.Repeat < 0 || report.Repeat > MaxRepeat || len(report.Trials) == 0 ||
 		len(report.Trials) > MaxCorpusCases || report.DurationMS < 0 || report.StartedAt.IsZero() ||
 		report.Runtime.Version != 1 || !validDigest(report.Runtime.ConfigSHA256) || !report.TargetLifecycle.valid() ||
-		!report.WorkspaceInputs.valid() || !report.PrivateSurfaces.valid() || !report.BrowserFixtures.valid() {
+		!report.WorkspaceInputs.valid() || !report.PrivateSurfaces.valid() || !report.BrowserFixtures.valid() ||
+		!report.TrialScratch.validFor(report) {
 		return result, ErrCompare
 	}
 	seen, sessions, roles := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -202,7 +212,8 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 			trial.CaseSHA256 != summary.CaseSHA256 || trial.Repetition != summary.Repetition ||
 			trial.Code != summary.Code || trial.Verdict != summary.Verdict || trial.DurationMS != summary.DurationMS ||
 			!validID(trial.SessionID) || sessions[trial.SessionID] || !validID(trial.AgentID) ||
-			!consistentComparisonVerdict(trial) || !validTrialRoleBoundaries(trial) {
+			!consistentComparisonVerdict(trial) || !validTrialRoleBoundaries(trial) ||
+			!report.TrialScratch.matches(trial) {
 			return result, ErrCompare
 		}
 		calls := trial.DriverCalls
@@ -269,6 +280,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		report.PrivateSurfaces.verdict(),
 		report.BrowserFixtures.verdict(),
 		report.NativeModels.verdict(),
+		report.TrialScratch.verdict(),
 	)
 	if report.Verdict != combineVerdicts(verdicts...) {
 		return result, ErrCompare

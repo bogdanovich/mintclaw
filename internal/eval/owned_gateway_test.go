@@ -301,7 +301,16 @@ func runOwnedGatewayTestChild() int {
 			if strings.HasPrefix(file.Name(), "trial-") {
 				return 8
 			}
-			pending = pending || strings.HasPrefix(file.Name(), "pending-trial-")
+			if strings.HasPrefix(file.Name(), "scratch-") {
+				data, checkpointErr := os.ReadFile(filepath.Join(home, "reports", entries[0].Name(),
+					file.Name(), trialCheckpointName))
+				var trial Trial
+				if checkpointErr != nil || json.Unmarshal(data, &trial) != nil || trial.PDF == nil ||
+					trial.PDF.PostStop != nil || trial.Verdict == Fail || "scratch-"+trial.SessionID != file.Name() {
+					return 8
+				}
+				pending = true
+			}
 		}
 		if readErr != nil || !pending {
 			return 8

@@ -167,6 +167,10 @@ func TestOwnedBrowserRunExecutesFreshFixturesButCannotPassFromHTTPOrProse(t *tes
 				result.TargetLifecycle == nil || result.TargetLifecycle.Code != "native_exit_zero" {
 				t.Fatal("owned fixture run lost coverage, closure, or native uncertainty", err)
 			}
+			if result.TrialScratch == nil || !result.TrialScratch.validFor(result) ||
+				result.TrialScratch.verdict() != Pass {
+				t.Fatal("browser trials did not retire their private staging")
+			}
 			for _, summary := range result.Trials {
 				data, err := os.ReadFile(filepath.Join(result.ReportDir, summary.File))
 				if err != nil {

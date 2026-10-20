@@ -49,11 +49,14 @@ type RunReport struct {
 	WorkspaceInputs *WorkspaceInputs            `json:"workspace_inputs,omitempty"`
 	PrivateSurfaces *PrivateSurfaceObservation  `json:"private_surfaces,omitempty"`
 	BrowserFixtures *BrowserFixtureHostEvidence `json:"browser_fixtures,omitempty"`
+	TrialScratch    *TrialScratchObservation    `json:"trial_scratch,omitempty"`
 }
 
 type privateReport struct {
-	root *os.Root
-	dir  string
+	root        *os.Root
+	dir         string
+	staging     map[string]*trialStaging
+	stagingRoot os.FileInfo
 }
 
 func newPrivateReport(parent, home, workspace, id string) (*privateReport, error) {
@@ -175,6 +178,13 @@ func (report *privateReport) finish(result RunReport) error {
 			_, writeErr = fmt.Fprintf(file,
 				"\nRouted native model records: %s (%s, %s); %d requests, %d responses, %d observed usage.\n",
 				counts, observation.Code, usage.Coverage, usage.Requests, usage.Responses, usage.UsageResponses)
+		}
+	}
+	if writeErr == nil {
+		if result.TrialScratch != nil {
+			_, writeErr = fmt.Fprintf(file,
+				"\nPrivate trial staging: %s; %d receipts; cleanup verdict: %s. Native resources are separate.\n",
+				result.TrialScratch.Scope, len(result.TrialScratch.Trials), result.TrialScratch.verdict())
 		}
 	}
 	if writeErr == nil {

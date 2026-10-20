@@ -472,6 +472,12 @@ inconclusive/skip coverage, and case-level changes. Separate quality drift from 
 Keep raw token integers in JSON and compact `10.2k`-style display in summaries. Aggregate all available model calls,
 not the final response alone; report unknown private/delegated usage rather than inventing totals or costs.
 
+The per-trial resource packet adds [private evidence staging](../operations/manual-agent-evals.md#per-trial-evidence-staging):
+fresh session-bound directories before admitted trial work, pending checkpoints retired only after canonical
+evidence exists, and frozen cleanup receipts consumed without replay by grade/compare. Unknown files or resource
+replacement do not trigger recursive deletion or a passing suite. This scope does not replace native PDF/browser
+ownership, certify a whole-profile reset, upgrade historical reports, or complete live qualification/exit by itself.
+
 **Exit:** an operator can list/validate/run all cases, PDF only, browser only, tags, or one case, select a safe
 workspace preset, repeat trials, regrade evidence, and compare to a chosen baseline. A case with a missing judge,
 oracle, required artifact, unsupported capability, or failed cleanup cannot silently make the suite green.

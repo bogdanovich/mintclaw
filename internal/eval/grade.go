@@ -72,6 +72,7 @@ func Grade(
 			filter,
 		) || !original.TargetLifecycle.valid() || !original.WorkspaceInputs.valid() ||
 		!original.PrivateSurfaces.valid() || !original.BrowserFixtures.valid() || !original.TargetUsage.valid() ||
+		!original.TrialScratch.validFor(original) || original.TrialScratch.verdict() != Pass ||
 		!original.NativeModels.valid(original.Runtime) || original.NativeModels.verdict() == Fail ||
 		original.PrivateSurfaces != nil && original.PrivateSurfaces.LeakObserved {
 		return RunReport{}, ErrGrade
@@ -111,6 +112,7 @@ func Grade(
 		}
 		trial, decodeErr := decodeDocument[Trial](data, 8*1024*1024)
 		if decodeErr != nil || !gradeEligible(trial, item, summary, preset, workspace) ||
+			!original.TrialScratch.matches(trial) ||
 			item.Case.PDF != nil && item.Case.PDF.SourceFields != nil &&
 				!pdfSourceFieldsRuntimeMatches(trial.PDF.SourceFields, original.Runtime) ||
 			(item.Case.PDF != nil || item.Case.Browser != nil) &&
@@ -182,6 +184,7 @@ func Grade(
 		BrowserFixtures: original.BrowserFixtures,
 		TargetUsage:     newTargetUsage(),
 		NativeModels:    models,
+		TrialScratch:    selectTrialScratch(original.TrialScratch, identities),
 	}
 	writer, err := newPrivateReport(options.OutputParent, home, workspace, result.ID)
 	if err != nil {
@@ -262,6 +265,7 @@ func Grade(
 		original.TargetLifecycle.verdict(),
 		original.PrivateSurfaces.verdict(),
 		original.BrowserFixtures.verdict(),
+		result.TrialScratch.verdict(),
 	)
 	result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 	result.Complete = true
