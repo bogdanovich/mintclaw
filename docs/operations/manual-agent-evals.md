@@ -7,15 +7,16 @@ on Linux or macOS and executes bounded scripted or adaptive conversation/navigat
 bootstrap skills, deploy a binary, restart a gateway, grant broad approval, or retry uncertain task admission.
 
 The [browser guide](manual-agent-evals-browser.md) describes owned-profile read/artifact/denied task execution,
-scoped native action/delivery/privacy/cleanup grading, and the protected submit/followup workflow. One read path is
-live-qualified; other domain/effective-input qualification remains incomplete. The
+scoped native action/delivery/privacy/cleanup grading, and the protected submit/followup workflow. Scoped read and
+ambiguity paths are live-qualified; other positive domain qualification remains incomplete. The
 [private form v1 pilot](manual-agent-evals-browser-private-v1-pilot-20261019.md) preserves two failures, not a passing
 private browser suite.
 Offline `compare` reports all retained trial counts, case compatibility and observed environment changes; it does
 not execute tasks, regrade evidence, or establish causal quality drift.
 Missing capabilities/drivers/domain evidence produce explicit non-passing coverage. A text response never proves
 that a PDF was filled, a browser action happened, or Telegram delivery worked. See the
-[roadmap](../architecture/agent-evals-roadmap.md) for the remaining packets.
+[first-release exit](manual-agent-evals-first-release-exit-20261020.md) for the frozen acceptance audit and the
+complete fourteen-case ledger, including failures. Harness completion is not complete target qualification.
 
 PDF preparation, protected answers, frozen write/approval binding, native settlement and bounded independent
 artifact collection are described in the [PDF guide](manual-agent-evals-pdf.md). Required delivery uniqueness,

@@ -2,7 +2,9 @@
 
 ## Status
 
-Approved on 2026-10-10; implementation is active under the [first-release goal](agent-evals-goal.md).
+Approved on 2026-10-10. The first-release harness is delivered under the unchanged
+[first-release goal](agent-evals-goal.md); see the
+[requirement-by-requirement exit](../operations/manual-agent-evals-first-release-exit-20261020.md).
 The [design](agent-evals-design.md) records source findings, alternatives, and ownership. Agreement preceded
 implementation; an admission document alone is not a functioning eval engine.
 
@@ -11,8 +13,13 @@ The roadmap builds a small manual quality harness, not a replacement runtime or 
 All fourteen minimum case definitions now have retained actual attempts across the pilot ledger, including the
 [three remaining PDF v1 pilots](../operations/manual-agent-evals-pdf-remaining-v1-pilots-20261020.md). Correction,
 conditional intent and large section each stayed inconclusive; no judge, regrade or used-profile retry ran.
-This is attempted coverage, not fourteen passes or complete domain qualification. E5 resources and the frozen
-requirement-by-requirement exit audit remain open; preserve every negative outcome.
+This is attempted coverage, not fourteen passes or complete domain qualification. E5's
+[per-trial staging packet](../operations/manual-agent-evals-trial-staging-v1-20261020.md) is merged and exercised:
+two general trials passed, a fresh PDF cancel stayed inconclusive, and all three local staging receipts were
+removed. The exit record closes implementation only when merged; every product negative/unknown remains.
+
+The pilot notes below are historical progress, not a new mandatory queue. The exit audit is the current closure
+map; future target repairs or broader qualification require their own bounded goals.
 
 The [private browser v1 pilot](../operations/manual-agent-evals-browser-private-v1-pilot-20261019.md) after merged
 #1847 attempted submit and followup once each on separate fresh Linux profiles. Both failed with expected submissions
@@ -166,10 +173,10 @@ this negative checkpoint result instead of accepting arbitrary finals or retryin
 | --- | --- | --- | --- |
 | E0 | Agree architecture and freeze first-goal acceptance | Operator review | Approved; admission recorded |
 | E1 | Run bounded scripted multi-turn cases and produce honest reports | E0 | Contracts/client/runtime admission merged; both required general scripted cases passed on Linux after #1598, with recorded platform/cleanup limits |
-| E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation/adaptive runner/grade merged (#1531, #1541); judge v2 live calibration passed 6/6; adaptive live qualification pending |
+| E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation/adaptive runner/grade merged; judge v2 live calibration passed 6/6; actual adaptive correction calls observed; unsuccessful target workflows remain unqualified |
 | E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Native workflows/oracles and generated-only grade merged; all six cases attempted; cancellation/no-write passed; the other five retain nonpassing results, not positive output/private/correction/large qualification |
 | E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | All six native workflows attempted; scoped Linux read and ambiguity run/regrade passed; artifact, denial and private forms retain nonpassing results; full positive domain qualification is not established |
-| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Allowlisted provisioning, repeats/all-trial grade/compare and scoped effective-input content witnesses merged and exercised; per-trial resources and exit audit remain; broader provenance is explicitly unknown |
+| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Allowlisted provisioning, repeats/all-trial grade/compare, scoped effective-input content witnesses and per-trial staging receipts merged and exercised; frozen exit audit recorded; broader provenance explicitly unknown |
 
 E5's explicit owned-profile metadata capture prerequisite merged in #1801, with
 [validation and preserved failures](../operations/manual-agent-evals-model-metadata-validation-20261019.md).
@@ -219,7 +226,11 @@ The [browser fixture guide](../operations/manual-agent-evals-browser.md) records
 bounds and unresolved native admission. Fixture controls are not browser task qualification. Prepared eval
 admission rejects non-loopback native gateway listener plans (#1562), without changing ordinary gateway binding.
 
-## Next Mandatory Work
+## Pre-Exit Work Ledger
+
+This preserves the implementation/qualification sequence and its limits. The linked exit audit distinguishes
+completed harness work, retained target negatives and optional broader qualification; it does not turn missing
+native evidence into success or require retrying every product failure until green.
 
 1. E5: finish per-trial isolation and actual effective-input identity using the existing native boundaries and
    explicit fresh-profile preparation. The merged one-time conversation/PDF seed provisioner and file samples do
@@ -332,7 +343,8 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    turn unavailable
    usage, incomplete native evidence or a two-case smoke into complete-suite success.
 
-These are unfinished parts of the frozen first goal, not new milestones or permission to expand its scope.
+These notes are retained history, not permission to expand the frozen first goal after its exit. Consult the
+exit audit for current implementation closure and explicitly unqualified product behavior.
 
 ## E0: Agree And Admit
 
