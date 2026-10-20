@@ -25,6 +25,7 @@ func validBrowserConversation(trial Trial, item Case, workspace string) bool {
 	if item.Browser == nil || trial.Browser == nil || !isBrowserForm(item) &&
 		(len(item.Driver.Facts) != 0 || trial.Browser.FormInputs != nil || trial.Browser.Form != nil) ||
 		trial.PDF != nil || trial.Cancellation != nil ||
+		!isBrowserAmbiguity(item) && trial.Browser.Ambiguity != nil ||
 		trial.Browser.Version != Version || trial.Browser.Scope != "owned_fixture_execution_v1" ||
 		trial.Browser.NativeAuthority != "observed" || trial.Browser.NativeCleanup != "observed" ||
 		!validID(trial.ID) || !validID(trial.SessionID) || !boundedIdentity(trial.SessionKey, 512) ||
@@ -47,9 +48,14 @@ func validBrowserTaskProof(trial Trial, proof *BrowserTaskEvidence, scope string
 		proof.Navigations < 1 || proof.Navigations > proof.Invocations || !proof.LogicalSettled || !proof.TemporaryEmpty {
 		return false
 	}
-	permissionPrompt := scope == browserQuestionDenialAssessmentScope || scope == browserFormAssessmentScope
+	permissionPrompt := scope == browserQuestionDenialAssessmentScope || scope == browserFormAssessmentScope ||
+		scope == browserAmbiguityAssessmentScope
 	if permissionPrompt && proof.PermissionPromptDeliveries != 1 ||
 		!permissionPrompt && proof.PermissionPromptDeliveries != 0 {
+		return false
+	}
+	if scope == browserAmbiguityAssessmentScope && proof.ApprovalPromptDeliveries != 1 ||
+		scope != browserAmbiguityAssessmentScope && proof.ApprovalPromptDeliveries != 0 {
 		return false
 	}
 	finals := 0
@@ -76,12 +82,16 @@ func observedBrowserHost(evidence *BrowserTrialEvidence, host *BrowserFixtureHos
 	if evidence.Form != nil {
 		proof = evidence.Form.Native
 	}
+	if evidence.Ambiguity != nil {
+		proof = evidence.Ambiguity.Native
+	}
 	return proof != nil && host.OriginSHA256 == proof.OriginSHA256
 }
 
 func validBrowserEvidence(trial Trial, item Case, workspace string) bool {
 	return validBrowserReadEvidence(trial, item, workspace) || validBrowserArtifactEvidence(trial, item, workspace) ||
-		validBrowserDenialEvidence(trial, item, workspace) || validBrowserFormEvidence(trial, item, workspace)
+		validBrowserDenialEvidence(trial, item, workspace) || validBrowserFormEvidence(trial, item, workspace) ||
+		validBrowserAmbiguityEvidence(trial, item, workspace)
 }
 
 func gradeFinalizedBrowserChecks(item Case, trial Trial) []CheckResult {
@@ -95,6 +105,9 @@ func gradeFinalizedBrowserChecks(item Case, trial Trial) []CheckResult {
 	}
 	if isBrowserForm(item) {
 		source = "browser.form"
+	}
+	if isBrowserAmbiguity(item) {
+		source = "browser.ambiguity"
 	}
 	for index, check := range item.Checks {
 		switch check.Kind {
@@ -116,6 +129,11 @@ func assessFinalizedBrowser(
 	ctx context.Context, judge *ModelRole, item Case, trial *Trial, workspace string,
 	lifecycle *TargetLifecycle, surfaces *PrivateSurfaceObservation, host *BrowserFixtureHostEvidence,
 ) {
+	for _, check := range trial.Checks {
+		if check.Verdict == Fail {
+			return
+		}
+	}
 	if !observedOwnedProfile(lifecycle, surfaces) || !observedBrowserHost(trial.Browser, host) ||
 		!validBrowserEvidence(*trial, item, workspace) {
 		return

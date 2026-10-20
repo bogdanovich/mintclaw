@@ -271,18 +271,18 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    the changed case revision was actually run in v2 and failed before a permission checkpoint, so neither
    cancellation branch gained positive live qualification. This is a recorded negative result, not permission
    for an open-ended target-repair loop. The other three scenarios
-   previously remained gated. Submit/followup now have the scoped workflow described below; ambiguity retains its
-   native-action evidence gate.
+   previously remained gated. Submit/followup now have the scoped workflow described below; ambiguity now has
+   the owned clarification/approval/post-stop workflow, with a fresh identified live attempt still required.
    A [native reference-region producer](browser-reference-regions.md) now binds
    direct-library main-document button refs to bounded unique ARIA-region context,
-   including approval hashes and fresh revalidation. It grants no permission and
-   does not remove the ambiguity skip: the owned-fixture clarification/approval
-   consumer and post-stop wrong-account oracle remain required.
+   including approval hashes and fresh revalidation. It grants no permission by itself.
    [Ambiguity admission A](agent-evals-browser-ambiguity.md) adds the native
    answered-question, unchanged owned-page and exact South-only approval join,
-   reusing existing HMAC/single-use authority. B's post-stop receipt/assessment
-   and explicit case activation remain required; A does not remove the skip or
-   qualify a live attempt.
+   reusing existing HMAC/single-use authority. B now connects typed post-stop
+   receipts, complete native action/prompt/delivery/cleanup inspection and the
+   independent South-only fixture oracle before judging/offline regrade. It
+   activates the scripted question/approval case only on owned metadata-captured
+   profiles; it does not qualify a live attempt or upgrade older skipped reports.
    No local fixture pass qualifies native browser behavior.
    The [private-input prerequisite](agent-evals-browser-private-input.md) separates the missing native ingress from
    already protected model-produced fill. B1 adds only generation-bound, value-free broker target bindings and

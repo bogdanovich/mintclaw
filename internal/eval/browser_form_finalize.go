@@ -111,7 +111,7 @@ func finalizeBrowserForm(trial *Trial, pending browserPendingTrial, target admit
 		return errBrowserEvidence
 	}
 	form.ContextRetained, form.Corrections = true, corrections
-	form.Native = inspectBrowserTaskWithForm(*trial, target, pending.fixture, observed, empty, nil, nil, form)
+	form.Native = inspectBrowserTask(*trial, target, pending.fixture, observed, empty, browserTaskEffects{form: form})
 	if form.Native.Code != "native_post_stop_observed" || trial.Browser.Fixture == nil ||
 		trial.Browser.Fixture.Effects != Pass {
 		return nil

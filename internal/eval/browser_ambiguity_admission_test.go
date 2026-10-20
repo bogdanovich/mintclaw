@@ -232,10 +232,10 @@ func (c *browserAmbiguityControl) prepare(t *testing.T) (browser.Preparation, in
 	return prepared, record, prompt
 }
 
-func TestBrowserAmbiguityNativeClarificationAndExactSingleUseApproval(t *testing.T) {
-	c := newBrowserAmbiguityControl(t)
-	c.answer(t)
-	prepared, record, prompt := c.prepare(t)
+func (c *browserAmbiguityControl) approveAndExecute(
+	t *testing.T, prepared browser.Preparation, record interactions.Record, prompt Event,
+) {
+	t.Helper()
 	if err := c.domain.observeApproval(t.Context(), prompt); err != nil {
 		t.Fatal("clarified native approval was not observed", err)
 	}
@@ -248,6 +248,8 @@ func TestBrowserAmbiguityNativeClarificationAndExactSingleUseApproval(t *testing
 	if _, _, err = c.domain.request(t.Context(), Action{Kind: "allow_once"}, prompt); err == nil {
 		t.Fatal("allow-once replayed")
 	}
+	c.trial.Events = append(c.trial.Events, prompt)
+	c.appendInput(request, payloadString(request.Payload, protocol.PayloadKeyContent))
 	record, err = c.registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		MessageID: request.ID, Text: "allow_once", ResponseMessageID: prompt.MessageID,
 	}, interactions.OutcomeAllowed)
@@ -274,6 +276,13 @@ func TestBrowserAmbiguityNativeClarificationAndExactSingleUseApproval(t *testing
 	if _, err = c.registry.Resolve(record.ID, record.Revision); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestBrowserAmbiguityNativeClarificationAndExactSingleUseApproval(t *testing.T) {
+	c := newBrowserAmbiguityControl(t)
+	c.answer(t)
+	prepared, record, prompt := c.prepare(t)
+	c.approveAndExecute(t, prepared, record, prompt)
 	proof, err := c.domain.consumedApproval()
 	if err != nil || proof.Scope != browserAmbiguityApprovalScope || c.nativeWorker.mutations != 1 ||
 		c.domain.fixture.snapshot().removals[0] != "south" {

@@ -38,19 +38,39 @@ produce the actual single-question map. Denial keeps its no-grant semantics.
 
 ## B: Post-Stop Assessment And Case Activation
 
-Still required before removing the current run-time ambiguity skip:
+B connects the following complete owned-profile workflow:
 
-- Preserve typed clarification/approval receipts and join the exact native
-  removal invocation accepted after native approval consumption.
-- Assess every native action, delivered prompt/final, owned shutdown, privacy
-  surface and temporary-root witness through existing domain boundaries.
+- Preflight requires owned startup and explicit metadata capture before any
+  probe/model work. Attached or uncaptured mutating cases are refused.
+- The versioned script answers the one native question, then sends explicit
+  approval intent. It no longer forbids the form submission that implements
+  removal or adds an unnecessary post-completion browser turn. Different
+  intents/order, extra steps, private facts or adaptive removal are unsupported.
+- After owned shutdown, build typed clarification/approval receipts from native
+  records, not model prose. The exact native removal must succeed once after
+  approval consumption, on the same session/tab/controller/execution. Native
+  session IDs use their own bounded namespace, not lowercase manifest IDs.
+- Inspect the complete native action/invocation snapshot with the existing
+  shared inspector. Its private typed effect context replaces positional
+  optional arguments; incompatible contexts cannot be combined. No source
+  records are filtered out to manufacture a read-only proof.
+- Require exactly the delivered question and approval prompts, including body,
+  request, trace and platform-message identity; require settled final deliveries,
+  owned exit, privacy and empty temporary roots. Any additional scoped native
+  interaction prevents qualification.
 - Independently require exactly one South removal and no North removal,
-  submission or download in the sealed fixture state.
-- Add the explicit approval step to the scripted case, admit judging/offline
-  regrade only after complete hard evidence, and run one identified merged-code
-  live attempt. Retain its verdict, including any product failure.
+  submission or download in the healthy sealed fixture. That predicate alone
+  never qualifies browser authority. Retained hard failures are not reset by
+  later assessment or a passing judge.
+- Only complete evidence may reach a tools-disabled judge or offline regrade.
+  Offline grade uses retained receipts without opening native runtime state,
+  restarting the target or replaying an oracle/action. Old skipped/ineligible or
+  incomplete reports cannot be upgraded.
 
-A's model-free native broker/registry/HMAC/outbox controls are not B, a live eval
-result, or permission to remove the skip. The required corpus and frozen E0-E5
-goal are unchanged; no production workspace, model call or deployment is part
-of this prerequisite.
+Model-free controls exercise the native broker/registry/HMAC/outbox joins with a
+stub worker, hard-fail dominance, missing/changed source records and independent
+effects, preflight and offline grade without runtime state. They are not live
+qualification. A fresh identified merged-code live attempt and its retained
+actual verdict remain required, including any product failure. No production
+workspace change, deployment or live model call is part of these controls. The
+required corpus and frozen E0-E5 goal are unchanged.

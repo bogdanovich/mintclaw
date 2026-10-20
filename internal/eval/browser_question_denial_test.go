@@ -227,7 +227,8 @@ func TestBrowserQuestionDenialBindsNativePermissionPrompt(t *testing.T) {
 				}
 				break
 			}
-			native := inspectBrowserTask(control.trial, control.target(), control.page, copy, true, nil, proof)
+			native := inspectBrowserTask(control.trial, control.target(), control.page, copy, true,
+				browserTaskEffects{denial: proof})
 			if !found || native.Code == "native_post_stop_observed" {
 				t.Fatal("unbound permission prompt qualified", mode)
 			}
