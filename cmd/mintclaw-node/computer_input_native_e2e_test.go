@@ -25,11 +25,24 @@ import (
 // an ephemeral, single-executable system.exec policy. Nothing is installed or
 // added to a production policy, and the public computer host stays read-only.
 func TestCompanionNativeInputMechanismsOverWSS(t *testing.T) {
+	runCompanionNativeMechanisms(t, "MINTCLAW_COMPUTER_NATIVE_INPUT_TEST_BINARY",
+		"^TestNativeQualification$/^Input$", nativeInputChildVerified)
+}
+
+func TestCompanionNativeInputOwnershipOverWSS(t *testing.T) {
+	runCompanionNativeMechanisms(t, "MINTCLAW_COMPUTER_NATIVE_OWNERSHIP_TEST_BINARY",
+		"^TestNativeMacInputOwnership$", nativeOwnershipChildVerified)
+}
+
+func runCompanionNativeMechanisms(
+	t *testing.T, helperEnv, selection string, verified func(nativeInputChildResult) bool,
+) {
+	t.Helper()
 	if runtime.GOOS != "darwin" {
 		t.Skip("actual macOS companion permission identity required")
 	}
 	driver := os.Getenv("MINTCLAW_COMPUTER_NATIVE_DRIVER")
-	helper := os.Getenv("MINTCLAW_COMPUTER_NATIVE_INPUT_TEST_BINARY")
+	helper := os.Getenv(helperEnv)
 	app := os.Getenv("MINTCLAW_COMPUTER_COMPANION_APP")
 	fixture := os.Getenv("MINTCLAW_COMPUTER_NATIVE_FIXTURE")
 	if driver == "" && helper == "" && app == "" && fixture == "" {
@@ -101,7 +114,7 @@ func TestCompanionNativeInputMechanismsOverWSS(t *testing.T) {
 	}
 	input, err := json.Marshal(map[string]any{
 		"argv": []string{
-			helper, "-test.run=^TestNativeQualification$/^Input$", "-test.v", "-test.count=1", "-test.timeout=160s",
+			helper, "-test.run=" + selection, "-test.v", "-test.count=1", "-test.timeout=160s",
 		},
 		"cwd": root, "env": inputEnv, "timeout_seconds": 170,
 	})
@@ -124,7 +137,7 @@ func TestCompanionNativeInputMechanismsOverWSS(t *testing.T) {
 		t.Fatal("actual companion could not run the private fixture qualification", err)
 	}
 	var result nativeInputChildResult
-	if json.Unmarshal(data, &result) != nil || !nativeInputChildVerified(result) {
+	if json.Unmarshal(data, &result) != nil || !verified(result) {
 		// Only this helper's owned fixture output is included, never arbitrary
 		// application state, raw screenshots, provider credentials or typed secrets.
 		t.Log(result.Stdout)
@@ -132,9 +145,7 @@ func TestCompanionNativeInputMechanismsOverWSS(t *testing.T) {
 		t.Fatalf("native input not qualified: child exit=%d truncated=%t", result.ExitCode, result.Truncated)
 	}
 	t.Log(result.Stdout)
-	t.Log(
-		"actual companion child independently verified fixture insertion/replacement/click/denial; no public input enabled",
-	)
+	t.Log("actual companion child independently verified selected native fixture checks; no public input enabled")
 }
 
 type nativeInputChildResult struct {
@@ -145,17 +156,33 @@ type nativeInputChildResult struct {
 }
 
 func nativeInputChildVerified(result nativeInputChildResult) bool {
-	if result.ExitCode != 0 || result.Truncated || result.Stderr != "" ||
-		!strings.Contains(result.Stdout, "native worker TCC preflight: Accessibility=true, Screen Recording=true") {
-		return false
-	}
-	lines := strings.Split(result.Stdout, "\n")
 	names := []string{"UnicodeInsertion", "UnicodeReplacement", "ButtonClick", "ScopeDenial"}
 	for index := range 7 {
 		names = append(names, "UnicodeInsertion/"+strconv.Itoa(index))
 	}
+	return nativeMechanismChildVerified(result,
+		"native worker TCC preflight: Accessibility=true, Screen Recording=true",
+		"TestNativeQualification/Input/", names)
+}
+
+func nativeOwnershipChildVerified(result nativeInputChildResult) bool {
+	names := make([]string, 20)
+	for index := range names {
+		names[index] = strconv.Itoa(index)
+	}
+	return nativeMechanismChildVerified(result,
+		"native ownership TCC preflight: Accessibility=true, Screen Recording=true",
+		"TestNativeMacInputOwnership/", names)
+}
+
+func nativeMechanismChildVerified(result nativeInputChildResult, preflight, testPrefix string, names []string) bool {
+	if result.ExitCode != 0 || result.Truncated || result.Stderr != "" ||
+		!strings.Contains(result.Stdout, preflight) {
+		return false
+	}
+	lines := strings.Split(result.Stdout, "\n")
 	for _, name := range names {
-		prefix := "--- PASS: TestNativeQualification/Input/" + name + " ("
+		prefix := "--- PASS: " + testPrefix + name + " ("
 		found := false
 		for _, line := range lines {
 			found = found || strings.HasPrefix(strings.TrimSpace(line), prefix)
@@ -170,6 +197,38 @@ func nativeInputChildVerified(result nativeInputChildResult) bool {
 		}
 	}
 	return false
+}
+
+func TestNativeOwnershipChildVerificationRequiresAllTwentyRounds(t *testing.T) {
+	valid := "native ownership TCC preflight: Accessibility=true, Screen Recording=true\n"
+	for index := range 20 {
+		valid += "--- PASS: TestNativeMacInputOwnership/" + strconv.Itoa(index) + " (0.1s)\n"
+	}
+	valid += "PASS\n"
+	if !nativeOwnershipChildVerified(nativeInputChildResult{Stdout: valid}) {
+		t.Fatal("complete twenty-round independent native proof rejected")
+	}
+	for _, result := range []nativeInputChildResult{
+		{},
+		{Stdout: "PASS\n"},
+		{Stdout: valid, ExitCode: 1},
+		{Stdout: valid, Truncated: true},
+		{Stdout: valid, Stderr: "child warning"},
+		{Stdout: strings.Replace(valid, "Accessibility=true", "Accessibility=false", 1)},
+		{Stdout: strings.Replace(valid, "Screen Recording=true", "Screen Recording=false", 1)},
+		{Stdout: strings.TrimSuffix(valid, "PASS\n")},
+	} {
+		if nativeOwnershipChildVerified(result) {
+			t.Fatal("failed/absent/denied/truncated ownership proof was accepted")
+		}
+	}
+	for index := range 20 {
+		missing := strings.Replace(valid,
+			"--- PASS: TestNativeMacInputOwnership/"+strconv.Itoa(index)+" (", "--- SKIP: missing (", 1)
+		if nativeOwnershipChildVerified(nativeInputChildResult{Stdout: missing}) {
+			t.Fatal("missing native ownership round was accepted", index)
+		}
+	}
 }
 
 func TestNativeInputChildVerificationRequiresEffectsAndExit(t *testing.T) {
