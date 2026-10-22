@@ -454,10 +454,53 @@ not rewrite that historical trace into a more specific private error.
 The generic correction distinguishes positively identified missing or detached
 native controls before any value access as `observe_required`. Destination,
 method, target and other policy failures retain their existing denial. Its
-private wire response contains only
-that fixed code and the expected origin, never a capsule ID or page error.
+private wire response contains only that fixed code and the expected origin,
+never a capsule ID or page error.
 The broker requires a still-active grant and uncanceled operation before
 projecting it. The model is instructed to obtain new refs and retry preparation
 once; it cannot bypass readiness checks or reuse old refs. Other denials,
 unknown submission outcomes and cleanup retain their existing behavior. The
 correction requires independent review and merged deployment before release.
+
+### Review completed; deployment pending
+
+PR #1860 completed independent review on head
+`a000fec6a1b9224d0b9dfaae2c4729b1e3eb0750`, with ten successful CI checks,
+two intentionally skipped checks, no unresolved threads and owner PR-level
+rocket approval. Normal merge produced
+`86c0ce584defec8cf56c107becf5c15f89bf7442` on 2026-10-22 UTC. The review
+revision narrows refresh to positively missing/detached native refs; connected
+forms with a cross-origin action, GET method or separate-window target remain
+denied without admitting a private capsule.
+
+Local qualification under Go 1.26.10 included all 29 pinned Chromium tests
+(no failures or skips), the complete browser package after revision (67.768s),
+the complete tools package (97.964s), targeted refresh race cases (1.838s), and
+enabled discovered/delayed OpenAI-compatible and Codex fixtures plus Codex
+outcome cases (178.616s, seven subcases without skips). Canonical formatting,
+unchanged-rule lint, documentation lint and whitespace checks passed. No real
+vault values were retrieved by operator tooling.
+
+Security prerequisite PR #1861 separately raised the minimum to Go 1.26.10
+and passed all 15 CI checks, including vulnerability analysis. Its reviewed
+merge is `ba8a4858b1d6d57c930ae0cc9b38b95fbab035ca`. During qualification,
+PR #1859 also advanced main with the required-live-data guard. A temporary
+local merge of that main and the unchanged reviewed #1860 head passed the
+seven enabled provider fixtures again (178.522s), the upstream required-read
+guard tests (2.354s), canonical formatting and full lint (zero issues). The
+resulting tree `caa14c91a71dbfe4bbcb1f10e1a5306aa508fbb4` exactly matches
+the actual #1860 merge tree; no extra application change was introduced.
+
+This records code readiness, not a production release or a new Facebook
+success. The post-merge server check still found runtime `cf8bf5dc` / Go
+1.26.9 and source `3df8406f`, with uncommitted parallel source changes. The
+dirty-tree deployment guard stopped even preparatory cache warming before a
+build, installation or service action. All ten services remained active, with
+zero failed units and zero error-level entries in the ten-minute window.
+
+After the source checkout is available, deployment still needs its ordinary
+backup, reviewed-main build, configuration/key-identity checks, affected
+service verification, new stateless smoke trace and public approval-route
+check. A fresh owner-driven Facebook login with stored TOTP and browser
+closure must then qualify the real account path. The historical failed task,
+credential state, phone enrollment and running services were not rewritten.
