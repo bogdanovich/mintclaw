@@ -843,7 +843,7 @@ class Driver {
     }
     const page = this.selectedPage();
     const capsule = await prepareCredentialLogin(page, args);
-    if (!capsule) return textResult('private credential operation denied', true);
+    if (!capsule) return textResult(JSON.stringify({ code: 'observe_required', origin: args.origin }));
     const id = randomBytes(32).toString('hex');
     const pending = { id, page, capsule, request: { ...args }, deadline: Date.now() + 15000 };
     this.credentialPending = pending;

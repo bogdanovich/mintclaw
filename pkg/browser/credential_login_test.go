@@ -21,6 +21,7 @@ type credentialTestClient struct {
 	result                         credentialDriverResult
 	preparedFields                 CredentialFields
 	afterPrepare                   func()
+	prepareErr                     error
 	protectOutputs                 func([]string) error
 }
 
@@ -34,6 +35,9 @@ func (client *credentialTestClient) prepareCredential(_ context.Context, fields 
 	client.preparedFields = fields
 	if client.afterPrepare != nil {
 		client.afterPrepare()
+	}
+	if client.prepareErr != nil {
+		return "", client.prepareErr
 	}
 	return strings.Repeat("a", 64), nil
 }
