@@ -50,6 +50,8 @@ func (*BrowserLoginTool) Description() string {
 		"After submitted, observe the page for the next step or errors. To confirm authentication, expose a " +
 		"visible Log out/Sign out control and use verify with its authenticated_ref; a submit is not proof of login. " +
 		"Confirmed logged_in returns a receipt_id for reporting the completed external action. " +
+		"On observe_required, no values were read or submitted: observe the current form and retry once with " +
+		"fresh refs; if it repeats, hand off. Do not reuse old refs or retry denied/outcome_unknown submissions. " +
 		"If an unsupported challenge appears, hand off without guessing codes or repeating failed logins. " +
 		"Values stay inside the trusted runtime. Phone approval is required when no current vault grant exists. " +
 		"Never supply passwords or tokens. Do not replay an outcome_unknown submission. " +
@@ -153,7 +155,7 @@ func (tool *BrowserLoginTool) Execute(ctx context.Context, args map[string]any) 
 	// projection against an accidental future source returning private detail.
 	switch result.Outcome {
 	case "logged_in", "approval_required", "handoff_required", "denied", "failed", "outcome_unknown",
-		"found", "not_found", "choice_required", "unavailable", "submitted", "unverified":
+		"found", "not_found", "choice_required", "unavailable", "submitted", "unverified", "observe_required":
 	default:
 		return denied()
 	}

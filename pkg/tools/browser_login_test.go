@@ -86,6 +86,7 @@ func TestBrowserLoginToolDoesNotCertifyUnconfirmedLogin(t *testing.T) {
 	for _, outcome := range []string{
 		"approval_required", "handoff_required", "outcome_unknown", "denied", "failed",
 		"submitted", "unverified", "found", "not_found", "choice_required", "unavailable",
+		"observe_required",
 	} {
 		t.Run(outcome, func(t *testing.T) {
 			source := &credentialBrowserToolFixture{

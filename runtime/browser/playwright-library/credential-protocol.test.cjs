@@ -160,6 +160,50 @@ test('discarded capsules cannot submit and malformed JSON never echoes private i
     await wire.shutdown();
   });
 
+test('replaced submit requires fresh observation before any private submission',
+  { timeout: 30000 }, async t => {
+    const wire = await wireFixture(t);
+    const snapshot = await wire.call('browser_navigate', { url: `${origin}/login` });
+    const fields = { ...prepare(snapshot), step: 'credentials', website_domain: 'example.org' };
+    await wire.call('browser_run_code_unsafe', { code: `async page => {
+      await page.locator('button').evaluate(element => element.replaceWith(element.cloneNode(true)));
+      return true;
+    }` });
+    const stale = envelope(await wire.call('mintclaw_credential_prepare', fields));
+    assert.deepEqual(stale, { code: 'observe_required', origin });
+    // No capsule was admitted, so a normal fresh observation is still allowed.
+    const fresh = await wire.call('browser_snapshot', {});
+    const updated = { ...prepare(fresh), step: 'credentials', website_domain: 'example.org' };
+    assert.notEqual(updated.submit_ref, fields.submit_ref);
+    const ready = envelope(await wire.call('mintclaw_credential_prepare', updated));
+    const submitted = envelope(await wire.call('mintclaw_credential_submit', { id: ready.id, username, password }));
+    assert.equal(submitted.code, 'submitted');
+    assert.deepEqual(submitted.cookies, [cookie]);
+    // The fixture rejects any second POST, including an attempted stale submit.
+    assert.equal(JSON.stringify(stale).includes(username) || JSON.stringify(stale).includes(password), false);
+    await wire.shutdown();
+  });
+
+test('preparation policy rejections remain denied without admitting a capsule',
+  { timeout: 30000 }, async t => {
+    const wire = await wireFixture(t);
+    for (const attribute of ['action', 'method', 'target']) {
+      const snapshot = await wire.call('browser_navigate', { url: `${origin}/login` });
+      const fields = { ...prepare(snapshot), step: 'credentials', website_domain: 'example.org' };
+      await wire.call('browser_run_code_unsafe', { code: `async page => {
+        await page.locator('form').evaluate(form => form.setAttribute(${JSON.stringify(attribute)},
+          ${JSON.stringify({action: 'https://other.example.net/session', method: 'get', target: '_blank'}[attribute])}));
+        return true;
+      }` });
+      const denied = await wire.call('mintclaw_credential_prepare', fields);
+      assert.equal(denied.is_error, true, 'policy rejection was reported as refreshable');
+      assert.equal(denied.content[0].text, 'private credential operation denied');
+      const observed = await wire.call('browser_snapshot', {});
+      assert.equal(observed.is_error, false, 'rejected policy admitted a pending capsule');
+    }
+    await wire.shutdown();
+  });
+
 test('expired prepared requests dispose their handle before denying submission', async () => {
   const driver = new Driver({});
   let disposed = 0;

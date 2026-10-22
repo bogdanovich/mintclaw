@@ -427,3 +427,37 @@ not claim a new real Facebook task on `1f5b2a99`. Repeating real submissions
 solely to test the non-secret evidence field is unnecessary; the next ordinary
 owner login can exercise the complete formal report. Restart invalidated
 earlier grants, so that next login may need fresh phone approval.
+
+## Form controls replaced after observation
+
+The next owner Facebook test on 2026-10-22 UTC, task
+`subagent-769c8526-f7d9-48b5-836b-cea8098c8b39`, generation
+`2ed173f1-3d67-46c5-ae64-332615d2b3b0`, approved successfully and resumed
+exactly once. Origin trace `trace-turn-43144340aa61f0956ee4ad74` suspended
+with 93 records. Continuation `trace-turn-799053b784bb6fc495b489ac`, 92
+records, opened a fresh browser, found the Login and returned `denied` at
+record 50 for its credentials step. Native closure returned closed at 71.
+Authentication and TOTP were not reached. Both traces use source `cf8bf5dc`,
+schema `mintclaw.diagnostic_trace.v1`, `redacted_content` /
+`mintclaw.config_filter.v1`, with no truncation. The current denial projection
+does not prove which internal pre-injection check rejected this exact attempt.
+
+A separate anonymous public-page probe, without retrieving or filling any
+credential values, reproduced a native readiness failure with the same selected
+native refs. Immediately after observation, preparation passed. After 11.5
+seconds, the username/password inputs remained connected, but the selected
+submit control `e65` was detached. Fresh observation selected its replacement
+`e215` and preparation passed again. This proves a real form replacement case
+and strongly suggests the cause of the similarly timed owner denial; it does
+not rewrite that historical trace into a more specific private error.
+
+The generic correction distinguishes positively identified missing or detached
+native controls before any value access as `observe_required`. Destination,
+method, target and other policy failures retain their existing denial. Its
+private wire response contains only
+that fixed code and the expected origin, never a capsule ID or page error.
+The broker requires a still-active grant and uncanceled operation before
+projecting it. The model is instructed to obtain new refs and retry preparation
+once; it cannot bypass readiness checks or reuse old refs. Other denials,
+unknown submission outcomes and cleanup retain their existing behavior. The
+correction requires independent review and merged deployment before release.
