@@ -80,13 +80,14 @@ session; the operation is not automatically retried.
 After submission, HTTPS redirects may stay within the matched registrable
 website domain. The Go broker derives that domain using the Public Suffix List;
 model arguments cannot widen it. An unrelated redirect retires the session.
-Child-frame requests remain denied. If native form preparation finds controls
-that are no longer ready, it returns `observe_required` before retrieving any
+Child-frame requests remain denied. If native form preparation finds missing
+or detached controls, it returns `observe_required` before retrieving any
 values or creating a private submission capsule. The agent must observe the
 current page and retry preparation once with newly observed refs; repeated
 readiness failure requires handoff. It must never privately rediscover a
 replacement control by its label or reuse the stale refs. Revocation,
-cancellation and other denials do not become permission to retry.
+cancellation, destination/method/target policy failures and other denials do
+not become permission to retry.
 
 This recovery applies only before retrieval/injection. A failure after private
 submission may have had effects and retains `outcome_unknown` plus session

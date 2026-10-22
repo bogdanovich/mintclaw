@@ -184,6 +184,26 @@ test('replaced submit requires fresh observation before any private submission',
     await wire.shutdown();
   });
 
+test('preparation policy rejections remain denied without admitting a capsule',
+  { timeout: 30000 }, async t => {
+    const wire = await wireFixture(t);
+    for (const attribute of ['action', 'method', 'target']) {
+      const snapshot = await wire.call('browser_navigate', { url: `${origin}/login` });
+      const fields = { ...prepare(snapshot), step: 'credentials', website_domain: 'example.org' };
+      await wire.call('browser_run_code_unsafe', { code: `async page => {
+        await page.locator('form').evaluate(form => form.setAttribute(${JSON.stringify(attribute)},
+          ${JSON.stringify({action: 'https://other.example.net/session', method: 'get', target: '_blank'}[attribute])}));
+        return true;
+      }` });
+      const denied = await wire.call('mintclaw_credential_prepare', fields);
+      assert.equal(denied.is_error, true, 'policy rejection was reported as refreshable');
+      assert.equal(denied.content[0].text, 'private credential operation denied');
+      const observed = await wire.call('browser_snapshot', {});
+      assert.equal(observed.is_error, false, 'rejected policy admitted a pending capsule');
+    }
+    await wire.shutdown();
+  });
+
 test('expired prepared requests dispose their handle before denying submission', async () => {
   const driver = new Driver({});
   let disposed = 0;

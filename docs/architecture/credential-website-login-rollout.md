@@ -451,8 +451,10 @@ submit control `e65` was detached. Fresh observation selected its replacement
 and strongly suggests the cause of the similarly timed owner denial; it does
 not rewrite that historical trace into a more specific private error.
 
-The generic correction distinguishes native preparation failure before any
-value access as `observe_required`. Its private wire response contains only
+The generic correction distinguishes positively identified missing or detached
+native controls before any value access as `observe_required`. Destination,
+method, target and other policy failures retain their existing denial. Its
+private wire response contains only
 that fixed code and the expected origin, never a capsule ID or page error.
 The broker requires a still-active grant and uncanceled operation before
 projecting it. The model is instructed to obtain new refs and retry preparation
