@@ -1779,6 +1779,12 @@ func (runner *toolLoopRunner) invokeToolCall(
 		}
 	}
 
+	// A failed required read cannot acquire replacement control through a hook.
+	if call.liveDataFailure != "" {
+		resolveCanceledToolSuspension(execCtx, toolResult)
+		toolResult = toolshared.ErrorResult(call.liveDataFailure)
+	}
+
 	if toolResult == nil {
 		toolResult = toolshared.ErrorResult("hook returned nil tool result")
 	}
