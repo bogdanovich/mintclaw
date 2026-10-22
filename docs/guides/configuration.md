@@ -857,6 +857,21 @@ without another model call. Preparing or durably queueing a message is not deliv
 to the model as a tool error instead of being described as sent. For progress updates or other non-final sends, agents can set
 `delivery_intent: "immediate_continue"`; the runtime delivers that message immediately and continues the turn.
 
+### Required Live Data
+
+`tools.live_data_guards` is an optional list of source-read policies. Each entry
+contains exact `tools` names and an optional `failure_message`. When a listed
+tool fails, the runtime ends the turn with that message, skips remaining tool
+calls, and discards pending report artifacts. A later tool-result hook cannot
+mask the original source failure. Successful reads and unlisted tools retain
+their normal behavior.
+
+For example, a profile can list `mcp_renpho_get_latest_measurement` to prevent
+falling back to cached measurements after a failed required live read. Its
+workspace instructions must still require that read before report generation
+and verify measurement dates after a successful response. The guard does not
+classify the freshness of successful data or retract an earlier delivery.
+
 ### Read File Mode
 
 `read_file` has two mutually exclusive implementations selected by config. MintClaw registers exactly one of them at startup:

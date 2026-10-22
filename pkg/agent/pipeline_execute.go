@@ -751,6 +751,7 @@ type toolCallState struct {
 	executionContext            context.Context
 	trustedExecution            *tools.TrustedToolExecution
 	result                      *toolshared.ToolResult
+	liveDataFailure             string
 	duration                    time.Duration
 	loopSemantics               loopguard.Semantics
 	loopArguments               map[string]any
@@ -865,6 +866,10 @@ func (runner *toolLoopRunner) executeToolCall(
 	if result := runner.admitToolCall(call); result.disposition != toolCallProceed {
 		return checkStage(result)
 	}
+	liveDataFailure := ""
+	if call.resultSource == toolResultHook {
+		liveDataFailure = runner.p.liveDataFailureMessage(call.name, call.result)
+	}
 	if protectedContinuation && (call.resultSource == toolResultHook ||
 		!runner.exec.protectedAnswerContinuation.matchesExecution(call.name, call.arguments)) {
 		return failProtectedContinuation()
@@ -888,9 +893,28 @@ func (runner *toolLoopRunner) executeToolCall(
 	if protectedContinuation && !runner.exec.protectedAnswerContinuation.matchesExecution(call.name, call.arguments) {
 		return failProtectedContinuation()
 	}
+	if call.liveDataFailure != "" {
+		liveDataFailure = call.liveDataFailure
+	}
+	if liveDataFailure != "" {
+		// A hook must not turn a failed source read into a deliverable success.
+		call.result = toolshared.ErrorResult(liveDataFailure)
+	}
 	result := runner.persistToolCallResult(ctx, call)
 	if result.disposition != toolCallProceed {
 		return checkStage(result)
+	}
+	if liveDataFailure != "" {
+		runner.appendSkippedToolMessages(
+			call.index+1,
+			"required live data fetch failed",
+			"Skipped because a required live data fetch failed. Cached data cannot replace this source.",
+		)
+		runner.exec.messages = runner.messages
+		runner.exec.deliverable = nil
+		return stopToolBatch(ToolLoopOutcome{
+			Control: turnStepFinalize, TerminalMode: terminalRenderExact, FinalContent: liveDataFailure,
+		})
 	}
 	if !protectedContinuation {
 		if call.toolResultFollowupErr != nil || (call.toolResultFollowup != nil &&
@@ -1654,6 +1678,8 @@ func (runner *toolLoopRunner) invokeToolCall(
 			asyncCallback,
 		)
 	}
+	// Preserve the source failure before an AfterTool hook can replace its result.
+	call.liveDataFailure = p.liveDataFailureMessage(toolName, toolResult)
 	call.taskSuspended = toolResult != nil && toolResult.Control.TaskSuspended
 	if runner.exec.protectedAnswerContinuation.awaitingInitialExecution() && toolName ==
 		runner.exec.protectedAnswerContinuation.toolName {
