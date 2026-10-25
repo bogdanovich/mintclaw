@@ -145,7 +145,25 @@ func (p *startupBlockedProvider) GetDefaultModel() string {
 }
 
 // Run starts the gateway runtime using the configuration loaded from configPath.
-func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runErr error) {
+func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) error {
+	return runGateway(debug, homePath, configPath, allowEmptyStartup, nil)
+}
+
+// RunWithProviderCallBudget applies one caller-owned budget to the agent's
+// provider generation. Profile admission, terminal evidence and sealing belong
+// to the caller; independently provider-owning tools remain outside this scope.
+func RunWithProviderCallBudget(
+	debug bool, homePath, configPath string, allowEmptyStartup bool, budget *providers.CallBudget,
+) error {
+	if budget == nil {
+		return providers.ErrCallBudget
+	}
+	return runGateway(debug, homePath, configPath, allowEmptyStartup, budget)
+}
+
+func runGateway(
+	debug bool, homePath, configPath string, allowEmptyStartup bool, budget *providers.CallBudget,
+) (runErr error) {
 	startedAt := time.Now()
 	panicPath := filepath.Join(homePath, logPath, panicFile)
 	panicFunc, err := logger.InitPanic(panicPath)
@@ -243,7 +261,11 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 	if spoolErr := configureGatewayInboundSpool(cfg, msgBus); spoolErr != nil {
 		return fmt.Errorf("configure inbound spool: %w", spoolErr)
 	}
-	agentLoop, err := agent.NewAgentLoopChecked(cfg, msgBus, provider, agent.WithStateManager(gatewayState))
+	agentOptions := []agent.AgentLoopOption{agent.WithStateManager(gatewayState)}
+	if budget != nil {
+		agentOptions = append(agentOptions, agent.WithProviderCallBudget(budget))
+	}
+	agentLoop, err := agent.NewAgentLoopChecked(cfg, msgBus, provider, agentOptions...)
 	if err != nil {
 		return fmt.Errorf("initialize agent: %w", err)
 	}
