@@ -147,7 +147,9 @@ The phone explicitly displays access to all website-matching Login items and
 stored one-time codes in the dedicated vault for up to 20 hours. This is broader
 than approving one fixed alias. Consumer leases narrow that authority to the
 selected item and website domain for the session; adding an item or taking a
-new step does not renew the grant. Existing revoke/expiry/restart behavior is
+new step does not renew the grant. Original unexpired approval now survives
+restart under the [durable approval contract](credential-durable-approval.md).
+Existing revoke/expiry behavior is
 preserved. Grant duration does not make ephemeral browser cookies persistent.
 
 A browser login needing phone approval becomes a durable external wait with a

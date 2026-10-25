@@ -58,8 +58,17 @@ func TestProtectedOwnerStoreFixture(t *testing.T) {
 		len(restarted.owner.Credentials[0].Attestation.ClientDataJSON) == 0 {
 		t.Fatal("complete enrollment/counter record did not survive restart")
 	}
-	if !errors.Is(restarted.Check(context.Background(), grant.ID, checkedRequest(grant.PolicyRevision)), ErrDenied) {
-		t.Fatal("restart restored a grant")
+	if restarted.Check(context.Background(), grant.ID, checkedRequest(grant.PolicyRevision)) != nil {
+		t.Fatal("restart lost a verified grant")
+	}
+	restored := restarted.grants[grant.ID]
+	if !restored.IssuedAt.Equal(grant.IssuedAt) || !restored.ExpiresAt.Equal(grant.ExpiresAt) {
+		t.Fatal("filesystem reload renewed the original grant deadline")
+	}
+	otherPrincipal := checkedRequest(grant.PolicyRevision)
+	otherPrincipal.Principal.ActorID = "other"
+	if restarted.Check(context.Background(), grant.ID, otherPrincipal) == nil {
+		t.Fatal("filesystem reload widened the approved principal")
 	}
 	if err = restarted.Close(); err != nil {
 		t.Fatal("restart close failed")
@@ -227,8 +236,8 @@ func testRejectedEnrollmentStore(t *testing.T) {
 		t.Fatal("private recovery close failed")
 	}
 	active, setup, err := New(config)
-	if err != nil || setup != nil || !active.ready(context.Background()) || len(active.grants) != 0 {
-		t.Fatal("accepted filesystem activation did not survive without grants")
+	if err != nil || setup != nil || !active.ready(context.Background()) || len(active.grants) != 1 {
+		t.Fatal("accepted filesystem activation or verified grant did not survive")
 	}
 	if active.Close() != nil {
 		t.Fatal("accepted filesystem fixture close failed")

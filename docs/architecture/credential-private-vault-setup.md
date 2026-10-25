@@ -60,7 +60,9 @@ grants. These controls assume the approved trusted runtime and host.
 Restart the gateway to initialize the SDK, then enroll the phone using
 `mintclaw credentials enroll` if needed. Missing/invalid private token state or
 SDK initialization failure leaves approval setup available but provides no
-vault consumer. Restart restores the owner passkey but no credential grants.
+vault consumer. Restart restores the owner passkey and original unexpired
+approval metadata matching the current policy; see
+[durable approval](credential-durable-approval.md).
 This implementation does not replace an existing token; rotation requires
 operator administration of the private file and a gateway restart.
 
