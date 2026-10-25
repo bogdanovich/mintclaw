@@ -552,6 +552,158 @@ func TestCodingRuntimeConfigPreservesCanonicalModelContract(t *testing.T) {
 	}
 }
 
+func TestCodingRuntimeConfigUsesCodingDefaultsOnlyForUnboundThread(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = "gateway-model"
+	cfg.Agents.Defaults.Provider = "anthropic"
+	cfg.Coding.Defaults = config.CodingDefaultsConfig{
+		Model: "coding-model", Provider: "openai", ReasoningEffort: "xhigh",
+	}
+	cfg.ModelList = config.SecureModelList{
+		{
+			ModelName: "gateway-model", Provider: "anthropic", Model: "claude-gateway", Enabled: true,
+		},
+		{
+			ModelName: "coding-model", Provider: "openai", Model: "gpt-coding", Enabled: true,
+			Reasoning: &config.ModelReasoningConfig{
+				SupportedEfforts: []reasoning.Effort{reasoning.EffortLow, reasoning.EffortXHigh},
+				DefaultEffort:    reasoning.EffortLow,
+			},
+		},
+	}
+
+	runtimeCfg, modelName, providerName, err := codingRuntimeConfig(cfg, thread.Metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelName != "coding-model" || providerName != "openai" ||
+		runtimeCfg.ModelList[0].ThinkingLevel != "xhigh" {
+		t.Fatalf(
+			"new thread selection = %s/%s reasoning=%q",
+			providerName,
+			modelName,
+			runtimeCfg.ModelList[0].ThinkingLevel,
+		)
+	}
+	if cfg.Agents.Defaults.ModelName != "gateway-model" || cfg.Agents.Defaults.Provider != "anthropic" {
+		t.Fatalf("gateway defaults changed: %+v", cfg.Agents.Defaults)
+	}
+
+	resumedCfg, modelName, providerName, err := codingRuntimeConfig(cfg, thread.Metadata{
+		Model: "gateway-model", Provider: "anthropic",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelName != "gateway-model" || providerName != "anthropic" ||
+		resumedCfg.ModelList[0].ThinkingLevel != "" {
+		t.Fatalf(
+			"resumed thread selection = %s/%s reasoning=%q",
+			providerName,
+			modelName,
+			resumedCfg.ModelList[0].ThinkingLevel,
+		)
+	}
+}
+
+func TestResolveNativeCodingModelUsesCodingDefaultsForNewThread(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = "gateway-model"
+	cfg.Agents.Defaults.Provider = "anthropic"
+	cfg.Coding.Defaults = config.CodingDefaultsConfig{
+		Model: "coding-model", Provider: "openai", ReasoningEffort: "xhigh",
+	}
+	cfg.ModelList = config.SecureModelList{
+		{ModelName: "gateway-model", Provider: "anthropic", Model: "claude-gateway", Enabled: true},
+		{
+			ModelName: "coding-model", Provider: "openai", Model: "gpt-coding", Enabled: true,
+			Reasoning: &config.ModelReasoningConfig{
+				SupportedEfforts: []reasoning.Effort{reasoning.EffortLow, reasoning.EffortXHigh},
+				DefaultEffort:    reasoning.EffortLow,
+			},
+		},
+	}
+	if _, err := config.NewRepository(path).Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.EnvConfig, path)
+
+	selection, err := resolveNativeCodingModel("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := frontend.ModelSelection{
+		Model: "coding-model", Provider: "openai", ReasoningEffort: "xhigh",
+	}
+	if selection != want {
+		t.Fatalf("new coding selection = %+v, want %+v", selection, want)
+	}
+
+	explicit, err := resolveNativeCodingModel("gateway-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit != (frontend.ModelSelection{Model: "gateway-model", Provider: "anthropic"}) {
+		t.Fatalf("explicit selection = %+v", explicit)
+	}
+}
+
+func TestPersistCodingModelDefaultKeepsGatewayDefaultsIndependent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = "gateway-model"
+	cfg.Agents.Defaults.Provider = "anthropic"
+	cfg.ModelList = config.SecureModelList{
+		{ModelName: "gateway-model", Provider: "anthropic", Model: "claude-gateway", Enabled: true},
+		{
+			ModelName: "coding-model", Provider: "openai", Model: "gpt-coding", Enabled: true,
+			Reasoning: &config.ModelReasoningConfig{
+				SupportedEfforts: []reasoning.Effort{reasoning.EffortLow, reasoning.EffortXHigh},
+				DefaultEffort:    reasoning.EffortLow,
+			},
+		},
+	}
+	repository := config.NewRepository(path)
+	if _, err := repository.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistCodingModelDefault(repository.Update, frontend.ModelSelection{
+		Model: "coding-model", Provider: "openai", ReasoningEffort: "xhigh",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Config.Coding.Defaults != (config.CodingDefaultsConfig{
+		Model: "coding-model", Provider: "openai", ReasoningEffort: "xhigh",
+	}) {
+		t.Fatalf("coding defaults = %+v", persisted.Config.Coding.Defaults)
+	}
+	if persisted.Config.Agents.Defaults.ModelName != "gateway-model" ||
+		persisted.Config.Agents.Defaults.Provider != "anthropic" {
+		t.Fatalf("gateway defaults changed: %+v", persisted.Config.Agents.Defaults)
+	}
+	if err = persistCodingModelDefault(repository.Update, frontend.ModelSelection{
+		Model: "coding-model", Provider: "openai", ReasoningEffort: "max",
+	}); err == nil || !strings.Contains(err.Error(), "unsupported reasoning effort") {
+		t.Fatalf("unsupported default error = %v", err)
+	}
+	afterFailure, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterFailure.Config.Coding.Defaults != persisted.Config.Coding.Defaults {
+		t.Fatalf(
+			"failed default update changed config: got %+v, want %+v",
+			afterFailure.Config.Coding.Defaults,
+			persisted.Config.Coding.Defaults,
+		)
+	}
+}
+
 func TestCodingRuntimeConfigKeepsLoadBalancedAliasBoundToPersistedProvider(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ModelList = config.SecureModelList{
@@ -940,6 +1092,7 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 	sessions := session.NewMemoryStore()
 	var selectedConfig *config.ModelConfig
 	providerCreateCalls := 0
+	var savedDefault frontend.ModelSelection
 	var gotOptions agent.DirectTurnOptions
 	createProvider := func(runtimeCfg *config.Config) (providers.LLMProvider, string, error) {
 		providerCreateCalls++
@@ -987,6 +1140,10 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 		},
 		projector:     projector,
 		metadataState: newCodingMetadataState(store, nil, metadata, time.Now),
+		persistModelDefault: func(selection frontend.ModelSelection) error {
+			savedDefault = selection
+			return nil
+		},
 	}
 	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
 		Model: "shared", Provider: "anthropic", ReasoningEffort: "medium",
@@ -1040,6 +1197,15 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 	}
 	if selectedConfig == nil || selectedConfig.ModelName != "deep" || selectedConfig.Provider != "anthropic" {
 		t.Fatalf("selected provider config = %+v", selectedConfig)
+	}
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
+		Model: "deep", Provider: "anthropic", ReasoningEffort: "xhigh", SaveAsDefault: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if savedDefault.Model != "deep" || savedDefault.Provider != "anthropic" ||
+		savedDefault.ReasoningEffort != "xhigh" || !savedDefault.SaveAsDefault {
+		t.Fatalf("saved coding default = %+v", savedDefault)
 	}
 	persisted, err := store.Load(metadata.ThreadID)
 	if err != nil {

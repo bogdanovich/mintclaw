@@ -201,6 +201,7 @@ type ModelSelection struct {
 	Model           string `json:"model"`
 	Provider        string `json:"provider"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	SaveAsDefault   bool   `json:"save_as_default,omitempty"`
 }
 
 // InstructionSource is a content-free description of one project instruction

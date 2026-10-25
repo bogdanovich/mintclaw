@@ -178,6 +178,9 @@ func finalizeLoadedConfig(
 	if err := cfg.ValidateCodingState(); err != nil {
 		return err
 	}
+	if err := cfg.ValidateCodingDefaults(); err != nil {
+		return err
+	}
 	if err := cfg.ValidateExecutionTargets(); err != nil {
 		return err
 	}
