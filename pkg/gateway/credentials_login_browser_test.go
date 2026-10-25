@@ -619,7 +619,7 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			_, grantErr := replacement.controller.ActiveLogin(ctx, scope)
 			respond(map[string]bool{
 				"passkey_retained": routes.handler.(*credentialHTTPHandler).enrollment == nil,
-				"grant_denied":     grantErr != nil,
+				"grant_retained":   grantErr == nil,
 				"old_lease_denied": lease.Check(ctx, scope) != nil,
 				"no_retrieval":     retrieved.Load() == 1,
 			})

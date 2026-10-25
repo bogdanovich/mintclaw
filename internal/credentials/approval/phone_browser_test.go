@@ -163,7 +163,7 @@ func testPhoneBrowserFixture(t *testing.T, pagePath string, discovery, idle bool
 	if output.String() != "phone browser qualification: OK\n" || strings.Contains(output.String(), string(invite)) {
 		t.Fatal("unexpected browser fixture output")
 	}
-	if fixture.store.commits != 4 {
+	if fixture.store.commits != 6 {
 		t.Fatal("browser enrollment, verification, approval and revocation were not all persisted")
 	}
 }

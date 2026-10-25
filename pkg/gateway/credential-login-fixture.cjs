@@ -137,27 +137,28 @@ async function phone() {
     stage = 'login-result';
     const firstOutcome = config.lifetime === 'cancel' ? 'caller_canceled' : config.outcome || 'logged_in';
     assert.equal((await fixture('/_fixture/result')).outcome, firstOutcome);
-    if (config.restart || config.lifetime === 'expiry') {
+    if (config.restart) {
+      stage = 'restart';
+      const restarted = await fixture('/_fixture/restart');
+      assert.deepEqual(restarted, { passkey_retained: true, grant_retained: true, old_lease_denied: true, no_retrieval: true });
+      stage = 'restart-reuse';
+      assert.equal((await fixture('/_fixture/reuse')).outcome, config.outcome || 'logged_in');
+    } else if (config.lifetime === 'expiry') {
       if (config.lifetime === 'expiry') {
         stage = 'expiry';
         assert.equal((await fixture('/_fixture/expired')).retired, true);
       }
-      if (config.restart) {
-        stage = 'restart';
-        const restarted = await fixture('/_fixture/restart');
-        assert.deepEqual(restarted, { passkey_retained: true, grant_denied: true, old_lease_denied: true, no_retrieval: true });
-      }
-      stage = config.restart ? 'restart-request' : 'expiry-request';
+      stage = 'expiry-request';
       const fresh = await fixture('/_fixture/login');
       assert.notEqual(fresh.link, pending.link);
-      stage = config.restart ? 'restart-approve' : 'expiry-approve';
+      stage = 'expiry-approve';
       await page.goto(fresh.link);
       await page.getByRole('button', { name: 'Approve with passkey' }).waitFor();
       assert.equal(await page.locator('#accounts').innerText(), 'fixture-account');
       assert.equal(await page.locator('#duration').innerText(), duration);
       await page.getByRole('button', { name: 'Approve with passkey' }).click();
       await page.getByRole('status').filter({ hasText: 'Approved until' }).waitFor();
-      stage = config.restart ? 'restart-result' : 'expiry-result';
+      stage = 'expiry-result';
       assert.equal((await fixture('/_fixture/result')).outcome, config.outcome || 'logged_in');
     } else {
       stage = 'reuse';

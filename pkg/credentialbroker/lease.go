@@ -119,7 +119,8 @@ func (lease GrantLease) Done() <-chan struct{} {
 }
 
 // Close permanently disables this authority and every borrowed lease. Policy
-// replacement cannot reopen it. A fresh authority starts with no grants.
+// replacement cannot reopen it. A fresh authority starts empty unless trusted
+// startup explicitly restores a verified private approval snapshot.
 func (authority *Authority) Close() {
 	if authority == nil {
 		return
