@@ -68,6 +68,15 @@ func documentFormIntakeFollowup(
 	if intake := projection.Intake; intake != nil &&
 		(projection.FormAction == "collect" || projection.FormAction == "pause" || projection.FormAction == "resume" ||
 			intake.Progress.PendingInputs > 0) {
+		processingInstruction := "No form text is waiting for processing (pending_inputs=0). " +
+			"Separate pending_tasks are unresolved task-scope requests, not unprocessed form facts or failures. " +
+			"Do not offer /retry_form or reopen those scope questions. Ask only genuinely missing form facts. "
+		if intake.Progress.PendingInputs > 0 {
+			processingInstruction = "Pending inputs still block review and output: do not claim a review checkpoint or ask to finish. " +
+				"With pending input, ask only a clarification justified by native findings; otherwise offer /retry_form " +
+				"using received_input_state and accepted_count/acknowledged_count " +
+				"to distinguish accepted facts from retained text, without requesting received facts again. "
+		}
 		return &toolshared.ToolOnlyFollowup{
 			ResponseOnly: true,
 			Instruction: documentIntakeAcceptanceInstruction +
@@ -76,11 +85,7 @@ func documentFormIntakeFollowup(
 				"Do not repeat a summary or grouped plan already delivered earlier in this turn through message. " +
 				"If the introduction was already delivered, give only the next protected question and how to answer it. " +
 				"Invite one free-text paragraph or several ordinary messages; never require /answer, labels, field IDs or one answer per field. Do not echo personal values. Never ask again for confirmed/provided/preserved facts. " +
-				"Pending inputs still block review and output: do not claim a review checkpoint or ask to finish. " +
-				"With pending input, ask only a clarification justified by native findings; otherwise offer /retry_form " +
-				"using received_input_state and accepted_count/acknowledged_count " +
-				"to distinguish accepted facts from retained text, " +
-				"without requesting received facts again. Do not claim complete filling, restart intake or request " +
+				processingInstruction + "Do not claim complete filling, restart intake or request " +
 				"the attachment again. Wait for the user's next message.",
 		}, nil
 	}

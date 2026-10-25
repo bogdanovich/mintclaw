@@ -620,14 +620,20 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 	hasContextMedia bool,
 	requiresDocumentVision bool,
 	turnScopedInput bool,
+	userInput ...string,
 ) {
-	if runner == nil || runner.exec == nil || (!hasContextText && !hasContextMedia) {
+	hasUserInput := turnScopedInput && len(userInput) > 0 && userInput[0] != ""
+	if runner == nil || runner.exec == nil || (!hasContextText && !hasContextMedia && !hasUserInput) {
 		return
 	}
 	for index := len(runner.messages) - 1; index >= 0; index-- {
 		message := runner.messages[index]
 		if message.Role != "tool" || message.ToolCallID != toolCallID {
 			continue
+		}
+		inputText := ""
+		if turnScopedInput && len(userInput) > 0 {
+			inputText = userInput[0]
 		}
 		runner.exec.liveToolContexts = append(runner.exec.liveToolContexts, liveToolContextProjection{
 			toolCallID:             toolCallID,
@@ -637,6 +643,7 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 			durableAttachments:     append([]providers.Attachment(nil), durable.Attachments...),
 			requiresDocumentVision: requiresDocumentVision,
 			turnScopedInput:        turnScopedInput,
+			userInputText:          inputText,
 		})
 		return
 	}
@@ -1926,6 +1933,10 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		runner.llm.handledAttachments = append(runner.llm.handledAttachments, settlement.attachments...)
 	} else {
 		liveContextText := runner.takeLiveToolContextText(toolResult)
+		liveContextText, userInputText, inputErr := p.splitLiveUserInput(toolResult.ContextInput, liveContextText)
+		if inputErr != nil {
+			return stopToolBatch(ToolLoopOutcome{TurnErr: inputErr})
+		}
 		p.prepareDocumentHandoff(ts, toolResult.ContextInput)
 		hasLiveContextMedia := len(toolResult.ContextMedia) > 0
 		modelContextResult := toolResultForModelContext(toolName, toolResult)
@@ -2007,6 +2018,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				hasLiveContextMedia,
 				hasLiveContextMedia && toolResult.ContextMediaRequiresVision,
 				toolResult.ContextInput != nil,
+				userInputText,
 			)
 		}
 	}

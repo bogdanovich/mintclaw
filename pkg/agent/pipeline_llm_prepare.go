@@ -117,7 +117,9 @@ func (p *Pipeline) prepareLLMRequest(
 	// the runtime-owned request before exposing a clone to hooks, then only
 	// allow later stages to add sensitivity. Hook-returned message metadata
 	// must never clear it.
-	llm.protectedDiagnosticContext = diagnosticCurrentTurnContainsSensitiveEvidence(llm.callMessages)
+	llm.liveUserInputs = append([]liveToolContextProjection(nil), exec.liveToolContexts...)
+	llm.protectedDiagnosticContext = diagnosticCurrentTurnContainsSensitiveEvidence(llm.callMessages) ||
+		hasLiveUserInput(llm.liveUserInputs)
 	promptCacheTailStart, promptCacheTailBoundaryFound := promptCacheDynamicTailStart(llm.callMessages)
 	frozenTurnMessages := cloneProviderMessages(llm.callMessages)
 
@@ -179,6 +181,9 @@ func (p *Pipeline) prepareLLMRequest(
 		if err := restoreFrozenTurnEnvelopes(frozenTurnMessages, llm.callMessages); err != nil {
 			return llmStageResult{}, err
 		}
+		if err := restoreLiveUserInputIdentities(frozenTurnMessages, llm.callMessages, llm.liveUserInputs); err != nil {
+			return llmStageResult{}, err
+		}
 	}
 	if exec.protectedAnswerContinuation.pending() {
 		llm.providerToolDefs = exec.protectedAnswerContinuation.restrictToolDefinitions(llm.providerToolDefs)
@@ -222,10 +227,12 @@ func (p *Pipeline) prepareLLMRequest(
 		llm.llmModel,
 		primaryCandidateProvider(exec.model.activeCandidates),
 	)
-	llm.setCanonicalAttemptMessages(
+	if err := llm.setCanonicalAttemptMessages(
 		llm.callMessages,
 		promptCacheTailBoundary{Start: promptCacheTailStart, Found: promptCacheTailBoundaryFound},
-	)
+	); err != nil {
+		return llmStageResult{}, err
+	}
 	llm.requiresDocumentVision = exec.hasLiveDocumentContextMedia() && hasMediaRefs(llm.callMessages)
 	llm.modelAttemptID = p.emitLLMRequestAttempt(ts, exec, llm, llm.diagnosticMessagesForAttempt())
 
@@ -253,9 +260,12 @@ func (p *Pipeline) emitLLMRequestAttempt(
 		runtimeevents.KindAgentLLMRequest,
 		ts.eventMeta("runTurn", "turn.llm.request").withModelAttemptID(attemptID),
 		LLMRequestPayload{
-			Provider:           primaryCandidateProvider(exec.model.activeCandidates),
-			Model:              llm.llmModel,
-			PromptHash:         safeJSONHash(traceSettings, diagnosticPromptHashMessages(llm.callMessages)),
+			Provider: primaryCandidateProvider(exec.model.activeCandidates),
+			Model:    llm.llmModel,
+			PromptHash: safeJSONHash(
+				traceSettings,
+				diagnosticPromptHashMessages(llm.promptHashMessagesForAttempt()),
+			),
 			SystemSources:      fingerprintSystemSources(traceSettings, llm.callMessages),
 			PromptCacheMode:    string(effectivePromptCacheMode(p.Cfg)),
 			PromptCache:        promptCache,
