@@ -75,3 +75,9 @@ Negative controls include cancellation, wrong scope, orphaned tool results,
 native trace errors, stale finals, duplicate native-valid deliveries, missing
 host/cleanup evidence and truncated logs. These are model-free CI controls,
 not live model qualification or a new green baseline.
+
+The model-free CLI build explicitly disables VCS stamping so its synthetic
+source identity is the same in archives, worktrees and ordinary CI checkouts.
+Production trace provenance checks are unchanged. An unattributed-source control
+must retain a complete `inconclusive` report with partial native evidence and
+zero judge calls, rather than losing its checkpoint to null-array decoding.

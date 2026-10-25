@@ -19,6 +19,23 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
+func buildSteeringTestCLI(t *testing.T, binary, root, commit string) {
+	t.Helper()
+	buildCtx, buildCancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer buildCancel()
+	flags := "-X github.com/bogdanovich/mintclaw/pkg/config.Version=steering-native-test " +
+		"-X github.com/bogdanovich/mintclaw/pkg/config.GitCommit=" + commit
+	// This model-free fixture uses synthetic attribution, not checkout attestation.
+	build := exec.CommandContext(
+		buildCtx, "go", "build", "-buildvcs=false", "-tags", "goolm,stdjson", "-ldflags", flags,
+		"-o", binary, "./cmd/mintclaw",
+	)
+	build.Dir, build.Env = root, append(os.Environ(), "CGO_ENABLED=0")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build native steering CLI: %v\n%s", err, output)
+	}
+}
+
 func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("prepared runtime admission currently supports Linux and macOS")
@@ -28,20 +45,16 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	buildCtx, buildCancel := context.WithTimeout(t.Context(), 3*time.Minute)
-	defer buildCancel()
-	flags := "-X github.com/bogdanovich/mintclaw/pkg/config.Version=steering-native-test " +
-		"-X github.com/bogdanovich/mintclaw/pkg/config.GitCommit=" + nativeModelTestCommit
-	build := exec.CommandContext(buildCtx, "go", "build", "-tags", "goolm,stdjson", "-ldflags", flags,
-		"-o", binary, "./cmd/mintclaw")
-	build.Dir, build.Env = root, append(os.Environ(), "CGO_ENABLED=0")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build native steering CLI: %v\n%s", err, output)
-	}
-	for _, variant := range []struct{ name, file, mode string }{
-		{"boundary", "steering-boundary.json", "one-at-a-time"},
-		{"order-one", "steering-order.json", "one-at-a-time"},
-		{"order-all", "steering-order.json", "all"},
+	buildSteeringTestCLI(t, binary, root, nativeModelTestCommit)
+	buildSteeringTestCLI(t, binary+"-no-source", root, "")
+	for _, variant := range []struct {
+		name, file, mode string
+		missingSource    bool
+	}{
+		{"boundary", "steering-boundary.json", "one-at-a-time", false},
+		{"order-one", "steering-order.json", "one-at-a-time", false},
+		{"order-all", "steering-order.json", "all", false},
+		{"missing-source", "steering-boundary.json", "one-at-a-time", true},
 	} {
 		t.Run(variant.name, func(t *testing.T) {
 			definition, err := os.ReadFile(filepath.Join("../../evals/cases/general", variant.file))
@@ -139,9 +152,13 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 			writeCase(t, corpus, "case.json", item.Case)
 			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 			defer cancel()
+			targetBinary := binary
+			if variant.missingSource {
+				targetBinary += "-no-source"
+			}
 			command := exec.CommandContext(
 				ctx,
-				binary,
+				targetBinary,
 				"eval",
 				"run",
 				"--root",
@@ -189,6 +206,15 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 					credentialJSONValue(staged, fixture.cfg.SensitiveDataReplacer()), proofCode,
 					staged.ExecutionVerdict, staged.ExecutionCode)
 				t.Fatalf("native trial: %v; run: %v\n%s\n%s", err, runErr, output, stderr.Bytes())
+			}
+			if variant.missingSource {
+				if !report.Complete || report.Verdict != Inconclusive || trial.Verdict != Inconclusive ||
+					trial.ExecutionVerdict != Pass || trial.Steering == nil ||
+					trial.Steering.Code != "post_stop_evidence_unavailable" || judges.Load() != 0 ||
+					targets.Load() != 3 || report.TargetBudget == nil || report.TargetBudget.verdict() != Pass {
+					t.Fatalf("missing source did not remain a complete non-passing report: %v\n%s", runErr, output)
+				}
+				return
 			}
 			if runErr != nil || report.Verdict != Pass || trial.Verdict != Pass || judges.Load() != 1 ||
 				report.TargetBudget == nil || report.TargetBudget.verdict() != Pass {

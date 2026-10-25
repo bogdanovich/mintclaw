@@ -39,7 +39,8 @@ func newSteeringConversation(item Case, target admittedTarget, session string) (
 		task: item.Task + "\nEval tool arguments: " + string(encoded),
 		proof: &SteeringEvidence{
 			Version: Version, Code: "not_completed", Profile: *target.preset.ActiveTool,
-			Guidance: []SteeringGuidanceEvidence{},
+			Guidance: []SteeringGuidanceEvidence{}, History: []string{},
+			Outbox: []SteeringOutboxEvidence{}, OutboxNames: []string{},
 		},
 	}, nil
 }

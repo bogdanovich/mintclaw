@@ -171,7 +171,8 @@ profiles, each with three native sessions, six logical provider calls and one
 shared ceiling. The active profile exposes only the selected MCP tool; no paid
 model or production profile is used. These controls are not live steering proof.
 
-The [steering contracts](../reference/core-steering-evals.md) add pending boundary
+The [steering contracts](../reference/core-steering-evals.md)
+([#1892](https://github.com/bogdanovich/mintclaw/pull/1892)) add pending boundary
 and order definitions with native frozen evidence and post-stop history/outbox
 rechecks. Real CLI/local-model controls pass for boundary and both recorded order
 modes, including frozen regrade after deleting live native files. Same-sender
