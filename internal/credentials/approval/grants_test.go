@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
+
+	"github.com/bogdanovich/mintclaw/pkg/credentialbroker/intent"
 )
 
 func restartApprovalFixture(t *testing.T, fixture fixture, config Config) *Controller {
@@ -19,6 +21,37 @@ func restartApprovalFixture(t *testing.T, fixture fixture, config Config) *Contr
 	}
 	t.Cleanup(func() { _ = controller.Close() })
 	return controller
+}
+
+func TestGrantPersistenceDoesNotPruneTheCompletingRequest(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.enroll(t)
+	id, ceremony := fixture.approval(t, time.Hour)
+	now := fixture.controller.now()
+	fixture.controller.requests[id].issued = now.Add(-RequestLifetime + time.Second)
+	fixture.store.onCommit = func() {
+		if fixture.store.commits != 2 {
+			return
+		}
+		calls := 0
+		fixture.controller.now = func() time.Time {
+			calls++
+			if calls > 2 {
+				return now.Add(time.Second)
+			}
+			return now
+		}
+	}
+	grant, err := fixture.controller.FinishApproval(t.Context(), ceremony.ID,
+		fixture.assertion(t, ceremony, testOrigin, protocol.FlagUserPresent|protocol.FlagUserVerified, 1, false))
+	if err != nil || grant.ID == "" || !fixture.controller.grantActive(grant.ID) {
+		t.Fatal("durable commit lost the verified, bounded approval")
+	}
+	// Expiry of the request locator is independent of the original grant's
+	// lifetime. Pruning it must happen outside the completing transaction.
+	if status, _ := fixture.controller.Status(t.Context(), testPrincipal, id); status != intent.Denied {
+		t.Fatal("expired request locator was renewed")
+	}
 }
 
 func TestPersistedGrantRevocationAndPolicyTransitions(t *testing.T) {

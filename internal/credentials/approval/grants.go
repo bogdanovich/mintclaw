@@ -34,12 +34,15 @@ func (controller *Controller) restoreGrants() error {
 // file and directory sync; any uncertain write disables all live consumers.
 // Close intentionally leaves this snapshot intact for the next trusted runtime.
 func (controller *Controller) persistGrants() error {
-	controller.prune()
+	// Snapshot live grants only. Pruning unrelated requests here can retire
+	// the request whose verified approval is still completing this transaction.
 	owner := controller.owner
 	owner.GrantPolicyRevision = controller.policy.Revision()
 	owner.Grants = make([]credentialbroker.Grant, 0, len(controller.grants))
 	for _, grant := range controller.grants {
-		owner.Grants = append(owner.Grants, cloneGrant(grant))
+		if controller.grantActive(grant.ID) {
+			owner.Grants = append(owner.Grants, cloneGrant(grant))
+		}
 	}
 	slices.SortFunc(owner.Grants, func(a, b credentialbroker.Grant) int {
 		if a.ID < b.ID {
