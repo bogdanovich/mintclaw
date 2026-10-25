@@ -30,7 +30,11 @@ browser/owned-target execution and baseline comparison have their own evidence c
 live scenario qualification.
 General cases require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
-The corpus has 16 cases: four active/default general, six pending PDF and six pending browser.
+The corpus has 18 cases: four active/default General, two pending steering,
+six pending PDF and six pending browser. Steering order records separate explicit
+`one-at-a-time`/`all` profile variants; native same-sender inputs coalesce in FIFO
+order in both modes. These live cases hold one read, not a parallel tool batch or
+a deterministically paused finalization edge; native Go tests cover those races.
 The [full baseline](../docs/operations/manual-agent-evals-baseline-20261024.md) remains nonpassing. Pending cases
 remain inspectable offline, but no default live run includes them. Corpus presence or a valid manifest is not
 domain qualification; the [browser guide](../docs/operations/manual-agent-evals-browser.md) retains its limits.

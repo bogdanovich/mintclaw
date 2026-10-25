@@ -47,6 +47,7 @@ type Trial struct {
 	CaseID               string                        `json:"case_id"`
 	CaseSHA256           string                        `json:"case_sha256"`
 	TargetBudgetRequired bool                          `json:"target_budget_required,omitempty"`
+	ActiveToolRequired   bool                          `json:"active_tool_required,omitempty"`
 	Repetition           int                           `json:"repetition,omitempty"`
 	SessionID            string                        `json:"session_id"`
 	AgentID              string                        `json:"agent_id"`
@@ -68,6 +69,7 @@ type Trial struct {
 	Browser              *BrowserTrialEvidence         `json:"browser,omitempty"`
 	Cancellation         *QuestionCancellationEvidence `json:"question_cancellation,omitempty"`
 	Answer               *QuestionAnswerEvidence       `json:"question_answer,omitempty"`
+	Steering             *SteeringEvidence             `json:"steering,omitempty"`
 }
 
 // Private, bounded native observations. They are not model input, authorization,

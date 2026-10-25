@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -63,6 +64,10 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		if requiresTargetBudget(item.Case) && (preset.TargetCallBudget == nil || !options.StartTarget) {
 			return RunReport{}, ErrUnsafeTarget
 		}
+		if item.Case.Steering != nil && (preset.ActiveTool == nil || !options.StartTarget ||
+			!slices.Contains(item.Case.Steering.Modes, preset.ActiveTool.SteeringMode)) {
+			return RunReport{}, ErrUnsafeTarget
+		}
 		if item.Case.PDF != nil && item.Case.PDF.SourceFields != nil &&
 			containsAll(preset.Capabilities, item.Case.Requires) && !preset.CaptureModelMetadata {
 			return RunReport{}, ErrUnsafeTarget
@@ -96,7 +101,19 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	var retainedFacts privateFactRetention
 	var pendingPDF pdfRunFinalization
 	pendingBrowser := browserRun{host: fixtures}
+	pendingSteering := steeringRun{}
 	var privateSurfaces *PrivateSurfaceObservation
+	var activeHost *ActiveToolHostEvidence
+	closeActive := func() {
+		if active == nil || activeHost != nil {
+			return
+		}
+		code := "closed"
+		if closeActiveTool(active) != nil {
+			code = "shutdown_unknown"
+		}
+		activeHost = &ActiveToolHostEvidence{Version: Version, Profile: *preset.ActiveTool, Code: code}
+	}
 	stopTarget := func() {
 		if child == nil || lifecycle != nil {
 			return
@@ -120,7 +137,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	defer func() {
 		stopTarget()
-		_ = closeActiveTool(active)
+		closeActive()
 		pendingBrowser.close(lifecycle)
 		// Even report I/O failures must not discard the only private fact set
 		// before attempting the post-stop raw observation.
@@ -220,6 +237,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		trial.Repetition = ordinal%options.Repeat + 1
 		result.TargetUsage.addTrial(trial)
 		pendingPDF.observeTrial(trial)
+		if item.Case.Steering != nil {
+			pendingSteering.retain(item.Case, trial)
+		}
 		name := "trial-" + trial.ID + ".json"
 		roleCalls = append(roleCalls, trial.DriverCalls...)
 		if trial.Judge != nil && trial.Judge.Call != nil {
@@ -235,7 +255,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		result.Verdict = combineVerdicts(result.Verdict, trial.Verdict)
 		_, pdfPending := pendingPDF.trials[trial.ID]
 		_, browserPending := pendingBrowser.trials[trial.ID]
-		if writer.checkpointTrial(name, trial, pdfPending || browserPending) != nil {
+		if writer.checkpointTrial(name, trial, pdfPending || browserPending || item.Case.Steering != nil) != nil {
 			result.Trials[len(result.Trials)-1].File = ""
 			result.Verdict = combineVerdicts(result.Verdict, Error)
 			result.DurationMS = time.Since(result.StartedAt).Milliseconds()
@@ -244,10 +264,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	result.WorkspaceInputs.After = observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter)
 	stopTarget()
-	activeCloseErr := closeActiveTool(active)
-	if activeCloseErr != nil {
-		result.Verdict = combineVerdicts(result.Verdict, Inconclusive)
-	}
+	closeActive()
+	result.ActiveTool = activeHost
+	result.Verdict = combineVerdicts(result.Verdict, activeHost.verdict(lifecycle))
 	result.TargetBudget = observeTargetBudget(child, retainedFacts.values, filter)
 	result.BrowserFixtures = pendingBrowser.close(lifecycle)
 	observeOwnedSurfaces()
@@ -307,6 +326,18 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	if browserErr != nil {
 		err = ErrReport
 	}
+	steeringCtx, steeringCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	steeringErr := pendingSteering.finish(steeringCtx, target, writer, &result, retainedFacts.values, filter,
+		func(item Case, trial *Trial) {
+			assessSteering(suiteCtx, roles.judge, item, trial, result, target.preset.ExpectedWorkspace)
+			if trial.Judge != nil && trial.Judge.Call != nil {
+				roleCalls = append(roleCalls, *trial.Judge.Call)
+			}
+		})
+	steeringCancel()
+	if steeringErr != nil {
+		err = ErrReport
+	}
 	result.RoleUsage = []RoleUsage{summarizeRoleCalls("user", roleCalls), summarizeRoleCalls("judge", roleCalls)}
 	if err != nil {
 		result.Verdict = combineVerdicts(result.Verdict, Error)
@@ -336,7 +367,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	result.Coverage = map[Verdict]int{}
 	result.Verdict = combineVerdicts(result.TargetLifecycle.verdict(), result.PrivateSurfaces.verdict(),
 		result.BrowserFixtures.verdict(), result.NativeModels.verdict(), result.TrialScratch.verdict(),
-		result.TargetBudget.verdict())
+		result.TargetBudget.verdict(), result.ActiveTool.verdict(result.TargetLifecycle))
 	for _, summary := range result.Trials {
 		result.Coverage[summary.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, summary.Verdict)
@@ -483,6 +514,16 @@ func runAdmittedTrial(
 		trial.DurationMS = time.Since(trial.StartedAt).Milliseconds()
 		return trial
 	}
+	if item.Case.Steering != nil {
+		steering, err := newSteeringConversation(item.Case, target, sessionID)
+		if err != nil {
+			client.Close()
+			trial.Verdict, trial.Code = Inconclusive, "steering_preparation_unavailable"
+			return trial
+		}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, steering)
+	}
 	if browser != nil {
 		trial = runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, browser)
@@ -531,6 +572,7 @@ func newUnattemptedTrial(item LoadedCase, agent string) Trial {
 		SessionID: uuid.NewString(), AgentID: agent, Verdict: Inconclusive, Code: "not_attempted",
 		StartedAt: time.Now().UTC(), Events: []Event{}, Checks: []CheckResult{}, RemoteState: "not_sent",
 		TargetBudgetRequired: requiresTargetBudget(item.Case),
+		ActiveToolRequired:   requiresActiveTool(item.Case),
 	}
 }
 

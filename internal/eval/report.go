@@ -51,6 +51,7 @@ type RunReport struct {
 	BrowserFixtures *BrowserFixtureHostEvidence `json:"browser_fixtures,omitempty"`
 	TrialScratch    *TrialScratchObservation    `json:"trial_scratch,omitempty"`
 	TargetBudget    *TargetBudgetObservation    `json:"target_budget,omitempty"`
+	ActiveTool      *ActiveToolHostEvidence     `json:"active_tool,omitempty"`
 }
 
 type privateReport struct {

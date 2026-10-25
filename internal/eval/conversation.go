@@ -101,6 +101,7 @@ func runDomainConversation(
 		StartedAt: time.Now().UTC(), Events: []Event{}, Checks: []CheckResult{}, RemoteState: "unknown",
 		ExecutionVerdict: Inconclusive, ExecutionCode: "not_completed",
 		TargetBudgetRequired: requiresTargetBudget(item.Case),
+		ActiveToolRequired:   requiresActiveTool(item.Case),
 	}
 	defer func() {
 		transport.Close()
@@ -205,7 +206,10 @@ func runDomainConversation(
 		len(item.Case.Fixtures) == 0 {
 		trial.EvidenceEligible = true
 	}
-	if len(item.Case.Rubric) > 0 {
+	if item.Case.Steering != nil && trial.Verdict != Pass {
+		trial.EvidenceEligible = false
+	}
+	if len(item.Case.Rubric) > 0 && item.Case.Steering == nil {
 		judgement := Judgement{
 			Version: Version, Verdict: Inconclusive, Code: "ineligible_judge_evidence",
 			Findings: JudgeFindings{Version: Version, Criteria: []JudgeFinding{}},

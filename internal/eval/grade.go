@@ -75,6 +75,7 @@ func Grade(
 		!original.TrialScratch.validFor(original) || original.TrialScratch.verdict() != Pass ||
 		!original.NativeModels.valid(original.Runtime) || original.NativeModels.verdict() == Fail ||
 		!original.TargetBudget.valid(original) || original.TargetBudget.verdict() != Pass ||
+		!original.ActiveTool.valid(original) || original.ActiveTool.verdict(original.TargetLifecycle) != Pass ||
 		original.PrivateSurfaces != nil && original.PrivateSurfaces.LeakObserved {
 		return RunReport{}, ErrGrade
 	}
@@ -114,6 +115,7 @@ func Grade(
 		trial, decodeErr := decodeDocument[Trial](data, 8*1024*1024)
 		if decodeErr != nil || !gradeEligible(trial, item, summary, preset, workspace) ||
 			trial.TargetBudgetRequired && original.TargetBudget == nil ||
+			trial.ActiveToolRequired && original.ActiveTool == nil ||
 			!original.TrialScratch.matches(trial) ||
 			item.Case.PDF != nil && item.Case.PDF.SourceFields != nil &&
 				!pdfSourceFieldsRuntimeMatches(trial.PDF.SourceFields, original.Runtime) ||
@@ -122,6 +124,10 @@ func Grade(
 			item.Case.Browser != nil &&
 				!observedBrowserHost(trial.Browser, original.BrowserFixtures) ||
 			sessions[trial.SessionID] || credentialJSONValue(trial, filter) {
+			return RunReport{}, ErrGrade
+		}
+		if item.Case.Steering != nil && (original.ActiveTool == nil ||
+			!validSteeringEvidence(trial, item.Case, workspace, original.ActiveTool.Profile, original.Runtime)) {
 			return RunReport{}, ErrGrade
 		}
 		if item.Case.PDF != nil && item.Case.PDF.Output == "required" ||
@@ -188,6 +194,7 @@ func Grade(
 		NativeModels:    models,
 		TrialScratch:    selectTrialScratch(original.TrialScratch, identities),
 		TargetBudget:    original.TargetBudget,
+		ActiveTool:      original.ActiveTool,
 	}
 	writer, err := newPrivateReport(options.OutputParent, home, workspace, result.ID)
 	if err != nil {
@@ -219,6 +226,9 @@ func Grade(
 		}
 		if item.Case.Browser != nil {
 			trial.Checks = gradeFinalizedBrowserChecks(item.Case, trial)
+		}
+		if item.Case.Steering != nil {
+			trial.Checks = gradeSteeringChecks(item.Case, trial, original, workspace)
 		}
 		trial.Verdict, trial.Code = trial.ExecutionVerdict, trial.ExecutionCode
 		for _, check := range trial.Checks {
@@ -273,6 +283,7 @@ func Grade(
 		original.BrowserFixtures.verdict(),
 		result.TrialScratch.verdict(),
 		result.TargetBudget.verdict(),
+		result.ActiveTool.verdict(original.TargetLifecycle),
 	)
 	result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 	result.Complete = true
@@ -314,6 +325,7 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 	}
 	if trial.Version != Version || trial.ID != summary.ID || trial.CaseID != item.Case.ID ||
 		trial.TargetBudgetRequired != requiresTargetBudget(item.Case) ||
+		trial.ActiveToolRequired != requiresActiveTool(item.Case) ||
 		trial.Repetition != summary.Repetition ||
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||

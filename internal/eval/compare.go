@@ -185,7 +185,9 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		len(report.Trials) > MaxCorpusCases || report.DurationMS < 0 || report.StartedAt.IsZero() ||
 		report.Runtime.Version != 1 || !validDigest(report.Runtime.ConfigSHA256) || !report.TargetLifecycle.valid() ||
 		!report.WorkspaceInputs.valid() || !report.PrivateSurfaces.valid() || !report.BrowserFixtures.valid() ||
-		!report.TrialScratch.validFor(report) || !report.TargetBudget.valid(report) {
+		!report.TrialScratch.validFor(
+			report,
+		) || !report.TargetBudget.valid(report) || !report.ActiveTool.valid(report) {
 		return result, ErrCompare
 	}
 	seen, sessions, roles := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -218,6 +220,9 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 			return result, ErrCompare
 		}
 		if trial.TargetBudgetRequired && report.TargetBudget == nil {
+			return result, ErrCompare
+		}
+		if trial.ActiveToolRequired && report.ActiveTool == nil {
 			return result, ErrCompare
 		}
 		calls := trial.DriverCalls
@@ -286,6 +291,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		report.NativeModels.verdict(),
 		report.TrialScratch.verdict(),
 		report.TargetBudget.verdict(),
+		report.ActiveTool.verdict(report.TargetLifecycle),
 	)
 	if report.Verdict != combineVerdicts(verdicts...) {
 		return result, ErrCompare
