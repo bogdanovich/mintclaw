@@ -150,6 +150,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		m.modelSetupRequired = false
 		m.pendingModel = ""
 		m.pendingProvider = ""
+		m.pendingModelSession = false
 		m.modelSearching = false
 		m.modelSearch.SetValue("")
 		m.modelSearch.Blur()
@@ -864,7 +865,7 @@ func (m *Model) selectHighlightedModelOrReasoning(saveAsDefault bool) tea.Cmd {
 		}
 		return m.selectModel(frontend.ModelSelection{
 			Model: m.pendingModel, Provider: m.pendingProvider,
-			ReasoningEffort: effort, SaveAsDefault: saveAsDefault,
+			ReasoningEffort: effort, SaveAsDefault: saveAsDefault && !m.pendingModelSession,
 		})
 	}
 	items := m.activeModelPickerItems()
@@ -887,7 +888,7 @@ func (m *Model) selectHighlightedModelOrReasoning(saveAsDefault bool) tea.Cmd {
 	}
 	m.modelSearching = false
 	m.modelSearch.Blur()
-	m.openReasoningPicker(item.model)
+	m.openReasoningPicker(item.model, false)
 	return nil
 }
 
@@ -927,7 +928,7 @@ func (m *Model) beginDirectModelSelection(args string) tea.Cmd {
 	}
 	m.commandPanel = commandPanelModel
 	m.commandPanelOffset = 0
-	m.openReasoningPicker(option)
+	m.openReasoningPicker(option, true)
 	m.clearCommandDraft()
 	m.err = nil
 	return nil
@@ -1044,9 +1045,10 @@ func availableReasoningOptions(snapshot frontend.ThreadSnapshot, model, provider
 	return nil
 }
 
-func (m *Model) openReasoningPicker(option frontend.ModelOption) {
+func (m *Model) openReasoningPicker(option frontend.ModelOption, sessionOnly bool) {
 	m.pendingModel = option.Name
 	m.pendingProvider = option.Provider
+	m.pendingModelSession = sessionOnly
 	m.commandPanelOffset = 0
 	m.modelReasoning = reasoningEffortIndex(m.snapshot, option.Name, option.Provider)
 }

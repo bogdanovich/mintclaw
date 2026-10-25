@@ -754,6 +754,35 @@ func TestSlashModelSessionShortcutDoesNotSaveDefault(t *testing.T) {
 	}
 }
 
+func TestDirectSlashModelWithoutEffortRemainsSessionOnly(t *testing.T) {
+	controller := &modelSelectionController{fakeController: newController(t)}
+	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "fast", Provider: "openai"})
+	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{
+		Models: []frontend.ModelOption{{
+			Name: "fast", Provider: "openai",
+			ReasoningProfile: testReasoningProfile(
+				t, reasoning.EffortMedium, reasoning.EffortLow, reasoning.EffortMedium,
+			),
+		}},
+	})
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.composer.SetValue("/model fast")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("direct model selection did not return a command")
+	}
+	model = updateModel(t, model, command())
+	want := frontend.ModelSelection{Model: "fast", Provider: "openai"}
+	if controller.selected != want || model.err != nil {
+		t.Fatalf("direct session-only selection = %+v, error %v", controller.selected, model.err)
+	}
+}
+
 func TestSlashModelSeparatesConfiguredRoutesFromSetupRequired(t *testing.T) {
 	controller := &modelSelectionController{fakeController: newController(t)}
 	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "ready", Provider: "openai"})

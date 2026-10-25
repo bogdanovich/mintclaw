@@ -149,6 +149,7 @@ type Model struct {
 	modelSetupRequired  bool
 	pendingModel        string
 	pendingProvider     string
+	pendingModelSession bool
 	modelSearching      bool
 	modelSearch         textinput.Model
 	nextEvidenceRequest uint64
@@ -577,6 +578,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.modelSetupRequired = false
 				m.pendingModel = ""
 				m.pendingProvider = ""
+				m.pendingModelSession = false
 				m.modelSearching = false
 				m.modelSearch.SetValue("")
 				m.modelSearch.Blur()
@@ -1089,6 +1091,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		if m.commandPanel == commandPanelModel && m.pendingModel != "" {
 			m.pendingModel = ""
 			m.pendingProvider = ""
+			m.pendingModelSession = false
 			m.modelReasoning = 0
 			m.commandPanelOffset = 0
 			m.err = nil
@@ -1111,6 +1114,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.modelSetupRequired = false
 			m.pendingModel = ""
 			m.pendingProvider = ""
+			m.pendingModelSession = false
 			m.modelSearching = false
 			m.modelSearch.SetValue("")
 			m.modelSearch.Blur()
