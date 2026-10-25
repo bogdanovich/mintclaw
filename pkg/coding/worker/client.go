@@ -7,6 +7,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -16,6 +17,7 @@ const (
 	MaxClientEventBytes      = 8 << 20
 	maxClientAbandonedCalls  = 512
 	clientEventEnvelopeBytes = 256
+	clientWriteFailureGrace  = time.Second
 )
 
 var (
@@ -256,13 +258,29 @@ func (client *Client) Call(
 	client.mu.Unlock()
 
 	written, writeErr := writeWireRecord(client.output, request)
-	client.writeGate <- struct{}{}
 	if writeErr != nil {
 		client.abandon(request.ID)
-		client.finish(writeErr)
+		client.settleWriteFailure(ctx, writeErr)
+		client.writeGate <- struct{}{}
 		return nil, classifyCallFailure(method, written > 0, writeErr)
 	}
+	client.writeGate <- struct{}{}
 	return client.awaitResponse(ctx, request, call)
+}
+
+// A worker can close its request pipe after sending worker_stopped, before the
+// reader has decoded that event. Preserve that bounded read-side settlement;
+// the failed call still reports its own failure and is never replayed.
+func (client *Client) settleWriteFailure(ctx context.Context, writeErr error) {
+	timer := time.NewTimer(clientWriteFailureGrace)
+	defer timer.Stop()
+	select {
+	case <-client.done:
+	case <-ctx.Done():
+		client.finish(writeErr)
+	case <-timer.C:
+		client.finish(writeErr)
+	}
 }
 
 func (client *Client) awaitResponse(

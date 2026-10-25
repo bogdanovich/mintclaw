@@ -90,3 +90,12 @@ promotion: qualification bounds and the fixed batch are still pending.
 
 The [fourteen-case baseline](../operations/manual-agent-evals-baseline-20261024.md)
 remains red and unchanged. No old scenario, fixture or result is rewritten.
+
+## Passive History Prerequisite
+
+The [native session inspection API](../reference/session-inspection.md) supplies
+canonical filenames and a bounded pure decoder without opening a store or
+repairing dirty state. C1b will use this boundary for ordered pairing evidence;
+scope admission, stable file capture, raw privacy inspection and frozen receipt
+validation still belong to the eval observer. The API alone is not an implemented
+answer/resume eval or a live qualification result.
