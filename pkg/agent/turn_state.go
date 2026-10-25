@@ -223,6 +223,7 @@ type liveToolContextProjection struct {
 	durableAttachments     []providers.Attachment
 	requiresDocumentVision bool
 	turnScopedInput        bool
+	userInputText          string
 }
 
 // turnPendingInputs is the single owner of messages accepted for a later
@@ -383,6 +384,7 @@ type LLMIterationState struct {
 	iteration                    int
 	modelAttemptID               string
 	diagnosticMessages           []providers.Message
+	liveUserInputs               []liveToolContextProjection
 	promptCacheTailStart         int
 	promptCacheTailBoundaryFound bool
 	assistantMessageID           string
@@ -428,19 +430,32 @@ func (state *LLMIterationState) beginModelAttempt() string {
 func (state *LLMIterationState) setCanonicalAttemptMessages(
 	messages []providers.Message,
 	boundary promptCacheTailBoundary,
-) {
+) error {
 	if state == nil {
-		return
+		return nil
 	}
 	state.diagnosticMessages = cloneProviderMessages(messages)
 	state.promptCacheTailStart = boundary.Start
 	state.promptCacheTailBoundaryFound = boundary.Found
-	state.callMessages = projectTurnEnvelopesForProvider(messages)
+	projected, err := projectLiveUserInputs(messages, state.liveUserInputs)
+	if err != nil {
+		state.callMessages = nil
+		return err
+	}
+	state.callMessages = projectTurnEnvelopesForProvider(projected)
+	return nil
 }
 
-func (state *LLMIterationState) replaceCanonicalAttemptMessages(messages []providers.Message) {
+func (state *LLMIterationState) replaceCanonicalAttemptMessages(messages []providers.Message) error {
 	start, found := promptCacheDynamicTailStart(messages)
-	state.setCanonicalAttemptMessages(messages, promptCacheTailBoundary{Start: start, Found: found})
+	return state.setCanonicalAttemptMessages(messages, promptCacheTailBoundary{Start: start, Found: found})
+}
+
+func (state *LLMIterationState) promptHashMessagesForAttempt() []providers.Message {
+	if hasLiveUserInput(state.liveUserInputs) {
+		return projectTurnEnvelopesForProvider(state.diagnosticMessages)
+	}
+	return state.callMessages
 }
 
 func (state *LLMIterationState) diagnosticMessagesForAttempt() []providers.Message {

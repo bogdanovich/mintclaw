@@ -464,6 +464,8 @@ func (p *Pipeline) invokeLLMWithRetry(
 				llm.providerToolDefs,
 				p.maxMediaSize(),
 			)
+			liveInputReserve := liveUserInputTokenReserve(llm.liveUserInputs)
+			reserveTokens += liveInputReserve
 			compactBudget := effectiveHistoryBudget(
 				ts.agent.ContextWindow,
 				ts.agent.MaxTokens,
@@ -562,14 +564,20 @@ func (p *Pipeline) invokeLLMWithRetry(
 				},
 				ts.agent.ContextWindow,
 				llm.providerToolDefs,
-				ts.agent.MaxTokens,
+				ts.agent.MaxTokens+liveInputReserve,
 			)
-			llm.replaceCanonicalAttemptMessages(callMessages)
+			if projectionErr := llm.replaceCanonicalAttemptMessages(callMessages); projectionErr != nil {
+				return llmStageResult{}, projectionErr
+			}
 			exec.history = append(trimmedStableHistory, protectedTurnTail...)
 			exec.messages = buildMessages(trimmedStableHistory)
 			if llm.gracefulTerminal {
 				msgs := append([]providers.Message(nil), exec.messages...)
-				llm.replaceCanonicalAttemptMessages(append(msgs, ts.interruptHintMessage()))
+				if projectionErr := llm.replaceCanonicalAttemptMessages(
+					append(msgs, ts.interruptHintMessage()),
+				); projectionErr != nil {
+					return llmStageResult{}, projectionErr
+				}
 			}
 			if dropped := originalHistoryCount - len(exec.history); dropped > 0 {
 				logger.WarnCF(

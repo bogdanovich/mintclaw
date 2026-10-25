@@ -135,9 +135,10 @@ func promptCacheScopeForTurn(ts *turnState, exec *turnExecution, purpose string)
 	// boundary even inside one root turn. Do not retain or reread the payload.
 	if exec != nil && len(exec.liveToolContexts) > 0 {
 		type liveProjection struct {
-			CallID  string
-			Content string
-			Media   []string
+			CallID    string
+			Content   string
+			Media     []string
+			UserInput string `json:"UserInput,omitempty"`
 		}
 		var projections []liveProjection
 		for _, projection := range exec.liveToolContexts {
@@ -146,7 +147,7 @@ func promptCacheScopeForTurn(ts *turnState, exec *turnExecution, purpose string)
 				if projection.matches(message) {
 					matches++
 					projections = append(projections, liveProjection{
-						message.ToolCallID, message.Content, message.Media,
+						message.ToolCallID, message.Content, message.Media, projection.userInputText,
 					})
 				}
 			}

@@ -69,13 +69,17 @@ func TestLLMIterationStateReplaceCanonicalAttemptMessagesRefreshesTailBoundary(t
 		{Role: "assistant", Content: "historical answer"},
 		{Role: "user", Content: "current question", PromptLayer: string(PromptLayerTurn)},
 	}
-	state.setCanonicalAttemptMessages(initial, promptCacheTailBoundary{Start: 3, Found: true})
+	if err := state.setCanonicalAttemptMessages(initial, promptCacheTailBoundary{Start: 3, Found: true}); err != nil {
+		t.Fatal(err)
+	}
 
 	rebuilt := []providers.Message{
 		{Role: "system", Content: "system"},
 		{Role: "user", Content: "current question", PromptLayer: string(PromptLayerTurn)},
 	}
-	state.replaceCanonicalAttemptMessages(rebuilt)
+	if err := state.replaceCanonicalAttemptMessages(rebuilt); err != nil {
+		t.Fatal(err)
+	}
 	fingerprint := fingerprintPromptCacheRequest(
 		traceCaptureSettings{},
 		state.callMessages,

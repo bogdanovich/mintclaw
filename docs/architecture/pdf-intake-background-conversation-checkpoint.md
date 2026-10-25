@@ -49,3 +49,67 @@ Regressions cover active/paused resume, preserved pending authority, whole-prefi
 capacity and ordinary side-message instructions; existing burst/resume/replay
 tests must remain green. Repeat the real gateway/model check before recording
 the outcome in the final evidence report.
+
+## Request-boundary checkpoint after the second real-model run
+
+The follow-up PR [#1875](https://github.com/bogdanovich/mintclaw/pull/1875)
+passed current-head CI/review and deployed at
+`ebf8613c5d78f5ac6e4e139d69e5e0e42a7e71e4`. Its first ready baseline was three
+production files (+28/-6), one test file (+71) and this document (+51), with no
+review-fix cycles. The repeated live conversational invariant still failed, so
+do not keep tuning the same instruction or call the goal complete.
+
+Fresh request `background-c06-why` again answered about form handling after the
+previous assistant had answered arithmetic. The canonical user message is an
+opaque protected receipt; freshly authorized input is carried only inside a
+tool message. Changing that tool message's instruction did not establish the
+actual current user request at the provider boundary.
+
+The native data invariants passed again: two names became four confirmed facts,
+no excluded contact value/disposition, zero retained form input and the same
+source/draft after return. In the second session, native scope stayed `question`
+with identical payload digests after unrelated arithmetic and return. Resume no
+longer reopened it. However `background-d05-return` claimed unprocessed form
+input and suggested retry despite native `pending_inputs=0`; it confused a
+separate pending task-scope request with unprocessed form text. One earlier
+rejected interpretation recovered using the existing typed retry, with the
+same job and `input_count=1`; it is not a first-attempt success claim.
+
+### Decision and invariants
+
+Considered: further instruction tuning, persisting a new conversation
+transcript, relabeling tool results as user messages, or a bounded provider-only
+projection of the existing typed `ContextInput` grant. Choose the last option.
+The other approaches either repeated the failed mechanism, weakened protected
+history, or broke tool-call/result ownership.
+
+Reuse the existing live projection identity/lifetime and text allowance. Bind a
+native grant to the exact live tool occurrence. Add its user message only in a
+detached provider-request copy, after the complete paired tool-result block;
+never relabel a tool result or rewrite the original user receipt. Leave
+canonical history, snapshots, envelopes, journals and diagnostic input opaque.
+Preserve pairing, later steering order, retry/rebuild behavior and
+fail-closed handling for missing/ambiguous identities or truncated input. Generic
+document text is not an authorized user input. No new store, registry, task
+stack, schema or authority path is admitted.
+
+Context-overflow rebuilding reserves the message cost of provider-only user
+input for compaction, assembly and history trimming. It must not refill old
+history using a smaller canonical-only estimate, drop the current input or
+increase the provider's output-token limit. A near-window regression exercises
+the real overflow/rebuild path, not just the projection helper.
+
+Separately derive renderer guidance from native `pending_inputs`: a retained
+task-scope question is not a failed form-data receipt. No field/form/language
+phrase rules, inferred values, output authority or budget reset are permitted.
+Executable request-boundary/privacy/cache tests and another real-model check
+are required before this bounded goal can close.
+
+The provider-only projection repairs the current request, not historical
+conversation. The existing transient policy also removes earlier unrelated
+user requests from ordinary history; an answer such as a bare number cannot
+reconstruct that lost context. A product/privacy decision is pending on retaining
+confidently unrelated conversation as normal chat history while keeping form
+facts, mixed/uncertain inputs and unresolved attachments protected. Do not add a
+new transcript store, silently change retention, or claim general conversational
+continuity from a single arithmetic example.
