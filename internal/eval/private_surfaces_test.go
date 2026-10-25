@@ -162,6 +162,7 @@ func TestOwnedPDFRunInspectsFactsWrittenOnlyDuringNativeStop(t *testing.T) {
 	})
 	result, err := Run(t.Context(), fixture.preset, items, RunOptions{
 		Home: fixture.home, OutputParent: fixture.output, StartTarget: true, SuiteTimeout: 15 * time.Second,
+		IncludePending: true,
 	})
 	if !errors.Is(err, ErrNotPassed) || result.Verdict != Fail || !result.Complete || result.PrivateSurfaces == nil ||
 		!result.PrivateSurfaces.LeakObserved || result.TargetLifecycle == nil || result.TargetLifecycle.Code != "native_exit_zero" {

@@ -238,7 +238,7 @@ func TestPDFSourceFieldsRunRequiresExplicitCaptureBeforeEffects(t *testing.T) {
 	enableAdmissionPDF(t, fixture)
 	for _, owned := range []bool{false, true} {
 		report, err := Run(t.Context(), fixture.preset, []LoadedCase{item}, RunOptions{
-			Home: fixture.home, StartTarget: owned, OutputParent: fixture.output,
+			Home: fixture.home, StartTarget: owned, OutputParent: fixture.output, IncludePending: true,
 		})
 		if !errors.Is(err, ErrUnsafeTarget) || report.ReportDir != "" ||
 			fixture.tasks.Load() != 0 || fixture.probes.Load() != 0 {

@@ -4,6 +4,8 @@ This versioned corpus is for occasional real-agent evaluation, not required live
 The [design](../docs/architecture/agent-evals-design.md),
 [roadmap](../docs/architecture/agent-evals-roadmap.md), and
 [goal](../docs/architecture/agent-evals-goal.md) define the program.
+The [core regression follow-up](../docs/architecture/agent-evals-core-roadmap.md) proposes the next general cases;
+PDF/browser qualification is currently deferred, not passed.
 
 ## Current Interface
 
@@ -24,15 +26,44 @@ private report permissions, and limitations are in the [operator guide](../docs/
 aliases use the isolated profile's native credential configuration. `run --repeat N` retains independent serial
 trials (1-64 per case, at most 256 total), and `grade` rejudges all eligible source repetitions without target work.
 Native PDF execution/artifact controls have domain-specific admission and unresolved qualification checks;
-browser integration, owned provisioning and baseline comparison remain later packets. Stub tests are not live
-scenario qualification.
+browser/owned-target execution and baseline comparison have their own evidence contracts. Stub tests are not
+live scenario qualification.
 The two general cases now require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
-The initial corpus has 14 cases: two general, six PDF and six browser. Browser contracts can be listed and
-validated offline, but live integration is still unavailable: `run` retains explicit non-passing
-`browser_evidence_unavailable` coverage without sending their tasks. Their [fixture/corpus guide](../docs/operations/manual-agent-evals-browser.md)
-defines independent expectations and unresolved authority/privacy/cleanup admission. Corpus presence or a valid
-manifest is not domain qualification.
+The corpus has 14 cases: two active/default general, six pending PDF and six pending browser.
+The [full baseline](../docs/operations/manual-agent-evals-baseline-20261024.md) remains nonpassing. Pending cases
+remain inspectable offline, but no default live run includes them. Corpus presence or a valid manifest is not
+domain qualification; the [browser guide](../docs/operations/manual-agent-evals-browser.md) retains its limits.
+
+## Active And Pending Sets
+
+With no `--suite`, `--tag` or `--case` filters, `run` selects only catalog defaults (currently two general cases).
+Explicit filters select their full matching set. Any selected pending case refuses the whole run before profile/model
+work unless `--include-pending` is present; there is no silent partial execution. `--suite all` is not an opt-in.
+`--include-pending` alone does not widen the default set. For example, with a separately prepared isolated profile:
+
+```sh
+mintclaw eval run --preset /private/preset.json --out /private/reports
+mintclaw eval run --suite pdf --include-pending --preset /private/preset.json --out /private/reports
+```
+
+The second command deliberately resumes pending tasks; it does not bypass capability, approval or isolation gates.
+`list`/`validate` default to all cases and expose `status`, `default` and optional `pending_reason` per case, including
+in `--json`. `grade`/`compare` still analyze frozen historical evidence without requiring pending execution permission.
+Reports cover the selected trials, not invented passed/skipped records for excluded pending scenarios.
+
+Optional root `catalog.json` is version 1 with exactly one entry per suite:
+
+```json
+{"version":1,"suites":[{"id":"general","status":"active","default":true}]}
+```
+
+For a pending suite use `"status":"pending","default":false,"reason":"<operator reason>"`.
+Active suites may be non-default but have no reason; pending suites require a nonblank reason of at most 1,024 bytes.
+The catalog is a bounded regular JSON file (at most 64 KiB); unknown/duplicate fields, suites, statuses, missing
+suite policies and pending/default contradictions are rejected. It is operational selection metadata, not task
+authority or part of a case digest. Changing a case still changes its identity. Private corpora without a catalog
+retain their existing all-active/all-default behavior and arbitrary valid suite names.
 
 Preset paths resolve relative to the preset file, not the shell's working directory. The included preset is a
 template, not a configured or safe running gateway. Runtime preflight must separately verify actual policy,

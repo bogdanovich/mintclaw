@@ -145,7 +145,7 @@ func TestRunPDFActuallySendsOwnedFixtureWithoutClaimingDomainQualification(t *te
 	}}
 	items[0].Case.Rubric = nil
 	result, err := Run(t.Context(), fixture.preset, items, RunOptions{
-		Home: fixture.home, OutputParent: fixture.output,
+		Home: fixture.home, OutputParent: fixture.output, IncludePending: true,
 	})
 	if !errors.Is(err, ErrNotPassed) || !result.Complete || result.Verdict != Inconclusive ||
 		fixture.tasks.Load() != 2 || len(result.Trials) != 1 || result.Trials[0].Code == "domain_evidence_unavailable" {

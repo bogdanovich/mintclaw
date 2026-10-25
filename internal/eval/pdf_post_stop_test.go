@@ -334,6 +334,7 @@ func TestOwnedRunInspectsLateSourceChangesBeforePublishingFinalPDFTrial(t *testi
 	})
 	result, err := Run(t.Context(), fixture.preset, []LoadedCase{item}, RunOptions{
 		Home: fixture.home, OutputParent: fixture.output, StartTarget: true, SuiteTimeout: 20 * time.Second,
+		IncludePending: true,
 	})
 	if !errors.Is(err, ErrNotPassed) || !result.Complete || result.Verdict != Fail ||
 		result.TargetLifecycle == nil || result.TargetLifecycle.Code != "native_exit_zero" ||

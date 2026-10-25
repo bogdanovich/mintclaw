@@ -161,6 +161,7 @@ func TestOwnedBrowserRunExecutesFreshFixturesButCannotPassFromHTTPOrProse(t *tes
 			item := browserCorpusCase(t, name)
 			result, err := Run(t.Context(), fixture.preset, []LoadedCase{item}, RunOptions{
 				Home: fixture.home, OutputParent: fixture.output, StartTarget: true, Repeat: 2,
+				IncludePending: true,
 			})
 			if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 2 || result.Verdict == Pass ||
 				result.BrowserFixtures == nil || result.BrowserFixtures.Code != "closed" || result.BrowserFixtures.Trials != 2 ||
@@ -242,7 +243,7 @@ func TestOwnedBrowserAmbiguityAttemptsCaseWithoutInventingAuthority(t *testing.T
 	fixture.writeConfig(t)
 	cases := []LoadedCase{browserCorpusCase(t, "ambiguous")}
 	result, err := Run(t.Context(), fixture.preset, cases, RunOptions{
-		Home: fixture.home, OutputParent: fixture.output, StartTarget: true,
+		Home: fixture.home, OutputParent: fixture.output, StartTarget: true, IncludePending: true,
 	})
 	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 1 || result.Coverage[Skipped] != 0 ||
 		result.BrowserFixtures == nil || result.BrowserFixtures.Trials != 1 {
@@ -267,7 +268,7 @@ func TestBrowserMutationCasesRequireOwnedCaptureBeforeAnyProbe(t *testing.T) {
 					enableAdmissionBrowser(t, fixture)
 					fixture.preset.CaptureModelMetadata = flags[1]
 					_, err := Run(t.Context(), fixture.preset, []LoadedCase{browserCorpusCase(t, scenario)}, RunOptions{
-						Home: fixture.home, OutputParent: fixture.output, StartTarget: flags[0],
+						Home: fixture.home, OutputParent: fixture.output, StartTarget: flags[0], IncludePending: true,
 					})
 					if !errors.Is(err, ErrUnsafeTarget) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
 						t.Fatal("mutating browser case started without owned metadata evidence", err)
@@ -282,7 +283,7 @@ func TestOwnedBrowserDenialAttemptsTheScenarioWithoutInventingApprovalEvidence(t
 	fixture := newOwnedGatewayFixture(t, "browser_read")
 	enableAdmissionBrowser(t, fixture)
 	result, err := Run(t.Context(), fixture.preset, []LoadedCase{browserCorpusCase(t, "denied")}, RunOptions{
-		Home: fixture.home, OutputParent: fixture.output, StartTarget: true,
+		Home: fixture.home, OutputParent: fixture.output, StartTarget: true, IncludePending: true,
 	})
 	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 1 ||
 		result.Trials[0].Verdict == Pass || result.Trials[0].Verdict == Skipped ||
@@ -344,7 +345,7 @@ func TestBrowserRunRefusesUnownedAttachmentAndClosesOnPreTaskReportFailure(t *te
 		t.Run(mode, func(t *testing.T) {
 			fixture := newOwnedGatewayFixture(t, "browser_read")
 			enableAdmissionBrowser(t, fixture)
-			options := RunOptions{Home: fixture.home, OutputParent: fixture.output}
+			options := RunOptions{Home: fixture.home, OutputParent: fixture.output, IncludePending: true}
 			want := ErrUnsafeTarget
 			if mode == "report" {
 				options.StartTarget, options.OutputParent, want = true, fixture.workspace, ErrReport
