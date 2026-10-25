@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/events"
@@ -26,6 +28,11 @@ type questionConversation struct {
 	prompt                                  Event
 	waiting                                 interactions.Record
 	cancellation                            *QuestionCancellationEvidence
+	answerRequest                           protocol.MintClawMessage
+	answerAt                                time.Time
+	resumeFinal                             Event
+	answer                                  *QuestionAnswerEvidence
+	answerCheckID                           string
 }
 
 func (domain *questionConversation) initialTask() string { return domain.task }
@@ -45,10 +52,30 @@ func (domain *questionConversation) request(
 	if action.Kind == "cancel" {
 		domain.cancelAt = time.Now()
 	}
+	if action.Kind == "answer" {
+		if domain.answerCheckID == "" || domain.answerRequest.ID != "" ||
+			!paperQuestion(domain.waiting) || action.Text != "paper" {
+			return protocol.MintClawMessage{}, false, errQuestionEvidence
+		}
+		domain.answerAt = time.Now()
+		domain.answerRequest = protocol.MintClawMessage{
+			Type: protocol.TypeMessageSend, ID: uuid.NewString(), SessionID: domain.sessionID,
+			Timestamp: domain.answerAt.UnixMilli(), Payload: map[string]any{
+				protocol.PayloadKeyContent:            "paper",
+				protocol.PayloadKeyInteractionChoice:  protocol.InteractionChoiceAnswer,
+				protocol.PayloadKeyInteractionShortID: prompt.InteractionShortID,
+				protocol.PayloadKeyInteractionPrompt:  prompt.MessageID,
+			},
+		}
+		return domain.answerRequest, true, nil
+	}
 	return protocol.MintClawMessage{}, false, nil
 }
 
 func (domain *questionConversation) observe(ctx context.Context, prompt Event) error {
+	if prompt.Kind == "final" && domain.answerRequest.ID != "" {
+		return domain.observeAnswer(ctx, prompt)
+	}
 	if prompt.Kind != "question" {
 		return nil
 	}
@@ -193,6 +220,14 @@ func (domain *questionConversation) cancelledRecord(kind interactions.Kind) (int
 
 func (domain *questionConversation) conclude(_ context.Context, trial *Trial) {
 	trial.Cancellation = domain.cancellation
+	trial.Answer = domain.answer
+	for index := range trial.Checks {
+		if trial.Checks[index].Code == "missing_evidence" && trial.Checks[index].ID == domain.answerCheckID &&
+			validQuestionAnswer(*trial, domain.workspace) {
+			trial.Checks[index] = booleanCheck(domain.answerCheckID, true,
+				[]string{domain.prompt.ID, domain.resumeFinal.ID, "question_answer"})
+		}
+	}
 }
 
 func (domain *questionConversation) record(id string) (interactions.Record, error) {

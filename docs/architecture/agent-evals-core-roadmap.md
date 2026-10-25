@@ -64,8 +64,8 @@ its current contract instead of treating all control modes as interchangeable.
 
 ## Proposed Scenarios
 
-The sections below specify the twelve target contracts. Correction has a
-loadable **pending** candidate; the other definitions remain queued in the ledger.
+The sections below specify the twelve target contracts. Correction and
+answer/resume have loadable **pending** candidates; the other definitions remain queued in the ledger.
 P0 is the first useful expansion; P1 follows after its required harness support. Use synthetic random
 markers and local fixtures, never production conversations or accounts. Fixed
 user actions are preferable to an LLM user for these mechanical regressions.

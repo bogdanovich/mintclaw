@@ -66,6 +66,24 @@ type Trial struct {
 	PDF              *PDFTrialEvidence             `json:"pdf,omitempty"`
 	Browser          *BrowserTrialEvidence         `json:"browser,omitempty"`
 	Cancellation     *QuestionCancellationEvidence `json:"question_cancellation,omitempty"`
+	Answer           *QuestionAnswerEvidence       `json:"question_answer,omitempty"`
+}
+
+// Private, bounded native observations. They are not model input, authorization,
+// a hostile-filesystem attestation or proof of whole-runtime quiescence.
+type QuestionAnswerEvidence struct {
+	Version            int      `json:"version"`
+	Workspace          string   `json:"workspace"`
+	AnswerRequestID    string   `json:"answer_request_id"`
+	AnswerAt           int64    `json:"answer_at"`
+	ObservedAt         int64    `json:"observed_at"`
+	ResumeFinalEventID string   `json:"resume_final_event_id"`
+	Waiting            string   `json:"waiting"`
+	Resolved           string   `json:"resolved"`
+	Metadata           string   `json:"metadata"`
+	History            []string `json:"history"`
+	HistorySHA256      string   `json:"history_sha256"`
+	MetadataSHA256     string   `json:"metadata_sha256"`
 }
 
 // This records one native interaction's terminal state, not runtime quiescence

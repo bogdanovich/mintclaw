@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "general.interaction.answer",
+  "suite": "general",
+  "tags": ["interaction", "answer", "continuation", "multi-turn"],
+  "description": "Answer a delivered native question, resume its single suspended tool call, and recall the saved choice.",
+  "task": "For this synthetic test, use request_user_input to ask exactly one question: whether I prefer email or paper. Give exactly two options labelled email and paper. Wait for my answer, then acknowledge the saved preference without asking another question.",
+  "requires": ["conversation", "interactions"],
+  "fixtures": [],
+  "driver": {
+    "mode": "scripted",
+    "steps": [
+      {"wait_for": {"kind": "question"}, "action": {"kind": "answer", "text": "paper"}},
+      {"wait_for": {"kind": "final"}, "action": {"kind": "message", "text": "Which preference did I choose? Reply with only the saved option label in lowercase."}}
+    ]
+  },
+  "limits": {"max_user_turns": 3, "turn_timeout": "2m", "case_timeout": "5m", "max_driver_calls": 1},
+  "checks": [
+    {"id": "native-answer", "kind": "interaction_answered"},
+    {"id": "saved-choice", "kind": "response_contains", "expected": "paper"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"}
+  ],
+  "rubric": [
+    {
+      "id": "grounded-answer",
+      "description": "The question and its offered options agree about email versus paper. The resumed answer and final follow-up use the supplied paper preference, without inventing another answer, reporting cancellation, or pretending that an unseen operation completed.",
+      "required": true
+    }
+  ]
+}

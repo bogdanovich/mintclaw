@@ -208,6 +208,9 @@ func Grade(
 		item := selected[trial.CaseID]
 		last := lastOutcome(trial.Events)
 		trial.Checks = gradeConversation(item.Case.Checks, trial.Events, last)
+		if hasQuestionAnswerCheck(item.Case) {
+			trial.Checks = gradeQuestionAnswerChecks(item.Case, trial, workspace)
+		}
 		if item.Case.PDF != nil {
 			trial.Checks = gradeFinalizedPDFChecks(item.Case, trial)
 		}
@@ -327,6 +330,9 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 	}
 	if item.Case.Browser != nil {
 		return validBrowserEvidence(trial, item.Case, workspace)
+	}
+	if hasQuestionAnswerCheck(item.Case) && !validQuestionAnswer(trial, workspace) {
+		return false
 	}
 	return validTrialConversation(trial, preset.ExpectedAgent, workspace)
 }

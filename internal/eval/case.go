@@ -138,6 +138,9 @@ func (c Case) Validate() error {
 		return ErrInvalidCase
 	}
 	for _, step := range c.Driver.Steps {
+		if step.Action.Kind == "answer" && (step.WaitFor.Kind != "question" || !hasQuestionAnswerCheck(c)) {
+			return ErrInvalidCase
+		}
 		if step.WaitFor.Kind == "question_or_approval" && (c.Browser == nil || c.Browser.Scenario != "denied") {
 			return ErrInvalidCase
 		}
@@ -171,6 +174,10 @@ func (c Case) Validate() error {
 			}
 		case "same_session", "interaction_observed":
 			if check.Expected != "" {
+				return ErrInvalidCase
+			}
+		case "interaction_answered":
+			if check.Expected != "" || !validQuestionAnswerCase(c) {
 				return ErrInvalidCase
 			}
 		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write", "pdf_source_fields":
@@ -245,8 +252,11 @@ func (driver Driver) validate(limits Limits) error {
 
 func (action Action) validate(facts map[string]string) error {
 	switch action.Kind {
-	case "message", "finish":
+	case "message", "finish", "answer":
 		if !boundedText(action.Text, MaxInputBytes) || action.Fact != "" {
+			return ErrInvalidCase
+		}
+		if action.Kind == "answer" && len(action.Text) > 16*1024 {
 			return ErrInvalidCase
 		}
 	case "protected_answer":

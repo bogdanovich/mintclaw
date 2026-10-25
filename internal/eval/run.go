@@ -497,6 +497,7 @@ func runAdmittedTrial(
 			task: item.Case.Task, home: target.preset.IsolationRoot,
 			workspace: target.preset.ExpectedWorkspace, sessionID: sessionID,
 			agent: target.preset.ExpectedAgent, started: started, filter: roles.filter,
+			answerCheckID: questionAnswerCheckID(item.Case),
 		}
 		return runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, questions)
