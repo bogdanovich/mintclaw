@@ -67,7 +67,7 @@ func (c *MintClawChannel) readLoop(pc *mintclawConn) {
 		_ = pc.conn.SetReadDeadline(time.Now().Add(readTimeout))
 
 		var msg MintClawMessage
-		if err := json.Unmarshal(rawMsg, &msg); err != nil {
+		if !utf8.Valid(rawMsg) || json.Unmarshal(rawMsg, &msg) != nil {
 			errMsg := newError("invalid_message", "failed to parse message")
 			_ = pc.writeJSON(c.ctx, errMsg)
 			continue
