@@ -5,7 +5,7 @@
   "tags": ["context", "correction", "multi-turn"],
   "description": "Replace a remembered synthetic marker and recall only the current value across three turns.",
   "task": "Remember this synthetic test marker: MC_CORE_88284260. Briefly acknowledge it.",
-  "requires": ["conversation"],
+  "requires": ["conversation", "bounded_calls"],
   "fixtures": [],
   "driver": {
     "mode": "scripted",

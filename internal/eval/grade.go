@@ -74,6 +74,7 @@ func Grade(
 		!original.PrivateSurfaces.valid() || !original.BrowserFixtures.valid() || !original.TargetUsage.valid() ||
 		!original.TrialScratch.validFor(original) || original.TrialScratch.verdict() != Pass ||
 		!original.NativeModels.valid(original.Runtime) || original.NativeModels.verdict() == Fail ||
+		!original.TargetBudget.valid(original) || original.TargetBudget.verdict() != Pass ||
 		original.PrivateSurfaces != nil && original.PrivateSurfaces.LeakObserved {
 		return RunReport{}, ErrGrade
 	}
@@ -112,6 +113,7 @@ func Grade(
 		}
 		trial, decodeErr := decodeDocument[Trial](data, 8*1024*1024)
 		if decodeErr != nil || !gradeEligible(trial, item, summary, preset, workspace) ||
+			trial.TargetBudgetRequired && original.TargetBudget == nil ||
 			!original.TrialScratch.matches(trial) ||
 			item.Case.PDF != nil && item.Case.PDF.SourceFields != nil &&
 				!pdfSourceFieldsRuntimeMatches(trial.PDF.SourceFields, original.Runtime) ||
@@ -185,6 +187,7 @@ func Grade(
 		TargetUsage:     newTargetUsage(),
 		NativeModels:    models,
 		TrialScratch:    selectTrialScratch(original.TrialScratch, identities),
+		TargetBudget:    original.TargetBudget,
 	}
 	writer, err := newPrivateReport(options.OutputParent, home, workspace, result.ID)
 	if err != nil {
@@ -269,6 +272,7 @@ func Grade(
 		original.PrivateSurfaces.verdict(),
 		original.BrowserFixtures.verdict(),
 		result.TrialScratch.verdict(),
+		result.TargetBudget.verdict(),
 	)
 	result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 	result.Complete = true
@@ -309,6 +313,7 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 		}
 	}
 	if trial.Version != Version || trial.ID != summary.ID || trial.CaseID != item.Case.ID ||
+		trial.TargetBudgetRequired != requiresTargetBudget(item.Case) ||
 		trial.Repetition != summary.Repetition ||
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||

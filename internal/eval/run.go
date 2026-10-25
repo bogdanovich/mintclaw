@@ -52,9 +52,15 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		return RunReport{}, err
 	}
 	seen := make(map[string]bool)
+	if preset.Validate() != nil || preset.TargetCallBudget != nil && !options.StartTarget {
+		return RunReport{}, ErrUnsafeTarget
+	}
 	for _, item := range cases {
 		if item.Case.Validate() != nil || !validDigest(item.Digest) || seen[item.Case.ID] {
 			return RunReport{}, ErrInvalidCase
+		}
+		if requiresTargetBudget(item.Case) && (preset.TargetCallBudget == nil || !options.StartTarget) {
+			return RunReport{}, ErrUnsafeTarget
 		}
 		if item.Case.PDF != nil && item.Case.PDF.SourceFields != nil &&
 			containsAll(preset.Capabilities, item.Case.Requires) && !preset.CaptureModelMetadata {
@@ -96,7 +102,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		lifecycle = &receipt
 	}
 	observeOwnedSurfaces := func() {
-		if child == nil || privateSurfaces != nil || retainedFacts.values == nil && !preset.CaptureModelMetadata {
+		if child == nil || privateSurfaces != nil ||
+			retainedFacts.values == nil && !preset.CaptureModelMetadata && child.budgetSpec == nil {
 			return
 		}
 		scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -231,6 +238,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	result.WorkspaceInputs.After = observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter)
 	stopTarget()
+	result.TargetBudget = observeTargetBudget(child, retainedFacts.values, filter)
 	result.BrowserFixtures = pendingBrowser.close(lifecycle)
 	observeOwnedSurfaces()
 	if privateSurfaces != nil {
@@ -317,7 +325,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	result.Coverage = map[Verdict]int{}
 	result.Verdict = combineVerdicts(result.TargetLifecycle.verdict(), result.PrivateSurfaces.verdict(),
-		result.BrowserFixtures.verdict(), result.NativeModels.verdict(), result.TrialScratch.verdict())
+		result.BrowserFixtures.verdict(), result.NativeModels.verdict(), result.TrialScratch.verdict(),
+		result.TargetBudget.verdict())
 	for _, summary := range result.Trials {
 		result.Coverage[summary.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, summary.Verdict)
@@ -511,6 +520,7 @@ func newUnattemptedTrial(item LoadedCase, agent string) Trial {
 		Version: Version, ID: uuid.NewString(), CaseID: item.Case.ID, CaseSHA256: item.Digest,
 		SessionID: uuid.NewString(), AgentID: agent, Verdict: Inconclusive, Code: "not_attempted",
 		StartedAt: time.Now().UTC(), Events: []Event{}, Checks: []CheckResult{}, RemoteState: "not_sent",
+		TargetBudgetRequired: requiresTargetBudget(item.Case),
 	}
 }
 

@@ -5,7 +5,7 @@
   "tags": ["interaction", "answer", "continuation", "multi-turn"],
   "description": "Answer a delivered native question, resume its single suspended tool call, and recall the saved choice.",
   "task": "For this synthetic test, use request_user_input to ask exactly one question: whether I prefer email or paper. Give exactly two options labelled email and paper. Wait for my answer, then acknowledge the saved preference without asking another question.",
-  "requires": ["conversation", "interactions"],
+  "requires": ["conversation", "interactions", "bounded_calls"],
   "fixtures": [],
   "driver": {
     "mode": "scripted",

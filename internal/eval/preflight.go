@@ -105,6 +105,9 @@ func validateConversationProfile(cfg *config.Config, preset Preset, workspace st
 func validateConversationPolicy(cfg *config.Config, preset Preset, workspace string) error {
 	pdfEnabled := slices.Contains(preset.Capabilities, "pdf")
 	browserEnabled := slices.Contains(preset.Capabilities, "browser")
+	if preset.TargetCallBudget != nil && (pdfEnabled || browserEnabled) {
+		return ErrUnsafeTarget
+	}
 	if cfg == nil || cfg.ValidateModelList() != nil || cfg.ValidateAgents() != nil || len(cfg.Agents.List) != 1 ||
 		!cfg.Agents.Defaults.RestrictToWorkspace || cfg.Agents.Defaults.AllowReadOutsideWorkspace ||
 		cfg.WorkspacePath() != workspace || preset.ExpectedWorkspace != workspace ||
@@ -170,7 +173,7 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 	}
 	for _, capability := range preset.Capabilities {
 		if capability != "conversation" && capability != "interactions" && capability != "pdf" &&
-			capability != "browser" ||
+			capability != "browser" && capability != boundedCallsCapability ||
 			capability == "interactions" && (!cfg.Tools.RequestUserInput.Enabled ||
 				!slices.Contains(agent.ToolPolicy.Allow, "request_user_input") || len(agent.ToolPolicy.Deny) != 0) {
 			return ErrUnsafeTarget

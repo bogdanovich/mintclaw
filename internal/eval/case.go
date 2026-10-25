@@ -126,6 +126,9 @@ func (c Case) Validate() error {
 	if (c.Suite == "browser" || slices.Contains(c.Requires, "browser")) && c.Browser == nil {
 		return ErrInvalidCase
 	}
+	if requiresTargetBudget(c) && (c.PDF != nil || c.Browser != nil || c.Suite != "general") {
+		return ErrInvalidCase
+	}
 	fixtureIDs := make(map[string]bool)
 	for _, fixture := range c.Fixtures {
 		if !validID(fixture.ID) || fixtureIDs[fixture.ID] || !safeRelativePath(fixture.Path) ||
