@@ -39,6 +39,7 @@ func (observation *TargetBudgetObservation) valid(report RunReport) bool {
 	}
 	if _, err := observation.Spec.Encode(); err != nil || observation.Version != Version ||
 		report.Runtime.Version != 1 || report.TargetLifecycle == nil || !report.TargetLifecycle.valid() ||
+		report.PrivateSurfaces == nil ||
 		report.Runtime.PID != report.TargetLifecycle.PID {
 		return false
 	}

@@ -82,6 +82,7 @@ func TestTargetBudgetVerdictsAndFrozenIdentity(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			report := comparisonFixture(t, Pass)
 			report.Runtime.PID, report.TargetLifecycle = 3456, targetBudgetTestLifecycle(3456)
+			report.PrivateSurfaces = &PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "observed"}
 			observation, proof := targetBudgetTestProof(t, 3456)
 			test.edit(&proof)
 			setTargetBudgetTestProof(t, observation, proof)
@@ -204,13 +205,16 @@ func TestTargetBudgetRawReceiptPrivacyAndUnavailableControls(t *testing.T) {
 }
 
 func TestTargetBudgetFrozenGradeCannotBypassRequiredProofOrUnknown(t *testing.T) {
-	for _, mode := range []string{"pass", "missing", "unknown", "exhausted", "corrupt", "omitted_trial_requirement"} {
+	for _, mode := range []string{
+		"pass", "missing", "unknown", "exhausted", "corrupt", "omitted_trial_requirement", "omitted_privacy",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			fixture, item, source, calls := gradeFixture(t, false)
 			item.Case.Requires = append(item.Case.Requires, boundedCallsCapability)
 			raw, _ := json.Marshal(item.Case)
 			item.Digest = digest(raw)
 			source.TargetLifecycle = targetBudgetTestLifecycle(source.Runtime.PID)
+			source.PrivateSurfaces = &PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "observed"}
 			observation, proof := targetBudgetTestProof(t, source.Runtime.PID)
 			source.TargetBudget = observation
 			switch mode {
@@ -223,6 +227,8 @@ func TestTargetBudgetFrozenGradeCannotBypassRequiredProofOrUnknown(t *testing.T)
 				proof.Snapshot.StoppedReason = "calls"
 			case "corrupt":
 				proof.Nonce = uuid.NewString()
+			case "omitted_privacy":
+				source.PrivateSurfaces = nil
 			}
 			setTargetBudgetTestProof(t, observation, proof)
 			trial := comparisonTrial(t, source, 0)
@@ -254,6 +260,7 @@ func TestTargetBudgetCompareRequiresProofAndReportsLimitsDrift(t *testing.T) {
 	before, after := comparisonFixture(t, Pass), comparisonFixture(t, Pass)
 	for _, report := range []*RunReport{&before, &after} {
 		report.Runtime.PID, report.TargetLifecycle = 3456, targetBudgetTestLifecycle(3456)
+		report.PrivateSurfaces = &PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "observed"}
 		report.TargetBudget, _ = targetBudgetTestProof(t, 3456)
 		trial := comparisonTrial(t, *report, 0)
 		trial.TargetBudgetRequired = true
@@ -274,6 +281,12 @@ func TestTargetBudgetCompareRequiresProofAndReportsLimitsDrift(t *testing.T) {
 	if err != nil || !slices.Contains(result.EnvironmentChanges, "target_call_budget") {
 		t.Fatal("changed limits were hidden as equal quality environments", err, result)
 	}
+	after.PrivateSurfaces = nil
+	writeAdmissionJSON(t, filepath.Join(after.ReportDir, "run.json"), after)
+	if _, err = Compare(before.ReportDir, after.ReportDir); !errors.Is(err, ErrCompare) {
+		t.Fatal("new bounded report lost its mandatory raw privacy observation", err)
+	}
+	after.PrivateSurfaces = before.PrivateSurfaces
 	after.TargetBudget = nil
 	writeAdmissionJSON(t, filepath.Join(after.ReportDir, "run.json"), after)
 	if _, err = Compare(before.ReportDir, after.ReportDir); !errors.Is(err, ErrCompare) {

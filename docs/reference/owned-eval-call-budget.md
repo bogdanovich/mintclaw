@@ -64,6 +64,8 @@ limits and PID to the owned lifecycle and runtime probe. Missing/malformed,
 unsettled, zero-call, unclean or unknown-usage evidence is non-passing; hard limit
 refusals fail. A passing trial or semantic judge cannot override that run-level
 verdict. Native model metadata still reports `all_call_coverage: "unknown"`.
+Bounded reports must retain the requested whole-profile privacy observation;
+its omission is invalid, not the historical unrequested/nil privacy state.
 
 Offline `grade` checks the manifest's mandatory requirement and all frozen budget
 bindings before any judge call. An unknown, failed, omitted or malformed required
