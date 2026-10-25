@@ -83,9 +83,11 @@ type formIntakeStoredOutcome struct {
 	ScopedInstruction bool                      `json:"scoped_instruction,omitempty"`
 	ScopedIDs         []string                  `json:"scoped_ids,omitempty"`
 	// Native-derived settlement of advisory uncertainty, never a value or approval.
-	ResolvedGuidanceIDs  []string                     `json:"resolved_guidance_ids,omitempty"`
-	ExcludedCandidateIDs []string                     `json:"excluded_candidate_ids,omitempty"`
-	PriorResolutions     []formIntakeStoredResolution `json:"prior_resolutions,omitempty"`
+	ResolvedGuidanceIDs  []string `json:"resolved_guidance_ids,omitempty"`
+	ExcludedCandidateIDs []string `json:"excluded_candidate_ids,omitempty"`
+	// Native apply-time cutoff, not the exclusion pass's reservation position.
+	ExclusionThroughPasses int                          `json:"exclusion_through_passes,omitempty"`
+	PriorResolutions       []formIntakeStoredResolution `json:"prior_resolutions,omitempty"`
 }
 
 // ApplyFormIntakePass publishes accepted ledger events, raw-input accounting
@@ -179,6 +181,9 @@ func (store *FormJobStore) ApplyFormIntakePass(
 			ScopedInstruction:    selection.ScopedInstruction,
 			ScopedIDs:            selection.ScopedIDs,
 			ExcludedCandidateIDs: excluded,
+		}
+		if len(excluded) != 0 {
+			pass.Outcome.ExclusionThroughPasses = len(input.Reservations)
 		}
 		pass.Outcome.ResolvedGuidanceIDs = formIntakeResolvedGuidanceIDs(*input, *pass)
 		if resolveErr := store.resolvePriorFormIntakeLiterals(

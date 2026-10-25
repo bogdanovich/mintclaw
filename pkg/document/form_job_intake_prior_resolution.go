@@ -17,13 +17,13 @@ type formIntakeStoredResolution struct {
 // stale interpretation snapshot. Completed exact replay is handled before this.
 func formIntakeReservationSuperseded(mode *formIntakeStoredMode, inputID string, passIndex int) bool {
 	for _, input := range mode.Inputs {
-		for observedIndex, pass := range input.Reservations {
+		for _, pass := range input.Reservations {
 			if pass.Outcome == nil {
 				continue
 			}
 			// Explicit exclusion changes this input's candidate interpretation,
 			// even when no field event advances the public revision.
-			if input.ID == inputID && observedIndex > passIndex && len(pass.Outcome.ExcludedCandidateIDs) != 0 {
+			if input.ID == inputID && passIndex < pass.Outcome.ExclusionThroughPasses {
 				return true
 			}
 			for _, prior := range pass.Outcome.PriorResolutions {

@@ -136,6 +136,16 @@ func formIntakeAccountedLiterals(input formIntakeStoredInput) []FormIntakeAccoun
 }
 
 func validateFormIntakeAccounting(record FormJobRecord, input formIntakeStoredInput) error {
+	for index, pass := range input.Reservations {
+		if outcome := pass.Outcome; outcome != nil {
+			cutoff := outcome.ExclusionThroughPasses
+			if len(outcome.ExcludedCandidateIDs) == 0 && cutoff != 0 ||
+				len(outcome.ExcludedCandidateIDs) != 0 && (cutoff < index+1 || cutoff > len(input.Reservations) ||
+					cutoff > MaxFormIntakeExtractionPasses) {
+				return ErrFormJobRecordCorrupt
+			}
+		}
+	}
 	if len(input.Accounted) > MaxFormIntakeAccountedSpans || input.OriginalBytes < 0 ||
 		input.OriginalBytes > MaxFormIntakeInputBytes ||
 		(input.State == formIntakeInputStaged && (len(input.Accounted) != 0 || input.OriginalBytes != 0)) ||

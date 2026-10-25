@@ -237,6 +237,7 @@ func TestFormIntakeExclusionMetadataIsFailClosedForOlderReaders(t *testing.T) {
 		payload := formIntakeStoredOutcome{Digest: strings.Repeat("a", 64), AppliedRevision: 2}
 		if excluded {
 			payload.ExcludedCandidateIDs = []string{fillFieldID(1)}
+			payload.ExclusionThroughPasses = 1
 		}
 		envelope, err := sealFormJobEnvelope(
 			key,
@@ -262,8 +263,28 @@ func TestFormIntakeExclusionMetadataIsFailClosedForOlderReaders(t *testing.T) {
 			envelope,
 			&current,
 		); err != nil ||
-			!slices.Equal(current.ExcludedCandidateIDs, payload.ExcludedCandidateIDs) {
+			!slices.Equal(current.ExcludedCandidateIDs, payload.ExcludedCandidateIDs) ||
+			current.ExclusionThroughPasses != payload.ExclusionThroughPasses {
 			t.Fatal("new reader lost exclusion or legacy outcome")
+		}
+	}
+}
+
+func TestFormIntakeExclusionCutoffMustCoverItsOwnPassAndOnlyExistingReservations(t *testing.T) {
+	for _, cutoff := range []int{-1, 0, 1, 2, 3, MaxFormIntakeExtractionPasses + 1} {
+		input := formIntakeStoredInput{
+			State: formIntakeInputConsumed,
+			Reservations: []formIntakeStoredPass{{}, {Outcome: &formIntakeStoredOutcome{
+				ExcludedCandidateIDs: []string{fillFieldID(1)}, ExclusionThroughPasses: cutoff,
+			}}},
+		}
+		err := validateFormIntakeAccounting(FormJobRecord{}, input)
+		if cutoff == 2 && err != nil || cutoff != 2 && !errors.Is(err, ErrFormJobRecordCorrupt) {
+			t.Fatalf("invalid exclusion cutoff validation for %d: %v", cutoff, err)
+		}
+		input.Reservations[1].Outcome.ExcludedCandidateIDs = nil
+		if err = validateFormIntakeAccounting(FormJobRecord{}, input); cutoff != 0 && err == nil {
+			t.Fatal("outcome without exclusion acquired a reservation fence")
 		}
 	}
 }
@@ -337,5 +358,38 @@ func TestFormIntakeExclusionRejectsEarlierUnappliedInterpretationWithoutRevision
 	record, err := store.Get(t.Context(), start.JobID, start.Owner)
 	if err != nil || len(record.Fields) != 0 || record.LedgerRevision != 0 {
 		t.Fatal("stale interpretation mutated values")
+	}
+}
+
+func TestFormIntakeExclusionFencesReservationsMadeAfterItsReservationBeforeApply(t *testing.T) {
+	store, options, start, _, request := exclusionFixture(t)
+	stale := reserveIntakeApply(t, store, start, request.Reference, request.ExpectedRevision,
+		[]int{1}, "reserved-after-exclusion-pass-before-its-apply")
+	stale.Proposals = []FormIntakeProposal{intakeProposal(start.Schema, 1, "MINT")}
+	request.Proposals, request.Intent = nil, FormIntakeIntentClarify
+	settled, err := store.ApplyFormIntakePass(t.Context(), request)
+	if err != nil || settled.Job.Revision != request.ExpectedRevision || settled.Consumed {
+		t.Fatal("fixture did not leave a bookkeeping-only exclusion and another pending field", err)
+	}
+	store.Close()
+	store, err = OpenFormJobStore(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	if _, err = store.ApplyFormIntakePass(t.Context(), stale); !errors.Is(err, ErrFormJobConflict) {
+		t.Fatal("reservation pending at exclusion application assigned the excluded candidate")
+	}
+	replay, err := store.ApplyFormIntakePass(t.Context(), request)
+	if err != nil || !replay.Reused || replay.Job.LedgerRevision != 0 {
+		t.Fatal("settlement cutoff broke exact replay")
+	}
+	fresh := reserveIntakeApply(t, store, start, request.Reference, request.ExpectedRevision,
+		[]int{0}, "genuinely-after-settlement")
+	fresh.Proposals = []FormIntakeProposal{intakeProposal(start.Schema, 0, "MINT")}
+	accepted, err := store.ApplyFormIntakePass(t.Context(), fresh)
+	if err != nil || accepted.Job.LedgerRevision != 1 || len(accepted.AcceptedFieldIDs) != 1 ||
+		accepted.AcceptedFieldIDs[0] != start.Schema.Fields[0].ID {
+		t.Fatal("settlement blocked a genuinely later interpretation of the still-pending field", err)
 	}
 }
