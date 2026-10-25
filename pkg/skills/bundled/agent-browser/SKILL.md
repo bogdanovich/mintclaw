@@ -56,6 +56,8 @@ For a requested login, start at the site's public HTTPS homepage and use its
 observed Sign in link. A working homepage does not prove the sign-in page is
 available. Observe the actual page: HTTP 200 can still contain a CAPTCHA or
 Security Measure page. Do not hard-code site-specific login paths.
+If the page is still transitioning or titled Loading, allow it to settle and
+observe again before classifying it as a manual challenge.
 
 On the current official site, call `browser_login` with `operation=discover`,
 select a matching Login when needed, then call `operation=authorize` using the
