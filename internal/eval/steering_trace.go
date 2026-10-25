@@ -13,10 +13,13 @@ func validSteeringTrace(
 ) bool {
 	trace, err := diagnostictrace.Decode([]byte(proof.Trace))
 	limits := evalModelMetadataCapture()
-	if err != nil || trace.Source != (diagnostictrace.Source{Commit: runtime.GitCommit, MintClawVersion: runtime.BuildVersion}) ||
-		trace.Metadata.RootTurnID != primary.TraceScopes[0].TurnID || trace.Metadata.AgentID != trial.AgentID ||
+	if err != nil ||
+		trace.Source != (diagnostictrace.Source{Commit: runtime.GitCommit, MintClawVersion: runtime.BuildVersion}) ||
+		trace.Metadata.RootTurnID != primary.TraceScopes[0].TurnID ||
+		trace.Metadata.AgentID != trial.AgentID ||
 		trace.Metadata.SessionHash != diagnostictrace.FilteredHash(trial.SessionKey, nil) ||
-		trace.Policy.ContentMode != diagnostictrace.ContentMetadataOnly || trace.Truncation.Incomplete ||
+		trace.Policy.ContentMode != diagnostictrace.ContentMetadataOnly ||
+		trace.Truncation.Incomplete ||
 		trace.Truncation.DroppedRecords != 0 ||
 		len(trace.Truncation.Reasons) != 0 ||
 		len(trace.Truncation.DroppedByKind) != 0 ||
