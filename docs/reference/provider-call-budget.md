@@ -58,7 +58,11 @@ wiring, frozen-run validation and real qualification remain separate work.
 construction and shared-tool registration. It wraps the injected provider,
 every registry primary/light/candidate provider, and future model-selection
 providers. Registry ownership is unchanged: wrappers do not add cleanup owners
-for already-owned delegates. A newly created unsupported provider is closed by
+for already-owned delegates. Dynamic model/vision selection also routes newly
+needed fallback providers through the same factory, rather than creating an
+unwrapped fallback when it was absent from the initial registry. Selection
+cleanup retains its existing ownership of newly created providers, not inherited
+registry entries. A newly created unsupported provider is closed by
 the creating factory. Constructor failures do not transfer injected ownership.
 Fatal initialization errors stop construction before a context manager can
 capture an unbounded provider, including an invalid nil budget option.

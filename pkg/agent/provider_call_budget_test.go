@@ -216,6 +216,109 @@ func TestAgentProviderBudgetWrapsRegistryAndFutureModels(t *testing.T) {
 	}
 }
 
+func TestAgentProviderBudgetCoversNewDynamicFallbackAfterSeal(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"synthetic","object":"chat.completion","model":"fixture-model",` +
+			`"choices":[{"index":0,"message":{"role":"assistant","content":"synthetic"},"finish_reason":"stop"}],` +
+			`"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}}`))
+	}))
+	defer server.Close()
+	cfg := agentBudgetConfig(t)
+	for _, alias := range []string{"fixture-model", "future", "future-fallback"} {
+		cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
+			ModelName: alias, Provider: "openai",
+			Model: "fixture-model", APIBase: server.URL, Enabled: true,
+		})
+	}
+	budget := newAgentCallBudget(t, 1)
+	loop := newBudgetAgentLoop(t, cfg, &agentBudgetTestProvider{}, budget)
+	instance := loop.registry.GetDefaultAgent()
+	if len(instance.CandidateProviders) != 1 {
+		t.Fatal("future fallback unexpectedly populated the initial registry")
+	}
+	if err := agentBudgetChat(t.Context(), instance.Provider); err != nil {
+		t.Fatal(err)
+	}
+	budget.Seal()
+	execution, cleanup, err := loop.modelExecution.buildExecutionStateForModelTarget(
+		instance, "future", "", "", []string{"future-fallback"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if len(execution.Candidates) != 2 {
+		t.Fatalf("dynamic candidates = %+v", execution.Candidates)
+	}
+	fallback := execution.CandidateProviders[candidateProviderKey(execution.Candidates[1])]
+	if fallback == nil {
+		t.Fatal("dynamic fallback was not constructed")
+	}
+	if err := agentBudgetChat(t.Context(), fallback); !errors.Is(err, providers.ErrCallBudget) || requests.Load() != 1 {
+		t.Fatalf("dynamic fallback bypassed sealed budget: %v, HTTP requests %d", err, requests.Load())
+	}
+	if state := budget.Snapshot(); state.Calls != 1 || state.Completed != 1 || state.StoppedReason != "sealed" {
+		t.Fatalf("dynamic fallback accounting = %+v", state)
+	}
+}
+
+func TestAgentProviderBudgetDynamicFallbackKeepsCleanupOwnership(t *testing.T) {
+	cfg := agentBudgetConfig(t)
+	for _, alias := range []string{"future", "future-fallback"} {
+		cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
+			ModelName: alias, Provider: "openai",
+			Model: "fixture-model", APIBase: "http://127.0.0.1:1", Enabled: true,
+		})
+	}
+	budget := newAgentCallBudget(t, 2)
+	injected, primary, fallback := &agentBudgetTestProvider{}, &agentBudgetTestProvider{}, &agentBudgetTestProvider{}
+	loop := newBudgetAgentLoop(t, cfg, injected, budget)
+	var creations atomic.Int32
+	loop.providerFactory = budgetedModelProviderFactory(budget,
+		func(model *config.ModelConfig) (providers.LLMProvider, string, error) {
+			creations.Add(1)
+			if model.ModelName == "future-fallback" {
+				return fallback, model.Model, nil
+			}
+			return primary, model.Model, nil
+		})
+	execution, cleanup, err := loop.modelExecution.buildExecutionStateForModelTarget(
+		loop.registry.GetDefaultAgent(), "future", "", "", []string{"future-fallback"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creations.Load() != 2 || len(execution.Candidates) != 2 {
+		cleanup()
+		t.Fatal("selected primary and new fallback did not share the injected factory")
+	}
+	for _, candidate := range execution.Candidates {
+		if err := agentBudgetChat(
+			t.Context(),
+			execution.CandidateProviders[candidateProviderKey(candidate)],
+		); err != nil {
+			cleanup()
+			t.Fatal(err)
+		}
+	}
+	cleanup()
+	loop.Close()
+	if primary.closes.Load() != 1 || fallback.closes.Load() != 1 || injected.closes.Load() != 0 ||
+		primary.calls.Load() != 1 || fallback.calls.Load() != 1 || budget.Seal().Calls != 2 {
+		t.Fatalf(
+			"dynamic ownership/calls: primary %d/%d fallback %d/%d injected closes %d",
+			primary.closes.Load(),
+			primary.calls.Load(),
+			fallback.closes.Load(),
+			fallback.calls.Load(),
+			injected.closes.Load(),
+		)
+	}
+}
+
 func TestAgentProviderBudgetAdmissionAndFactoryCleanup(t *testing.T) {
 	for _, test := range []struct{ nilBudget, unsupported, reload bool }{
 		{nilBudget: true}, {unsupported: true}, {reload: true},
