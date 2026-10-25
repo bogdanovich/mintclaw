@@ -108,9 +108,71 @@ func TestProofFrozenBindingAndUnknownEvidence(t *testing.T) {
 	proof.GatewayClean = false
 	proof.Snapshot.UnknownUsage, proof.Snapshot.UsageKnown = 1, false
 	proof.Snapshot.StoppedReason = "unknown_usage"
+	proof.Snapshot.ReportedTokens = 0
 	data, _ = json.Marshal(proof)
 	if _, err := DecodeProof(data, spec, os.Getpid()); err != nil {
 		t.Fatal("valid non-passing terminal observation was discarded", err)
+	}
+}
+
+func TestProofRejectsImpossibleReportedCounters(t *testing.T) {
+	spec := testSpec()
+	for _, test := range []struct {
+		name      string
+		completed int
+		unknown   int
+		tokens    int64
+	}{
+		{"known_completion_without_tokens", 1, 0, 0},
+		{"tokens_without_completions", 0, 0, 7},
+		{"tokens_from_only_unknown_completions", 1, 1, 7},
+		{"fewer_tokens_than_known_completions", 2, 0, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proof := Proof{
+				Version:  Version,
+				Scope:    Scope,
+				Nonce:    spec.Nonce,
+				PID:      os.Getpid(),
+				Snapshot: testSnapshot(spec),
+			}
+			proof.Snapshot.Calls, proof.Snapshot.Completed = test.completed, test.completed
+			proof.Snapshot.UnknownUsage, proof.Snapshot.ReportedTokens = test.unknown, test.tokens
+			proof.Snapshot.UsageKnown = test.unknown == 0
+			if test.unknown != 0 {
+				proof.Snapshot.StoppedReason = "unknown_usage"
+			}
+			raw, _ := json.Marshal(proof)
+			if _, err := DecodeProof(raw, spec, os.Getpid()); !errors.Is(err, ErrBudgetProtocol) {
+				t.Fatal("impossible native counters admitted", proof.Snapshot, err)
+			}
+		})
+	}
+}
+
+func TestProofAdmitsNativeReportedCounterFloor(t *testing.T) {
+	spec := testSpec()
+	for _, test := range []struct {
+		completed, unknown int
+		tokens             int64
+	}{{0, 0, 0}, {2, 0, 2}, {2, 1, 1}, {1, 1, 0}} {
+		proof := Proof{
+			Version:  Version,
+			Scope:    Scope,
+			Nonce:    spec.Nonce,
+			PID:      os.Getpid(),
+			Snapshot: testSnapshot(spec),
+		}
+		proof.Snapshot.Calls, proof.Snapshot.Completed = test.completed, test.completed
+		proof.Snapshot.UnknownUsage, proof.Snapshot.ReportedTokens = test.unknown, test.tokens
+		proof.Snapshot.UsageKnown = test.unknown == 0
+		if test.unknown != 0 {
+			proof.Snapshot.StoppedReason = "unknown_usage"
+		}
+		raw, _ := json.Marshal(proof)
+		if _, err := DecodeProof(raw, spec, os.Getpid()); err != nil {
+			t.Fatal("native floor or honest unknown counters rejected", proof.Snapshot, err)
+		}
 	}
 }
 

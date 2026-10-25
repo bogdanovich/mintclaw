@@ -117,6 +117,10 @@ func (proof Proof) validate(spec Spec, expectedPID int) error {
 		(snapshot.UnknownUsage != 0 && snapshot.StoppedReason == "") {
 		return ErrBudgetProtocol
 	}
+	knownCompletions := int64(snapshot.Completed - snapshot.UnknownUsage)
+	if knownCompletions == 0 && snapshot.ReportedTokens != 0 || snapshot.ReportedTokens < knownCompletions {
+		return ErrBudgetProtocol
+	}
 	switch snapshot.StoppedReason {
 	case "", "sealed", "calls", "concurrency", "output_limit", "input_limit", "media_unsupported",
 		"unknown_usage", "reported_tokens":
