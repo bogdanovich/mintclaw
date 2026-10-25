@@ -15,7 +15,7 @@ membership and deferral reason. `grade`/`compare` remain available for historica
 does not replace the red full-suite baseline. See the [catalog contract](../../evals/README.md#active-and-pending-sets).
 
 The [core execution ledger](../architecture/agent-evals-core-execution.md) now tracks C1-C3 implementation.
-The correction candidate is individually pending: the corpus has 15 cases, still only two defaults. Explicit
+Correction and answer/resume candidates are individually pending: the corpus has 16 cases, still only two defaults. Explicit
 `--suite general` includes candidates and may require `--include-pending`; omit selection filters for defaults.
 
 `mintclaw eval list` and `validate` remain offline. `run` attaches to an already prepared isolated loopback gateway

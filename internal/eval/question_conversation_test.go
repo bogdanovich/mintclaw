@@ -25,6 +25,13 @@ func nativeQuestionFixture(
 	t *testing.T, domain *questionConversation, request protocol.MintClawMessage,
 	sessionKey, question string, privateOutbox bool,
 ) (*interactions.Registry, interactions.Record, protocol.MintClawMessage) {
+	return nativeQuestionOptionsFixture(t, domain, request, sessionKey, question, privateOutbox, nil)
+}
+
+func nativeQuestionOptionsFixture(
+	t *testing.T, domain *questionConversation, request protocol.MintClawMessage,
+	sessionKey, question string, privateOutbox bool, options []interactions.Option,
+) (*interactions.Registry, interactions.Record, protocol.MintClawMessage) {
 	t.Helper()
 	response := testResponse(request, 1)
 	response.Payload[protocol.PayloadKeySessionKey] = sessionKey
@@ -46,7 +53,7 @@ func nativeQuestionFixture(
 			TurnID: request.ID, ToolName: "request_user_input", ToolCallID: "ordinary-call",
 			ExecutionContext: &bus.InboundContext{MessageID: request.ID},
 		},
-		Questions: []interactions.Question{{ID: "preference", Question: question}},
+		Questions: []interactions.Question{{ID: "preference", Question: question, Options: options}},
 		ExpiresAt: time.Now().Add(time.Minute),
 	})
 	if err != nil {

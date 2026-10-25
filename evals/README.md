@@ -30,10 +30,13 @@ browser/owned-target execution and baseline comparison have their own evidence c
 live scenario qualification.
 General cases require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
-The corpus has 15 cases: two active/default general, one pending general correction, six pending PDF and six pending browser.
+The corpus has 16 cases: two active/default general, two pending general candidates, six pending PDF and six pending browser.
 The [full baseline](../docs/operations/manual-agent-evals-baseline-20261024.md) remains nonpassing. Pending cases
 remain inspectable offline, but no default live run includes them. Corpus presence or a valid manifest is not
 domain qualification; the [browser guide](../docs/operations/manual-agent-evals-browser.md) retains its limits.
+The pending core candidates are correction and native ordinary answer/resume. The latter requires delivered-prompt,
+resolved-answer and ordered canonical history evidence; a judge's passing text alone cannot satisfy it. The
+[execution ledger](../docs/architecture/agent-evals-core-execution.md#c1b-contract) describes bounds and frozen regrading.
 
 ## Active And Pending Sets
 

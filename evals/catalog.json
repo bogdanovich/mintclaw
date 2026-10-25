@@ -21,6 +21,12 @@
       "status": "pending",
       "default": false,
       "reason": "Awaiting bounded core qualification (C1); not part of the default baseline."
+    },
+    {
+      "id": "general.interaction.answer",
+      "status": "pending",
+      "default": false,
+      "reason": "Awaiting bounded answer/resume qualification (C1); native evidence is mandatory, not part of defaults."
     }
   ]
 }

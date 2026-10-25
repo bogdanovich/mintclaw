@@ -33,8 +33,8 @@ does not reopen C0 or E0-E5.
 | --- | --- | --- | --- |
 | C0 | None | Two active/default general cases; PDF/browser pending; proposal | Complete, #1868 |
 | C1a | C0 | Per-case narrowing and three-turn correction with final-only absence oracle | Complete, [#1872](https://github.com/bogdanovich/mintclaw/pull/1872); 14/14 CI and reviewed merge |
-| C1b transport | C0 | [Prompt-bound ordinary answers](../channels/mintclaw.md) through existing native projection | Implemented; channel/bus/interaction tests pass; PR review pending |
-| C1b | C1a | Ordinary answer/resume native observer and stale/wrong-prompt controls | Queued |
+| C1b transport | C0 | [Prompt-bound ordinary answers](../channels/mintclaw.md) through existing native projection | Complete, [#1874](https://github.com/bogdanovich/mintclaw/pull/1874); reviewed green merge including wire UTF-8 regression |
+| C1b | C1a | Ordinary answer/resume native observer and stale/wrong-prompt controls | Candidate implemented; model-free validation passed, PR review pending |
 | C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | Queued; user-turn limits alone are not call coverage |
 | C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | Queued |
 | C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Queued |
@@ -54,7 +54,7 @@ or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
 | Scenario | Definition/Harness | Required Native Evidence | Live/Default |
 | --- | --- | --- | --- |
 | `general.context.correction` | C1a scripted candidate | Same session, corrected final, old marker absent from final; semantic judge | Not run; pending, non-default |
-| `general.interaction.answer` | Queued C1b | Delivered prompt, terminal answer, one paired continuation/tool result | Not present |
+| `general.interaction.answer` | C1b scripted candidate | Delivered prompt, terminal answer, one paired continuation/tool result | Not run; pending, non-default |
 | `general.steering.boundary` | Queued C2 | Active barrier, enqueue/injection, ordered emitted-batch results | Not present |
 | `general.steering.order` | Queued C2 | FIFO/mode injection, late-input ownership, no orphan/duplicate final | Not present |
 | `general.session.isolation` | Queued C2 | Two distinct scopes and correctly routed markers/injections | Not present |
@@ -82,7 +82,7 @@ outcome; a required judge evaluates grounded correction. `final_response_absent`
 is final-only; existing `response_absent` stays transcript-wide. An earlier
 acknowledgement of A is legitimate.
 
-There are now 15 cases: two active/default general, one pending correction, six
+There are now 16 cases: two active/default general, pending correction and answer, six
 pending PDF and six pending browser. Bare `run` keeps its two-case default.
 Explicit `--suite general` selects the pending candidate too and requires
 `--include-pending`; existing active case IDs do not. C1a claims no live pass or
@@ -99,3 +99,45 @@ repairing dirty state. C1b will use this boundary for ordered pairing evidence;
 scope admission, stable file capture, raw privacy inspection and frozen receipt
 validation still belong to the eval observer. The API alone is not an implemented
 answer/resume eval or a live qualification result.
+
+The passive memory prerequisite was reviewed and merged in
+[#1876](https://github.com/bogdanovich/mintclaw/pull/1876). The unrelated existing
+worker terminal/write race exposed by C1b transport CI was reproduced and fixed
+separately in [#1877](https://github.com/bogdanovich/mintclaw/pull/1877), with a
+regression that fails on the old client, repeated tests and the full worker race
+suite. Both merges required substantive exact-head review, green CI and owner
+PR-root approval. No test was skipped or relaxed to hide the shutdown race.
+
+## C1b Contract
+
+The pending `general.interaction.answer` definition sends three scripted inputs:
+ask one native email/paper question, answer `paper` through the delivered prompt,
+then ask for the saved choice. This first pack deliberately supports that one
+synthetic ordinary choice, not arbitrary questions, protected facts, approval
+grants or adaptive answers. A required judge checks visible option coherence;
+it cannot replace the `interaction_answered` hard check.
+This covers the native MintClaw protocol, not physical Telegram/client UI button
+rendering. The positive control uses the real `RequestUserInputTool.Execute`;
+ordinary options expose labels/descriptions, not a public `value` field.
+
+The existing native question observer joins waiting and resolved/answered
+records, unchanged origin/questions/route, exact answer request/prompt identity,
+one resume and the same scoped session. It passively captures canonical history
+between equal metadata reads, without opening/recovering a session store. The
+history must retain one emitted question call, one succeeding matching tool
+result and exactly one assistant continuation before the next user turn. The follow-up
+must recall `paper` in the same session. Missing, dirty, malformed, stale or
+contradictory observations remain non-passing.
+
+Native history may be 0644 under the admitted 0700 home: anchored directory/file
+checks reject symlinks and group/other writes instead of chmodding runtime
+files. Bounds are 2 MiB combined native metadata/history, 256 records, 64 KiB
+metadata/individual lines and 3 MiB retained answer evidence. Raw JSON/JSONL
+privacy inspection precedes projection. Retained native JSON strings/lines
+preserve native schema boundaries, nulls and byte identities; offline `grade`
+uses native passive parsers and the frozen observations, not current files.
+Operator-owned reports are observations, not hostile-filesystem attestations;
+`compare` summarizes recorded outcomes rather than performing a new grading.
+
+Model-free controls are not live qualification. Both core candidates remain
+pending until C1q budget enforcement and their fixed qualification batches.
