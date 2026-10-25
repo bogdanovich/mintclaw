@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "general.context.correction",
+  "suite": "general",
+  "tags": ["context", "correction", "multi-turn"],
+  "description": "Replace a remembered synthetic marker and recall only the current value across three turns.",
+  "task": "Remember this synthetic test marker: MC_CORE_88284260. Briefly acknowledge it.",
+  "requires": ["conversation"],
+  "fixtures": [],
+  "driver": {
+    "mode": "scripted",
+    "steps": [
+      {
+        "wait_for": {"kind": "final"},
+        "action": {"kind": "message", "text": "Correction: replace the previous marker with MC_CORE_3AB40B27. This is now the only current marker. Briefly acknowledge the correction."}
+      },
+      {
+        "wait_for": {"kind": "final"},
+        "action": {"kind": "message", "text": "What is the current test marker? Reply with the current marker only, without the old value or any explanation."}
+      }
+    ]
+  },
+  "limits": {"max_user_turns": 3, "turn_timeout": "2m", "case_timeout": "5m", "max_driver_calls": 1},
+  "checks": [
+    {"id": "corrected-marker", "kind": "response_contains", "expected": "MC_CORE_3AB40B27"},
+    {"id": "old-marker-not-final", "kind": "final_response_absent", "expected": "MC_CORE_88284260"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"}
+  ],
+  "rubric": [
+    {
+      "id": "grounded-correction",
+      "description": "The final reply uses the corrected current marker from this same conversation, not the superseded value, and does not invent a marker or claim unseen work.",
+      "required": true
+    }
+  ]
+}

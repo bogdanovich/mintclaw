@@ -14,5 +14,13 @@
       "default": false,
       "reason": "Deferred by operator: focus on core/general coverage. The recorded full baseline remains nonpassing."
     }
+  ],
+  "cases": [
+    {
+      "id": "general.context.correction",
+      "status": "pending",
+      "default": false,
+      "reason": "Awaiting bounded core qualification (C1); not part of the default baseline."
+    }
   ]
 }

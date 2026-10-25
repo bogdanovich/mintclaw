@@ -19,6 +19,7 @@ type SuitePolicy struct {
 type corpusCatalog struct {
 	Version int           `json:"version"`
 	Suites  []SuitePolicy `json:"suites"`
+	Cases   []SuitePolicy `json:"cases,omitempty"`
 }
 
 func (item LoadedCase) Availability() SuitePolicy {
@@ -55,12 +56,15 @@ func loadCatalogPolicy(root *os.Root, cases []LoadedCase) error {
 		return ErrInvalidCorpus
 	}
 	catalog, err := DecodeManifest[corpusCatalog](data)
-	if err != nil || catalog.Version != Version || len(catalog.Suites) == 0 || len(catalog.Suites) > MaxCorpusCases {
+	if err != nil || catalog.Version != Version || len(catalog.Suites) == 0 || len(catalog.Suites) > MaxCorpusCases ||
+		len(catalog.Cases) > MaxCorpusCases {
 		return ErrInvalidCorpus
 	}
 	known := make(map[string]bool)
+	caseSuites := make(map[string]string, len(cases))
 	for _, item := range cases {
 		known[item.Case.Suite] = true
+		caseSuites[item.Case.ID] = item.Case.Suite
 	}
 	policies := make(map[string]SuitePolicy, len(catalog.Suites))
 	for _, policy := range catalog.Suites {
@@ -72,8 +76,24 @@ func loadCatalogPolicy(root *os.Root, cases []LoadedCase) error {
 	if len(policies) != len(known) {
 		return ErrInvalidCorpus
 	}
+	overrides := make(map[string]SuitePolicy, len(catalog.Cases))
+	for _, policy := range catalog.Cases {
+		suite, exists := caseSuites[policy.ID]
+		parent := policies[suite]
+		if !exists || !policy.valid() || overrides[policy.ID].ID != "" ||
+			policy.Default && !parent.Default || parent.Status == "pending" && policy.Status != "pending" {
+			return ErrInvalidCorpus
+		}
+		overrides[policy.ID] = policy
+	}
 	for index := range cases {
 		policy := policies[cases[index].Case.Suite]
+		if override, exists := overrides[cases[index].Case.ID]; exists {
+			// Availability remains suite-bound; the catalog's case ID only selects
+			// which member is narrowed. A case cannot widen its parent suite gate.
+			override.ID = policy.ID
+			policy = override
+		}
 		cases[index].Policy = &policy
 	}
 	return nil

@@ -25,8 +25,9 @@ func TestOfflineCommands(t *testing.T) {
 		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 			t.Fatal(err)
 		}
-		if result.RuntimeRun || result.Outcome != "valid" || len(result.Cases) != 2 ||
-			result.Cases[0].ID != "browser.fixture.followup" || result.Cases[1].ID != "general.context.followup" ||
+		if result.RuntimeRun || result.Outcome != "valid" || len(result.Cases) != 3 ||
+			result.Cases[0].ID != "browser.fixture.followup" || result.Cases[1].ID != "general.context.correction" ||
+			result.Cases[2].ID != "general.context.followup" ||
 			strings.Contains(output.String(), "MC_EVAL_CONTEXT") {
 			t.Fatal("offline command leaked task contents or claimed a runtime run")
 		}
@@ -128,14 +129,15 @@ func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
 				}
 			case "pending":
 				pending++
-				if item.Default || item.PendingReason == "" || item.Suite == "general" {
+				if item.Default || item.PendingReason == "" ||
+					item.Suite == "general" && item.ID != "general.context.correction" {
 					t.Fatal("pending metadata incorrect")
 				}
 			default:
 				t.Fatal("catalog status unavailable")
 			}
 		}
-		if active != 2 || pending != 12 || result.RuntimeRun {
+		if active != 2 || pending != 13 || result.RuntimeRun {
 			t.Fatal("offline inspection hid deferred coverage or claimed execution")
 		}
 	}
@@ -160,7 +162,10 @@ func TestRunDefaultAndExplicitPendingAdmissionBeforePreset(t *testing.T) {
 	}{
 		{name: "defaults"},
 		{name: "opt-in-alone-does-not-widen-defaults", flags: []string{"--include-pending"}},
-		{name: "explicit-general", flags: []string{"--suite", "general"}},
+		{name: "explicit-general", flags: []string{"--suite", "general"}, pending: true},
+		{name: "core-candidate", flags: []string{"--case", "general.context.correction"}, pending: true},
+		{name: "core-opt-in", flags: []string{"--case", "general.context.correction", "--include-pending"}},
+		{name: "active-id", flags: []string{"--case", "general.context.followup"}},
 		{name: "all", flags: []string{"--suite", "all"}, pending: true},
 		{name: "pdf", flags: []string{"--suite", "pdf"}, pending: true},
 		{name: "browser", flags: []string{"--suite", "browser"}, pending: true},
