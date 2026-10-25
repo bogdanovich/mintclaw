@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/identity"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
@@ -65,7 +67,7 @@ func (c *MintClawChannel) readLoop(pc *mintclawConn) {
 		_ = pc.conn.SetReadDeadline(time.Now().Add(readTimeout))
 
 		var msg MintClawMessage
-		if err := json.Unmarshal(rawMsg, &msg); err != nil {
+		if !utf8.Valid(rawMsg) || json.Unmarshal(rawMsg, &msg) != nil {
 			errMsg := newError("invalid_message", "failed to parse message")
 			_ = pc.writeJSON(c.ctx, errMsg)
 			continue
@@ -231,6 +233,13 @@ func mintclawInboundInteraction(
 
 	var content, response string
 	switch choice {
+	case InteractionChoiceAnswer:
+		text, textOK := payload[PayloadKeyContent].(string)
+		if !textOK || !utf8.ValidString(text) || utf8.RuneCountInString(text) > interactions.MaxAnswerLength ||
+			strings.TrimSpace(text) == "" {
+			return bus.InboundInteractionProjection{}, "", false, fmt.Errorf("interaction answer is invalid")
+		}
+		content, response, choice = strings.TrimSpace(text), strings.TrimSpace(text), ""
 	case bus.InboundInteractionChoiceAllowOnce:
 		content, response = "Allow once", "Allow once"
 	case bus.InboundInteractionChoiceDeny:

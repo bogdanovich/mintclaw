@@ -41,6 +41,10 @@ const (
 	PayloadKeyDeliveryID         = "delivery_id"
 	PayloadKeyResultOutput       = "result_output"
 
+	// InteractionChoiceAnswer is a wire action, not an approval/control grant.
+	// It projects the content as an ordinary response to the identified prompt.
+	InteractionChoiceAnswer = "answer"
+
 	MessageKindThought    = "thought"
 	MessageKindToolCalls  = "tool_calls"
 	MessageKindFinalReply = "final_reply"
