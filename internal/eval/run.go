@@ -26,6 +26,7 @@ type RunOptions struct {
 	PDFOraclePython string
 	Repeat          int
 	StartTarget     bool
+	IncludePending  bool
 }
 
 // Run defaults to attachment after prepared-target admission. StartTarget owns
@@ -46,6 +47,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	if options.SuiteTimeout <= 0 || options.SuiteTimeout > 4*time.Hour ||
 		options.PDFOraclePython != "" && !filepath.IsAbs(options.PDFOraclePython) {
 		return RunReport{}, ErrRunOptions
+	}
+	if err := CheckRunAvailability(cases, options.IncludePending); err != nil {
+		return RunReport{}, err
 	}
 	seen := make(map[string]bool)
 	for _, item := range cases {

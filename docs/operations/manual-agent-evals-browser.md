@@ -1,5 +1,10 @@
 # Manual Browser Evals: Fixture Witness
 
+All six browser cases are currently **pending/non-default** by operator decision.
+Offline inspection is unchanged; explicit execution requires selecting them and adding `--include-pending`.
+The [latest full baseline](manual-agent-evals-baseline-20261024.md) remains red; historical scoped passes below
+do not supersede it. See the [core follow-up](../architecture/agent-evals-core-roadmap.md).
+
 The runner implements all six E4 scenario workflows, not a fully qualified browser suite. All are visible in
 `eval list` and `validate`. Admitted owned runs use the normal gateway and retain independent fixture witnesses
 after shutdown. Read and ambiguity have one qualified Linux run/regrade each. Artifact has a bounded approval,
@@ -127,7 +132,7 @@ MINTCLAW_HOME=/private/eval-seed MINTCLAW_CONFIG=/private/eval-seed/config.json 
   mintclaw eval prepare --preset /private/eval-seed/preset.json --out /private/eval-profiles
 MINTCLAW_HOME=/private/eval-profiles/GENERATED_HOME \
   MINTCLAW_CONFIG=/private/eval-profiles/GENERATED_HOME/config.json \
-  mintclaw eval run --root ./evals --suite browser --start-target \
+  mintclaw eval run --root ./evals --suite browser --include-pending --start-target \
   --preset /private/eval-profiles/GENERATED_HOME/reports/preset.json \
   --out /private/eval-profiles/GENERATED_HOME/reports
 ```

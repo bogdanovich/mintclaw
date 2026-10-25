@@ -61,6 +61,7 @@ func TestOwnedRunObservesRequestlessMediaWithoutInventingNativeSettlement(t *tes
 	})
 	result, err := Run(t.Context(), fixture.preset, []LoadedCase{item}, RunOptions{
 		Home: fixture.home, OutputParent: fixture.output, StartTarget: true, SuiteTimeout: 20 * time.Second,
+		IncludePending: true,
 	})
 	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 1 {
 		t.Fatal("requestless media control did not complete", err)
@@ -84,7 +85,10 @@ func TestOwnedRunRejectsAnEarlierTrialFactInALaterIgnoredFrame(t *testing.T) {
 		Mode: "normal", ParentPID: os.Getpid(), CrossTrialValue: fact,
 	})
 	result, err := Run(t.Context(), fixture.preset, []LoadedCase{item, loadedTestCase(t, "general.after-private-pdf")},
-		RunOptions{Home: fixture.home, OutputParent: fixture.output, StartTarget: true, SuiteTimeout: 20 * time.Second})
+		RunOptions{
+			Home: fixture.home, OutputParent: fixture.output, StartTarget: true, SuiteTimeout: 20 * time.Second,
+			IncludePending: true,
+		})
 	if !errors.Is(err, ErrNotPassed) || !result.Complete || result.Verdict != Fail || len(result.Trials) != 2 ||
 		result.Trials[1].Verdict != Fail || result.Trials[1].Code != "private_wire_evidence" ||
 		result.PrivateSurfaces == nil || result.PrivateSurfaces.LeakObserved {

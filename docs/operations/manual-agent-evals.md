@@ -6,6 +6,14 @@ The latest [full fourteen-case baseline candidate](manual-agent-evals-baseline-2
 2 pass, 7 fail, 2 error, 3 inconclusive on captured merged `1013693a9`. Historical scoped passes below are not a
 guarantee that every current scenario passes; the new record preserves target, driver and admission limits separately.
 
+PDF/browser are now **pending**, not fixed or passed. The [core follow-up](../architecture/agent-evals-core-roadmap.md)
+records the operator decision and proposed general regressions. `run` without suite/tag/case filters selects only
+the two active/default general cases. Explicit filters (including `--suite all`) that select pending cases refuse
+before profile/model work unless `--include-pending` is supplied. That flag alone does not broaden defaults or
+bypass isolation/authority admission. Offline `list`/`validate` still show all fourteen cases with status, default
+membership and deferral reason. `grade`/`compare` remain available for historical evidence. A general-only pass
+does not replace the red full-suite baseline. See the [catalog contract](../../evals/README.md#active-and-pending-sets).
+
 `mintclaw eval list` and `validate` remain offline. `run` attaches to an already prepared isolated loopback gateway
 on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,
 bootstrap skills, deploy a binary, restart a gateway, grant broad approval, or retry uncertain task admission.

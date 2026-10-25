@@ -104,3 +104,90 @@ func TestRunRejectsInvalidRepeatBeforeLoadingCorpusOrProfile(t *testing.T) {
 		}
 	}
 }
+
+func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
+	for _, name := range []string{"list", "validate"} {
+		command := NewEvalCommand()
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetArgs([]string{name, "--root", "../../../../evals", "--json"})
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		var result catalogResult
+		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		active, pending := 0, 0
+		for _, item := range result.Cases {
+			switch item.Status {
+			case "active":
+				active++
+				if !item.Default || item.PendingReason != "" || item.Suite != "general" {
+					t.Fatal("active default metadata incorrect")
+				}
+			case "pending":
+				pending++
+				if item.Default || item.PendingReason == "" || item.Suite == "general" {
+					t.Fatal("pending metadata incorrect")
+				}
+			default:
+				t.Fatal("catalog status unavailable")
+			}
+		}
+		if active != 2 || pending != 12 || result.RuntimeRun {
+			t.Fatal("offline inspection hid deferred coverage or claimed execution")
+		}
+	}
+	command := NewEvalCommand()
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetArgs([]string{"list", "--root", "../../../../evals", "--suite", "pdf"})
+	if err := command.Execute(); err != nil || strings.Count(output.String(), "pending") != 6 ||
+		!strings.Contains(
+			output.String(),
+			"default=false",
+		) || !strings.Contains(output.String(), "Deferred by operator") {
+		t.Fatal("human catalog omitted pending status/reason", err)
+	}
+}
+
+func TestRunDefaultAndExplicitPendingAdmissionBeforePreset(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		flags   []string
+		pending bool
+	}{
+		{name: "defaults"},
+		{name: "opt-in-alone-does-not-widen-defaults", flags: []string{"--include-pending"}},
+		{name: "explicit-general", flags: []string{"--suite", "general"}},
+		{name: "all", flags: []string{"--suite", "all"}, pending: true},
+		{name: "pdf", flags: []string{"--suite", "pdf"}, pending: true},
+		{name: "browser", flags: []string{"--suite", "browser"}, pending: true},
+		{name: "pending-id", flags: []string{"--case", "pdf.loan.fill"}, pending: true},
+		{name: "mixed-id", flags: []string{"--case", "general.context.followup", "--case", "pdf.loan.fill"}, pending: true},
+		{name: "broad-tag", flags: []string{"--tag", "multi-turn"}, pending: true},
+		{name: "explicit-opt-in", flags: []string{"--suite", "all", "--include-pending"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := NewEvalCommand()
+			var output bytes.Buffer
+			command.SetOut(&output)
+			command.SetErr(&output)
+			args := []string{
+				"run", "--root", "../../../../evals", "--preset", "/nonexistent-eval-preset",
+				"--out", "/nonexistent-eval-reports", "--json",
+			}
+			command.SetArgs(append(args, test.flags...))
+			err := command.Execute()
+			want := manualeval.ErrInvalidPreset
+			if test.pending {
+				want = manualeval.ErrPendingCases
+			}
+			if !errors.Is(err, want) || strings.Contains(output.String(), `"verdict":"pass"`) ||
+				strings.Contains(output.String(), "MC_EVAL_CONTEXT") {
+				t.Fatal("default/pending admission reached wrong boundary", err, want)
+			}
+		})
+	}
+}

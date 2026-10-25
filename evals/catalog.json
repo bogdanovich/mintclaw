@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "suites": [
+    {"id": "general", "status": "active", "default": true},
+    {
+      "id": "pdf",
+      "status": "pending",
+      "default": false,
+      "reason": "Deferred by operator: focus on core/general coverage. The recorded full baseline remains nonpassing."
+    },
+    {
+      "id": "browser",
+      "status": "pending",
+      "default": false,
+      "reason": "Deferred by operator: focus on core/general coverage. The recorded full baseline remains nonpassing."
+    }
+  ]
+}

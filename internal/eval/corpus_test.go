@@ -145,6 +145,24 @@ func TestRepositoryCorpus(t *testing.T) {
 	if err != nil || len(corpus) != 14 {
 		t.Fatal("repository cases invalid", err)
 	}
+	defaults, err := Select(corpus, Selection{DefaultOnly: true})
+	if err != nil || len(defaults) != 2 || defaults[0].Case.ID != "general.context.followup" ||
+		defaults[1].Case.ID != "general.interaction.navigation" || CheckRunAvailability(defaults, false) != nil {
+		t.Fatal("repository general baseline missing", err)
+	}
+	pending := 0
+	for _, item := range corpus {
+		policy := item.Availability()
+		if policy.Status == "pending" {
+			pending++
+			if policy.Default || policy.Reason == "" || item.Case.Suite == "general" {
+				t.Fatal("invalid deferred coverage")
+			}
+		}
+	}
+	if pending != 12 || !errors.Is(CheckRunAvailability(corpus, false), ErrPendingCases) {
+		t.Fatal("deferred domain cases were lost or implicitly enabled")
+	}
 	pdf, err := Select(corpus, Selection{Suite: "pdf"})
 	if err != nil || len(pdf) != 6 {
 		t.Fatal("required PDF coverage missing", err)

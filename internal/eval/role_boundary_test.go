@@ -338,6 +338,7 @@ func TestOwnedRunGuardsUserAgainstEarlierPDFTrialFacts(t *testing.T) {
 	second.Digest = digest(data)
 	result, err := Run(t.Context(), fixture.preset, []LoadedCase{first, second}, RunOptions{
 		Home: fixture.home, OutputParent: fixture.output, StartTarget: true, SuiteTimeout: 20 * time.Second,
+		IncludePending: true,
 	})
 	if !errors.Is(err, ErrNotPassed) || !result.Complete || result.Verdict != Fail || len(result.Trials) != 2 ||
 		calls.Load() != 1 || result.Trials[1].Verdict != Fail {

@@ -17,11 +17,14 @@ type corpusOptions struct {
 }
 
 type catalogItem struct {
-	ID          string   `json:"id"`
-	Suite       string   `json:"suite"`
-	Tags        []string `json:"tags"`
-	Description string   `json:"description"`
-	CaseSHA256  string   `json:"case_sha256"`
+	ID            string   `json:"id"`
+	Suite         string   `json:"suite"`
+	Tags          []string `json:"tags"`
+	Description   string   `json:"description"`
+	CaseSHA256    string   `json:"case_sha256"`
+	Status        string   `json:"status"`
+	Default       bool     `json:"default"`
+	PendingReason string   `json:"pending_reason,omitempty"`
 }
 
 type catalogResult struct {
@@ -75,16 +78,19 @@ func newCorpusCommand(name string) *cobra.Command {
 				result.PresetID = preset.ID
 			}
 			for _, item := range selected {
+				policy := item.Availability()
 				result.Cases = append(result.Cases, catalogItem{
 					ID: item.Case.ID, Suite: item.Case.Suite, Tags: item.Case.Tags,
 					Description: item.Case.Description, CaseSHA256: item.Digest,
+					Status: policy.Status, Default: policy.Default, PendingReason: policy.Reason,
 				})
 			}
 			if options.json {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 			}
 			for _, item := range result.Cases {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\n", item.ID, item.Suite, item.Description)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\tdefault=%t\t%s\t%s\n",
+					item.ID, item.Suite, item.Status, item.Default, item.Description, item.PendingReason)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%d scenarios validated offline; no runtime run.\n", len(result.Cases))
 			return nil
@@ -96,7 +102,8 @@ func newCorpusCommand(name string) *cobra.Command {
 
 func bindCorpusFlags(command *cobra.Command, options *corpusOptions) {
 	command.Flags().StringVar(&options.root, "root", options.root, "Corpus directory containing cases/ and fixtures/")
-	command.Flags().StringVar(&options.selection.Suite, "suite", "all", "Select a suite (default all)")
+	command.Flags().StringVar(&options.selection.Suite, "suite", options.selection.Suite,
+		"Select a suite (run without filters uses catalog defaults; list/validate/grade default to all)")
 	command.Flags().StringArrayVar(&options.selection.Tags, "tag", nil, "Require a tag (repeatable; all must match)")
 	command.Flags().StringArrayVar(&options.selection.IDs, "case", nil, "Select a case ID (repeatable)")
 	command.Flags().

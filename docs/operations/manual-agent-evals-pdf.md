@@ -2,6 +2,11 @@
 
 ## Current Status
 
+All six PDF cases are currently **pending/non-default** by operator decision.
+Offline inspection is unchanged; explicit execution requires selecting them and adding `--include-pending`.
+The [latest full baseline](manual-agent-evals-baseline-20261024.md) remains red; historical scoped passes below
+do not supersede it. See the [core follow-up](../architecture/agent-evals-core-roadmap.md).
+
 The repository contains six PDF scenarios and four deterministic synthetic AcroForms, with exact SHA-256 checked
 by offline corpus validation. The dialogue packet lets `eval run` attempt PDF conversations on a narrowly admitted
 isolated profile, using protected facts and owned fixtures. The write-intent packet adds native review-bound separate
