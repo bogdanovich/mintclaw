@@ -51,3 +51,35 @@ The existing eval native-model observation still declares `AllCalls: unknown`.
 This primitive does not relabel that historical evidence, activate a case,
 permit live model access, or claim complete billing telemetry. Owned gateway
 wiring, frozen-run validation and real qualification remain separate work.
+
+## Agent Generation Integration
+
+`agent.WithProviderCallBudget` attaches a shared budget before context-manager
+construction and shared-tool registration. It wraps the injected provider,
+every registry primary/light/candidate provider, and future model-selection
+providers. Registry ownership is unchanged: wrappers do not add cleanup owners
+for already-owned delegates. Dynamic model/vision selection also routes newly
+needed fallback providers through the same factory, rather than creating an
+unwrapped fallback when it was absent from the initial registry. Selection
+cleanup retains its existing ownership of newly created providers, not inherited
+registry entries. A newly created unsupported provider is closed by
+the creating factory. Constructor failures do not transfer injected ownership.
+Fatal initialization errors stop construction before a context manager can
+capture an unbounded provider, including an invalid nil budget option.
+
+This opt-in mode is one immutable generation: configured hot reload, reload
+validation and reload preparation are refused. Normal loops without the option
+retain existing behavior. The caller seals the shared budget only after loop
+and background-work settlement.
+
+Native primary turns, final rendering and the provider captured by Seahorse
+share the wrappers. Model-free tests exercise real registry/provider factories
+against a synthetic local HTTP endpoint, the native turn pipeline, the captured
+summary completion boundary and final rendering. They are not live model
+qualification or a witnessed compaction scenario.
+
+This API does not wrap independently created providers inside provider-owning
+tools such as document-private auditing. An eval caller must enforce its
+restricted profile separately; no tool/approval authority is granted here.
+Owned gateway launch, per-trial frozen evidence and qualification remain
+unimplemented at this stage. Native-model `AllCalls` semantics are unchanged.
