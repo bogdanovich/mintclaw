@@ -57,7 +57,11 @@ func NewCallBudget(limits CallBudgetLimits) (*CallBudget, error) {
 }
 
 func (b *CallBudget) Wrap(delegate LLMProvider) (LLMProvider, error) {
-	if b == nil || nilInterface(delegate) || !Capabilities(delegate).CallerMediatedTools {
+	if b == nil || nilInterface(delegate) {
+		return nil, fmt.Errorf("%w: unsupported_provider", ErrCallBudget)
+	}
+	capabilities := Capabilities(delegate)
+	if !capabilities.CallerMediatedTools || !capabilities.OutputTokenLimit {
 		return nil, fmt.Errorf("%w: unsupported_provider", ErrCallBudget)
 	}
 	if wrapped, ok := delegate.(*callBudgetProvider); ok {
@@ -66,7 +70,7 @@ func (b *CallBudget) Wrap(delegate LLMProvider) (LLMProvider, error) {
 		}
 		return nil, fmt.Errorf("%w: foreign_budget", ErrCallBudget)
 	}
-	if Capabilities(delegate).Streaming {
+	if capabilities.Streaming {
 		if _, ok := delegate.(StreamingProvider); !ok {
 			return nil, ErrStreamingContract
 		}

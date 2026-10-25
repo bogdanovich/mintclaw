@@ -150,6 +150,11 @@ and reported-usage limits. Admission/unknown-usage failures stop further calls;
 snapshots retain counters rather than payloads. Provider-internal retries and
 billed work are explicitly outside this API's coverage.
 
+Wrapping also requires the explicit output-limit capability supplied by
+[#1884](https://github.com/bogdanovich/mintclaw/pull/1884). OAuth Codex deliberately
+omits that request field and is therefore refused in bounded mode, including
+through schema wrappers; ordinary unwrapped behavior is unchanged.
+
 This prerequisite does not yet wire the budget through owned gateway provider
 creation, final rendering or compaction, and does not qualify/promote a case.
 Those wiring and frozen-evidence checks remain C1q acceptance work. Existing

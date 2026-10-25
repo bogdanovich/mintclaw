@@ -8,7 +8,8 @@ core evals, not an enabled runtime policy or a completed eval integration.
 
 - One `Chat` or declared `ChatStreamEvents` invocation consumes one logical call,
   including a failed invocation. A non-streaming fallback probe consumes none.
-- Admission requires caller-mediated tool capabilities, a positive integer
+- Admission requires caller-mediated tools and the positive
+  [transmitted output-limit capability](provider-output-limits.md), a positive integer
   `max_tokens` within the requested-output ceiling, and bounded serialized
   messages, tool definitions and options. Media/attachments are unsupported;
   references do not establish a bound on the data an adapter might load.

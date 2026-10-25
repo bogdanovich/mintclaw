@@ -63,6 +63,7 @@ func testCallBudget(t *testing.T, modify func(*CallBudgetLimits)) *CallBudget {
 func budgetProvider(t *testing.T, budget *CallBudget, provider *budgetTestProvider) LLMProvider {
 	t.Helper()
 	provider.caps.CallerMediatedTools = true
+	provider.caps.OutputTokenLimit = true
 	wrapped, err := budget.Wrap(provider)
 	if err != nil {
 		t.Fatal(err)
@@ -293,7 +294,9 @@ func TestCallBudgetAdmissionAndNonStreamingFallback(t *testing.T) {
 	budget := testCallBudget(t, nil)
 	for _, delegate := range []LLMProvider{
 		nil, (*budgetTestProvider)(nil), &descriptorTestProvider{},
-		&descriptorTestProvider{capabilities: ProviderCapabilities{CallerMediatedTools: true, Streaming: true}},
+		&descriptorTestProvider{capabilities: ProviderCapabilities{
+			CallerMediatedTools: true, OutputTokenLimit: true, Streaming: true,
+		}},
 	} {
 		if _, err := budget.Wrap(delegate); err == nil {
 			t.Fatal("unsupported provider admitted")
@@ -480,5 +483,32 @@ func TestCallBudgetAnthropicMissingUsageIsNotKnownZero(t *testing.T) {
 				t.Fatalf("unavailable usage = %+v/%v, state %+v", response, err, state)
 			}
 		})
+	}
+}
+
+func TestCallBudgetRequiresTransmittedOutputLimitBeforeDelegation(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		budget := testCallBudget(t, nil)
+		delegate := &budgetTestProvider{caps: ProviderCapabilities{
+			CallerMediatedTools: true, Streaming: streaming,
+		}}
+		wrapped, err := budget.Wrap(delegate)
+		if wrapped != nil || !errors.Is(err, ErrCallBudget) || delegate.calls.Load() != 0 ||
+			budget.Snapshot().Calls != 0 {
+			t.Fatalf("unbounded adapter admitted before streaming=%v: %v/%v", streaming, wrapped, err)
+		}
+	}
+	for _, transform := range []string{"off", "simple"} {
+		delegate, err := wrapProviderWithToolSchemaTransform(NewCodexProvider("synthetic", "account"), transform)
+		if err != nil {
+			t.Fatal(err)
+		}
+		budget := testCallBudget(t, nil)
+		if wrapped, err := budget.Wrap(
+			delegate,
+		); wrapped != nil || !errors.Is(err, ErrCallBudget) ||
+			budget.Snapshot().Calls != 0 {
+			t.Fatalf("OAuth Codex admitted through %s wrapper: %v/%v", transform, wrapped, err)
+		}
 	}
 }
