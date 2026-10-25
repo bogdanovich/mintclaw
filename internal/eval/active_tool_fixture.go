@@ -24,6 +24,7 @@ const activeToolName = "eval_barrier"
 type activeToolFixture struct {
 	url     string
 	server  *http.Server
+	mcp     *sdkmcp.Server
 	done    chan struct{}
 	closing chan struct{}
 	workers sync.WaitGroup
@@ -51,6 +52,7 @@ type activeToolObservation struct {
 	EnteredSequence int    `json:"entered_sequence"`
 	ReleaseSequence int    `json:"release_sequence"`
 	SettledSequence int    `json:"settled_sequence"`
+	Cancellation    string `json:"cancellation,omitempty"`
 }
 
 type activeToolBarrier struct {
@@ -82,17 +84,26 @@ func newActiveToolFixture(address, namespace string) (*activeToolFixture, error)
 		barriers: make(map[activeToolArgs]*activeToolBarrier),
 	}
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "mintclaw-eval-barrier", Version: "1"}, nil)
+	fixture.mcp = server
 	sdkmcp.AddTool(server, &sdkmcp.Tool{
 		Name: activeToolName, Description: "Read a synthetic fixture; wait until the test driver releases it.",
 		Annotations: &sdkmcp.ToolAnnotations{ReadOnlyHint: true},
 	}, fixture.call)
+	// Cancellation notifications must reach the same SDK session as the held call.
 	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server },
-		&sdkmcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+		&sdkmcp.StreamableHTTPOptions{JSONResponse: true, SessionTimeout: 5 * time.Minute})
 	fixture.server = &http.Server{
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second,
 		WriteTimeout: 50 * time.Second, IdleTimeout: 2 * time.Second, MaxHeaderBytes: 8192,
 		ErrorLog: log.New(io.Discard, "", 0),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			fixture.mu.Lock()
+			closed := fixture.closed
+			fixture.mu.Unlock()
+			if closed {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
 			if request.URL.Path != "/eval/"+namespace+"/mcp" || request.URL.RawPath != "" ||
 				request.URL.RawQuery != "" ||
 				request.URL.ForceQuery ||
@@ -161,13 +172,19 @@ func (fixture *activeToolFixture) call(
 	}
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
-	if ctx.Err() != nil {
-		state = "canceled"
-	} else if fixture.closed || fixture.failed {
+	if fixture.closed || fixture.failed {
 		state = "closed"
+	} else if ctx.Err() != nil {
+		state = "canceled"
 	}
 	fixture.sequence++
 	barrier.observation.State, barrier.observation.SettledSequence = state, fixture.sequence
+	if state == "canceled" {
+		barrier.observation.Cancellation = "context_canceled"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			barrier.observation.Cancellation = "deadline_exceeded"
+		}
+	}
 	fixture.inFlight--
 	close(barrier.settled)
 	if state != "released" {
@@ -228,6 +245,11 @@ func (fixture *activeToolFixture) shutdown() error {
 		fixture.closed = true
 		close(fixture.closing)
 		fixture.mu.Unlock()
+		for session := range fixture.mcp.Sessions() {
+			if session.Close() != nil {
+				fixture.closeErr = errActiveToolFixture
+			}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if fixture.server.Shutdown(ctx) != nil {
@@ -235,6 +257,12 @@ func (fixture *activeToolFixture) shutdown() error {
 			_ = fixture.server.Close()
 		}
 		<-fixture.done
+		// A request can finish session setup while the first close pass runs.
+		for session := range fixture.mcp.Sessions() {
+			if session.Close() != nil {
+				fixture.closeErr = errActiveToolFixture
+			}
+		}
 		fixture.workers.Wait()
 		fixture.mu.Lock()
 		if fixture.failed {
