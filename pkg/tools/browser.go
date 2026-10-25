@@ -621,8 +621,10 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 				DryRun:               profile.DryRun,
 				AllowApprovedActions: profile.AllowApprovedActions,
 				HeadedView:           attached || profile.Runtime.Headed,
-				Handoff: !attached && profile.Mode == config.BrowserProfileManaged &&
-					profile.Runtime.Headed,
+				Handoff: target.EffectivePlacement() != config.BrowserPlacementNode && profile.Runtime.Headed &&
+					(profile.Mode == config.BrowserProfileManaged ||
+						(target.EffectivePlacement() == config.BrowserPlacementGateway &&
+							profile.Mode == config.BrowserProfileEphemeral)),
 				AttachConsent:       attached && profile.Attached.ConsentMode == config.BrowserAttachedConsentSession,
 				ActionOriginMode:    profile.Attached.ActionOriginMode,
 				NetworkBoundary:     networkBoundary,
@@ -771,14 +773,24 @@ func (*BrowserSessionTool) Description() string {
 	return "Open, inspect, close, hand off, or resume one broker-owned browser session. " +
 		"For open, target is the browser target name from browser_targets; when the task does not name one, " +
 		"use browser_targets.default_target and never infer preference from target array order. " +
-		"For open, omit profile unless the current user request explicitly selects an identity profile; omission " +
-		"uses that target's default_profile. A request to keep the browser open after the work is a lifecycle " +
+		"For open, normally omit profile to use that target's default_profile. An explicit identity selection or " +
+		"a visual challenge requiring a configured local headed ephemeral profile may select another profile. " +
+		"A request to keep the browser open after the work is a lifecycle " +
 		"requirement, not evidence that a session or tab already exists and not a request for an attached profile. " +
 		"Reuse a live broker session for status, handoff, or resume only with a current browser_session_id from live runtime evidence. " +
 		"Close returns a terminal closed or already_closed receipt without repeating the session ID. A not_found " +
 		"close result is never proof that cleanup happened. " +
 		"For open and handoff, interaction_language is required and must match the natural language of the root " +
 		"user request that led to the browser operation, ignoring delegated or internal English instructions. " +
+		"For CAPTCHA/security challenges, first send an available screenshot with browser_capture " +
+		"delivery=interaction so the user can see the obstacle before being asked. Confirm delivery, then use browser_input for a human's text " +
+		"answer while retaining the same session. If mouse interaction is required in a headless session, close it " +
+		"and reopen the same site once in a configured same-target local ephemeral profile whose headed_view and " +
+		"handoff are true, then hand off. This is a fresh session; never claim cookies or login progress transferred. " +
+		"Do not automatically switch to cloud, persistent or attached personal identities, or retry unknown login " +
+		"submissions. If no visible temporary profile is available, report that instead of claiming a window opened. " +
+		"Capture and ordinary field input remain denied after private browser_login starts; do not bypass that " +
+		"boundary. Use visible handoff, or a fresh visible session for a new capture before private login. " +
 		"Handoff pauses agent control, gives the user the same operator-visible browser for the selected " +
 		"target (a local window or its configured cloud live view), keeps the session open, and waits. Supply a " +
 		"self-contained handoff_prompt in " +
@@ -804,7 +816,8 @@ func (*BrowserSessionTool) Parameters() map[string]any {
 			"profile": map[string]any{
 				"type": "string",
 				"description": "For open only: omit to use the selected target's default_profile. Set an exact listed " +
-					"profile only when the current user request explicitly selects that browser identity source.",
+					"profile for an explicit identity selection, or choose a same-target local headed ephemeral profile " +
+					"for a visual challenge requiring human interaction. Never infer a personal identity from that need.",
 			},
 			"interaction_language": map[string]any{
 				"type":      "string",
@@ -2236,7 +2249,10 @@ func (*BrowserCaptureTool) RuntimeCapabilities() []runtimecap.CapabilityID {
 }
 
 func (*BrowserCaptureTool) Description() string {
-	return "Capture one retained PNG for an exact fresh browser observation, either the page or one semantic element reference."
+	return "Capture one retained PNG for an exact fresh browser observation, either the page or one semantic element reference. " +
+		"For a CAPTCHA or human handoff, set delivery=interaction to deliver the image to the owner immediately, even " +
+		"inside a delegated browser task. Confirm capture success before asking browser_input or handing off. " +
+		"The normal delivery mode retains delegated images for the final report. Private-login capture remains denied."
 }
 
 func (*BrowserCaptureTool) ToolLoopSemantics() loopguard.Semantics {
@@ -2254,6 +2270,10 @@ func (*BrowserCaptureTool) Parameters() map[string]any {
 			"browser_session_id", "tab_id", "snapshot_id", "snapshot_generation", "target",
 		},
 		"properties": map[string]any{
+			"delivery": map[string]any{
+				"type": "string", "enum": []string{"normal", "interaction"},
+				"description": "Use interaction for an image the user must see before answering a browser question.",
+			},
 			"browser_session_id":  map[string]any{"type": "string"},
 			"tab_id":              map[string]any{"type": "string"},
 			"frame_id":            map[string]any{"type": "string"},
@@ -2292,6 +2312,19 @@ func (tool *BrowserCaptureTool) execute(
 	args map[string]any,
 	deliver bool,
 ) *toolshared.ToolResult {
+	intent := toolshared.DeliveryImmediateContinue
+	if raw := args["delivery"]; raw != nil {
+		mode, ok := raw.(string)
+		if !ok || (mode != "normal" && mode != "interaction") {
+			return browserToolError(browser.ErrInvalid)
+		}
+		if mode == "interaction" {
+			if !deliver {
+				return browserToolError(browser.ErrDenied)
+			}
+			intent = toolshared.DeliveryInteractionMedia
+		}
+	}
 	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
 		return browserErrorResult(
 			"not_granted",
@@ -2349,7 +2382,7 @@ func (tool *BrowserCaptureTool) execute(
 	); lookupErr != nil {
 		return browserToolError(lookupErr)
 	} else if found {
-		return tool.result(ctx, owner, requestID, artifact, true, deliver)
+		return tool.result(ctx, owner, requestID, artifact, true, deliver, intent)
 	}
 	artifact, err := tool.runtime.source.CaptureScreenshot(ctx, browser.ScreenshotRequest{
 		Owner: owner, RequestID: requestID, SessionID: sessionID, TabID: tabID,
@@ -2359,7 +2392,7 @@ func (tool *BrowserCaptureTool) execute(
 	if err != nil {
 		return browserToolError(err)
 	}
-	return tool.result(ctx, owner, requestID, artifact, false, deliver)
+	return tool.result(ctx, owner, requestID, artifact, false, deliver, intent)
 }
 
 func (tool *BrowserCaptureTool) result(
@@ -2369,14 +2402,24 @@ func (tool *BrowserCaptureTool) result(
 	artifact browser.ScreenshotArtifact,
 	replayed bool,
 	deliver bool,
+	intent toolshared.DeliveryIntent,
 ) *toolshared.ToolResult {
 	result := tool.runtime.result(browserCaptureView{Artifact: artifact, Replayed: replayed})
 	if !deliver {
 		return result
 	}
-	if result.IsError || artifact.MediaRef == "" || artifact.Recovery == nil ||
-		(artifact.DeliveryState != browser.ScreenshotDeliveryPending &&
-			artifact.DeliveryState != browser.ScreenshotDeliveryAlreadyClaimed) {
+	if result.IsError {
+		return result
+	}
+	if artifact.MediaRef == "" || artifact.Recovery == nil ||
+		(artifact.DeliveryState != browser.ScreenshotDeliveryPending && artifact.DeliveryState != browser.ScreenshotDeliveryAlreadyClaimed) {
+		if intent == toolshared.DeliveryInteractionMedia {
+			return browserErrorResult(
+				"delivery_unavailable",
+				"The interaction image cannot be delivered to the owner.",
+				"report_image_unavailable",
+			)
+		}
 		return result
 	}
 	recovery := artifact.Recovery
@@ -2396,7 +2439,7 @@ func (tool *BrowserCaptureTool) result(
 		},
 	}).WithOutboundCommit(func(commitCtx context.Context) error {
 		return tool.runtime.source.ClaimScreenshotDelivery(commitCtx, delivery)
-	}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
+	}).WithDeliveryIntent(intent)
 }
 
 func (*BrowserActTool) Name() string { return "browser_act" }

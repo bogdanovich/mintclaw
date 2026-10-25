@@ -1281,7 +1281,8 @@ func (broker *Broker) Handoff(ctx context.Context, owner Owner, sessionID string
 		return broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
 	}
 	profile, profileOK := broker.browserProfile(session)
-	if !profileOK || profile.Mode != config.BrowserProfileManaged {
+	if !profileOK || (profile.Mode != config.BrowserProfileManaged &&
+		(profile.Mode != config.BrowserProfileEphemeral || !profile.Runtime.Headed)) {
 		return Session{}, ErrDenied
 	}
 	if session.State != SessionReady || session.EffectiveController() != ControllerAgent {

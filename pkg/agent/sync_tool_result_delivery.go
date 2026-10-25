@@ -55,7 +55,7 @@ func normalizeToolResultForSyncDelivery(ts *turnState, result *toolshared.ToolRe
 		result.Media = nil
 		result.Deliverable = nil
 		result.Delivery = toolshared.ToolDelivery{Intent: toolshared.DeliveryFinalHandled}
-	} else if ts != nil && ts.opts.SuppressToolUserDelivery {
+	} else if ts != nil && ts.opts.SuppressToolUserDelivery && result.Delivery.Intent != toolshared.DeliveryInteractionMedia {
 		result.Delivery.Intent = toolshared.DeliverySilent
 	}
 	return result
@@ -72,7 +72,7 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 		return nil, result
 	}
 
-	if !ts.opts.SuppressToolUserDelivery && result.Delivery.IsImmediate() {
+	if result.Delivery.IsImmediate() {
 		if len(deliveredToolResultMediaRefs(result)) > 0 && !hasOutboundTransaction(ctx) {
 			err := fmt.Errorf("durable outbound transaction is required for immediate media delivery")
 			return nil, wrapToolDeliveryError(result, err.Error(), err)
@@ -83,6 +83,12 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 		_, outcome, err := d.deliverToUser(ctx, ts, result, toolName, nil, true, bus.OutboundMetadata{})
 		if err != nil {
 			return nil, wrapToolDeliveryError(result, fmt.Sprintf("failed to deliver attachment: %v", err), err)
+		}
+		if result.Delivery.Intent == toolshared.DeliveryInteractionMedia {
+			if outcome != toolResultDeliveryDirect {
+				return nil, toolshared.ErrorResult("interaction image delivery was not confirmed")
+			}
+			result.ForLLM += "\nThe interaction image was delivered to the user. You may now ask the browser question."
 		}
 		if outcome != toolResultDeliveryNone {
 			markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))

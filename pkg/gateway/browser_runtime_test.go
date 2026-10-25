@@ -137,7 +137,7 @@ func TestGatewayAttachedOnlyDiscoveryDoesNotAdvertiseUnsupportedDownload(t *test
 	}
 }
 
-func TestBrowserHandoffProfilesAreScopedPerLocalOrCloudManagedIdentity(t *testing.T) {
+func TestBrowserHandoffProfilesAreScopedToOperatorVisibleLocalOrCloudIdentity(t *testing.T) {
 	policy := config.BrowserToolsConfig{Targets: map[string]config.BrowserTargetConfig{
 		"gateway": {
 			Enabled: true, Placement: config.BrowserPlacementGateway,
@@ -148,6 +148,13 @@ func TestBrowserHandoffProfilesAreScopedPerLocalOrCloudManagedIdentity(t *testin
 				},
 				"headless": {
 					Enabled: true, Mode: config.BrowserProfileManaged,
+				},
+				"temporary_visible": {
+					Enabled: true, Mode: config.BrowserProfileEphemeral,
+					Runtime: config.BrowserProfileRuntimeConfig{Headed: true},
+				},
+				"temporary_headless": {
+					Enabled: true, Mode: config.BrowserProfileEphemeral,
 				},
 			},
 		},
@@ -171,11 +178,12 @@ func TestBrowserHandoffProfilesAreScopedPerLocalOrCloudManagedIdentity(t *testin
 		},
 	}}
 	profiles := browserHandoffProfiles(policy)
-	if len(profiles) != 2 {
+	if len(profiles) != 3 {
 		t.Fatalf("handoff profiles = %#v", profiles)
 	}
 	for _, key := range []string{
 		gatewayBrowserProfileKey("gateway", "managed"),
+		gatewayBrowserProfileKey("gateway", "temporary_visible"),
 		gatewayBrowserProfileKey("cloud", "personal"),
 	} {
 		if _, found := profiles[key]; !found {
@@ -184,6 +192,7 @@ func TestBrowserHandoffProfilesAreScopedPerLocalOrCloudManagedIdentity(t *testin
 	}
 	for _, key := range []string{
 		gatewayBrowserProfileKey("gateway", "headless"),
+		gatewayBrowserProfileKey("gateway", "temporary_headless"),
 		gatewayBrowserProfileKey("companion", "managed"),
 	} {
 		if _, found := profiles[key]; found {

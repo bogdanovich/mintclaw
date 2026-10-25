@@ -1143,7 +1143,7 @@ func applyToolResultOutboundMetadata(result *toolshared.ToolResult, metadata *bu
 	switch result.Delivery.Intent {
 	case toolshared.DeliveryFinalHandled:
 		kind = bus.OutboundKindFinal
-	case toolshared.DeliveryImmediateContinue:
+	case toolshared.DeliveryImmediateContinue, toolshared.DeliveryInteractionMedia:
 		kind = bus.OutboundKindInterim
 	}
 	if kind != "" {

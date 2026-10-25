@@ -912,8 +912,10 @@ func browserHandoffProfiles(policy config.BrowserToolsConfig) map[string]struct{
 			continue
 		}
 		for profileName, profile := range target.Profiles {
-			if profile.Enabled && profile.Mode == config.BrowserProfileManaged &&
-				profile.Runtime.Headed {
+			if profile.Enabled && profile.Runtime.Headed &&
+				(profile.Mode == config.BrowserProfileManaged ||
+					(target.EffectivePlacement() == config.BrowserPlacementGateway &&
+						profile.Mode == config.BrowserProfileEphemeral)) {
 				profiles[gatewayBrowserProfileKey(name, profileName)] = struct{}{}
 			}
 		}

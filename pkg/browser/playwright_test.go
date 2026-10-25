@@ -2585,8 +2585,8 @@ func TestPlaywrightEphemeralManagerCloseFailureRetainsRuntimeForRetry(t *testing
 	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
 }
 
-func TestPlaywrightEphemeralProfileRejectsPersistentHumanHandoff(t *testing.T) {
-	root, runtimeConfig := ephemeralPlaywrightConfig(t, true)
+func TestPlaywrightHeadlessEphemeralProfileRejectsHumanHandoff(t *testing.T) {
+	root, runtimeConfig := ephemeralPlaywrightConfig(t, false)
 	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
 	if err != nil {
 		t.Fatal(err)
@@ -2608,6 +2608,51 @@ func TestPlaywrightEphemeralProfileRejectsPersistentHumanHandoff(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+}
+
+func TestPlaywrightHeadedEphemeralHandoffRetainsTemporaryOwnership(t *testing.T) {
+	for _, resume := range []bool{false, true} {
+		t.Run(fmt.Sprintf("resume=%t", resume), func(t *testing.T) {
+			root, runtimeConfig := ephemeralPlaywrightConfig(t, true)
+			factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+			factory.clientFactory = func() playwrightMCPClient { return client }
+			broker := newTestBroker(t, root, NewMemoryStore(), factory)
+			owner := testOwner()
+			session, err := broker.Open(t.Context(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "ephemeral",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			human, err := broker.Handoff(t.Context(), owner, session.ID)
+			if err != nil || human.EffectiveController() != ControllerHuman || human.SnapshotID != "" {
+				t.Fatalf("visible temporary handoff failed: %v", err)
+			}
+			if !PlaywrightHandoffAvailable(root) {
+				t.Fatal("visible temporary handoff was not discoverable")
+			}
+			if _, err = broker.Observe(t.Context(), owner, session.ID, session.TabID); err == nil {
+				t.Fatal("agent observed the page while the user controlled it")
+			}
+			if resume {
+				if _, err = broker.ReleaseHandoff(t.Context(), owner, session.ID); err != nil {
+					t.Fatal(err)
+				}
+				ready, resumeErr := broker.Resume(t.Context(), owner, session.ID)
+				if resumeErr != nil || ready.EffectiveController() != ControllerAgent || ready.SnapshotID != "" {
+					t.Fatal("resumed temporary browser retained stale observation authority", resumeErr)
+				}
+			}
+			if _, err = broker.Close(t.Context(), owner, session.ID); err != nil {
+				t.Fatal(err)
+			}
+			assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+		})
+	}
 }
 
 func TestPlaywrightEphemeralFactoryRecoversStaleRuntimeBeforeReuse(t *testing.T) {
