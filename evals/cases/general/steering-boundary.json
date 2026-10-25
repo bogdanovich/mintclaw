@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "general.steering.boundary",
+  "suite": "general",
+  "tags": ["steering", "boundary", "core"],
+  "description": "Apply a correction during a genuinely held read, preserving native tool results and one final delivery.",
+  "task": "Remember the synthetic current label mc-c2-old-r83. Call mcp_corefixture_eval_barrier exactly once using the provided Eval tool arguments. Wait for that read to finish, then reply with only the current label. Honor mid-turn corrections without canceling the admitted read. Do not ask questions or call other tools.",
+  "requires": ["conversation", "bounded_calls", "active_tool"],
+  "fixtures": [],
+  "steering": {
+    "scenario": "boundary",
+    "modes": ["one-at-a-time"],
+    "initial_marker": "mc-c2-old-r83",
+    "updates": ["mc-c2-new-k17"]
+  },
+  "driver": {
+    "mode": "scripted",
+    "steps": [
+      {
+        "wait_for": {"kind": "final"},
+        "action": {"kind": "message", "text": "What is the current synthetic label? Reply with the label only. Do not call tools."}
+      }
+    ]
+  },
+  "limits": {"max_user_turns": 3, "turn_timeout": "2m", "case_timeout": "5m", "max_driver_calls": 1},
+  "checks": [
+    {"id": "native-boundary", "kind": "steering_boundary"},
+    {"id": "current-label", "kind": "response_contains", "expected": "mc-c2-new-k17"},
+    {"id": "old-label-absent", "kind": "final_response_absent", "expected": "mc-c2-old-r83"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"}
+  ],
+  "rubric": [
+    {
+      "id": "grounded-steering",
+      "description": "The response and follow-up use the corrected label from this same active conversation, not the old label, and do not claim cancellation or invent work. Native hard checks independently establish tool completion and delivery.",
+      "required": true
+    }
+  ]
+}

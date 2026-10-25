@@ -39,6 +39,17 @@ func visitNativeTraceSnapshots(
 	facts map[string]string, filter *strings.Replacer,
 	visit func(int, diagnostictrace.Trace, string),
 ) string {
+	return visitNativeTraceSnapshotsRaw(ctx, target, bindings, facts, filter,
+		func(index int, trace diagnostictrace.Trace, sha, _ string) { visit(index, trace, sha) })
+}
+
+// Raw snapshots cross the same source, privacy and native-shape gates as the
+// projections. Consumers retain original JSON for offline hard-check replay.
+func visitNativeTraceSnapshotsRaw(
+	ctx context.Context, target admittedTarget, bindings []nativeModelBinding,
+	facts map[string]string, filter *strings.Replacer,
+	visit func(int, diagnostictrace.Trace, string, string),
+) string {
 	if ctx == nil || ctx.Err() != nil || target.config == nil ||
 		target.config.Diagnostics.TraceCapture != evalModelMetadataCapture() {
 		return "native_evidence_unavailable"
@@ -115,6 +126,7 @@ func visitNativeTraceSnapshots(
 		_, keysErr := decodeValue(json.NewDecoder(bytes.NewReader(data)), 0)
 		trace, decodeErr := diagnostictrace.Decode(data)
 		sha := digest(data)
+		raw := string(data)
 		clear(data)
 		if keysErr != nil || decodeErr != nil || seen[trace.TraceID] ||
 			entry.Name() != trace.TraceID+".json" || trace.Source != source ||
@@ -129,7 +141,7 @@ func visitNativeTraceSnapshots(
 		seen[trace.TraceID] = true
 		for index, binding := range bindings {
 			if binding.TraceScope.TurnID == trace.Metadata.RootTurnID {
-				visit(index, trace, sha)
+				visit(index, trace, sha, raw)
 			}
 		}
 	}

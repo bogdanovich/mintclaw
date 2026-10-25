@@ -55,8 +55,8 @@ or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
 | --- | --- | --- | --- |
 | `general.context.correction` | C1a scripted | Same session, corrected final, old marker absent from final; semantic judge | Qualification pass + fixed 3/3; active/default |
 | `general.interaction.answer` | C1b scripted | Delivered prompt, terminal answer, one paired continuation/tool result | Qualification pass + fixed 3/3; active/default |
-| `general.steering.boundary` | Queued C2 | Active barrier, enqueue/injection, ordered emitted-batch results | Not present |
-| `general.steering.order` | Queued C2 | FIFO/mode injection, late-input ownership, no orphan/duplicate final | Not present |
+| `general.steering.boundary` | C2 native held-read driver/observer | Active barrier, enqueue/injection, paired result, final census | Pending; live qualification not run |
+| `general.steering.order` | C2 explicit same-sender mode variants | FIFO/coalescence, no orphan/duplicate final; exact edge races in native Go tests | Pending; live qualification not run |
 | `general.session.isolation` | Queued C2 | Two distinct scopes and correctly routed markers/injections | Not present |
 | `general.tools.recovery` | Queued C3a | Failed read then successful pinned-fixture read | Not present |
 | `general.control.stop` | Queued C3b | Terminal abort/queue settlement and successful next request | Not present |
@@ -158,7 +158,8 @@ The primitive was reviewed/merged in
 green, exact-head substantive review and owner PR-root approval. It did not widen
 eval admission or claim C2 qualification.
 
-The following foundation admits only this exact owned fixture with the existing
+The following foundation, reviewed/merged in
+[#1891](https://github.com/bogdanovich/mintclaw/pull/1891), admits only this exact owned fixture with the existing
 native budget, metadata capture, pinned steering mode and a narrow info-level
 event filter. Its synchronous in-flight sender owns actual wire IDs, privacy and
 sticky input limits. A bounded raw-inspecting log observer waits for one native
@@ -170,10 +171,16 @@ profiles, each with three native sessions, six logical provider calls and one
 shared ceiling. The active profile exposes only the selected MCP tool; no paid
 model or production profile is used. These controls are not live steering proof.
 
-Next: loadable boundary/order/isolation definitions and their full frozen oracle
-joining native scope/trace, enqueue/injection, complete ordered emitted-batch
-results and delivery. No new scenario/default is added by the foundations alone.
-The native scheduler remains the sole steering authority; C2 is incomplete.
+The [steering contracts](../reference/core-steering-evals.md) add pending boundary
+and order definitions with native frozen evidence and post-stop history/outbox
+rechecks. Real CLI/local-model controls pass for boundary and both recorded order
+modes, including frozen regrade after deleting live native files. Same-sender
+guidance coalesces in both modes by the native authority API; anonymous queue
+presentation and exact finalization-edge races are separate deterministic tests,
+not falsely claimed live coverage. There is no live C2 qualification/promotion yet.
+
+Next: distinct-session isolation, then fixed live qualification of C2. The native
+scheduler remains the sole steering authority; C2 and the overall goal are incomplete.
 
 ## C1q Provider Primitive
 
