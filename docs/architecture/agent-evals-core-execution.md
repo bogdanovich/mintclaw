@@ -159,3 +159,11 @@ This prerequisite does not yet wire the budget through owned gateway provider
 creation, final rendering or compaction, and does not qualify/promote a case.
 Those wiring and frozen-evidence checks remain C1q acceptance work. Existing
 native-model evidence keeps its conservative `AllCalls: unknown` meaning.
+
+The agent-generation integration wraps existing registry primary/light/candidate
+providers and future model-selection providers before the context manager and
+shared tools capture them. Config reload is explicitly refused in this opt-in
+mode; existing provider cleanup owners stay unchanged. Native turn/final-render,
+captured summary-boundary and local HTTP factory controls cover these paths.
+This does not cover independent provider-owning tools, grant authority, wire
+owned gateway launch, or establish a C3f compaction/live-qualification witness.

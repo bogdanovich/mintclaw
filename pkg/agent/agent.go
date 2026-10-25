@@ -101,6 +101,7 @@ type AgentLoop struct {
 	reloadFunc func() error
 
 	providerFactory func(*config.ModelConfig) (providers.LLMProvider, string, error)
+	providerBudget  *providers.CallBudget
 }
 
 type continuationTarget struct {
@@ -328,6 +329,9 @@ type turnEventScope struct {
 
 // ValidateConfigReload reports restart-only changes without mutating live runtime state.
 func (al *AgentLoop) ValidateConfigReload(cfg *config.Config) error {
+	if al.providerBudget != nil {
+		return fmt.Errorf("%w: bounded runtime cannot reload", providers.ErrCallBudget)
+	}
 	if cfg == nil {
 		return fmt.Errorf("config cannot be nil")
 	}
