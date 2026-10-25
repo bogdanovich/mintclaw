@@ -244,8 +244,9 @@ func TestAuthorityBrokerTerminalWorkerReapsSetsidDescendantOnClose(t *testing.T)
 	if opened := receiveTerminalWorkerEvent(t, events); opened.Type != TerminalEventOpened {
 		t.Fatalf("opened event = %#v", opened)
 	}
-	command := "/usr/bin/setsid /bin/sh -c 'echo $$ > " + pidFile +
-		"; trap \"\" TERM; while :; do sleep 1; done' &\n"
+	// File existence must publish a complete PID before close can reap its writer.
+	command := "/usr/bin/setsid /bin/sh -c 'echo $$ > " + pidFile + ".tmp; mv " +
+		pidFile + ".tmp " + pidFile + "; trap \"\" TERM; while :; do sleep 1; done' &\n"
 	controls <- terminalInputControl(1, "input-1", command)
 	waitForTerminalAck(t, events, 1)
 	waitForAuthorityBrokerFile(t, pidFile)
