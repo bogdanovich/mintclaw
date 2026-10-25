@@ -35,7 +35,7 @@ does not reopen C0 or E0-E5.
 | C1a | C0 | Per-case narrowing and three-turn correction with final-only absence oracle | Complete, [#1872](https://github.com/bogdanovich/mintclaw/pull/1872); 14/14 CI and reviewed merge |
 | C1b transport | C0 | [Prompt-bound ordinary answers](../channels/mintclaw.md) through existing native projection | Complete, [#1874](https://github.com/bogdanovich/mintclaw/pull/1874); reviewed green merge including wire UTF-8 regression |
 | C1b | C1a | Ordinary answer/resume native observer and stale/wrong-prompt controls | Complete, [#1881](https://github.com/bogdanovich/mintclaw/pull/1881); candidate remains pending live qualification |
-| C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | Queued; user-turn limits alone are not call coverage |
+| C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | In progress: #1884 merged, #1882 reviewed/fixing; owned launch and frozen receipt still required |
 | C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | Queued |
 | C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Queued |
 | C3b | C2 | Native active stop/reuse, distinct from local driver stop | Queued |
