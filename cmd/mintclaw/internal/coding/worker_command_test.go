@@ -316,8 +316,8 @@ func TestNativeWorkerFactoryFailsClosedBeforeThreadState(t *testing.T) {
 		{
 			name: "model selection",
 			mutate: func(_ *worker.Binding, deps *dependencies) {
-				deps.resolveModel = func(string) (string, string, error) {
-					return "different-model", "fixture", nil
+				deps.resolveModel = func(string) (frontend.ModelSelection, error) {
+					return frontend.ModelSelection{Model: "different-model", Provider: "fixture"}, nil
 				}
 			},
 		},

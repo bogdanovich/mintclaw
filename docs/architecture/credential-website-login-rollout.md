@@ -504,3 +504,47 @@ service verification, new stateless smoke trace and public approval-route
 check. A fresh owner-driven Facebook login with stored TOTP and browser
 closure must then qualify the real account path. The historical failed task,
 credential state, phone enrollment and running services were not rewritten.
+
+### Form-control recovery deployed
+
+On 2026-10-25 UTC, merged main
+`1013693a9eebce0604bda82083a3ba47e30a752f` was built and installed with
+Go 1.26.10. The nine pre-existing source edits were first preserved in a
+private archive and a retained local Git stash/ref, with matching file hashes;
+the production checkout is now clean main. No private workspace configuration
+was stashed or reset.
+
+Backup `/home/server/mintclaw-credential-continuation-upgrade-20261025T003602Z`
+retains the former binaries, systemd files and rollback manifest. All 34 backup
+checksums passed final verification. All three new binaries have the intended
+VCS revision and `vcs.modified=false`. Configuration hashes and the token/owner
+key file identities remained unchanged. All five profile configurations loaded
+without errors and with unchanged policy findings; nutrition was compared
+against its actual isolated `dc5b9355e` binary.
+
+Main was switched first. After its smoke/public-route checks, main-web, family,
+spouse and reviewer were rolled to the new binaries. The separate nutrition
+deployment was preserved: its PID, executable path and SHA-256 remained the
+same, and it already uses Go 1.26.10. All ten services are active, with no failed
+units, legacy processes or error-level entries in the inspected ten-minute
+window.
+
+New stateless trace `trace-turn-02410473bdbc8e4983e4788b` has the exact deployed
+source, schema `mintclaw.diagnostic_trace.v1`, six records, zero tool calls,
+completed status, exact input/reply hashes and no truncation. Its policy is
+`redacted_content` / `mintclaw.config_filter.v1`. The public approval root
+returned HTML/HTTP 200; its JavaScript matches the exact deployed source, and
+external operator enrollment remains HTTP 403.
+
+All 29 native credential tests also passed on the server using its configured
+`/usr/bin/google-chrome-stable` and Playwright 1.63.0: zero failures or skips,
+31.557 seconds. This includes stale-submit recovery, one fresh private submit,
+and denial for cross-origin actions, GET methods and separate-window targets.
+These tests use synthetic values; operator tooling did not retrieve account
+passwords, TOTP seeds/codes or authentication cookies.
+
+A fresh real Facebook/TOTP login still needs an owner-driven normal-chat pilot.
+The restart invalidates prior in-process grants, so fresh phone approval may be
+needed; the request window remains two hours and the granted access lasts up
+to twenty hours. The earlier failed task remains historical evidence, not a
+newly successful login.

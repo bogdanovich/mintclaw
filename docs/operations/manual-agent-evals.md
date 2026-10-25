@@ -2,6 +2,10 @@
 
 ## Current Scope
 
+The latest [full fourteen-case baseline candidate](manual-agent-evals-baseline-20261024.md) is **not green**:
+2 pass, 7 fail, 2 error, 3 inconclusive on captured merged `1013693a9`. Historical scoped passes below are not a
+guarantee that every current scenario passes; the new record preserves target, driver and admission limits separately.
+
 `mintclaw eval list` and `validate` remain offline. `run` attaches to an already prepared isolated loopback gateway
 on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,
 bootstrap skills, deploy a binary, restart a gateway, grant broad approval, or retry uncertain task admission.
