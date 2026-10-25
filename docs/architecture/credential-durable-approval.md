@@ -35,6 +35,25 @@ Protection comes from this private trusted-host store; an unkeyed hash would
 not authenticate an editable approval, and encryption with a nearby key would
 not establish an additional host trust boundary.
 
+Phone approval is a consent checkpoint for the supported credential path. It
+does not cryptographically unlock the service-account token: the gateway loads
+that token into its private SDK client at startup, before a phone grant exists.
+The WebAuthn assertion authenticates the owner's approval to MintClaw;
+1Password's service-account authentication uses the service token independently.
+See the [1Password service-account security model](https://www.1password.dev/service-accounts/security)
+and [WebAuthn assertion verification](https://www.w3.org/TR/webauthn-3/#sctn-verifying-assertion).
+
+An agent with arbitrary same-user filesystem/shell access or administration
+over this runtime could bypass the approval controller rather than forge a
+passkey signature. Private file modes protect other unprivileged OS users;
+they do not separate an agent running as the credential owner. A hash, or
+encryption with a key readable by that same principal, does not establish that
+separation. Keeping secret values out of providers and logs depends on the
+private consumption/output path under the explicitly trusted-model contract.
+Protecting against a deliberately bypassing agent requires an independently
+enforced access boundary for the token and credential runtime, including no
+agent administration over that boundary. This PR adds no such isolation.
+
 Only a verified passkey assertion creates a new grant, for at most 20 hours.
 Use and restart never renew it. Startup validates the entire matching-policy
 snapshot before installing any grants, discards expired or future-issued
