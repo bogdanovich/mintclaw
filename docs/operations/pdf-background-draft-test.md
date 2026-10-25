@@ -6,6 +6,13 @@ the generated synthetic Community Equipment Loan PDF from the
 Upload it from your computer; do not paste a server path.
 Keep any real form draft untouched and use a new disposable test task/topic.
 
+Status on 2026-10-25: the
+[automated foundation check](../architecture/pdf-intake-background-draft-foundation-qualification.md)
+passed native values/exclusion, unrelated current requests and safe draft
+return. Cross-turn unrelated history is **not yet qualified**: the existing
+live-only policy loses the earlier user request. Step 4 below tests the desired
+completed behavior, not a claim that the current release passes it.
+
 1. Attach the PDF with: “Новая отдельная тестовая задача. Я заёмщик. Объясни
    документ и сгруппируй необходимые сведения. Помоги заполнить обычными
    сообщениями. PDF пока не создавай, ничего не подписывай и не подавай.”
@@ -18,9 +25,13 @@ Keep any real form draft untouched and use a new disposable test task/topic.
    ambiguity is settled. The contact's telephone remains genuinely missing;
    it is valid to ask for that missing number later, but not to ask whether the
    excluded number should be copied to the contact.
-4. Send `test`, then “Сколько будет два плюс два?”, then “Почему?”, waiting for
-   each reply. Expect ordinary conversation and an arithmetic explanation,
-   not a mandatory task/form choice or an explanation about protected receipts.
+4. Send `test`. Then invent three fresh arbitrary word-game labels, send them
+   in order and ask for only “принято”, without repeating the labels. Ask which
+   label was second, without supplying it again. Expect ordinary conversation
+   and the correct historical reference, not a task/form choice or a guess.
+   If the acknowledgement echoed the labels, this does not establish retention
+   of the user's request; use fresh labels. Arithmetic followed by “Почему?”
+   alone is insufficient proof of historical continuity.
 5. Send: “Давай вернёмся к предыдущей форме. На чём остановились? PDF пока не
    создавай.” Expect the same draft and accepted data, with only missing or
    genuinely uncertain facts requested. No repeated ownership question.
