@@ -30,8 +30,12 @@ browser/owned-target execution and baseline comparison have their own evidence c
 live scenario qualification.
 General cases require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
-The corpus has 19 cases: four active/default General, three pending core steering/isolation,
-six pending PDF and six pending browser. Steering order records separate explicit
+The corpus has 19 cases: six active/default General, pending isolation,
+six pending PDF and six pending browser. The fixed
+[C2 campaign](../docs/operations/manual-agent-evals-core-c2-20261025.md) qualified
+boundary and both order modes with 3/3 batches; it also retains one failed order
+qualification and an inconclusive isolation batch caused by provider quota/unknown usage.
+Steering order records separate explicit
 `one-at-a-time`/`all` profile variants; native same-sender inputs coalesce in FIFO
 order in both modes. These live cases hold one read, not a parallel tool batch or
 a deterministically paused finalization edge; native Go tests cover those races.
@@ -45,7 +49,7 @@ resolved-answer and ordered canonical history evidence; a judge's passing text a
 
 ## Active And Pending Sets
 
-With no `--suite`, `--tag` or `--case` filters, `run` selects only catalog defaults (currently four general cases).
+With no `--suite`, `--tag` or `--case` filters, `run` selects only catalog defaults (currently six general cases).
 Explicit filters select their full matching set. Any selected pending case refuses the whole run before profile/model
 work unless `--include-pending` is present; there is no silent partial execution. `--suite all` is not an opt-in.
 `--include-pending` alone does not widen the default set. For example, with a separately prepared isolated profile:
@@ -61,8 +65,9 @@ The second command deliberately resumes pending tasks; it does not bypass capabi
 `list`/`validate` default to all cases and expose `status`, `default` and optional `pending_reason` per case, including
 in `--json`. `grade`/`compare` still analyze frozen historical evidence without requiring pending execution permission.
 Reports cover the selected trials, not invented passed/skipped records for excluded pending scenarios.
-The expanded General defaults require a fresh owned profile with `bounded_calls`,
-`target_call_budget` and a configured judge; the template shows explicit ceilings, not a running configuration.
+The expanded General defaults require a fresh owned active-tool profile in `one-at-a-time` mode with
+`bounded_calls`, `target_call_budget`, metadata capture and a configured judge. See the
+[steering guide](../docs/reference/core-steering-evals.md); templates show ceilings, not running configurations.
 The original two case definitions/digests are unchanged. An older attach preset may explicitly select
 `--case general.context.followup --case general.interaction.navigation` without enabling bounded C1 cases.
 PDF/browser need their separate domain profiles; a bounded General preset does not admit them.

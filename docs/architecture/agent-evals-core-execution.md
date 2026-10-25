@@ -36,7 +36,7 @@ does not reopen C0 or E0-E5.
 | C1b transport | C0 | [Prompt-bound ordinary answers](../channels/mintclaw.md) through existing native projection | Complete, [#1874](https://github.com/bogdanovich/mintclaw/pull/1874); reviewed green merge including wire UTF-8 regression |
 | C1b | C1a | Ordinary answer/resume native observer and stale/wrong-prompt controls | Complete, [#1881](https://github.com/bogdanovich/mintclaw/pull/1881); qualified in C1q |
 | C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | Complete: #1884, #1882, #1885, #1887 and #1888 merged; both cases qualified 1 + fixed 3/3 on `c69659c5` |
-| C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | In progress; native fixture #1890 merged; owned-profile/driver foundations next |
+| C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | Implemented, #1890-#1893; boundary/order fixed batches qualified; isolation pending quota |
 | C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Queued |
 | C3b | C2 | Native active stop/reuse, distinct from local driver stop | Queued |
 | C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Queued |
@@ -44,7 +44,7 @@ does not reopen C0 or E0-E5.
 | C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Queued |
 | C3f | C1q | Controlled small context and actual compaction witness | Queued |
 | C3g | C1q | Pinned native skill selection and no-skill control | Queued |
-| Qualification | All prerequisites | Fixed attempts/batches, result matrix, explicit promotion | C1 complete; C2/C3 not started; goal remains active |
+| Qualification | All prerequisites | Fixed attempts/batches, result matrix, explicit promotion | C1/C2 fixed campaigns complete; C3 not started; goal remains active |
 
 Split genuine prerequisites when needed, but do not silently redefine contracts
 or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
@@ -55,9 +55,9 @@ or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
 | --- | --- | --- | --- |
 | `general.context.correction` | C1a scripted | Same session, corrected final, old marker absent from final; semantic judge | Qualification pass + fixed 3/3; active/default |
 | `general.interaction.answer` | C1b scripted | Delivered prompt, terminal answer, one paired continuation/tool result | Qualification pass + fixed 3/3; active/default |
-| `general.steering.boundary` | C2 native held-read driver/observer | Active barrier, enqueue/injection, paired result, final census | Pending; live qualification not run |
-| `general.steering.order` | C2 explicit same-sender mode variants | FIFO/coalescence, no orphan/duplicate final; exact edge races in native Go tests | Pending; live qualification not run |
-| `general.session.isolation` | C2 scope-pair implementation in progress | Distinct owners, enclosed held reads, scoped markers/history/delivery | Pending; deterministic controls under validation; not qualified |
+| `general.steering.boundary` | C2 native held-read driver/observer | Active barrier, enqueue/injection, paired result, final census | Qualification + fixed 3/3 pass; active/default |
+| `general.steering.order` | C2 explicit same-sender mode variants | FIFO/coalescence, no orphan/duplicate final; exact edge races in native Go tests | Both mode batches 3/3; one failed qualification retained; active/default |
+| `general.session.isolation` | C2 scope-pair, #1893 | Distinct owners, enclosed held reads, scoped markers/history/delivery | Qualification pass; batch 3 inconclusive from HTTP 429/unknown usage; pending |
 | `general.tools.recovery` | Queued C3a | Failed read then successful pinned-fixture read | Not present |
 | `general.control.stop` | Queued C3b | Terminal abort/queue settlement and successful next request | Not present |
 | `general.approval.denied` | Queued C3c | Exact prompt denied; unchanged independent target/effect census | Not present |
@@ -141,7 +141,8 @@ Operator-owned reports are observations, not hostile-filesystem attestations;
 `compare` summarizes recorded outcomes rather than performing a new grading.
 
 Model-free controls are not live qualification. C1q's separately retained live
-campaign now qualifies these two contracts; ten C2/C3 contracts remain queued.
+campaign qualifies these two contracts; C2 is implemented below and seven C3
+contracts remain queued.
 
 ## C2 Active Tool Prerequisite
 
@@ -178,7 +179,7 @@ rechecks. Real CLI/local-model controls pass for boundary and both recorded orde
 modes, including frozen regrade after deleting live native files. Same-sender
 guidance coalesces in both modes by the native authority API; anonymous queue
 presentation and exact finalization-edge races are separate deterministic tests,
-not falsely claimed live coverage. There is no live C2 qualification/promotion yet.
+not falsely claimed live coverage. The later fixed campaign is recorded below.
 
 The isolation packet adds two source-derived, three-input scopes under one
 six-input contract and a native two-turn concurrency pin. A model-free run
@@ -188,12 +189,18 @@ JSON containers use bounded token scanning rather than the model-input string
 ceiling; nested escaped strings keep their existing bounds. Both scopes must
 retain the same complete post-stop outbox census. Missing peers, foreign markers,
 swapped traces, non-overlapping calls and inconsistent census copies are
-non-passing controls. Final deterministic validation is in progress; no live
-qualification or promotion is claimed.
+non-passing controls. Full Linux/macOS CI, exact-head review and owner root rocket
+preceded the [#1893](https://github.com/bogdanovich/mintclaw/pull/1893) merge.
 
-Next: finish isolation validation, then fixed live qualification of C2. The
-native scheduler remains the sole steering authority; C2 and the overall goal
-are incomplete.
+The [fixed C2 campaign](../operations/manual-agent-evals-core-c2-20261025.md)
+retains 12 pass, 1 fail and 3 inconclusive trials on immutable `49f7fc7e6`.
+Boundary and both explicit order modes passed their fixed 3/3 batches and join
+defaults (six total). One order qualification failed after Gemini HTTP 429/unknown
+usage; it is retained, not relabeled. Isolation qualification passed, but its
+batch's shared budget became unknown after another HTTP 429, refusing all three
+judges; isolation stays pending. No retry or candidate change followed failure.
+The native scheduler remains the sole steering authority. Continue C3's seven
+contracts; the overall goal is active and incomplete. PDF/browser remain deferred.
 
 ## C1q Provider Primitive
 

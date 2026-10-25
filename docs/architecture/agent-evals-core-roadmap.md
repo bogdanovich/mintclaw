@@ -23,8 +23,11 @@ Historical grade/compare remain available without authorizing new target work.
 
 The two original defaults below remain unchanged. The
 [C1 fixed qualification](../operations/manual-agent-evals-core-c1-20261025.md)
-adds correction and answer/resume, making four General defaults with an explicit
-owned run-wide budget. It does not supersede the red full-suite record.
+adds correction and answer/resume. The
+[C2 fixed campaign](../operations/manual-agent-evals-core-c2-20261025.md) adds
+boundary and order, making six General defaults with an explicit owned run-wide
+budget and active-tool profile. Isolation remains pending after quota/unknown-usage
+blocked its batch. These records do not supersede the red full-suite record.
 
 | Case | Actual contract | Important limit |
 | --- | --- | --- |
@@ -33,8 +36,8 @@ owned run-wide budget. It does not supersede the red full-suite record.
 | `general.context.correction` | Replace A with B, recall B, reject stale A in the last final; fixed 3/3 | Sequential conversation, not in-flight steering |
 | `general.interaction.answer` | Answer exact delivered ordinary prompt; native terminal answer/history pairing and recall; fixed 3/3 | MintClaw wire coverage, not Telegram/PDF UI |
 
-The original two passed in the recorded full run; the new two have their separate
-C1 record. The combined four-default suite was not run in that campaign.
+The original two passed in the recorded full run; the later cases have separate
+C1/C2 records. The combined six-default suite was not paid-rerun in those campaigns.
 
 ## Investigation And Risk Map
 
@@ -70,7 +73,8 @@ its current contract instead of treating all control modes as interchangeable.
 ## Proposed Scenarios
 
 The sections below specify the twelve target contracts. Correction and
-answer/resume are qualified C1 defaults; the other ten definitions remain queued in the ledger.
+answer/resume are qualified C1 defaults. C2 implements steering and isolation;
+seven C3 definitions remain queued in the ledger.
 P0 is the first useful expansion; P1 follows after its required harness support. Use synthetic random
 markers and local fixtures, never production conversations or accounts. Fixed
 user actions are preferable to an LLM user for these mechanical regressions.
