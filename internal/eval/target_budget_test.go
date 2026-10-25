@@ -66,6 +66,7 @@ func TestTargetBudgetVerdictsAndFrozenIdentity(t *testing.T) {
 		}},
 		{"unknown_usage", Inconclusive, func(p *evaltarget.Proof) {
 			p.Snapshot.UnknownUsage, p.Snapshot.UsageKnown, p.Snapshot.StoppedReason = 1, false, "unknown_usage"
+			p.Snapshot.ReportedTokens = 0
 		}},
 		{"in_flight", Inconclusive, func(p *evaltarget.Proof) {
 			p.Snapshot.Calls, p.Snapshot.InFlight, p.Snapshot.UsageKnown = 2, 1, false
@@ -217,6 +218,7 @@ func TestTargetBudgetFrozenGradeCannotBypassRequiredProofOrUnknown(t *testing.T)
 				source.TargetBudget = nil
 			case "unknown":
 				proof.Snapshot.UnknownUsage, proof.Snapshot.UsageKnown, proof.Snapshot.StoppedReason = 1, false, "unknown_usage"
+				proof.Snapshot.ReportedTokens = 0
 			case "exhausted":
 				proof.Snapshot.StoppedReason = "calls"
 			case "corrupt":
