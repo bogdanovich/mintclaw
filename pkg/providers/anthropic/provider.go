@@ -36,7 +36,9 @@ type Provider struct {
 }
 
 func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
-	return providercapabilities.ProviderCapabilities{Thinking: true, CallerMediatedTools: true}
+	return providercapabilities.ProviderCapabilities{
+		Thinking: true, CallerMediatedTools: true, OutputTokenLimit: true,
+	}
 }
 
 func NewProvider(token string) *Provider {
