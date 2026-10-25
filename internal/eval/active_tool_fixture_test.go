@@ -134,8 +134,133 @@ func TestActiveToolFixtureMissingCanceledAndConcurrentControls(t *testing.T) {
 		}
 	}
 	observation, err := fixture.snapshot(activeToolArgs{TrialID: "trial-a", Slot: 1})
-	if err != nil || observation.State != "canceled" || observation.ReleaseSequence != 0 {
+	if err != nil || observation.State != "canceled" || observation.Cancellation != "context_canceled" ||
+		observation.ReleaseSequence != 0 {
 		t.Fatal("cancellation receipt changed", observation, err)
+	}
+}
+
+func TestActiveToolFixtureNativeMCPCancellationSettlesWithoutRelease(t *testing.T) {
+	fixture := newTestActiveToolFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	manager := nativemcp.NewManager()
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ConnectServer(ctx, "fixture", config.MCPServerConfig{
+		Enabled: true, Type: "http", URL: fixture.url,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	args := activeToolArgs{TrialID: "native-cancel", Slot: 1}
+	if err := fixture.register(args.TrialID, "session-cancel", args.Slot); err != nil {
+		t.Fatal(err)
+	}
+	fixture.mu.Lock()
+	settled := fixture.barriers[args].settled
+	fixture.mu.Unlock()
+	callCtx, cancelCall := context.WithCancel(ctx)
+	defer cancelCall()
+	result := make(chan error, 1)
+	go func() {
+		_, err := manager.CallTool(callCtx, "fixture", activeToolName,
+			map[string]any{"trial_id": args.TrialID, "slot": args.Slot})
+		result <- err
+	}()
+	if err := fixture.waitEntered(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	cancelCall()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled native read returned success")
+		}
+	case <-ctx.Done():
+		t.Fatal("native MCP client did not finish cancellation")
+	}
+	select {
+	case <-settled:
+	case <-ctx.Done():
+		t.Fatal("client cancellation did not settle the native server read")
+	}
+	observed, err := fixture.snapshot(args)
+	if err != nil || observed.State != "canceled" || observed.Cancellation != "context_canceled" ||
+		observed.ReleaseSequence != 0 ||
+		observed.EnteredSequence != 1 || observed.SettledSequence != 2 {
+		t.Fatal("missing unreleased native cancellation proof", observed, err)
+	}
+}
+
+func TestActiveToolFixtureDeadlineCannotBecomeNativeCancellation(t *testing.T) {
+	fixture := newTestActiveToolFixture(t)
+	args := activeToolArgs{TrialID: "deadline", Slot: 1}
+	if err := fixture.register(args.TrialID, "session-deadline", args.Slot); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := fixture.call(ctx, nil, args)
+		result <- err
+	}()
+	if err := fixture.waitEntered(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err == nil {
+		t.Fatal("expired read returned success")
+	}
+	observed, err := fixture.snapshot(args)
+	if err != nil || observed.State != "canceled" || observed.Cancellation != "deadline_exceeded" ||
+		observed.ReleaseSequence != 0 || observed.SettledSequence != 2 {
+		t.Fatal("deadline was mistaken for native cancellation", observed, err)
+	}
+}
+
+func TestActiveToolFixtureShutdownClosesNativeMCPSessions(t *testing.T) {
+	fixture := newTestActiveToolFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	manager := nativemcp.NewManager()
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ConnectServer(ctx, "fixture", config.MCPServerConfig{
+		Enabled: true, Type: "http", URL: fixture.url,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	args := activeToolArgs{TrialID: "native-shutdown", Slot: 1}
+	if err := fixture.register(args.TrialID, "session-shutdown", args.Slot); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		response, err := manager.CallTool(ctx, "fixture", activeToolName,
+			map[string]any{"trial_id": args.TrialID, "slot": args.Slot})
+		if err == nil && response != nil && response.IsError {
+			err = errActiveToolFixture
+		}
+		result <- err
+	}()
+	if err := fixture.waitEntered(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.shutdown(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("closed native read returned success")
+		}
+	case <-ctx.Done():
+		t.Fatal("native MCP client remained active after fixture shutdown")
+	}
+	observed, err := fixture.snapshot(args)
+	if err != nil || observed.State != "closed" || observed.Cancellation != "" || observed.ReleaseSequence != 0 {
+		t.Fatal("host close was mistaken for request cancellation", observed, err)
+	}
+	for range fixture.mcp.Sessions() {
+		t.Fatal("fixture retained an SDK session after shutdown")
 	}
 }
 
@@ -159,7 +284,8 @@ func TestActiveToolFixtureShutdownUnblocksOwnedCalls(t *testing.T) {
 		t.Fatal("shutdown was confused with driver release")
 	}
 	observation, err := fixture.snapshot(args)
-	if err != nil || observation.State != "closed" || observation.ReleaseSequence != 0 {
+	if err != nil || observation.State != "closed" || observation.Cancellation != "" ||
+		observation.ReleaseSequence != 0 {
 		t.Fatal("missing closed observation", observation, err)
 	}
 	if fixture.register("after-close", "session-a", 1) == nil {

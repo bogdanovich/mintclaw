@@ -1,6 +1,6 @@
 # Active Tool Fixture
 
-The internal eval fixture is a prerequisite for C2, not a completed steering
+The internal eval fixture underpins C2, but is not by itself a completed steering
 eval, a public tool or permission to enable arbitrary MCP servers. Ordinary eval
 profile admission still refuses MCP; the explicit owned `active_tool` profile
 below admits only this fixture. No live/default case is added by these primitives.
@@ -27,6 +27,19 @@ name files, URLs, shell commands or operations with external effects.
 - A missing call, cancellation, shutdown or timeout is not successful release.
   Shutdown unblocks owned calls; it does not assert native gateway settlement.
 
+The fixture uses bounded, stateful MCP SDK sessions so the SDK's native
+cancellation notification reaches the session owning the held request. A
+stateless per-request session cannot perform that correlation. Idle sessions
+expire after five minutes; owned shutdown closes SDK sessions around HTTP shutdown
+and blocks further HTTP admission. No second cancellation protocol is added.
+
+Canceled observations distinguish `cancellation: context_canceled` from
+`cancellation: deadline_exceeded`. A host shutdown is `closed` with no cancellation
+cause, even when closing the SDK also cancels a request context. Released receipts
+omit this optional field, preserving existing frozen C2 observations. A timeout,
+client close or fixture cancellation alone is still not proof that native
+AgentLoop `/stop` aborted and settled its owner; C3b needs that separate witness.
+
 The fixture observes a local MCP handler, **not** native AgentLoop ownership or
 steering injection, nor does it attest against a hostile local operator. A later
 C2 observer must join this activity with the native
@@ -43,7 +56,8 @@ asynchronous event logging may drop records, so missing evidence stays unknown.
 
 Controls use the real native MCP Manager over HTTP and synthetic tool inputs,
 with no paid model or production profile. They cover active-before-release,
-single-use identity, missing calls, cancellation, the concurrency limit,
+single-use identity, missing calls, actual native MCP client cancellation,
+deadline/cancellation separation, the concurrency limit, native SDK-session
 shutdown, HTTP admission and refusal to serialize private host state. These
 controls are not live model qualification.
 
@@ -90,7 +104,8 @@ The existing bounded passive session-history reader is shared with C1 answer
 observation. Its file anchoring, raw privacy inspection, equal metadata reads
 and native JSONL inspection remain unchanged; it never opens a recovering store.
 
-These foundations do not yet define or qualify boundary/order/isolation cases.
-Their final oracle must join native scope/trace, enqueue/injection, ordered
-emitted-batch results and final delivery, with explicit mode controls and
-independent two-session routes. The overall C2 packet remains incomplete.
+The [C2 case-level contracts](../architecture/agent-evals-core-execution.md)
+join native scope/trace, enqueue/injection, ordered emitted-batch results and
+final delivery, with explicit mode controls and independent two-session routes.
+Their fixed qualification outcomes remain unchanged. These cancellation
+primitives do not implement or qualify the forthcoming C3b stop/reuse case.
