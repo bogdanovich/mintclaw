@@ -34,8 +34,8 @@ does not reopen C0 or E0-E5.
 | C0 | None | Two active/default general cases; PDF/browser pending; proposal | Complete, #1868 |
 | C1a | C0 | Per-case narrowing and three-turn correction with final-only absence oracle | Complete, [#1872](https://github.com/bogdanovich/mintclaw/pull/1872); 14/14 CI and reviewed merge |
 | C1b transport | C0 | [Prompt-bound ordinary answers](../channels/mintclaw.md) through existing native projection | Complete, [#1874](https://github.com/bogdanovich/mintclaw/pull/1874); reviewed green merge including wire UTF-8 regression |
-| C1b | C1a | Ordinary answer/resume native observer and stale/wrong-prompt controls | Complete, [#1881](https://github.com/bogdanovich/mintclaw/pull/1881); candidate remains pending live qualification |
-| C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | In progress: #1884, #1882, #1885 and #1887 merged; runner/frozen checks in #1888; live qualification not started |
+| C1b | C1a | Ordinary answer/resume native observer and stale/wrong-prompt controls | Complete, [#1881](https://github.com/bogdanovich/mintclaw/pull/1881); qualified in C1q |
+| C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | Complete: #1884, #1882, #1885, #1887 and #1888 merged; both cases qualified 1 + fixed 3/3 on `c69659c5` |
 | C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | Queued |
 | C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Queued |
 | C3b | C2 | Native active stop/reuse, distinct from local driver stop | Queued |
@@ -44,7 +44,7 @@ does not reopen C0 or E0-E5.
 | C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Queued |
 | C3f | C1q | Controlled small context and actual compaction witness | Queued |
 | C3g | C1q | Pinned native skill selection and no-skill control | Queued |
-| Qualification | All prerequisites | Fixed attempts/batches, result matrix, explicit promotion | Not started |
+| Qualification | All prerequisites | Fixed attempts/batches, result matrix, explicit promotion | C1 complete; C2/C3 not started; goal remains active |
 
 Split genuine prerequisites when needed, but do not silently redefine contracts
 or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
@@ -53,8 +53,8 @@ or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
 
 | Scenario | Definition/Harness | Required Native Evidence | Live/Default |
 | --- | --- | --- | --- |
-| `general.context.correction` | C1a scripted candidate | Same session, corrected final, old marker absent from final; semantic judge | Not run; pending, non-default |
-| `general.interaction.answer` | C1b scripted candidate | Delivered prompt, terminal answer, one paired continuation/tool result | Not run; pending, non-default |
+| `general.context.correction` | C1a scripted | Same session, corrected final, old marker absent from final; semantic judge | Qualification pass + fixed 3/3; active/default |
+| `general.interaction.answer` | C1b scripted | Delivered prompt, terminal answer, one paired continuation/tool result | Qualification pass + fixed 3/3; active/default |
 | `general.steering.boundary` | Queued C2 | Active barrier, enqueue/injection, ordered emitted-batch results | Not present |
 | `general.steering.order` | Queued C2 | FIFO/mode injection, late-input ownership, no orphan/duplicate final | Not present |
 | `general.session.isolation` | Queued C2 | Two distinct scopes and correctly routed markers/injections | Not present |
@@ -82,11 +82,12 @@ outcome; a required judge evaluates grounded correction. `final_response_absent`
 is final-only; existing `response_absent` stays transcript-wide. An earlier
 acknowledgement of A is legitimate.
 
-There are now 16 cases: two active/default general, pending correction and answer, six
-pending PDF and six pending browser. Bare `run` keeps its two-case default.
-Explicit `--suite general` selects the pending candidate too and requires
-`--include-pending`; existing active case IDs do not. C1a claims no live pass or
-promotion: qualification bounds and the fixed batch are still pending.
+At the C1a/C1b implementation merges, there were 16 cases and two defaults;
+correction/answer were pending. C1a alone claimed no live pass. The later
+[C1 qualification](../operations/manual-agent-evals-core-c1-20261025.md) records
+one attempt and fixed 3/3 batches for both, so defaults now contain four General
+cases. Their native budget/owned-profile requirement is not bypassed by promotion.
+Six PDF and six browser cases stay pending/non-default.
 
 The [fourteen-case baseline](../operations/manual-agent-evals-baseline-20261024.md)
 remains red and unchanged. No old scenario, fixture or result is rewritten.
@@ -110,7 +111,7 @@ PR-root approval. No test was skipped or relaxed to hide the shutdown race.
 
 ## C1b Contract
 
-The pending `general.interaction.answer` definition sends three scripted inputs:
+The `general.interaction.answer` definition sends three scripted inputs:
 ask one native email/paper question, answer `paper` through the delivered prompt,
 then ask for the saved choice. This first pack deliberately supports that one
 synthetic ordinary choice, not arbitrary questions, protected facts, approval
@@ -139,8 +140,8 @@ uses native passive parsers and the frozen observations, not current files.
 Operator-owned reports are observations, not hostile-filesystem attestations;
 `compare` summarizes recorded outcomes rather than performing a new grading.
 
-Model-free controls are not live qualification. Both core candidates remain
-pending until C1q budget enforcement and their fixed qualification batches.
+Model-free controls are not live qualification. C1q's separately retained live
+campaign now qualifies these two contracts; ten C2/C3 contracts remain queued.
 
 ## C1q Provider Primitive
 
@@ -177,14 +178,26 @@ Its real CLI/local-model integration is deterministic evidence, not a live model
 qualification. The dependent runner adds one run-wide ceiling and retains the
 terminal proof; offline grading checks mandatory manifest requirements before
 judge work and refuses omission of the requested raw privacy observation.
-Both new General candidates remain pending/non-default. Their new
-budget requirement changes only these unqualified candidate digests; no original
+Both General cases passed the fixed C1 qualification. Their earlier C1q
+budget requirement changed only the then-unqualified candidate digests; no original
 default or PDF/browser case is rewritten.
 
-Current unqualified C1q case identities (the added `bounded_calls` requirement
+Qualified C1q case identities (the added `bounded_calls` requirement
 is part of the definition, not a relabeling of an earlier run):
 
 | Case | SHA-256 |
 | --- | --- |
 | `general.context.correction` | `2fd7760a9d5f54a530a48b3197f0440a02759c3ca42fc837d99af1823c82240b` |
 | `general.interaction.answer` | `a8eaee4e5515b36c0f320a30a96c7bfc2ea853d11f5670a54ec79ec50c1b20f4` |
+
+## C1 Qualification
+
+The [2026-10-25 record](../operations/manual-agent-evals-core-c1-20261025.md)
+preserves all four planned runs on merged `c69659c5`: 1/1 qualification and 3/3
+fixed batch per case. All eight trials passed hard checks and required judges;
+all owned children exited cleanly, privacy scans observed no known leak, and
+native budgets retained 24 completed calls total with no unknown usage.
+Answer-batch routed-model telemetry remains explicitly partial (7/9 records);
+required answer/history witnesses and the independent nine-call budget passed.
+No production deploy, paid CI, domain execution or rerun-until-green occurred.
+Only these two cases are promoted. The overall goal is not complete; next is C2.

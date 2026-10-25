@@ -48,11 +48,11 @@ func TestCoreCorrectionRunsThreeTurnsAndRejectsStaleFinal(t *testing.T) {
 		t.Fatal(err)
 	}
 	items, err := Select(corpus, Selection{IDs: []string{"general.context.correction"}})
-	if err != nil || len(items) != 1 || !errors.Is(CheckRunAvailability(items, false), ErrPendingCases) {
-		t.Fatal("unqualified correction is not an explicit pending candidate", err)
+	if err != nil || len(items) != 1 || CheckRunAvailability(items, false) != nil || !items[0].Availability().Default {
+		t.Fatal("qualified correction is not active/default", err)
 	}
-	if _, err = Run(t.Context(), Preset{}, items, RunOptions{}); !errors.Is(err, ErrPendingCases) {
-		t.Fatal("direct Run bypassed pending candidate admission", err)
+	if _, err = Run(t.Context(), Preset{}, items, RunOptions{}); !errors.Is(err, ErrUnsafeTarget) {
+		t.Fatal("promotion bypassed mandatory target-budget admission", err)
 	}
 	for _, test := range []struct {
 		name, final string

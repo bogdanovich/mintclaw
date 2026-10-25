@@ -4,7 +4,7 @@ This versioned corpus is for occasional real-agent evaluation, not required live
 The [design](../docs/architecture/agent-evals-design.md),
 [roadmap](../docs/architecture/agent-evals-roadmap.md), and
 [goal](../docs/architecture/agent-evals-goal.md) define the program.
-The [core regression follow-up](../docs/architecture/agent-evals-core-roadmap.md) proposes the next general cases;
+The [core regression follow-up](../docs/architecture/agent-evals-core-roadmap.md) tracks the next general cases;
 PDF/browser qualification is currently deferred, not passed.
 
 ## Current Interface
@@ -30,23 +30,26 @@ browser/owned-target execution and baseline comparison have their own evidence c
 live scenario qualification.
 General cases require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
-The corpus has 16 cases: two active/default general, two pending general candidates, six pending PDF and six pending browser.
+The corpus has 16 cases: four active/default general, six pending PDF and six pending browser.
 The [full baseline](../docs/operations/manual-agent-evals-baseline-20261024.md) remains nonpassing. Pending cases
 remain inspectable offline, but no default live run includes them. Corpus presence or a valid manifest is not
 domain qualification; the [browser guide](../docs/operations/manual-agent-evals-browser.md) retains its limits.
-The pending core candidates are correction and native ordinary answer/resume. The latter requires delivered-prompt,
+Correction and native ordinary answer/resume passed their fixed
+[C1 qualification batches](../docs/operations/manual-agent-evals-core-c1-20261025.md). The latter requires delivered-prompt,
 resolved-answer and ordered canonical history evidence; a judge's passing text alone cannot satisfy it. The
 [execution ledger](../docs/architecture/agent-evals-core-execution.md#c1b-contract) describes bounds and frozen regrading.
 
 ## Active And Pending Sets
 
-With no `--suite`, `--tag` or `--case` filters, `run` selects only catalog defaults (currently two general cases).
+With no `--suite`, `--tag` or `--case` filters, `run` selects only catalog defaults (currently four general cases).
 Explicit filters select their full matching set. Any selected pending case refuses the whole run before profile/model
 work unless `--include-pending` is present; there is no silent partial execution. `--suite all` is not an opt-in.
 `--include-pending` alone does not widen the default set. For example, with a separately prepared isolated profile:
 
 ```sh
-mintclaw eval run --preset /private/preset.json --out /private/reports
+MINTCLAW_HOME=/private/fresh-profile MINTCLAW_CONFIG=/private/fresh-profile/config.json \
+  mintclaw eval run --start-target --preset /private/fresh-profile/reports/preset.json \
+    --out /private/fresh-profile/reports
 mintclaw eval run --suite pdf --include-pending --preset /private/preset.json --out /private/reports
 ```
 
@@ -54,7 +57,11 @@ The second command deliberately resumes pending tasks; it does not bypass capabi
 `list`/`validate` default to all cases and expose `status`, `default` and optional `pending_reason` per case, including
 in `--json`. `grade`/`compare` still analyze frozen historical evidence without requiring pending execution permission.
 Reports cover the selected trials, not invented passed/skipped records for excluded pending scenarios.
-Explicit `--suite general` includes pending general candidates; omit filters for the unchanged default baseline.
+The expanded General defaults require a fresh owned profile with `bounded_calls`,
+`target_call_budget` and a configured judge; the template shows explicit ceilings, not a running configuration.
+The original two case definitions/digests are unchanged. An older attach preset may explicitly select
+`--case general.context.followup --case general.interaction.navigation` without enabling bounded C1 cases.
+PDF/browser need their separate domain profiles; a bounded General preset does not admit them.
 
 Optional root `catalog.json` is version 1 with exactly one entry per suite:
 

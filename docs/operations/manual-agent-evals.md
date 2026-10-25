@@ -8,15 +8,20 @@ guarantee that every current scenario passes; the new record preserves target, d
 
 PDF/browser are now **pending**, not fixed or passed. The [core follow-up](../architecture/agent-evals-core-roadmap.md)
 records the operator decision and proposed general regressions. `run` without suite/tag/case filters selects only
-the two active/default general cases. Explicit filters (including `--suite all`) that select pending cases refuse
+the four active/default general cases. Explicit filters (including `--suite all`) that select pending cases refuse
 before profile/model work unless `--include-pending` is supplied. That flag alone does not broaden defaults or
 bypass isolation/authority admission. Offline `list`/`validate` show all cases with status, default
 membership and deferral reason. `grade`/`compare` remain available for historical evidence. A general-only pass
 does not replace the red full-suite baseline. See the [catalog contract](../../evals/README.md#active-and-pending-sets).
 
 The [core execution ledger](../architecture/agent-evals-core-execution.md) now tracks C1-C3 implementation.
-Correction and answer/resume candidates are individually pending: the corpus has 16 cases, still only two defaults. Explicit
-`--suite general` includes candidates and may require `--include-pending`; omit selection filters for defaults.
+Correction and answer/resume passed their fixed
+[C1 qualification batches](manual-agent-evals-core-c1-20261025.md): the corpus has 16 cases and four General defaults.
+The expanded default set requires a fresh owned profile (`--start-target`) with `bounded_calls`,
+`target_call_budget` and a configured judge, as shown in the
+[template](../../evals/presets/local.template.json) and [budget contract](../reference/owned-eval-call-budget.md).
+Old attach presets can explicitly select `general.context.followup` and `general.interaction.navigation`.
+The combined four-default suite was not run in that campaign, and ten C2/C3 contracts remain unimplemented.
 
 `mintclaw eval list` and `validate` remain offline. `run` attaches to an already prepared isolated loopback gateway
 on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,

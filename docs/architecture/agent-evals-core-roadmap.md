@@ -21,15 +21,20 @@ cases; execution refuses any selected pending case without `--include-pending`,
 including explicit `--suite all`. The flag alone does not widen the default set.
 Historical grade/compare remain available without authorizing new target work.
 
-The default is currently only these two implemented cases:
+The two original defaults below remain unchanged. The
+[C1 fixed qualification](../operations/manual-agent-evals-core-c1-20261025.md)
+adds correction and answer/resume, making four General defaults with an explicit
+owned run-wide budget. It does not supersede the red full-suite record.
 
 | Case | Actual contract | Important limit |
 | --- | --- | --- |
 | `general.context.followup` | Recall a synthetic marker in a second request; native session stays the same; required semantic judge | Not active-turn steering, restart or compaction |
 | `general.interaction.navigation` | Ask a native ordinary question and cancel its delivered prompt; retained waiting/terminal records and required judge | Not successful answer/resume, active-turn stop or PDF controls |
+| `general.context.correction` | Replace A with B, recall B, reject stale A in the last final; fixed 3/3 | Sequential conversation, not in-flight steering |
+| `general.interaction.answer` | Answer exact delivered ordinary prompt; native terminal answer/history pairing and recall; fixed 3/3 | MintClaw wire coverage, not Telegram/PDF UI |
 
-Both passed in the recorded full run. Changing selection is not a new live
-baseline or a claim that new candidates below already pass.
+The original two passed in the recorded full run; the new two have their separate
+C1 record. The combined four-default suite was not run in that campaign.
 
 ## Investigation And Risk Map
 
@@ -65,7 +70,7 @@ its current contract instead of treating all control modes as interchangeable.
 ## Proposed Scenarios
 
 The sections below specify the twelve target contracts. Correction and
-answer/resume have loadable **pending** candidates; the other definitions remain queued in the ledger.
+answer/resume are qualified C1 defaults; the other ten definitions remain queued in the ledger.
 P0 is the first useful expansion; P1 follows after its required harness support. Use synthetic random
 markers and local fixtures, never production conversations or accounts. Fixed
 user actions are preferable to an LLM user for these mechanical regressions.
@@ -205,7 +210,7 @@ Budget: 2 inputs plus control, 1 judge call, 5 minutes.
 - Future presets use isolated synthetic workspaces and least privilege. No
   credentials, real URLs/accounts, private transcripts or artifacts in Git.
 - The scenario budgets above are proposed ceilings, not latency predictions.
-  The two pending core candidates require the explicit owned, run-wide
+  The two qualified core cases require the explicit owned, run-wide
   [target call budget](../reference/owned-eval-call-budget.md), shared across
   cases/repetitions rather than attributed to individual trials. New C2/C3
   packs must retain native call/token bounds before promotion; user-turn limits
@@ -233,7 +238,7 @@ Budget: 2 inputs plus control, 1 judge call, 5 minutes.
 | Packet | Status | Acceptance And Stop |
 | --- | --- | --- |
 | C0: Catalog + proposal | Complete, #1868 | Default = 2 general; 12 domain cases pending; deliberate opt-in; unchanged identities/historical eligibility |
-| C1: Correction + answer/resume | In progress | Two new cases, answer evidence, stale-answer controls, bounded live qualification |
+| C1: Correction + answer/resume | Complete | Two new cases, answer evidence, stale-answer controls, native budget/frozen admission and fixed live 3/3 batches |
 | C2: In-flight evidence + steering | Authorized, queued | One bounded native-boundary fixture/observer, steering/order and two-session isolation; no copied scheduler or timing-only oracle |
 | C3: Focused P1 packs | All seven authorized, queued | Admit prerequisites; separate lifecycle/tools/delivery/skill scope and stop criteria |
 
