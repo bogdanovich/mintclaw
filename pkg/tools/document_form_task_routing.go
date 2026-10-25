@@ -205,7 +205,7 @@ func (tool *DocumentTool) routeFormTaskWorkflow(
 	if view.State == document.FormTaskReady {
 		// Protected continuation starts with one native routing call. Keep the
 		// entire newly authorized request within the existing live-text ceiling.
-		wanted := view.HandoffTextBytes + 256
+		wanted := view.HandoffTextBytes + max(len(formTaskSwitchPrefix), len(formTaskIndependentPrefix))
 		if wanted > toolshared.ToolLiveContextTextAllowance(ctx) {
 			return documentFormTaskResult(view, "handoff_context_capacity")
 		}
@@ -233,8 +233,10 @@ func (tool *DocumentTool) routeFormTaskWorkflow(
 			projection.HandoffFresh = true
 			encoded, _ := json.Marshal(projection)
 			result.ForLLM = string(encoded)
-			result.ContextText = "The operator selected a new task. The previous PDF draft is preserved. " +
-				"Follow only this newly authorized request (and its attached media); ask its purpose if unstated:\n" + handoff.Text
+			result.ContextText = formTaskSwitchPrefix + handoff.Text
+			if handoff.Progress.State != document.FormIntakeSuspended {
+				result.ContextText = formTaskIndependentPrefix + handoff.Text
+			}
 			result.ContextMedia = handoff.Media
 			result.ContextMediaRequiresVision = requiresVision
 			result.ContextInput = &toolshared.ToolContextInput{Text: handoff.Text, Media: handoff.Media}
