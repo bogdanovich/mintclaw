@@ -1115,8 +1115,8 @@ func TestResumeRejectsUnknownModelBeforeChangingDurableSelection(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	deps.resolveModel = func(model string) (string, string, error) {
-		return "", "", fmt.Errorf("model %q not found", model)
+	deps.resolveModel = func(model string) (frontend.ModelSelection, error) {
+		return frontend.ModelSelection{}, fmt.Errorf("model %q not found", model)
 	}
 
 	for _, args := range [][]string{
@@ -1149,11 +1149,13 @@ func TestCodePersistsDefaultSelectionBeforePromptAdmission(t *testing.T) {
 	project := t.TempDir()
 	now := time.Date(2026, time.August, 10, 14, 45, 0, 0, time.UTC)
 	deps := testDependencies(home, project, &now)
-	deps.resolveModel = func(model string) (string, string, error) {
+	deps.resolveModel = func(model string) (frontend.ModelSelection, error) {
 		if strings.TrimSpace(model) != "" {
 			t.Fatalf("default resolution input = %q, want empty", model)
 		}
-		return "default-coding", "default-provider", nil
+		return frontend.ModelSelection{
+			Model: "default-coding", Provider: "default-provider", ReasoningEffort: "xhigh",
+		}, nil
 	}
 	deps.turnRunner = codingTurnRunnerFunc(func(
 		ctx context.Context,
@@ -1163,8 +1165,14 @@ func TestCodePersistsDefaultSelectionBeforePromptAdmission(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if persisted.Model != "default-coding" || persisted.Provider != "default-provider" {
-			t.Fatalf("pre-admission selection = model %q provider %q", persisted.Model, persisted.Provider)
+		if persisted.Model != "default-coding" || persisted.Provider != "default-provider" ||
+			persisted.ReasoningEffort != "xhigh" {
+			t.Fatalf(
+				"pre-admission selection = model %q provider %q reasoning %q",
+				persisted.Model,
+				persisted.Provider,
+				persisted.ReasoningEffort,
+			)
 		}
 		baseline, err := request.Store.LoadRepositoryBaselineWithLease(
 			ctx,
@@ -1216,8 +1224,8 @@ func TestResumePersistsMissingSelectionBeforePromptAdmission(t *testing.T) {
 	if err := store.Save(metadata); err != nil {
 		t.Fatal(err)
 	}
-	deps.resolveModel = func(model string) (string, string, error) {
-		return "recovered-default", "recovered-provider", nil
+	deps.resolveModel = func(model string) (frontend.ModelSelection, error) {
+		return frontend.ModelSelection{Model: "recovered-default", Provider: "recovered-provider"}, nil
 	}
 	deps.turnRunner = codingTurnRunnerFunc(func(
 		ctx context.Context,
@@ -1500,12 +1508,12 @@ func testDependencies(home, cwd string, now *time.Time) dependencies {
 		loadConfig: func() (*config.Config, error) {
 			return config.DefaultConfig(), nil
 		},
-		resolveModel: func(model string) (string, string, error) {
+		resolveModel: func(model string) (frontend.ModelSelection, error) {
 			resolved := strings.TrimSpace(model)
 			if resolved == "" {
 				resolved = "fixture-alias"
 			}
-			return resolved, "fixture", nil
+			return frontend.ModelSelection{Model: resolved, Provider: "fixture"}, nil
 		},
 		turnRunner: codingTurnRunnerFunc(func(
 			ctx context.Context,

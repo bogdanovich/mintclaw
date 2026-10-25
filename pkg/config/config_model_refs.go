@@ -114,6 +114,9 @@ func (c *Config) ValidateModelReferences() error {
 	if err := validateOptional("agents.defaults.model_name", defaults.ModelName); err != nil {
 		return err
 	}
+	if err := validateOptional("coding.defaults.model", c.Coding.Defaults.Model); err != nil {
+		return err
+	}
 	if err := validateFallbacks("agents.defaults.model_fallbacks", defaults.ModelFallbacks); err != nil {
 		return err
 	}

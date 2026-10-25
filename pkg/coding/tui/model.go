@@ -1142,6 +1142,10 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		if m.commandPanel == commandPanelModel {
 			return true, m.openModelSearch()
 		}
+	case "s":
+		if m.commandPanel == commandPanelModel && m.pendingModel != "" {
+			return true, m.selectHighlightedModelOrReasoning(false)
+		}
 	case "ctrl+r":
 		m.supersedeEvidenceRequest()
 		if activeWork(m.snapshot.Activity) || m.initialTurnPending {
@@ -1170,7 +1174,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		if m.commandPanel == commandPanelModel {
-			return true, m.selectHighlightedModelOrReasoning()
+			return true, m.selectHighlightedModelOrReasoning(true)
 		}
 		draft := m.composer.Value()
 		m.pruneDetachedAttachments()

@@ -86,6 +86,27 @@ or replaces it when resuming an explicit thread. While the TUI is idle,
 3. choose `Provider default` or a verified reasoning level for that exact
    provider/model route.
 
+On the final reasoning screen, `Enter` applies the selection to the current
+thread and saves it under `coding.defaults` for future coding threads. Press
+`s` instead to apply it only to the current thread. These coding defaults are
+independent from `agents.defaults`, so changing them does not change the model
+used by the always-running gateway agent. An existing thread always keeps its
+own persisted selection when resumed.
+
+The saved shape is:
+
+```json
+{
+  "coding": {
+    "defaults": {
+      "model": "gpt-6.1-sol",
+      "provider": "openai",
+      "reasoning_effort": "xhigh"
+    }
+  }
+}
+```
+
 Press `/` inside the picker to search configured aliases, providers, and
 provider-native model IDs. The default picker never invents catalog entries:
 it contains only enabled `model_list` routes from the loaded configuration.
@@ -98,7 +119,8 @@ outside configuration and transcripts under the active MintClaw home at
 `coding/model-recents.v1.json`; stale routes are hidden when they are no longer
 configured.
 
-`/model provider/name [reasoning-effort]` is the scriptable equivalent. A
+`/model provider/name [reasoning-effort]` is the session-only scriptable
+equivalent. A
 unique alias may be used without the provider; an ambiguous alias is resolved
 only by the current provider and otherwise requires `provider/name`.
 Unsupported combinations are rejected before the thread changes. A successful

@@ -32,7 +32,7 @@ type dependencies struct {
 	now             func() time.Time
 	newThreadID     func() string
 	turnRunner      codingTurnRunner
-	resolveModel    func(string) (string, string, error)
+	resolveModel    func(string) (frontend.ModelSelection, error)
 	terminal        func(io.Reader, io.Writer, bool) tui.TerminalCapabilities
 	newController   func(codingTurnRequest, bool) (frontend.Controller, error)
 	runTUI          func(context.Context, frontend.Controller, tui.Options) error
@@ -277,12 +277,13 @@ func prepareNewThread(
 	if metadataErr != nil {
 		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, metadataErr
 	}
-	resolvedModel, resolvedProvider, err := deps.resolveModel(model)
+	selection, err := deps.resolveModel(model)
 	if err != nil {
 		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, err
 	}
-	metadata.Model = resolvedModel
-	metadata.Provider = resolvedProvider
+	metadata.Model = selection.Model
+	metadata.Provider = selection.Provider
+	metadata.ReasoningEffort = selection.ReasoningEffort
 	if err := metadata.Validate(); err != nil {
 		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, err
 	}
@@ -803,20 +804,22 @@ func prepareResumedThread(
 		)
 	}
 	if options.model != "" {
-		resolvedModel, resolvedProvider, resolveErr := deps.resolveModel(options.model)
+		selection, resolveErr := deps.resolveModel(options.model)
 		if resolveErr != nil {
 			return thread.Metadata{}, lease, resolveErr
 		}
-		metadata.Model = resolvedModel
-		metadata.Provider = resolvedProvider
+		metadata.Model = selection.Model
+		metadata.Provider = selection.Provider
+		metadata.ReasoningEffort = selection.ReasoningEffort
 	} else if requireModel &&
 		(strings.TrimSpace(metadata.Model) == "" || strings.TrimSpace(metadata.Provider) == "") {
-		resolvedModel, resolvedProvider, resolveErr := deps.resolveModel(metadata.Model)
+		selection, resolveErr := deps.resolveModel(metadata.Model)
 		if resolveErr != nil {
 			return thread.Metadata{}, lease, resolveErr
 		}
-		metadata.Model = resolvedModel
-		metadata.Provider = resolvedProvider
+		metadata.Model = selection.Model
+		metadata.Provider = selection.Provider
+		metadata.ReasoningEffort = selection.ReasoningEffort
 	}
 	metadata.Project = admittedProject
 	metadata.UpdatedAt = deps.now().UTC()

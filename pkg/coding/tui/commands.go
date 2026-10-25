@@ -411,7 +411,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"MintClaw coding commands",
 			"/help              show commands and keyboard bindings",
 			"/status            show live thread and workspace status",
-			"/model [provider/name [effort]] select a model route and reasoning effort",
+			"/model [provider/name [effort]] select a model; picker Enter saves the coding default",
 			"/skills [name]     list skills or insert an exact $skill mention",
 			"/transcript        search and copy the retained transcript",
 			"/diff [target]     show bounded hunks for current, base, or commit",
@@ -775,7 +775,7 @@ func (m *Model) handleModelSearchKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		m.moveModelPickerSelection(1)
 		return true, nil
 	case "enter":
-		return true, m.selectHighlightedModelOrReasoning()
+		return true, m.selectHighlightedModelOrReasoning(true)
 	}
 	previous := m.modelSearch.Value()
 	var command tea.Cmd
@@ -854,7 +854,7 @@ func (m *Model) keepModelPickerLineVisible(line int) {
 	}
 }
 
-func (m *Model) selectHighlightedModelOrReasoning() tea.Cmd {
+func (m *Model) selectHighlightedModelOrReasoning(saveAsDefault bool) tea.Cmd {
 	if m.pendingModel != "" {
 		options := availableReasoningOptions(m.snapshot, m.pendingModel, m.pendingProvider)
 		m.modelReasoning = min(max(0, m.modelReasoning), len(options))
@@ -864,7 +864,7 @@ func (m *Model) selectHighlightedModelOrReasoning() tea.Cmd {
 		}
 		return m.selectModel(frontend.ModelSelection{
 			Model: m.pendingModel, Provider: m.pendingProvider,
-			ReasoningEffort: effort,
+			ReasoningEffort: effort, SaveAsDefault: saveAsDefault,
 		})
 	}
 	items := m.activeModelPickerItems()
@@ -1100,7 +1100,7 @@ func (m *Model) reasoningPanelLines() []string {
 		}
 		lines = append(lines, clipLine(cursor+selected+label, m.width))
 	}
-	return append(lines, "", "↑/↓ navigate · Enter select · Esc back")
+	return append(lines, "", "↑/↓ navigate · Enter default · s session · Esc back")
 }
 
 func resolveRuntimeSkillName(runtimeStatus *frontend.RuntimeStatus, requested string) (string, bool) {

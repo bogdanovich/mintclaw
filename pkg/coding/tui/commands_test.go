@@ -625,7 +625,9 @@ func TestSlashModelSelectsConfiguredAlias(t *testing.T) {
 		)
 	}
 	model = updateModel(t, model, command())
-	wantDeep := frontend.ModelSelection{Model: "deep", Provider: "anthropic", ReasoningEffort: "xhigh"}
+	wantDeep := frontend.ModelSelection{
+		Model: "deep", Provider: "anthropic", ReasoningEffort: "xhigh", SaveAsDefault: true,
+	}
 	if controller.selected != wantDeep || model.commandPanel != commandPanelNone || model.err != nil ||
 		model.composer.Value() != "/" {
 		t.Fatalf(
@@ -714,9 +716,41 @@ func TestSlashModelSearchesConfiguredRoutesAndSelectsProviderDefault(t *testing.
 		t.Fatal("provider-default selection did not return a command")
 	}
 	model = updateModel(t, model, command())
-	want := frontend.ModelSelection{Model: "deep", Provider: "anthropic"}
+	want := frontend.ModelSelection{Model: "deep", Provider: "anthropic", SaveAsDefault: true}
 	if controller.selected != want || model.err != nil {
 		t.Fatalf("provider-default selection = %+v, error %v", controller.selected, model.err)
+	}
+}
+
+func TestSlashModelSessionShortcutDoesNotSaveDefault(t *testing.T) {
+	controller := &modelSelectionController{fakeController: newController(t)}
+	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "fast", Provider: "openai"})
+	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{
+		Models: []frontend.ModelOption{{
+			Name: "fast", Provider: "openai",
+			ReasoningProfile: testReasoningProfile(
+				t, reasoning.EffortMedium, reasoning.EffortLow, reasoning.EffortMedium,
+			),
+		}},
+	})
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.composer.SetValue("/model fast")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(model.View(), "Enter default · s session") {
+		t.Fatalf("reasoning picker omits persistence hint: %q", model.View())
+	}
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("session-only shortcut did not return a command")
+	}
+	model = updateModel(t, model, command())
+	want := frontend.ModelSelection{Model: "fast", Provider: "openai"}
+	if controller.selected != want || model.err != nil {
+		t.Fatalf("session-only selection = %+v, error %v", controller.selected, model.err)
 	}
 }
 
