@@ -146,8 +146,9 @@ func TestRepositoryCorpus(t *testing.T) {
 		t.Fatal("repository cases invalid", err)
 	}
 	defaults, err := Select(corpus, Selection{DefaultOnly: true})
-	if err != nil || len(defaults) != 2 || defaults[0].Case.ID != "general.context.followup" ||
-		defaults[1].Case.ID != "general.interaction.navigation" || CheckRunAvailability(defaults, false) != nil {
+	if err != nil || len(defaults) != 4 || defaults[0].Case.ID != "general.context.correction" ||
+		defaults[1].Case.ID != "general.context.followup" || defaults[2].Case.ID != "general.interaction.answer" ||
+		defaults[3].Case.ID != "general.interaction.navigation" || CheckRunAvailability(defaults, false) != nil {
 		t.Fatal("repository general baseline missing", err)
 	}
 	pending := 0
@@ -155,14 +156,12 @@ func TestRepositoryCorpus(t *testing.T) {
 		policy := item.Availability()
 		if policy.Status == "pending" {
 			pending++
-			if policy.Default || policy.Reason == "" ||
-				item.Case.Suite == "general" && item.Case.ID != "general.context.correction" &&
-					item.Case.ID != "general.interaction.answer" {
+			if policy.Default || policy.Reason == "" || item.Case.Suite == "general" {
 				t.Fatal("invalid deferred coverage")
 			}
 		}
 	}
-	if pending != 14 || !errors.Is(CheckRunAvailability(corpus, false), ErrPendingCases) {
+	if pending != 12 || !errors.Is(CheckRunAvailability(corpus, false), ErrPendingCases) {
 		t.Fatal("deferred domain cases were lost or implicitly enabled")
 	}
 	pdf, err := Select(corpus, Selection{Suite: "pdf"})

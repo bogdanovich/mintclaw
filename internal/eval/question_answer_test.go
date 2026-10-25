@@ -303,10 +303,15 @@ func TestQuestionAnswerRetainedProofRoundTripAndRegrade(t *testing.T) {
 
 func TestQuestionAnswerAdmissionCannotBypassPendingOrNativeScope(t *testing.T) {
 	item := questionAnswerCase(t)
-	if !errors.Is(CheckRunAvailability([]LoadedCase{item}, false), ErrPendingCases) {
-		t.Fatal("unqualified answer candidate became default")
+	if CheckRunAvailability([]LoadedCase{item}, false) != nil || !item.Availability().Default {
+		t.Fatal("qualified answer is not active/default")
 	}
-	if _, err := Run(t.Context(), Preset{}, []LoadedCase{item}, RunOptions{}); !errors.Is(err, ErrPendingCases) {
+	if _, err := Run(t.Context(), Preset{}, []LoadedCase{item}, RunOptions{}); !errors.Is(err, ErrUnsafeTarget) {
+		t.Fatal("promotion bypassed mandatory target-budget admission")
+	}
+	pending := item
+	pending.Policy = &SuitePolicy{ID: item.Case.Suite, Status: "pending", Reason: "Synthetic pending policy control."}
+	if _, err := Run(t.Context(), Preset{}, []LoadedCase{pending}, RunOptions{}); !errors.Is(err, ErrPendingCases) {
 		t.Fatal("direct Run bypassed pending policy")
 	}
 	for _, mode := range []string{"no-check", "approval", "no-interactions", "adaptive", "other-answer", "no-rubric"} {

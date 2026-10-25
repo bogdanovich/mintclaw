@@ -5,5 +5,14 @@
   "expected_agent": "main",
   "expected_workspace": "profile/workspace",
   "isolation_root": "profile",
-  "capabilities": ["conversation", "interactions"]
+  "capabilities": ["conversation", "interactions", "bounded_calls"],
+  "judge_model": "eval-judge",
+  "capture_model_metadata": true,
+  "target_call_budget": {
+    "max_calls": 24,
+    "max_input_bytes": 131072,
+    "max_output_tokens": 2048,
+    "max_reported_tokens": 100000,
+    "max_in_flight": 2
+  }
 }

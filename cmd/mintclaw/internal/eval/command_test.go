@@ -130,16 +130,14 @@ func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
 				}
 			case "pending":
 				pending++
-				if item.Default || item.PendingReason == "" ||
-					item.Suite == "general" && item.ID != "general.context.correction" &&
-						item.ID != "general.interaction.answer" {
+				if item.Default || item.PendingReason == "" || item.Suite == "general" {
 					t.Fatal("pending metadata incorrect")
 				}
 			default:
 				t.Fatal("catalog status unavailable")
 			}
 		}
-		if active != 2 || pending != 14 || result.RuntimeRun {
+		if active != 4 || pending != 12 || result.RuntimeRun {
 			t.Fatal("offline inspection hid deferred coverage or claimed execution")
 		}
 	}
@@ -164,8 +162,8 @@ func TestRunDefaultAndExplicitPendingAdmissionBeforePreset(t *testing.T) {
 	}{
 		{name: "defaults"},
 		{name: "opt-in-alone-does-not-widen-defaults", flags: []string{"--include-pending"}},
-		{name: "explicit-general", flags: []string{"--suite", "general"}, pending: true},
-		{name: "core-candidate", flags: []string{"--case", "general.context.correction"}, pending: true},
+		{name: "explicit-general", flags: []string{"--suite", "general"}},
+		{name: "qualified-core", flags: []string{"--case", "general.context.correction"}},
 		{name: "core-opt-in", flags: []string{"--case", "general.context.correction", "--include-pending"}},
 		{name: "active-id", flags: []string{"--case", "general.context.followup"}},
 		{name: "all", flags: []string{"--suite", "all"}, pending: true},
