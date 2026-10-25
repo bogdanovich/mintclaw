@@ -28,21 +28,19 @@
     },
     {
       "id": "general.steering.boundary",
-      "status": "pending",
-      "default": false,
-      "reason": "C2 active-boundary contract awaits fixed native qualification; not part of defaults."
+      "status": "active",
+      "default": true
     },
     {
       "id": "general.steering.order",
-      "status": "pending",
-      "default": false,
-      "reason": "C2 FIFO contract awaits separate fixed one-at-a-time/all qualification; not part of defaults."
+      "status": "active",
+      "default": true
     },
     {
       "id": "general.session.isolation",
       "status": "pending",
       "default": false,
-      "reason": "C2 distinct-scope contract awaits fixed native qualification; not part of defaults."
+      "reason": "C2 fixed batch inconclusive: Gemini HTTP 429 caused unknown usage in the shared native budget. Not qualified; no retry-until-green."
     }
   ]
 }

@@ -1,8 +1,10 @@
 # Core Steering Evals
 
-`general.steering.boundary` and `general.steering.order` are pending manual
-General scenarios. They do not join the four qualified defaults until the fixed
-live qualification protocol succeeds. PDF/browser remain pending and untouched.
+`general.steering.boundary` and `general.steering.order` are active General
+defaults after their fixed 3/3 batches. The
+[C2 campaign](../operations/manual-agent-evals-core-c2-20261025.md) also retains
+one failed order qualification and an inconclusive isolation batch; it is not an
+all-green full-suite baseline. PDF/browser remain pending and untouched.
 
 ## Execution
 
@@ -16,7 +18,7 @@ private prepared preset:
 ```sh
 mintclaw eval run --root evals --case general.steering.boundary \
   --preset /private/prepared/reports/preset.json --out /private/prepared/reports \
-  --start-target --include-pending --json
+  --start-target --json
 ```
 
 The initial task calls one synthetic read with a unique trial/session identity.
@@ -87,11 +89,12 @@ the same projection. Returned-final usage includes both scopes; optional routed
 model telemetry still describes the main trial's projected events, not all calls.
 The independent shared native call budget covers both scopes.
 
-Implementation validation is in progress. The native-log reader permits normal
+Implementation validation passed full Linux/macOS CI. The native-log reader permits normal
 nullable values while preserving duplicate-key/privacy rejection. The closing
 private census scans large storage JSON containers separately from bounded
 model-input strings, without relaxing nested escaped-content limits. This is
-not live qualification and must not promote the case.
+separate from live qualification. Isolation's qualification passed, but a Gemini
+HTTP 429/unknown-usage call made its fixed batch inconclusive; it remains pending.
 
 Each case permits one judge call, no model-user calls, at most three/four user
 inputs (six total for isolation), a two-minute turn and five-minute conversation budget. The existing
