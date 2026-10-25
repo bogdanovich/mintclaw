@@ -1,9 +1,9 @@
 # Website Login discovery: rollout evidence
 
-Status: implementation and deployment qualified; the latest correction was
-verified on 2026-10-19 UTC. The owner's
-confirmed Facebook login and stored-code use remain pending. The first
-owner-approved attempt ended unknown; the follow-up is recorded below. This
+Status: implementation and deployment qualified; the owner's Facebook login,
+stored TOTP and native cleanup were confirmed on 2026-10-25 UTC with a verified
+login receipt and successful task delivery. Earlier failed and unknown
+attempts remain recorded below with their original limits. This
 records D3 of the [replacement roadmap](credential-discovery-redesign.md);
 it does not turn synthetic tests or metadata lookup into evidence of an
 authenticated account.
@@ -548,3 +548,28 @@ The restart invalidates prior in-process grants, so fresh phone approval may be
 needed; the request window remains two hours and the granted access lasts up
 to twenty hours. The earlier failed task remains historical evidence, not a
 newly successful login.
+
+### Fresh post-release Facebook pilot
+
+The owner-driven pilot on 2026-10-25 UTC completed successfully on source
+`1013693a9eebce0604bda82083a3ba47e30a752f`. Authoritative task
+`subagent-0d6f7290-57e8-46eb-b3d9-397495335fa2`, generation
+`76a947ef-d370-4add-9948-9deb8188161f`, is `succeeded` and `delivered`.
+Its objective contains the same login receipt as the verified tool result;
+there is no missing-runtime-receipt warning.
+
+Origin trace `trace-turn-6b92c055bbfa76285aa7da90` suspended with 61 records.
+Continuation `trace-turn-1e29be54e6a244a2506b3c2d` completed with 204 records.
+It found the Login at record 62, submitted credentials at 69 and TOTP at 119,
+verified `logged_in` with a receipt at 183, and confirmed `close_state=closed`
+at 190. Both traces share the same browser session-owner hash and use the
+expected diagnostic schema and redaction policy without truncation. Task
+generation is authoritative registry metadata, not inferred from missing trace
+scope fields.
+
+This proves the fresh Website/password/stored-TOTP/verification/cleanup path
+and its formal successful completion. The live pilot did not emit
+`observe_required`; the replaced-control branch remains separately qualified
+by the synthetic/native tests. No operator replay or account-value retrieval
+was performed to verify this result. Human challenges are a separate follow-up
+described in [browser-human-challenges.md](browser-human-challenges.md).

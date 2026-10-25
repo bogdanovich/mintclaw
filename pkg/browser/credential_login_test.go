@@ -58,12 +58,12 @@ func (client *credentialTestClient) discardCredential(context.Context, string) e
 	return nil
 }
 
-func credentialBrokerFixture(t *testing.T) (
+func credentialBrokerFixture(t *testing.T, headed ...bool) (
 	*Broker, CredentialLoginRequest, *credentialTestClient, *credentialbroker.Authority,
 	credentialbroker.GrantLease, string,
 ) {
 	t.Helper()
-	root, _ := ephemeralPlaywrightConfig(t, false)
+	root, _ := ephemeralPlaywrightConfig(t, len(headed) > 0 && headed[0])
 	store := NewMemoryStore()
 	broker := newTestBroker(t, root, store, &fakeWorkerFactory{})
 	owner := testOwner()

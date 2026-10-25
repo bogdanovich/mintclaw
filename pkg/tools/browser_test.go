@@ -1795,6 +1795,27 @@ func TestBrowserReadinessRankHasDeterministicFailClosedOrder(t *testing.T) {
 	}
 }
 
+func TestBrowserTargetsAdvertiseVisibleTemporaryHandoffWithoutPersistentIdentity(t *testing.T) {
+	options := browserToolTestConfig()
+	target := options.config.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.Mode = config.BrowserProfileEphemeral
+	profile.Runtime.Headed = true
+	target.Profiles = map[string]config.BrowserProfileConfig{"visible": profile}
+	options.config.Targets["gateway"] = target
+	source := &fakeBrowserToolSource{available: true, handoffReady: true}
+	var result browserTargetResult
+	decodeBrowserToolResult(t, NewBrowserTargetsTool(options, source).Execute(browserToolTestContext(), nil), &result)
+	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 1 {
+		t.Fatal("visible temporary profile was not discoverable")
+	}
+	got := result.Targets[0].Profiles[0]
+	if !got.HeadedView || !got.Handoff || got.Mode != config.BrowserProfileEphemeral ||
+		got.Persistence != "session_only" {
+		t.Fatal("visible temporary handoff changed browser identity or persistence")
+	}
+}
+
 func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	options := browserToolTestConfig()
 	options.config.Limits.HandoffSeconds = 900

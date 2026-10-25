@@ -350,7 +350,7 @@ type PlaywrightManagedHostConfig struct {
 // trusted execution host. The runtime mapping remains host-local.
 type PlaywrightHostConfig = PlaywrightManagedHostConfig
 
-// PlaywrightHandoffAvailable reports whether the managed driver owns a headed
+// PlaywrightHandoffAvailable reports whether the driver owns a headed
 // local browser window. Handoff does not expose a remote endpoint or admit a
 // headless/browser-extension configuration.
 func PlaywrightHandoffAvailable(root *config.Config) bool {
@@ -371,7 +371,8 @@ func PlaywrightHandoffAvailable(root *config.Config) bool {
 	if !ok {
 		return false
 	}
-	return profile.Mode == config.BrowserProfileManaged && profile.Runtime.Headed
+	return profile.Runtime.Headed &&
+		(profile.Mode == config.BrowserProfileManaged || profile.Mode == config.BrowserProfileEphemeral)
 }
 
 func onlyEnabledBrowserProfile(
