@@ -70,3 +70,58 @@ selected rendering profile and do not assume its old challenge survived.
   requesting an owner-driven website pilot.
 - Test the site's real challenge through normal chat. A headed browser does
   not guarantee the site will remove its bot block; report the actual outcome.
+
+
+## Installed qualification, 2026-10-25 UTC
+
+[PR #1871](https://github.com/bogdanovich/mintclaw/pull/1871) merged as
+`ea704efc47c8a7a9d77ad22eff50792a8d124d62` after thirteen successful CI
+checks, one skipped check, clean review of the final head, no unresolved
+threads and owner merge approval. That exact merged source is installed on the
+existing Linux gateway with Go 1.26.10.
+
+The deployed `gateway/ephemeral-visible` profile clones the existing temporary
+profile's actor, agent, network and approval policy, with its own root/lock and
+headed rendering. Default profile selection and other browser identities are
+preserved. The private browser agent policy names the existing RustDesk desktop
+and explicitly requests `browser_capture delivery=interaction` before questions.
+
+Qualification completed:
+
+- The new delegated transport-order test first failed with the question already
+  delivered, zero images and zero source claims. It then passed with confirmed
+  image delivery and exactly one claim before the native question. Ordinary
+  final-report media and unconfirmed-receipt handling also passed.
+- Full browser/tools/skills suites, the delivery/interaction agent regression
+  set, targeted gateway checks and the relevant race checks passed. All seven
+  opt-in Chromium OpenAI-compatible/Codex credential scenarios passed without
+  skips, including delayed continuation and provider/history/log/trace checks.
+- On the installed server, all 29 native credential/form/protocol scenarios
+  passed in its actual Chrome, without skips. A separate synthetic headed
+  fixture proved an X11 window was mapped, captured a PNG, filled a field,
+  started without cookies and removed its window/runtime after close. The
+  probe waits for the window manager's mapped state, rather than only window
+  creation. No real account or vault value was used.
+- Stateless smoke trace `trace-turn-080ae1f034511ca4465b7e62` completed on the
+  deployed source with six records, zero tools, matching input/reply hashes,
+  the expected redaction policy and no truncation.
+- The phone page returned HTTPS 200 with JavaScript matching source; external
+  operator enrollment remained denied with 403. All ten expected services were
+  active with no failed units, legacy processes or error-level journal entries
+  in the checked ten-minute window. The isolated nutrition installation was
+  preserved.
+
+Deployment guards paused safely when a staged configuration lacked its sibling
+security file. Validation was repeated in the original profile directory so the
+existing security document loaded normally; no security setting was weakened.
+A later config guard detected only an added empty `coding.defaults` object from
+the current schema. It was verified and preserved, without changing model,
+credential, browser or other config semantics. The token and phone-key file
+identities remained unchanged. Checksums verified all 38 retained rollback files;
+restore only the affected binary/static-config layers while stopped, without
+rolling back mutable tasks, interactions, grants or conversation state.
+
+The successful Facebook/TOTP pilot is recorded separately on source `1013693a`.
+A real eBay challenge with image delivery or RustDesk control remains an
+owner-driven normal-chat pilot; these checks do not prove that eBay will remove
+its bot block. A restart can require fresh phone approval, without re-enrollment.
