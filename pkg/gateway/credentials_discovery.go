@@ -20,7 +20,10 @@ func (source *gatewayBrowserToolSource) loginDiscoveredCredential(ctx context.Co
 		return denied
 	}
 	step := selection.Fields.Step
-	if !slices.Contains([]string{"discover", "credentials", "username", "password", "totp", "verify"}, step) {
+	if !slices.Contains(
+		[]string{"discover", "authorize", "credentials", "username", "password", "totp", "verify"},
+		step,
+	) {
 		return denied
 	}
 	scope, vaultID, err := runtime.controller.DiscoveryRequest(ctx, principal,
@@ -73,6 +76,9 @@ func (source *gatewayBrowserToolSource) loginDiscoveredCredential(ctx context.Co
 	}
 	if err != nil {
 		return denied
+	}
+	if step == "authorize" {
+		return browser.CredentialLoginResult{Alias: scope.Account, CredentialID: itemID, Outcome: "authorized"}
 	}
 	lease, err = lease.BindDiscovered(ctx, scope, itemID)
 	if err != nil {

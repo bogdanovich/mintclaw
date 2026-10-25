@@ -65,6 +65,7 @@ func setupCredentialRuntime(
 		OwnerID: cfg.Credentials.OwnerID, Origin: cfg.Credentials.Origin,
 		StateDirectory: cfg.Credentials.StateDirectory, Accounts: cfg.Credentials.Accounts,
 		PagePath: credentialPagePath, TrustLoopbackTLSProxy: cfg.Credentials.TrustLoopbackTLSProxy,
+		Automatic: cfg.Credentials.ApprovalMode == "automatic",
 	})
 	if err != nil {
 		return nil, errCredentialsUnavailable

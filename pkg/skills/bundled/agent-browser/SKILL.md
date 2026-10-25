@@ -50,6 +50,34 @@ visible tab exists at the start and does not select an `attached_user` profile.
 Do not choose an attached profile merely because a site may require login or an
 earlier assistant said that a browser was open.
 
+## Saved-account login
+
+For a requested login, start at the site's public HTTPS homepage and use its
+observed Sign in link. A working homepage does not prove the sign-in page is
+available. Observe the actual page: HTTP 200 can still contain a CAPTCHA or
+Security Measure page. Do not hard-code site-specific login paths.
+
+On the current official site, call `browser_login` with `operation=discover`,
+select a matching Login when needed, then call `operation=authorize` using the
+current session/tab/snapshot identity. Authorize needs no form field refs and
+reads no password or TOTP. It confirms access under the operator's configured
+mode: automatic scoped access, or a phone approval when required. Metadata
+discovery alone does not establish authorization or prove login.
+
+Complete authorization before asking the owner to solve a challenge or handing
+off through RustDesk. If phone approval suspends the task, the idle browser is
+closed; after approval open a fresh session in the selected rendering profile
+before the owner does any manual work. After manual work, resume the same
+session, observe fresh state, fill privately, verify login and close as requested.
+Do not discard a human-cleared browser merely to navigate to a sign-in URL.
+
+For a confirmed failed public GET navigation, one repeat navigation to the
+same URL in the same session is allowed before asking for manual help. Honor
+an image-first request before retrying. Alternatively recover once through the
+public homepage and its observed sign-in link. Bound these attempts; never
+repeat a credential submission or an accepted/outcome-unknown external effect.
+If the block remains, send its image and use the assistance flow below.
+
 ## Authentication recovery
 
 A `navigation_failed` result keeps the browser session alive. It is not proof

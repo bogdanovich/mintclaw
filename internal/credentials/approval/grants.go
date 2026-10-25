@@ -13,6 +13,11 @@ func (controller *Controller) restoreGrants() error {
 	if len(owner.Grants) == 0 {
 		return nil
 	}
+	if controller.automatic {
+		// Mode changes retire stored phone consent; automatic runtime leases
+		// must never be restored later as human approval.
+		return controller.persistGrants()
+	}
 	if owner.EnrollmentPending || owner.GrantPolicyRevision == "" ||
 		len(owner.Grants) > credentialbroker.MaxActiveGrants {
 		return ErrUnavailable
@@ -40,7 +45,7 @@ func (controller *Controller) persistGrants() error {
 	owner.GrantPolicyRevision = controller.policy.Revision()
 	owner.Grants = make([]credentialbroker.Grant, 0, len(controller.grants))
 	for _, grant := range controller.grants {
-		if controller.grantActive(grant.ID) {
+		if !controller.automatic && controller.grantActive(grant.ID) {
 			owner.Grants = append(owner.Grants, cloneGrant(grant))
 		}
 	}

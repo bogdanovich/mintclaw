@@ -13,7 +13,7 @@ func websiteStepArguments(step string) map[string]any {
 		"snapshot_id": "snapshot_fixture", "snapshot_generation": 2,
 	}
 	for _, field := range map[string][]string{
-		"discover": {}, "credentials": {"username_ref", "password_ref", "submit_ref"},
+		"discover": {}, "authorize": {}, "credentials": {"username_ref", "password_ref", "submit_ref"},
 		"username": {"username_ref", "submit_ref"}, "password": {"password_ref", "submit_ref"},
 		"totp": {"otp_ref", "submit_ref"}, "verify": {"authenticated_ref"},
 	}[step] {
@@ -23,7 +23,7 @@ func websiteStepArguments(step string) map[string]any {
 }
 
 func TestBrowserLoginWebsiteStepsUseOnlyCurrentReferencesAndSafeMetadata(t *testing.T) {
-	for _, step := range []string{"discover", "credentials", "username", "password", "totp", "verify"} {
+	for _, step := range []string{"discover", "authorize", "credentials", "username", "password", "totp", "verify"} {
 		t.Run(step, func(t *testing.T) {
 			outcome := "submitted"
 			if step == "discover" {
@@ -31,6 +31,9 @@ func TestBrowserLoginWebsiteStepsUseOnlyCurrentReferencesAndSafeMetadata(t *test
 			}
 			if step == "verify" {
 				outcome = "logged_in"
+			}
+			if step == "authorize" {
+				outcome = "authorized"
 			}
 			source := &credentialBrowserToolFixture{
 				credentialAvailable: true, result: browser.CredentialLoginResult{
@@ -101,5 +104,24 @@ func TestWebsiteSubmissionCannotCertifyAuthentication(t *testing.T) {
 		Execute(browserToolTestContext(), websiteStepArguments("credentials"))
 	if result == nil || result.ForLLM != `{"outcome":"denied"}` || len(result.WriteAudit) != 0 {
 		t.Fatal("generic submission fabricated a confirmed-login receipt")
+	}
+}
+
+func TestBrowserLoginAuthorizeRejectsFormFieldsAndCannotCertifyLogin(t *testing.T) {
+	for _, field := range []string{"username_ref", "password_ref", "otp_ref", "submit_ref", "authenticated_ref"} {
+		args := websiteStepArguments("authorize")
+		args[field] = "ref_fixture"
+		if _, err := projectBrowserLoginStep(args); err == nil {
+			t.Fatal("authorization accepted a form operation")
+		}
+	}
+	source := &credentialBrowserToolFixture{
+		credentialAvailable: true,
+		result:              browser.CredentialLoginResult{Alias: "vault-logins", Outcome: "logged_in"},
+	}
+	result := NewBrowserLoginTool(browserToolTestConfig(), source).
+		Execute(browserToolTestContext(), websiteStepArguments("authorize"))
+	if result.ForLLM != `{"outcome":"denied"}` || len(result.WriteAudit) != 0 {
+		t.Fatal("authorization fabricated a completed login")
 	}
 }

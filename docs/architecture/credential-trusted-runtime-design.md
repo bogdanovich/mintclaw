@@ -119,6 +119,12 @@ reachable from the Android phone. Enroll the owner through a private operator
 setup action. Verify challenge, origin, user presence/verification, credential
 ownership, replay, expiry, and persisted authenticator updates.
 
+Phone approval is optional operator policy. `credentials.approval_mode` defaults
+to `phone`; explicitly selecting `automatic` admits only configured caller and
+website scopes without phone enrollment or approval. Runtime-only automatic
+leases cannot become persisted phone consent. See
+[approval modes and preflight](credential-approval-modes.md).
+
 Approval covers named aliases for one owner, actor, agent, host, and policy
 revision. Its lifetime is at most 20 hours, may be shorter, and cannot silently
 renew. Bind later credential/session operations to that original grant.

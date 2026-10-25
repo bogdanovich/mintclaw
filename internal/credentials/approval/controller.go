@@ -36,6 +36,9 @@ type Config struct {
 	Origin         string
 	StateDirectory string
 	Accounts       []credentialbroker.AccountRule
+	// Automatic is explicit trusted operator policy, never a model argument.
+	// It admits policy-scoped runtime leases without a phone ceremony.
+	Automatic bool
 	// PagePath is "/" for the legacy standalone handler, or "/credentials/"
 	// when mounted in the existing application.
 	PagePath              string
@@ -115,6 +118,7 @@ type Controller struct {
 	origin     string
 	pagePath   string
 	tlsProxy   bool
+	automatic  bool
 	policy     *credentialbroker.Policy
 	bindings   map[string]binding
 	authority  *credentialbroker.Authority
@@ -190,6 +194,7 @@ func newController(config Config, store ownerStore) (*Controller, *OwnerSetup, e
 	controller := &Controller{
 		ownerID: config.OwnerID, origin: config.Origin, policy: policy, bindings: bindings,
 		pagePath: config.PagePath, tlsProxy: config.TrustLoopbackTLSProxy,
+		automatic: config.Automatic,
 		authority: authority, owner: owner, store: store, verifier: verifier,
 		requests: make(map[string]*pendingRequest), ceremonies: make(map[string]pendingCeremony),
 		grants: make(map[string]credentialbroker.Grant), now: time.Now, random: rand.Reader,
@@ -234,7 +239,8 @@ func (controller *Controller) usable(ctx context.Context) bool {
 }
 
 func (controller *Controller) ready(ctx context.Context) bool {
-	return controller.usable(ctx) && len(controller.owner.Credentials) == 1 && !controller.owner.EnrollmentPending
+	return controller.usable(ctx) && (controller.automatic ||
+		(len(controller.owner.Credentials) == 1 && !controller.owner.EnrollmentPending))
 }
 
 func (controller *Controller) enrollmentAllowed() bool {
@@ -268,6 +274,9 @@ func (controller *Controller) Request(ctx context.Context, principal credentialb
 	}
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
+	if controller.automatic {
+		return "", ErrDenied
+	}
 	if !controller.ready(ctx) {
 		return "", ErrUnavailable
 	}
@@ -382,7 +391,7 @@ func (controller *Controller) BeginRevocation(ctx context.Context, grantID strin
 	}
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
-	if !controller.ready(ctx) {
+	if !controller.ready(ctx) || controller.automatic {
 		return Ceremony{}, ErrUnavailable
 	}
 	controller.prune()

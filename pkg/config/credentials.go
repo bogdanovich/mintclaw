@@ -15,6 +15,7 @@ import (
 // never a vault token, username, password, OTP, or session cookie.
 type CredentialConfig struct {
 	Enabled               bool                           `json:"enabled,omitempty"`
+	ApprovalMode          string                         `json:"approval_mode,omitempty"`
 	BrowserLoginEnabled   bool                           `json:"browser_login_enabled,omitempty"`
 	GitHubReadEnabled     bool                           `json:"github_read_enabled,omitempty"`
 	HostID                string                         `json:"host_id,omitempty"`
@@ -38,6 +39,9 @@ func (cfg *Config) ValidateCredentials() error {
 		return nil
 	}
 	c := cfg.Credentials
+	if c.ApprovalMode != "" && c.ApprovalMode != "phone" && c.ApprovalMode != "automatic" {
+		return errors.New("credential approval mode must be phone or automatic")
+	}
 	if c.OwnerID == "" || c.Origin == "" || c.StateDirectory == "" || !filepath.IsAbs(c.StateDirectory) ||
 		filepath.Clean(c.StateDirectory) != c.StateDirectory || len(c.Accounts) == 0 {
 		return errors.New("credential approval configuration is invalid")

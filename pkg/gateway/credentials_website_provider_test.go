@@ -26,6 +26,23 @@ func (script *credentialWebsiteProviderScript) next(phase int, decode func(any) 
 	observe := func() (string, map[string]any, error) {
 		return "browser_observe", map[string]any{"browser_session_id": script.sessionID}, nil
 	}
+	if phase == 4 {
+		var authorized browser.CredentialLoginResult
+		if !decode(&authorized) || authorized.Outcome != "authorized" ||
+			authorized.CredentialID != script.credentialID {
+			return failed()
+		}
+		args, err := credentialFixtureLoginArguments(script.observation)
+		if err != nil {
+			return failed()
+		}
+		delete(args, "account_alias")
+		args["operation"], args["credential_id"] = "credentials", script.credentialID
+		return "browser_login", args, nil
+	}
+	if phase > 4 {
+		phase--
+	}
 	switch phase {
 	case 0:
 		return "browser_session", map[string]any{
@@ -54,12 +71,8 @@ func (script *credentialWebsiteProviderScript) next(phase int, decode func(any) 
 			return failed()
 		}
 		script.credentialID = found.CredentialID
-		args, err := credentialFixtureLoginArguments(script.observation)
-		if err != nil {
-			return failed()
-		}
-		delete(args, "account_alias")
-		args["operation"], args["credential_id"] = "credentials", script.credentialID
+		args := credentialFixtureStepArguments(script.observation, "authorize")
+		args["credential_id"] = script.credentialID
 		return "browser_login", args, nil
 	case 4, 6:
 		var submitted browser.CredentialLoginResult

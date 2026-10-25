@@ -58,6 +58,12 @@ func TestCredentialDelayedProviderOutputFixture(t *testing.T) {
 	}
 }
 
+func TestCredentialAutomaticProviderOutputFixture(t *testing.T) {
+	for _, kind := range []string{"openai_compat", "codex"} {
+		t.Run(kind, func(t *testing.T) { testCredentialBrowserFixtureScenario(t, kind, "logged_in", "automatic") })
+	}
+}
+
 func TestCredentialProviderOutputFixture(t *testing.T) {
 	testCredentialAliasBrowserAndPhoneFixture(t, "openai_compat", "logged_in")
 }
@@ -112,8 +118,9 @@ func testCredentialAliasBrowserAndPhoneFixture(t *testing.T, providerKind, expec
 func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOutcome, mode string) {
 	t.Helper()
 	restart, canceled, expiry := mode == "restart", mode == "cancel", mode == "expiry"
+	automatic := mode == "automatic"
 	durableApproval := mode == "discovery_wait"
-	discovery := mode == "discovery" || durableApproval
+	discovery := mode == "discovery" || durableApproval || automatic
 	failedNotifications := mode == "notification_failure"
 	if mode != "" && !restart && !canceled && !expiry && !discovery && !failedNotifications {
 		t.Fatal("unknown credential fixture scenario")
@@ -121,6 +128,9 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	connectorMode := strings.HasPrefix(providerKind, "github:")
 	providerKind = strings.TrimPrefix(providerKind, "github:")
 	providerMode := providerKind != ""
+	if automatic && !providerMode {
+		t.Fatal("automatic output qualification requires a provider path")
+	}
 	if os.Getenv("MINTCLAW_CREDENTIAL_ALIAS_BROWSER_FIXTURE") != "1" {
 		t.Skip("synthetic Chromium qualification only")
 	}
@@ -202,6 +212,9 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	if discovery {
 		account := &cfg.Credentials.Accounts[0]
 		account.DiscoverLogins, account.ItemID, account.Origins, account.Login = true, "", nil, nil
+	}
+	if automatic {
+		cfg.Credentials.ApprovalMode = "automatic"
 	}
 	if connectorMode {
 		cfg.Credentials.BrowserLoginEnabled = false
@@ -436,6 +449,12 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 			}
 			delete(args, "account_alias")
 			args["operation"], args["credential_id"] = "credentials", result.CredentialID
+			authorize := credentialFixtureStepArguments(observation, "authorize")
+			authorize["credential_id"] = result.CredentialID
+			if err := record(login.Execute(ctx, authorize), &result); err != nil ||
+				result.Outcome != "authorized" || retrieved.Load() != before {
+				return result, errors.New("authorization did not preserve a value-free preflight")
+			}
 		}
 		if err := record(login.Execute(ctx, args), &result); err != nil {
 			return result, err
@@ -773,43 +792,54 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 	})
 	server.Start()
 	defer server.Close()
-	invite, err := routes.handler.(*credentialHTTPHandler).enrollment.Issue(ctx)
-	if err != nil {
-		t.Fatal("private synthetic enrollment unavailable")
-	}
-	defer clear(invite)
-	input, err := json.Marshal(map[string]string{
-		"backend": server.URL, "invite": string(invite), "outcome": expectedOutcome,
-		"inflight":  map[bool]string{true: "true", false: ""}[connectorMode],
-		"restart":   map[bool]string{true: "true", false: ""}[restart],
-		"lifetime":  mode,
-		"discovery": map[bool]string{true: "true", false: ""}[discovery],
-	})
-	if err != nil {
-		t.Fatal("synthetic phone configuration unavailable")
-	}
-	defer clear(input)
-	command := exec.CommandContext(ctx, "node", script, "phone")
-	command.Stdin = bytes.NewReader(input)
-	var childOutput bytes.Buffer
-	command.Stdout, command.Stderr = &childOutput, &childOutput
-	if command.Run() != nil {
-		cancel()
-		// A fixed stage is enough to locate the failure; never dump child output.
-		stage := "unknown"
-		for _, candidate := range []string{
-			"start", "enroll", "login-request", "approve", "login-result", "reuse", "revoke",
-			"restart", "restart-request", "restart-approve", "restart-result",
-			"expiry", "expiry-request", "expiry-approve", "expiry-result",
-		} {
-			if childOutput.String() == "credential gateway fixture failed at "+candidate+"\n" {
-				stage = candidate
+	if automatic {
+		// No phone enrollment or approval is performed. Exercise both real
+		// provider sequences and the same private browser/output qualification.
+		for range 2 {
+			result, performErr := perform()
+			if performErr != nil || result.Outcome != expectedOutcome {
+				t.Fatalf("automatic private login qualification failed: %v", performErr)
 			}
 		}
-		if detail, ok := failure.Load().(string); ok {
-			stage += ": " + detail
+	} else {
+		invite, err := routes.handler.(*credentialHTTPHandler).enrollment.Issue(ctx)
+		if err != nil {
+			t.Fatal("private synthetic enrollment unavailable")
 		}
-		t.Fatalf("synthetic gateway/browser/phone qualification failed at %s", stage)
+		defer clear(invite)
+		input, err := json.Marshal(map[string]string{
+			"backend": server.URL, "invite": string(invite), "outcome": expectedOutcome,
+			"inflight":  map[bool]string{true: "true", false: ""}[connectorMode],
+			"restart":   map[bool]string{true: "true", false: ""}[restart],
+			"lifetime":  mode,
+			"discovery": map[bool]string{true: "true", false: ""}[discovery],
+		})
+		if err != nil {
+			t.Fatal("synthetic phone configuration unavailable")
+		}
+		defer clear(input)
+		command := exec.CommandContext(ctx, "node", script, "phone")
+		command.Stdin = bytes.NewReader(input)
+		var childOutput bytes.Buffer
+		command.Stdout, command.Stderr = &childOutput, &childOutput
+		if command.Run() != nil {
+			cancel()
+			// A fixed stage is enough to locate the failure; never dump child output.
+			stage := "unknown"
+			for _, candidate := range []string{
+				"start", "enroll", "login-request", "approve", "login-result", "reuse", "revoke",
+				"restart", "restart-request", "restart-approve", "restart-result",
+				"expiry", "expiry-request", "expiry-approve", "expiry-result",
+			} {
+				if childOutput.String() == "credential gateway fixture failed at "+candidate+"\n" {
+					stage = candidate
+				}
+			}
+			if detail, ok := failure.Load().(string); ok {
+				stage += ": " + detail
+			}
+			t.Fatalf("synthetic gateway/browser/phone qualification failed at %s", stage)
+		}
 	}
 	expectedReads := int32(2)
 	if discovery && expectedOutcome == "logged_in" {
