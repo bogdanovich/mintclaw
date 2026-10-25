@@ -22,6 +22,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
@@ -161,6 +162,82 @@ func TestMintClawInboundInteractionRejectsInvalidAuthority(t *testing.T) {
 			projection, content, projected, err := mintclawInboundInteraction(payload)
 			if err == nil || projected || content != "" || projection.Choice != "" {
 				t.Fatalf("invalid interaction projection = (%#v, %q, %t, %v)", projection, content, projected, err)
+			}
+		})
+	}
+}
+
+func TestHandleMessageSendProjectsPromptBoundOrdinaryAnswer(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	bc := &config.Channel{Type: config.ChannelMintClaw, Enabled: true, AllowFrom: []string{"mintclaw-user"}}
+	cfg := &config.MintClawSettings{}
+	cfg.SetToken("test-token")
+	ch, err := NewMintClawChannel(bc, cfg, msgBus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch.ctx = t.Context()
+	ch.handleMessageSend(&mintclawConn{id: "conn-answer", sessionID: "session-answer"}, MintClawMessage{
+		Type: TypeMessageSend, ID: "answer-request", SessionID: "session-answer",
+		Payload: map[string]any{
+			PayloadKeyContent: " Paper ", PayloadKeyInteractionChoice: InteractionChoiceAnswer,
+			PayloadKeyInteractionShortID: "question-short", PayloadKeyInteractionPrompt: "delivered-prompt",
+		},
+	})
+	select {
+	case inbound := <-msgBus.InboundChan():
+		projection := inbound.Context.Interaction
+		if inbound.Content != "Paper" || projection.Choice != "" || projection.Response != "Paper" ||
+			projection.ShortID != "question-short" || projection.ResponseMessageID != "delivered-prompt" ||
+			inbound.Context.ReplyToMessageID != "delivered-prompt" ||
+			inbound.Context.MessageID != "answer-request" || inbound.Context.ChatID != "mintclaw:session-answer" ||
+			inbound.Context.SenderID != "mintclaw-user" {
+			t.Fatal("ordinary answer lost prompt/route identity or became a control grant", inbound.Context)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prompt-bound ordinary answer was not admitted to the native bus")
+	}
+}
+
+func TestMintClawOrdinaryAnswerUsesNativeBoundsAndRequiresPromptIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		text  any
+		valid bool
+	}{
+		{"plain", "Paper", true},
+		{"unicode", "\u0411\u0443\u043c\u0430\u0433\u0430", true},
+		{"multiline", "First line\nSecond line", true},
+		{"boundary", strings.Repeat("\u042f", interactions.MaxAnswerLength), true},
+		{"oversized", strings.Repeat("\u042f", interactions.MaxAnswerLength+1), false},
+		{"empty", "", false},
+		{"whitespace", " \n\t", false},
+		{"non-string", true, false},
+		{"malformed-utf8", string([]byte{0xff}), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := map[string]any{
+				PayloadKeyContent: test.text, PayloadKeyInteractionChoice: InteractionChoiceAnswer,
+				PayloadKeyInteractionShortID: "question-short", PayloadKeyInteractionPrompt: "delivered-prompt",
+			}
+			projection, content, projected, err := mintclawInboundInteraction(payload)
+			if test.valid {
+				if err != nil || !projected || content != strings.TrimSpace(test.text.(string)) ||
+					projection.Response != content || projection.Choice != "" {
+					t.Fatal("valid ordinary answer projection rejected or changed", err)
+				}
+				for _, identity := range []string{PayloadKeyInteractionShortID, PayloadKeyInteractionPrompt} {
+					delete(payload, identity)
+					if _, _, accepted, identityErr := mintclawInboundInteraction(
+						payload,
+					); identityErr == nil ||
+						accepted {
+						t.Fatal("ordinary answer without prompt identity admitted")
+					}
+					payload[identity] = "restored-identity"
+				}
+			} else if err == nil || projected || content != "" || !projection.IsZero() {
+				t.Fatal("invalid ordinary answer was partially projected")
 			}
 		})
 	}

@@ -32,7 +32,8 @@ does not reopen C0 or E0-E5.
 | Packet | Dependency | Deliverable | Status |
 | --- | --- | --- | --- |
 | C0 | None | Two active/default general cases; PDF/browser pending; proposal | Complete, #1868 |
-| C1a | C0 | Per-case narrowing and three-turn correction with final-only absence oracle | Implemented on branch; validation/review pending |
+| C1a | C0 | Per-case narrowing and three-turn correction with final-only absence oracle | Complete, [#1872](https://github.com/bogdanovich/mintclaw/pull/1872); 14/14 CI and reviewed merge |
+| C1b transport | C0 | [Prompt-bound ordinary answers](../channels/mintclaw.md) through existing native projection | Implemented; channel/bus/interaction tests pass; PR review pending |
 | C1b | C1a | Ordinary answer/resume native observer and stale/wrong-prompt controls | Queued |
 | C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | Queued; user-turn limits alone are not call coverage |
 | C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | Queued |
