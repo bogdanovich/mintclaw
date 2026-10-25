@@ -40,7 +40,8 @@ separate runs with separately recorded configuration and qualification.
   corrections after that result in FIFO order, and retained session/client scope.
 - A complete metadata-only native trace from the candidate source, with the
   same tool call/result, interrupts during that call, then injection before the
-  next model request. Truncated/missing/mismatched evidence cannot pass.
+  first post-tool model request. An intervening request cannot be hidden by a
+  later request. Truncated/missing/mismatched evidence cannot pass.
 - A post-stop outbox census binding one delivered logical final per request to
   its observed platform message ID. Streaming revisions are not extra finals.
 - A clean owned gateway, observed private surfaces, an untruncated log, a known
@@ -72,7 +73,7 @@ outbox census is at most 128 entries/2 MiB, with bounded original native files.
 The real CLI/local HTTP controls exercise both scenarios and both order modes,
 then remove owned live history/outbox/traces and regrade the frozen evidence.
 Negative controls include cancellation, wrong scope, orphaned tool results,
-native trace errors, stale finals, duplicate native-valid deliveries, missing
+native trace errors, late injection, stale finals, duplicate native-valid deliveries, missing
 host/cleanup evidence and truncated logs. These are model-free CI controls,
 not live model qualification or a new green baseline.
 

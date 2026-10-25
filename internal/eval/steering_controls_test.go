@@ -56,6 +56,38 @@ func assertSteeringFrozenControls(t *testing.T, original Trial, item Case, repor
 			data, _ := json.Marshal(trace)
 			trial.Steering.Trace, trial.Steering.TraceSHA256 = string(data), digest(data)
 		}},
+		{"model_request_before_injection", func(trial *Trial) {
+			trace, err := diagnostictrace.Decode([]byte(trial.Steering.Trace))
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := slices.IndexFunc(trace.Records, func(record diagnostictrace.Record) bool {
+				return record.Kind == diagnostictrace.RecordToolResult
+			})
+			if result < 0 {
+				t.Fatal("native tool result fixture missing")
+			}
+			model := slices.IndexFunc(trace.Records[result+1:], func(record diagnostictrace.Record) bool {
+				return record.Kind == diagnostictrace.RecordModelRequest
+			})
+			if model < 0 {
+				t.Fatal("native model request fixture missing")
+			}
+			intervening := trace.Records[result+1+model]
+			intervening.Origin.ID = "eval-intervening-request"
+			intervening.Correlation.ModelAttemptID = "eval-intervening-attempt"
+			intervening.OffsetNanos = trace.Records[result].OffsetNanos
+			trace.Records = slices.Insert(trace.Records, result+1, intervening)
+			for index := range trace.Records {
+				trace.Records[index].Sequence = uint64(index + 1)
+			}
+			trace, err = diagnostictrace.Finalize(trace)
+			if err != nil {
+				t.Fatal("intervening request must remain a native-valid trace", err)
+			}
+			data, _ := json.Marshal(trace)
+			trial.Steering.Trace, trial.Steering.TraceSHA256 = string(data), digest(data)
+		}},
 		{"wrong_mode", func(trial *Trial) { trial.Steering.Profile.SteeringMode = "anonymous" }},
 		{"missing_delivery", func(trial *Trial) {
 			trial.Steering.Outbox, trial.Steering.OutboxNames = nil, nil

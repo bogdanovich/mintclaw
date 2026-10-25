@@ -122,17 +122,6 @@ func validSteeringTrace(
 	if !slices.Equal(counts, []int{len(proof.Guidance)}) {
 		return false
 	}
-	for offset, index := range injected {
-		if index <= resultIndex {
-			return false
-		}
-		boundary := len(trace.Records)
-		if offset+1 < len(injected) {
-			boundary = injected[offset+1]
-		}
-		if !slices.ContainsFunc(requests, func(request int) bool { return request > index && request < boundary }) {
-			return false
-		}
-	}
-	return true
+	nextRequest := slices.IndexFunc(requests, func(request int) bool { return request > resultIndex })
+	return nextRequest >= 0 && injected[0] > resultIndex && injected[0] < requests[nextRequest]
 }
