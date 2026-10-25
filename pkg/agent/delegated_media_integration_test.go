@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -20,9 +24,10 @@ type routedCaptureFixture struct {
 	*protectedFixedToolResultTool
 	workspace string
 	ref       string
+	claim     func(context.Context) error
 }
 
-func (tool *routedCaptureFixture) Execute(ctx context.Context, _ map[string]any) *toolshared.ToolResult {
+func (tool *routedCaptureFixture) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
 	owner, err := media.NewMediaOwner(tool.workspace, toolshared.ToolAgentID(ctx), toolshared.ToolActorID(ctx),
 		toolshared.ToolRouteSessionKey(ctx), toolshared.ToolSessionKey(ctx),
 		toolshared.ToolChannel(ctx), toolshared.ToolChatID(ctx), toolshared.ToolTopicID(ctx))
@@ -47,6 +52,12 @@ func (tool *routedCaptureFixture) Execute(ctx context.Context, _ map[string]any)
 			},
 		}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 	result.Media = []string{tool.ref}
+	if args["delivery"] == "interaction" {
+		result.Delivery.Intent = toolshared.DeliveryInteractionMedia
+	}
+	if tool.claim != nil {
+		result.WithOutboundCommit(tool.claim)
+	}
 	return result
 }
 
@@ -166,5 +177,131 @@ func TestDelegateRetainedScreenshotReachesChannelWithCompleteReport(t *testing.T
 				}
 			})
 		}
+	}
+}
+
+// Observe transport order, not merely publication intent or the final report.
+type challengeOrderChannel struct {
+	fakeMediaChannel
+	questionBeforeImage bool
+}
+
+func (channel *challengeOrderChannel) DeliverText(
+	ctx context.Context,
+	messages []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	channel.mu.Lock()
+	for _, message := range messages {
+		if strings.Contains(message.Content, "Enter the fixture challenge") && len(channel.sentMedia) != 1 {
+			channel.questionBeforeImage = true
+		}
+	}
+	channel.mu.Unlock()
+	return channel.fakeMediaChannel.DeliverText(ctx, messages)
+}
+
+func TestDelegatedInteractionImageReachesOwnerBeforeNativeQuestion(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{ID: "delegate-challenge", Name: "delegate", Arguments: map[string]any{
+			"agent_id": "browser", "task": "Show the challenge image, then ask for its answer.",
+		}}}},
+		{ToolCalls: []providers.ToolCall{{ID: "capture-challenge", Name: "browser_capture", Arguments: map[string]any{
+			"delivery": "interaction",
+		}}}},
+		{ToolCalls: []providers.ToolCall{{ID: "ask-challenge", Name: "request_user_input", Arguments: map[string]any{
+			"questions": []any{
+				map[string]any{"id": "challenge", "header": "Challenge", "question": "Enter the fixture challenge"},
+			},
+		}}}},
+	}}
+	fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
+		cfg.Agents.List = []config.AgentConfig{
+			{
+				ID:        "main",
+				Default:   true,
+				Workspace: filepath.Join(cfg.WorkspacePath(), "main"),
+				Subagents: &config.SubagentsConfig{AllowAgents: []string{"browser"}},
+			},
+			{ID: "browser", Workspace: filepath.Join(cfg.WorkspacePath(), "browser")},
+		}
+	})
+	loop, store := fixture.Loop, media.NewFileMediaStore()
+	path := filepath.Join(t.TempDir(), "challenge.png")
+	if err := os.WriteFile(path, []byte("\x89PNG\r\n\x1a\nfixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(path, media.MediaMeta{Filename: "challenge.png", ContentType: "image/png"}, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop.SetMediaStore(store)
+	var claims atomic.Int32
+	if err = loop.RegisterRuntimeTool("browser_capture", func(*config.Config) (toolshared.Tool, error) {
+		return &routedCaptureFixture{
+			protectedFixedToolResultTool: &protectedFixedToolResultTool{
+				fixedToolResultTool: &fixedToolResultTool{name: "browser_capture"},
+			},
+			workspace: fixture.Config.WorkspacePath(),
+			ref:       ref,
+			claim:     func(context.Context) error { claims.Add(1); return nil },
+		}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = loop.RegisterRuntimeTool("request_user_input", func(*config.Config) (toolshared.Tool, error) {
+		return tools.NewRequestUserInputTool(tools.RequestUserInputToolOptions{})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	installTestOutboundCoordinator(t, loop, fixture.Config.WorkspacePath())
+	adapter := &challengeOrderChannel{}
+	loop.SetChannelManager(newStartedTestChannelManagerWithConfig(t, fixture.Config, fixture.Bus, store,
+		"telegram", adapter, channels.WithOutboundOutbox(loop.outboundCoordinator())))
+	_, status, err := runAgentLoopWithStatusForTest(
+		withOutboundTransaction(t.Context(), "delegated-challenge"),
+		loop,
+		fixture.Agent,
+		turnSpec{
+			Dispatch: DispatchRequest{
+				SessionKey:      "parent-challenge-session",
+				RouteSessionKey: "original-route",
+				UserMessage:     "Help me with the challenge.",
+				InboundContext: &bus.InboundContext{
+					Channel:  "telegram",
+					ChatID:   "chat",
+					ActorID:  "actor",
+					SenderID: "actor",
+					ChatType: "direct",
+				},
+			},
+			SendResponse: true,
+		},
+	)
+	if err != nil || status != TurnEndStatusSuspended {
+		for _, request := range provider.requests {
+			for _, message := range request {
+				if message.ToolCallID == "ask-challenge" {
+					t.Logf("native question result: %s", message.Content)
+				}
+			}
+		}
+		t.Fatalf("native question did not suspend: %s, %v", status, err)
+	}
+	record, ok := activeInteractionForSession(
+		loop.interactionRegistryForWorkspace(fixture.Agent.Workspace),
+		"parent-challenge-session",
+	)
+	if !ok || record.Status != interactions.StatusWaiting || record.Origin.TaskID == "" {
+		t.Fatal("delegated question did not reach the owner")
+	}
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	if adapter.questionBeforeImage || len(adapter.sentMedia) != 1 || claims.Load() != 1 {
+		t.Fatalf(
+			"image/question order or durable claim failed: early=%v images=%d claims=%d",
+			adapter.questionBeforeImage,
+			len(adapter.sentMedia),
+			claims.Load(),
+		)
 	}
 }

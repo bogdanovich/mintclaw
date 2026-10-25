@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -237,5 +238,34 @@ func TestUnavailableRetainedMediaFallsBackToCompletePrimaryText(t *testing.T) {
 	)
 	if err == nil || !channels.DeliveryDefinitelyNotSent(err) || errors.Is(err, errFinalHandledDeliveryAmbiguous) {
 		t.Fatalf("unpublished capability failure was not classified safely: %v", err)
+	}
+}
+
+func TestInteractionImageRequiresConfirmedDeliveryAndIsNotRetainedForFinalResend(t *testing.T) {
+	for _, outcome := range []toolResultDeliveryOutcome{toolResultDeliveryDirect, toolResultDeliveryQueued, toolResultDeliveryNone} {
+		t.Run(fmt.Sprint(outcome), func(t *testing.T) {
+			ts, cfg := retainedMediaTurn(t, "telegram")
+			result := retainedMediaResult(t, ts, cfg, "challenge")
+			result.Delivery.Intent = toolshared.DeliveryInteractionMedia
+			calls := 0
+			delivery := &syncToolResultDelivery{
+				deliverToUser: func(context.Context, *turnState, *toolshared.ToolResult, string, []runtimeevents.TraceScope, bool, bus.OutboundMetadata) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
+					calls++
+					return nil, outcome, nil
+				},
+			}
+			_, got := delivery.applySyncToolResultDelivery(
+				withOutboundTransaction(t.Context(), "interaction-image"),
+				ts,
+				result,
+				"browser_capture",
+			)
+			if calls != 1 || got.IsError != (outcome != toolResultDeliveryDirect) {
+				t.Fatalf("unconfirmed delivery was treated as success: %d %v", calls, got.IsError)
+			}
+			if retainSuppressedMedia(ts, cfg, got) != nil {
+				t.Fatal("interaction image was retained for final resend")
+			}
+		})
 	}
 }

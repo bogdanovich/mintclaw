@@ -81,14 +81,14 @@ use origin recovery to retry an accepted or outcome-unknown external commit.
 
 ## CAPTCHA and security challenges
 
-First show the obstacle with `browser_capture` or `browser_observe` with
-`screenshot=true` when capture is allowed. Do not assume a Security Measure
+First show the obstacle with `browser_capture` and `delivery=interaction`
+when capture is allowed. Confirm successful delivery before asking a question;
+normal delegated captures are retained for the final report. Do not assume a Security Measure
 page contains a text CAPTCHA. Do not solve it through an external solver.
 
 For an observed text answer field, use `browser_input` to ask the human for
 the answer. This retains the exact live session and binds the protected answer
-to that field. Capture and ask can be ordered in the same tool batch when refs
-are already known. An ordinary `request_user_input` question does not retain
+to that field. Ask only after the image delivery succeeds. An ordinary `request_user_input` question does not retain
 this browser. Submit separately after the protected answer is filled. If the
 challenge or binding expires, observe and ask again; never reuse an old answer.
 

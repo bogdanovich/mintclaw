@@ -8,10 +8,11 @@ show the available evidence rather than inventing an answer field.
 ## Text answer
 
 Before private login starts, observe the current challenge and send its image
-with `browser_capture` or `browser_observe` with `screenshot=true`. These tools
-already deliver media through the authenticated owner's durable outbound route.
-When field refs are known, capture and `browser_input ask` can be ordered in
-one tool batch so the question follows the image promptly.
+with `browser_capture` and `delivery=interaction`. This uses the authenticated
+owner's existing durable outbound route and waits for confirmed delivery even
+inside a delegated task. Normal delegated screenshots remain attached to the
+final report; an interaction image must be sent before the native question,
+without waiting for that report. Confirm capture success before asking.
 
 Use `browser_input ask` for the exact observed answer field. It retains the
 same live session while awaiting the answer, without transferring DOM control.
@@ -57,6 +58,8 @@ selected rendering profile and do not assume its old challenge survived.
 
 ## Implementation and rollout
 
+- Add an explicit interaction-image delivery intent to the existing outbox;
+  do not suppress it with ordinary child output or resend it in the final report.
 - Extend the existing local headed-profile admission to temporary sessions;
   keep headless, node and private-data exclusions.
 - Verify human/agent exclusivity, fresh observation after resume, temporary

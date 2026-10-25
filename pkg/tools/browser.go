@@ -782,8 +782,8 @@ func (*BrowserSessionTool) Description() string {
 		"close result is never proof that cleanup happened. " +
 		"For open and handoff, interaction_language is required and must match the natural language of the root " +
 		"user request that led to the browser operation, ignoring delegated or internal English instructions. " +
-		"For CAPTCHA/security challenges, first send an available screenshot with browser_capture or " +
-		"browser_observe screenshot=true so the user can see the obstacle. Use browser_input for a human's text " +
+		"For CAPTCHA/security challenges, first send an available screenshot with browser_capture " +
+		"delivery=interaction so the user can see the obstacle before being asked. Confirm delivery, then use browser_input for a human's text " +
 		"answer while retaining the same session. If mouse interaction is required in a headless session, close it " +
 		"and reopen the same site once in a configured same-target local ephemeral profile whose headed_view and " +
 		"handoff are true, then hand off. This is a fresh session; never claim cookies or login progress transferred. " +
@@ -2249,7 +2249,10 @@ func (*BrowserCaptureTool) RuntimeCapabilities() []runtimecap.CapabilityID {
 }
 
 func (*BrowserCaptureTool) Description() string {
-	return "Capture one retained PNG for an exact fresh browser observation, either the page or one semantic element reference."
+	return "Capture one retained PNG for an exact fresh browser observation, either the page or one semantic element reference. " +
+		"For a CAPTCHA or human handoff, set delivery=interaction to deliver the image to the owner immediately, even " +
+		"inside a delegated browser task. Confirm capture success before asking browser_input or handing off. " +
+		"The normal delivery mode retains delegated images for the final report. Private-login capture remains denied."
 }
 
 func (*BrowserCaptureTool) ToolLoopSemantics() loopguard.Semantics {
@@ -2267,6 +2270,10 @@ func (*BrowserCaptureTool) Parameters() map[string]any {
 			"browser_session_id", "tab_id", "snapshot_id", "snapshot_generation", "target",
 		},
 		"properties": map[string]any{
+			"delivery": map[string]any{
+				"type": "string", "enum": []string{"normal", "interaction"},
+				"description": "Use interaction for an image the user must see before answering a browser question.",
+			},
 			"browser_session_id":  map[string]any{"type": "string"},
 			"tab_id":              map[string]any{"type": "string"},
 			"frame_id":            map[string]any{"type": "string"},
@@ -2305,6 +2312,19 @@ func (tool *BrowserCaptureTool) execute(
 	args map[string]any,
 	deliver bool,
 ) *toolshared.ToolResult {
+	intent := toolshared.DeliveryImmediateContinue
+	if raw := args["delivery"]; raw != nil {
+		mode, ok := raw.(string)
+		if !ok || (mode != "normal" && mode != "interaction") {
+			return browserToolError(browser.ErrInvalid)
+		}
+		if mode == "interaction" {
+			if !deliver {
+				return browserToolError(browser.ErrDenied)
+			}
+			intent = toolshared.DeliveryInteractionMedia
+		}
+	}
 	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
 		return browserErrorResult(
 			"not_granted",
@@ -2362,7 +2382,7 @@ func (tool *BrowserCaptureTool) execute(
 	); lookupErr != nil {
 		return browserToolError(lookupErr)
 	} else if found {
-		return tool.result(ctx, owner, requestID, artifact, true, deliver)
+		return tool.result(ctx, owner, requestID, artifact, true, deliver, intent)
 	}
 	artifact, err := tool.runtime.source.CaptureScreenshot(ctx, browser.ScreenshotRequest{
 		Owner: owner, RequestID: requestID, SessionID: sessionID, TabID: tabID,
@@ -2372,7 +2392,7 @@ func (tool *BrowserCaptureTool) execute(
 	if err != nil {
 		return browserToolError(err)
 	}
-	return tool.result(ctx, owner, requestID, artifact, false, deliver)
+	return tool.result(ctx, owner, requestID, artifact, false, deliver, intent)
 }
 
 func (tool *BrowserCaptureTool) result(
@@ -2382,14 +2402,24 @@ func (tool *BrowserCaptureTool) result(
 	artifact browser.ScreenshotArtifact,
 	replayed bool,
 	deliver bool,
+	intent toolshared.DeliveryIntent,
 ) *toolshared.ToolResult {
 	result := tool.runtime.result(browserCaptureView{Artifact: artifact, Replayed: replayed})
 	if !deliver {
 		return result
 	}
-	if result.IsError || artifact.MediaRef == "" || artifact.Recovery == nil ||
-		(artifact.DeliveryState != browser.ScreenshotDeliveryPending &&
-			artifact.DeliveryState != browser.ScreenshotDeliveryAlreadyClaimed) {
+	if result.IsError {
+		return result
+	}
+	if artifact.MediaRef == "" || artifact.Recovery == nil ||
+		(artifact.DeliveryState != browser.ScreenshotDeliveryPending && artifact.DeliveryState != browser.ScreenshotDeliveryAlreadyClaimed) {
+		if intent == toolshared.DeliveryInteractionMedia {
+			return browserErrorResult(
+				"delivery_unavailable",
+				"The interaction image cannot be delivered to the owner.",
+				"report_image_unavailable",
+			)
+		}
 		return result
 	}
 	recovery := artifact.Recovery
@@ -2409,7 +2439,7 @@ func (tool *BrowserCaptureTool) result(
 		},
 	}).WithOutboundCommit(func(commitCtx context.Context) error {
 		return tool.runtime.source.ClaimScreenshotDelivery(commitCtx, delivery)
-	}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
+	}).WithDeliveryIntent(intent)
 }
 
 func (*BrowserActTool) Name() string { return "browser_act" }

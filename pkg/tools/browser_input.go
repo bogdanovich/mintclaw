@@ -37,8 +37,8 @@ func (tool *BrowserInputTool) ToolEnabledForAgent(agentID string) bool {
 
 func (*BrowserInputTool) Description() string {
 	return "Ask the user privately for one browser text-field value and fill that exact fresh observed field. " +
-		"For a text CAPTCHA before private login, send its current image with browser_capture or browser_observe " +
-		"screenshot=true first, then ask for the code here. This question retains the same browser while waiting; " +
+		"For a text CAPTCHA before private login, send its current image with browser_capture " +
+		"delivery=interaction and confirm successful delivery first, then ask for the code here. This question retains the same browser while waiting; " +
 		"do not close it or use an ordinary request_user_input question for this field. Interactive puzzles need " +
 		"a configured visible browser handoff instead. Private-login sessions retain their existing input denial. " +
 		"Use operation ask with the current browser session, tab, snapshot, field ref and a self-contained question " +

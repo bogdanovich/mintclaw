@@ -14,7 +14,8 @@ import (
 // content, model artifact references, or resolved filesystem paths.
 func retainSuppressedMedia(ts *turnState, cfg *config.Config, result *toolshared.ToolResult) *taskresult.Deliverable {
 	if ts == nil || !ts.opts.SuppressToolUserDelivery || result == nil || result.IsError ||
-		result.Control.TaskSuspended || result.Delivery.Outbound == nil {
+		result.Control.TaskSuspended || result.Delivery.Outbound == nil ||
+		result.Delivery.Intent == toolshared.DeliveryInteractionMedia {
 		return nil
 	}
 	out := result.Delivery.Outbound

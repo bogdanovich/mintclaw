@@ -35,8 +35,11 @@ type DeliveryIntent string
 const (
 	DeliveryDefault           DeliveryIntent = ""
 	DeliveryImmediateContinue DeliveryIntent = "immediate_continue"
-	DeliveryFinalHandled      DeliveryIntent = "final_handled"
-	DeliverySilent            DeliveryIntent = "silent"
+	// DeliveryInteractionMedia sends a tool-owned image before a human question,
+	// including inside a delegated turn whose ordinary output is suppressed.
+	DeliveryInteractionMedia DeliveryIntent = "interaction_media"
+	DeliveryFinalHandled     DeliveryIntent = "final_handled"
+	DeliverySilent           DeliveryIntent = "silent"
 )
 
 // ToolResult is the stable output produced by a tool. Runtime control and
@@ -253,7 +256,7 @@ func (delivery ToolDelivery) IsFinalHandled() bool {
 }
 
 func (delivery ToolDelivery) IsImmediate() bool {
-	return delivery.Intent == DeliveryImmediateContinue
+	return delivery.Intent == DeliveryImmediateContinue || delivery.Intent == DeliveryInteractionMedia
 }
 
 func (delivery ToolDelivery) IsSilent() bool {
