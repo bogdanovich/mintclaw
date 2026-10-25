@@ -140,6 +140,9 @@ func (tool *DocumentTool) routeFormTaskWorkflow(
 	if err != nil {
 		return documentFormToolError(err)
 	}
+	if view.Answer != nil && view.Answer.Choice == document.FormTaskIndependent {
+		return tool.formTaskIndependentReplyResult(ctx, owner, view)
+	}
 	progress, err := tool.formJobs.FormIntakeForJob(ctx, view.JobID, owner)
 	if err != nil || progress == nil {
 		return documentFormToolError(document.ErrFormJobConflict)
@@ -304,6 +307,9 @@ func (tool *DocumentTool) routeFormTaskWorkflow(
 		}
 	}
 	if view.State == document.FormTaskQuestion {
+		if latest != nil {
+			return latest
+		}
 		return tool.formTaskQuestionResult(ctx, owner, view)
 	}
 	work, err = tool.formJobs.FormTaskRouteWork(ctx, view.JobID, owner)
@@ -312,6 +318,17 @@ func (tool *DocumentTool) routeFormTaskWorkflow(
 	}
 	for _, pending := range work {
 		if pending != view.Reference {
+			if _, _, parseErr := document.ParseFormTaskRouteReference(pending); parseErr == nil {
+				other, readErr := tool.formJobs.ReadFormTaskRoute(ctx, pending, owner)
+				if readErr != nil {
+					return documentFormToolError(readErr)
+				}
+				// An unanswered scope question is a retained request, not a
+				// modal obligation after every successful form continuation.
+				if other.State == document.FormTaskQuestion {
+					continue
+				}
+			}
 			result := documentFormTaskResult(view, "")
 			var projection safeDocumentFormTask
 			_ = json.Unmarshal([]byte(result.ForLLM), &projection)
@@ -405,6 +422,14 @@ func (tool *DocumentTool) formTaskQuestionResult(
 		question.Question = "Это новая задача или продолжаем прежнюю форму без использования нового вложения? " +
 			"Текст рядом с вложением останется в защищённом заполнении формы."
 		question.Options[0].Label, question.Options[1].Label = "Новая задача; сохранить черновик", "Продолжить прежнюю форму"
+	}
+	if len(view.MediaRefs) == 0 {
+		question.Question = "Does the retained message belong to the previous form or to a separate task? " +
+			"The draft is preserved; you may also continue an unrelated conversation."
+		if view.Context.Language == "ru" {
+			question.Question = "Сохранённое сообщение относится к прежней форме или к отдельной задаче? " +
+				"Черновик сохранён; можно также продолжить посторонний разговор."
+		}
 	}
 	request := interactions.SuspensionRequest{
 		Kind: interactions.KindQuestion, Questions: []interactions.Question{question}, ProtectedAnswer: &binding,

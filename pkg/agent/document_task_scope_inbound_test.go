@@ -26,6 +26,8 @@ type taskScopeInboundProvider struct {
 	requireAcrossDiscovery bool
 	discoveryRequested     atomic.Bool
 	inputAfterDiscovery    atomic.Bool
+	sideText               string
+	sawSideText            atomic.Bool
 }
 
 func (provider *taskScopeInboundProvider) Chat(
@@ -34,6 +36,9 @@ func (provider *taskScopeInboundProvider) Chat(
 ) (*providers.LLMResponse, error) {
 	for index := len(messages) - 1; index >= 0; index-- {
 		text := messages[index].Content
+		if provider.sideText != "" && strings.Contains(text, provider.sideText) {
+			provider.sawSideText.Store(true)
+		}
 		if strings.Contains(text, "/private/synthetic-second.pdf") {
 			provider.sawOriginalFile.Store(true)
 		}
@@ -80,32 +85,40 @@ func (taskScopeDiscoveryProbe) Execute(context.Context, map[string]any) *toolsha
 	return &toolshared.ToolResult{ForLLM: "Reader discovery completed; continue the same newly authorized task."}
 }
 
-type taskScopeInboundInterpreter struct{ documentFormAuditor }
+type taskScopeInboundInterpreter struct {
+	documentFormAuditor
+	action document.FormTaskRouteAction
+}
 
-func (*taskScopeInboundInterpreter) InterpretFormTaskRoute(
+func (interpreter *taskScopeInboundInterpreter) InterpretFormTaskRoute(
 	_ context.Context, _ string, view document.FormTaskRouteSnapshot,
 ) (document.FormTaskRouteInterpretation, error) {
 	text := view.Text
 	if view.Answer != nil {
 		text = view.Answer.Text
 	}
+	action := interpreter.action
+	if action == "" {
+		action = document.FormTaskSwitch
+	}
 	return document.FormTaskRouteInterpretation{
-		Action:   document.FormTaskSwitch,
+		Action:   action,
 		Evidence: document.FormIntakeLiteral{Text: strings.TrimSpace(text), Occurrence: 1},
 	}, nil
 }
 
 type taskScopeInboundFixture struct {
-	loop   *AgentLoop
-	agent  *AgentInstance
-	bus    *interactionOwnershipBus
-	store  *document.FormJobStore
-	owner  document.FormJobOwner
-	route  document.FormTaskRouteSnapshot
-	record interactions.Record
-	msg    bus.InboundMessage
-	target *inboundDispatchTarget
-	model  *taskScopeInboundProvider
+	loop        *AgentLoop
+	agent       *AgentInstance
+	bus         *interactionOwnershipBus
+	store       *document.FormJobStore
+	owner       document.FormJobOwner
+	route       document.FormTaskRouteSnapshot
+	record      interactions.Record
+	msg         bus.InboundMessage
+	target      *inboundDispatchTarget
+	model       *taskScopeInboundProvider
+	interpreter *taskScopeInboundInterpreter
 }
 
 func (f taskScopeInboundFixture) wait(t *testing.T, completions ...int) {
@@ -267,7 +280,41 @@ func newTaskScopeInboundFixture(t *testing.T, waiting ...bool) taskScopeInboundF
 	if len(waiting) == 0 || waiting[0] {
 		record = markTestInteractionWaiting(t, registry, record)
 	}
-	return taskScopeInboundFixture{loop, agent, tracking, store, owner, route, record, msg, target, model}
+	return taskScopeInboundFixture{loop, agent, tracking, store, owner, route, record, msg, target, model, interpreter}
+}
+
+func TestDocumentTaskScopeUnrelatedBareMessageRunsOnlyTheReplyAndPreservesDraft(t *testing.T) {
+	for _, text := range []string{"test", "Сколько будет два плюс два?"} {
+		t.Run(text, func(t *testing.T) {
+			f := newTaskScopeInboundFixture(t)
+			f.interpreter.action = document.FormTaskIndependent
+			f.msg.Content, f.model.sideText = text, text
+			coordinator := newInboundTurnCoordinator(f.loop)
+			coordinator.handleInbound(t.Context(), f.msg)
+			coordinator.wait()
+			f.wait(t)
+			view, err := f.store.ReadFormTaskRoute(t.Context(), f.route.Reference, f.owner)
+			if err != nil || view.State != document.FormTaskQuestion || view.Text != f.route.Text ||
+				f.model.sawOriginalFile.Load() || !f.model.sawSideText.Load() {
+				t.Fatal("unrelated reply lost its live context or granted the original request")
+			}
+			progress, err := f.store.FindFormIntake(t.Context(), f.owner)
+			if err != nil || progress == nil || progress.ModeID != view.ModeID || progress.PendingTasks != 1 {
+				t.Fatal("side conversation lost the same capturing draft or original retained request")
+			}
+			if _, active := activeInteractionForSession(
+				f.loop.interactionRegistryForWorkspace(f.agent.Workspace), f.target.SessionKey,
+			); active {
+				t.Fatal("ordinary side conversation reopened the scope question")
+			}
+			for _, message := range f.agent.Sessions.GetHistory(f.target.SessionKey) {
+				if message.Role != "assistant" && (strings.Contains(message.Content, text) ||
+					strings.Contains(message.Content, "synthetic-second.pdf")) {
+					t.Fatal("live-only request escaped canonical input/tool history")
+				}
+			}
+		})
+	}
 }
 
 func TestDocumentTaskScopeBareAnswerWaitsForPromptAndPersistsItsIdentity(t *testing.T) {
