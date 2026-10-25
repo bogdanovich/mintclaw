@@ -14,6 +14,13 @@ inside a delegated task. Normal delegated screenshots remain attached to the
 final report; an interaction image must be sent before the native question,
 without waiting for that report. Confirm capture success before asking.
 
+An interaction continuation started by a phone-ready event has no inbound
+message spool. The runtime supplies a stable interaction-scoped outbound
+transaction for tool-time images, preserving an existing inbound transaction
+when present. Final report delivery uses its separate transaction. Resumed
+images keep the same owner route, durable media claim and confirmed-delivery
+requirements as the initial delegated screenshot.
+
 Use `browser_input ask` for the exact observed answer field. It retains the
 same live session while awaiting the answer, without transferring DOM control.
 The existing protected-answer sink fills once using its opaque continuation;
