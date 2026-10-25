@@ -19,9 +19,10 @@ const (
 
 // ActiveToolProfile pins one owned, read-only local fixture, not generic MCP.
 type ActiveToolProfile struct {
-	Address      string `json:"address"`
-	Namespace    string `json:"namespace"`
-	SteeringMode string `json:"steering_mode"`
+	Address          string `json:"address"`
+	Namespace        string `json:"namespace"`
+	SteeringMode     string `json:"steering_mode"`
+	MaxParallelTurns int    `json:"max_parallel_turns,omitempty"`
 }
 
 func (profile ActiveToolProfile) validate() error {
@@ -31,7 +32,8 @@ func (profile ActiveToolProfile) validate() error {
 	if err != nil || numberErr != nil || host != "127.0.0.1" || number < 1024 || number > 65535 ||
 		strconv.Itoa(number) != port || profile.Address != net.JoinHostPort(host, port) ||
 		idErr != nil || id.Version() != 4 || id.Variant() != uuid.RFC4122 || id.String() != profile.Namespace ||
-		profile.SteeringMode != "one-at-a-time" && profile.SteeringMode != "all" {
+		profile.SteeringMode != "one-at-a-time" && profile.SteeringMode != "all" ||
+		profile.MaxParallelTurns < 0 || profile.MaxParallelTurns > 2 {
 		return ErrInvalidPreset
 	}
 	return nil
@@ -69,6 +71,10 @@ func validateActiveToolPolicy(cfg *config.Config, preset Preset) error {
 		return ErrUnsafeTarget
 	}
 	logging, want := cfg.Events.Logging, activeToolLogging()
+	if profile.MaxParallelTurns != 0 && (cfg.Agents.List[0].MaxParallelTurns != profile.MaxParallelTurns ||
+		cfg.Agents.Defaults.MaxParallelTurns != profile.MaxParallelTurns) {
+		return ErrUnsafeTarget
+	}
 	server := cfg.Tools.MCP.Servers[activeToolServer]
 	if profile.validate() != nil || !cfg.Tools.MCP.Enabled || cfg.Tools.MCP.Discovery.Enabled ||
 		len(cfg.Tools.MCP.Servers) != 1 || !server.Enabled || server.Type != "http" || server.URL != profile.url() ||

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 )
 
 func buildSteeringTestCLI(t *testing.T, binary, root, commit string) {
@@ -54,6 +55,7 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 		{"boundary", "steering-boundary.json", "one-at-a-time", false},
 		{"order-one", "steering-order.json", "one-at-a-time", false},
 		{"order-all", "steering-order.json", "all", false},
+		{"isolation", "session-isolation.json", "one-at-a-time", false},
 		{"missing-source", "steering-boundary.json", "one-at-a-time", true},
 	} {
 		t.Run(variant.name, func(t *testing.T) {
@@ -68,6 +70,11 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 			item := LoadedCase{Case: parsed, Digest: digest(definition)}
 			fixture, parent := preparationFixture(t)
 			enableTestActiveTool(fixture)
+			if item.Case.Steering.Peer != nil {
+				fixture.cfg.Agents.List[0].MaxParallelTurns = 2
+				fixture.cfg.Agents.Defaults.MaxParallelTurns = 2
+				fixture.preset.ActiveTool.MaxParallelTurns = 2
+			}
 			fixture.preset.ActiveTool.SteeringMode, fixture.cfg.Agents.Defaults.SteeringMode = variant.mode, variant.mode
 			fixture.preset.JudgeModel = "eval-model"
 			fixture.cfg.Agents.Defaults.ContextManager = "seahorse"
@@ -87,10 +94,20 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 				finish := "stop"
 				if bytes.Contains(raw, []byte("You are an independent conversation judge")) {
 					judges.Add(1)
-					message = map[string]any{
-						"role":    "assistant",
-						"content": `{"version":1,"criteria":[{"id":"grounded-steering","verdict":"pass","reason":"Synthetic native control.","evidence_ids":["event-000001"]}]}`,
+					if item.Case.Steering.Peer != nil && (!bytes.Contains(raw, []byte("[scope a]")) ||
+						!bytes.Contains(raw, []byte("[scope b]"))) {
+						w.WriteHeader(http.StatusBadRequest)
+						return
 					}
+					evidenceID := "event-000001"
+					if item.Case.Steering.Peer != nil {
+						evidenceID = "scope-a-" + evidenceID
+					}
+					findings, _ := json.Marshal(JudgeFindings{Version: Version, Criteria: []JudgeFinding{{
+						ID: "grounded-steering", Verdict: Pass, Reason: "Synthetic native control.",
+						EvidenceIDs: []string{evidenceID},
+					}}})
+					message = map[string]any{"role": "assistant", "content": string(findings)}
 				} else {
 					targets.Add(1)
 					var body struct {
@@ -114,6 +131,10 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 							}
 						}
 					}
+					if item.Case.Steering.Peer != nil {
+						t.Logf("model target=%d at=%s scope=%s has_tool_result=%v",
+							targets.Load(), time.Now().UTC().Format(time.RFC3339Nano), args.TrialID, toolResult)
+					}
 					if args.TrialID != "" && !toolResult {
 						arguments, _ := json.Marshal(args)
 						message = map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{
@@ -127,6 +148,13 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 						for _, update := range item.Case.Steering.Updates {
 							if bytes.Contains(raw, []byte(update)) {
 								marker = update
+							}
+						}
+						if peer := item.Case.Steering.Peer; peer != nil {
+							for _, value := range []string{peer.InitialMarker, peer.Update} {
+								if bytes.Contains(raw, []byte(value)) {
+									marker = value
+								}
 							}
 						}
 						message = map[string]any{"role": "assistant", "content": marker}
@@ -218,9 +246,60 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 			}
 			if runErr != nil || report.Verdict != Pass || trial.Verdict != Pass || judges.Load() != 1 ||
 				report.TargetBudget == nil || report.TargetBudget.verdict() != Pass {
+				t.Logf("native prerequisites host=%+v lifecycle=%+v private=%+v budget=%s",
+					report.ActiveTool, report.TargetLifecycle, report.PrivateSurfaces, report.TargetBudget.verdict())
+				if report.PrivateSurfaces != nil {
+					t.Logf("native SQLite=%+v", report.PrivateSurfaces.SQLite)
+				}
 				proofCode := "missing"
 				if trial.Steering != nil {
 					proofCode = trial.Steering.Code
+				}
+				if trial.Isolation != nil {
+					for _, event := range trial.Events {
+						if event.Kind == "input" {
+							t.Logf("main input id=%s hash=%s", event.RequestID,
+								diagnostictrace.FilteredHash(event.Content, nil))
+						}
+					}
+					peer := trial.Isolation.Peer
+					t.Logf("peer execution=%s/%s session=%s closed=%v",
+						peer.ExecutionVerdict, peer.ExecutionCode, peer.SessionKey, peer.TransportClosed)
+					if peer.Steering != nil {
+						t.Logf("peer proof=%s fixture=%+v guidance=%d",
+							peer.Steering.Code, peer.Steering.Fixture, len(peer.Steering.Guidance))
+					}
+					for _, event := range peer.Events {
+						if event.Kind == "input" {
+							t.Logf("peer input id=%s hash=%s", event.RequestID,
+								diagnostictrace.FilteredHash(event.Content, nil))
+						}
+					}
+					logs, _ := filepath.Glob(filepath.Join(prepared.Home, "eval-gateway-*.jsonl"))
+					for _, name := range logs {
+						rawLog, _ := os.ReadFile(name)
+						for index, line := range bytes.Split(rawLog, []byte{'\n'}) {
+							if len(bytes.TrimSpace(line)) != 0 {
+								_, parseErr := decodeValue(json.NewDecoder(bytes.NewReader(line)), 0)
+								if parseErr != nil {
+									t.Logf("native log line=%d strict_parse=%v bytes=%d", index, parseErr, len(line))
+								}
+							}
+							scan := privateContentScan{filter: fixture.cfg.SensitiveDataReplacer(), tokens: 65536}
+							if scan.jsonLines(line) {
+								t.Logf(
+									"native log line=%d privacy_blocked uncertain=%v bytes=%d",
+									index,
+									scan.uncertain,
+									len(line),
+								)
+							}
+							var event activeToolLogEvent
+							if json.Unmarshal(line, &event) == nil && event.Kind != "" {
+								t.Logf("native event=%+v", event)
+							}
+						}
+					}
 				}
 				t.Fatalf(
 					"native steering failed: %v report=%s trial=%s/%s proof=%s targets=%d judges=%d checks=%+v\n%s",
@@ -238,6 +317,10 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 			if report.ActiveTool == nil || !validSteeringEvidence(trial, item.Case, prepared.Workspace,
 				report.ActiveTool.Profile, report.Runtime) {
 				t.Fatal("native positive lost its independently replayable hard evidence")
+			}
+			if item.Case.Steering.Peer != nil && (targets.Load() != 6 || report.TargetUsage == nil ||
+				report.TargetUsage.Finals != 4 || trial.Isolation == nil) {
+				t.Fatal("two-scope target work or returned usage was omitted")
 			}
 			assertSteeringFrozenControls(t, trial, item.Case, report.RunReport, prepared.Workspace)
 			for _, path := range []string{"sessions", "state/outbox", "state/diagnostics/traces"} {

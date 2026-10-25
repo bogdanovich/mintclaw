@@ -12,7 +12,7 @@ func TestSteeringDefinitionsRemainPendingAndCannotWidenAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"general.steering.boundary", "general.steering.order"} {
+	for _, id := range []string{"general.steering.boundary", "general.steering.order", "general.session.isolation"} {
 		items, err := Select(corpus, Selection{IDs: []string{id}})
 		if err != nil || len(items) != 1 || items[0].Availability().Default ||
 			!errors.Is(CheckRunAvailability(items, false), ErrPendingCases) {

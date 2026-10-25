@@ -82,6 +82,13 @@ func validEventUsage(event Event) bool {
 }
 
 func (usage *TargetUsage) addTrial(trial Trial) {
+	usage.addScope(trial)
+	if trial.Isolation != nil {
+		usage.addScope(trial.Isolation.Peer.trial(trial))
+	}
+}
+
+func (usage *TargetUsage) addScope(trial Trial) {
 	inputs, finals := make(map[string]int), make(map[string]bool)
 	turns := make(map[events.TraceScope]bool)
 	for _, event := range trial.Events {

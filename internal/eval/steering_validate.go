@@ -21,7 +21,7 @@ type steeringHistoryBinding struct {
 	result string
 }
 
-func validSteeringEvidence(
+func validSteeringScopeEvidence(
 	trial Trial,
 	item Case,
 	workspace string,

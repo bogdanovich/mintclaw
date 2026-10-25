@@ -62,6 +62,34 @@ is not a claim of live coverage for an artificially paused finalization edge,
 anonymous coding steering, multiple senders or physical Telegram rendering.
 Distinct-session isolation is the next C2 scenario, not covered by these cases.
 
+## Scope Isolation
+
+`general.session.isolation` is a separate pending contract, never a default.
+It requires an active-tool preset with `max_parallel_turns: 2`, matching exactly
+both `agents.defaults.max_parallel_turns` and the sole agent's corresponding
+setting. An omitted pin preserves legacy profile behavior but cannot run this
+scenario. No native scheduler or runtime authority is replaced.
+
+The driver holds A's read, completes B's read/correction/follow-up on a fresh
+native connection, then corrects/releases A and queries A. Both per-scope flows
+have three-input ceilings, totaling the source contract's six. The two scope
+materializations retain the original case identity/digest, not alternate public
+case identities. One owned host's monotonic fixture sequence must enclose B's
+read lifecycle inside A's held read. Both native scopes, trace roots, canonical
+histories and deliveries are independently checked, including absence of the
+other scope's markers. History/outbox are refreshed for both after native stop.
+
+One judge sees two scope-labeled visible transcripts, grouped by scope with
+namespaced display event IDs. These labels are presentation, not additional
+native events; raw proof never enters the judge prompt. Offline grading uses
+the same projection. Returned-final usage includes both scopes; optional routed
+model telemetry still describes the main trial's projected events, not all calls.
+The independent shared native call budget covers both scopes.
+
+Implementation validation is in progress: genuine six-call execution is
+observed, but a post-stop privacy census is currently unavailable. This is not
+a passing native control or live qualification and must not promote the case.
+
 Each case permits one judge call, no model-user calls, at most three/four user
 inputs, a two-minute turn and five-minute conversation budget. The existing
 run-wide provider budget and suite deadline remain independent hard bounds;

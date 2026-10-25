@@ -68,6 +68,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			!slices.Contains(item.Case.Steering.Modes, preset.ActiveTool.SteeringMode)) {
 			return RunReport{}, ErrUnsafeTarget
 		}
+		if item.Case.Steering != nil && item.Case.Steering.Peer != nil && preset.ActiveTool.MaxParallelTurns != 2 {
+			return RunReport{}, ErrUnsafeTarget
+		}
 		if item.Case.PDF != nil && item.Case.PDF.SourceFields != nil &&
 			containsAll(preset.Capabilities, item.Case.Requires) && !preset.CaptureModelMetadata {
 			return RunReport{}, ErrUnsafeTarget
@@ -515,6 +518,18 @@ func runAdmittedTrial(
 		return trial
 	}
 	if item.Case.Steering != nil {
+		if item.Case.Steering.Peer != nil {
+			isolation, prepareErr := newIsolationConversation(item, target, sessionID, roles, options)
+			if prepareErr != nil {
+				client.Close()
+				trial.Verdict, trial.Code = Inconclusive, "isolation_preparation_unavailable"
+				return trial
+			}
+			mainItem := item
+			mainItem.Case = isolationMainCase(item.Case)
+			return runDomainConversation(caseCtx, client, mainItem, sessionID,
+				target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, isolation)
+		}
 		steering, err := newSteeringConversation(item.Case, target, sessionID)
 		if err != nil {
 			client.Close()

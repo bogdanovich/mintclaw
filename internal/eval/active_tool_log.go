@@ -88,7 +88,7 @@ func readActiveToolLog(
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
-		if _, err := decodeValue(json.NewDecoder(bytes.NewReader(line)), 0); err != nil {
+		if _, err := decodeJSONValue(json.NewDecoder(bytes.NewReader(line)), 0, true); err != nil {
 			return nil, errNativeEvidence
 		}
 		var record activeToolLogEvent

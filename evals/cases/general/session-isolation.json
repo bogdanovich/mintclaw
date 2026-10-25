@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "general.session.isolation",
+  "suite": "general",
+  "tags": ["session", "isolation", "steering", "core"],
+  "description": "Keep two concurrent native session scopes isolated while one holds a read and the other receives actual steering.",
+  "task": "Remember the synthetic current label mc-c2-alpha-old-d72. Call mcp_corefixture_eval_barrier exactly once using the provided Eval tool arguments. Wait for that read to finish, then reply with only the current label. Honor mid-turn corrections without canceling the admitted read. Do not ask questions or call other tools.",
+  "requires": ["conversation", "bounded_calls", "active_tool"],
+  "fixtures": [],
+  "steering": {
+    "scenario": "isolation",
+    "modes": ["one-at-a-time"],
+    "initial_marker": "mc-c2-alpha-old-d72",
+    "updates": ["mc-c2-alpha-new-n26"],
+    "peer": {
+      "initial_marker": "mc-c2-beta-old-t13",
+      "update": "mc-c2-beta-new-h68"
+    }
+  },
+  "driver": {
+    "mode": "scripted",
+    "steps": [
+      {
+        "wait_for": {"kind": "final"},
+        "action": {"kind": "message", "text": "What is the current synthetic label? Reply with the label only. Do not call tools."}
+      }
+    ]
+  },
+  "limits": {"max_user_turns": 6, "turn_timeout": "2m", "case_timeout": "5m", "max_driver_calls": 1},
+  "checks": [
+    {"id": "native-isolation", "kind": "steering_boundary"},
+    {"id": "current-label", "kind": "response_contains", "expected": "mc-c2-alpha-new-n26"},
+    {"id": "old-label-absent", "kind": "final_response_absent", "expected": "mc-c2-alpha-old-d72"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"}
+  ],
+  "rubric": [
+    {
+      "id": "grounded-steering",
+      "description": "The separately labeled scope a and scope b conversations retain only their own corrected labels: mc-c2-alpha-new-n26 in a, mc-c2-beta-new-h68 in b. Both follow-ups recall the correct scope, without cross-scope facts or claims of cancellation. Native hard checks independently prove distinct owners, overlapping held reads, correctly scoped steering/history and final delivery.",
+      "required": true
+    }
+  ]
+}
