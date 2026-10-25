@@ -52,6 +52,10 @@ earlier assistant said that a browser was open.
 
 ## Saved-account login
 
+Use a configured local ephemeral profile admitted for private `browser_login`;
+choose a headed ephemeral profile when manual control is likely. A persistent,
+attached personal or cloud profile is not a substitute for private login.
+
 For a requested login, start at the site's public HTTPS homepage and use its
 observed Sign in link. A working homepage does not prove the sign-in page is
 available. Observe the actual page: HTTP 200 can still contain a CAPTCHA or
