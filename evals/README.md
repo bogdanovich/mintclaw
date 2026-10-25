@@ -30,11 +30,13 @@ browser/owned-target execution and baseline comparison have their own evidence c
 live scenario qualification.
 General cases require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
-The corpus has 19 cases: six active/default General, pending isolation,
+The corpus has 20 cases: six active/default General, pending isolation and tool recovery,
 six pending PDF and six pending browser. The fixed
 [C2 campaign](../docs/operations/manual-agent-evals-core-c2-20261025.md) qualified
 boundary and both order modes with 3/3 batches; it also retains one failed order
 qualification and an inconclusive isolation batch caused by provider quota/unknown usage.
+The pending [read recovery contract](../docs/reference/core-read-recovery-eval.md)
+uses a separate read-only profile and does not widen the default active-tool profile.
 Steering order records separate explicit
 `one-at-a-time`/`all` profile variants; native same-sender inputs coalesce in FIFO
 order in both modes. These live cases hold one read, not a parallel tool batch or

@@ -37,7 +37,7 @@ does not reopen C0 or E0-E5.
 | C1b | C1a | Ordinary answer/resume native observer and stale/wrong-prompt controls | Complete, [#1881](https://github.com/bogdanovich/mintclaw/pull/1881); qualified in C1q |
 | C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | Complete: #1884, #1882, #1885, #1887 and #1888 merged; both cases qualified 1 + fixed 3/3 on `c69659c5` |
 | C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | Implemented, #1890-#1893; boundary/order fixed batches qualified; isolation pending quota |
-| C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Queued |
+| C3a | C2 | Narrow read-only fixtures and tool failure/recovery | In progress: native CLI/frozen regrade positive; broader/race/PR validation next; no live qualification |
 | C3b | C2 | Native active stop/reuse, distinct from local driver stop | Queued |
 | C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Queued |
 | C3d | C2 | Final-once delivery with streaming/non-streaming controls | Queued |
@@ -58,7 +58,7 @@ or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
 | `general.steering.boundary` | C2 native held-read driver/observer | Active barrier, enqueue/injection, paired result, final census | Qualification + fixed 3/3 pass; active/default |
 | `general.steering.order` | C2 explicit same-sender mode variants | FIFO/coalescence, no orphan/duplicate final; exact edge races in native Go tests | Both mode batches 3/3; one failed qualification retained; active/default |
 | `general.session.isolation` | C2 scope-pair, #1893 | Distinct owners, enclosed held reads, scoped markers/history/delivery | Qualification pass; batch 3 inconclusive from HTTP 429/unknown usage; pending |
-| `general.tools.recovery` | Queued C3a | Failed read then successful pinned-fixture read | Not present |
+| `general.tools.recovery` | C3a typed profile/driver/native observer | Failed read then successful pinned-fixture read | Pending; model-free native positive passed; not live-qualified |
 | `general.control.stop` | Queued C3b | Terminal abort/queue settlement and successful next request | Not present |
 | `general.approval.denied` | Queued C3c | Exact prompt denied; unchanged independent target/effect census | Not present |
 | `general.delivery.final-once` | Queued C3d | Request/outbox/delivery identity, not streaming-revision counts | Not present |

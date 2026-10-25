@@ -5,26 +5,28 @@ import (
 	"strings"
 )
 
-type steeringRun struct {
-	trials map[string]steeringPendingTrial
+type coreEvidenceRun struct {
+	trials map[string]corePendingTrial
 }
 
-type steeringPendingTrial struct {
+type corePendingTrial struct {
 	item    Case
 	session string
 }
 
-func (run *steeringRun) retain(item Case, trial Trial) {
+func (run *coreEvidenceRun) retain(item Case, trial Trial) {
 	if run.trials == nil {
-		run.trials = map[string]steeringPendingTrial{}
+		run.trials = map[string]corePendingTrial{}
 	}
-	run.trials[trial.ID] = steeringPendingTrial{item: item, session: trial.SessionID}
+	run.trials[trial.ID] = corePendingTrial{item: item, session: trial.SessionID}
 }
 
-// Re-read canonical history and the full outbox census only after native stop.
-// Late duplicate delivery/replay cannot hide behind a successful first final.
-// Finish every bounded observation before allowing any assessment/model call.
-func (run *steeringRun) finish(
+func deferredCoreEvidence(item Case) bool { return item.Steering != nil || item.ReadRecovery != nil }
+
+// One owner captures all bounded core observations after native stop and before
+// any assessment/model call. A later trial's unknown budget invalidates earlier
+// conversations too; successful visible finals alone cannot make them pass.
+func (run *coreEvidenceRun) finish(
 	ctx context.Context, target admittedTarget, writer *privateReport, report *RunReport,
 	facts map[string]string, filter *strings.Replacer, assess func(Case, *Trial),
 ) error {
@@ -68,6 +70,12 @@ func (run *steeringRun) finish(
 					refreshSteeringScope(ctx, target, &peer, isolationPeerCase(pending.item), facts, filter)
 					trial.Isolation.Peer = isolationScope(peer)
 				}
+			}
+		}
+		if trial.ReadRecovery != nil && trial.ExecutionVerdict == Pass {
+			trial.ReadRecovery.Code = "owned_scope_unavailable"
+			if readRecoveryOwnedReady(*report) {
+				refreshReadRecoveryScope(ctx, target, &trial, facts, filter)
 			}
 		}
 		finalized = append(finalized, finalizedTrial{index: index, item: pending.item, trial: trial})

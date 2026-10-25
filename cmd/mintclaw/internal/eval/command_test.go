@@ -25,9 +25,10 @@ func TestOfflineCommands(t *testing.T) {
 		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 			t.Fatal(err)
 		}
-		if result.RuntimeRun || result.Outcome != "valid" || len(result.Cases) != 4 ||
+		if result.RuntimeRun || result.Outcome != "valid" || len(result.Cases) != 5 ||
 			result.Cases[0].ID != "browser.fixture.followup" || result.Cases[1].ID != "general.context.correction" ||
 			result.Cases[2].ID != "general.context.followup" || result.Cases[3].ID != "general.interaction.answer" ||
+			result.Cases[4].ID != "general.tools.recovery" ||
 			strings.Contains(output.String(), "MC_EVAL_CONTEXT") ||
 			strings.Contains(output.String(), "use request_user_input to ask exactly") {
 			t.Fatal("offline command leaked task contents or claimed a runtime run")
@@ -130,15 +131,16 @@ func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
 				}
 			case "pending":
 				pending++
+				core := item.ID == "general.session.isolation" || item.ID == "general.tools.recovery"
 				if item.Default || item.PendingReason == "" ||
-					item.Suite == "general" && item.ID != "general.session.isolation" {
+					item.Suite == "general" && !core {
 					t.Fatal("pending metadata incorrect")
 				}
 			default:
 				t.Fatal("catalog status unavailable")
 			}
 		}
-		if active != 6 || pending != 13 || result.RuntimeRun {
+		if active != 6 || pending != 14 || result.RuntimeRun {
 			t.Fatal("offline inspection hid deferred coverage or claimed execution")
 		}
 	}

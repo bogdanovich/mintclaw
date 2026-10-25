@@ -28,7 +28,7 @@ func gradeSteeringChecks(item Case, trial Trial, report RunReport, workspace str
 	return checks
 }
 
-func assessSteering(
+func assessCoreConversation(
 	ctx context.Context,
 	judge *ModelRole,
 	item Case,
@@ -36,7 +36,7 @@ func assessSteering(
 	report RunReport,
 	workspace string,
 ) {
-	trial.Checks = gradeSteeringChecks(item, *trial, report, workspace)
+	trial.Checks = gradeCoreChecks(item, *trial, report, workspace)
 	trial.Verdict, trial.Code = trial.ExecutionVerdict, trial.ExecutionCode
 	for _, check := range trial.Checks {
 		trial.Verdict = combineVerdicts(trial.Verdict, check.Verdict)
@@ -44,6 +44,9 @@ func assessSteering(
 	trial.EvidenceEligible = trial.Verdict == Pass
 	if trial.Verdict != Pass {
 		trial.Code = "required_steering_check_not_passed"
+		if item.ReadRecovery != nil {
+			trial.Code = "required_read_recovery_check_not_passed"
+		}
 		return
 	}
 	judgement := judgeConversation(ctx, judge, item, steeringJudgeEvents(*trial))
@@ -57,4 +60,11 @@ func assessSteering(
 			trial.Code = judgement.Code
 		}
 	}
+}
+
+func gradeCoreChecks(item Case, trial Trial, report RunReport, workspace string) []CheckResult {
+	if item.ReadRecovery != nil {
+		return gradeReadRecoveryChecks(item, trial, report, workspace)
+	}
+	return gradeSteeringChecks(item, trial, report, workspace)
 }

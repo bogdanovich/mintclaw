@@ -41,6 +41,12 @@
       "status": "pending",
       "default": false,
       "reason": "C2 fixed batch inconclusive: Gemini HTTP 429 caused unknown usage in the shared native budget. Not qualified; no retry-until-green."
+    },
+    {
+      "id": "general.tools.recovery",
+      "status": "pending",
+      "default": false,
+      "reason": "C3 native read-only recovery contract awaits implementation validation and fixed qualification; not part of defaults."
     }
   ]
 }
