@@ -50,6 +50,9 @@ func assessCoreConversation(
 		if item.NativeStop != nil {
 			trial.Code = "required_native_stop_check_not_passed"
 		}
+		if item.ApprovalDenied != nil {
+			trial.Code = "required_approval_denied_check_not_passed"
+		}
 		return
 	}
 	judgement := judgeConversation(ctx, judge, item, steeringJudgeEvents(*trial))
@@ -66,6 +69,9 @@ func assessCoreConversation(
 }
 
 func gradeCoreChecks(item Case, trial Trial, report RunReport, workspace string) []CheckResult {
+	if item.ApprovalDenied != nil {
+		return gradeApprovalDeniedChecks(item, trial, report, workspace)
+	}
 	if item.NativeStop != nil {
 		return gradeNativeStopChecks(item, trial, report, workspace)
 	}

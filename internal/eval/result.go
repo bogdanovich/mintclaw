@@ -73,6 +73,7 @@ type Trial struct {
 	Isolation            *IsolationEvidence            `json:"isolation,omitempty"`
 	ReadRecovery         *ReadRecoveryEvidence         `json:"read_recovery,omitempty"`
 	NativeStop           *NativeStopEvidence           `json:"native_stop,omitempty"`
+	ApprovalDenied       *ApprovalDeniedEvidence       `json:"approval_denied,omitempty"`
 }
 
 // Private, bounded native observations. They are not model input, authorization,

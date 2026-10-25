@@ -67,6 +67,7 @@ func TestApprovalFixtureDeniesEveryScopeAndArgumentMismatch(t *testing.T) {
 		"path":      func(r *agent.ToolApprovalRequest) { r.Arguments["path"] = "../outside" },
 		"absolute":  func(r *agent.ToolApprovalRequest) { r.Arguments["path"] = "/eval-fixtures/approval.txt" },
 		"content":   func(r *agent.ToolApprovalRequest) { r.Arguments["content"] = "other" },
+		"newline":   func(r *agent.ToolApprovalRequest) { r.Arguments["content"] = ApprovalAfter + "\n" },
 		"overwrite": func(r *agent.ToolApprovalRequest) { r.Arguments["overwrite"] = false },
 		"type":      func(r *agent.ToolApprovalRequest) { r.Arguments["overwrite"] = "true" },
 		"extra":     func(r *agent.ToolApprovalRequest) { r.Arguments["extra"] = true },

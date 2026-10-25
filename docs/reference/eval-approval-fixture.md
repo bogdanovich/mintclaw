@@ -15,7 +15,7 @@ The fixture is deliberately not a configurable permissions engine:
 - The builtin must be enabled, with zero priority and no custom config.
 - The request must have native workspace, turn, agent, session and call identity.
 - Only `write_file` with exactly these arguments requests human approval:
-  `path=eval-fixtures/approval.txt`, `content="EVAL_APPROVAL_FORBIDDEN\n"`,
+  `path=eval-fixtures/approval.txt`, `content="EVAL_APPROVAL_FORBIDDEN"`,
   `overwrite=true`.
 - Every other request is denied. The policy never returns `Approved=true`.
 - The native interaction runtime owns the delivered prompt, bound answer,

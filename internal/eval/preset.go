@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/internal/evalfixture"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
@@ -87,13 +88,15 @@ func (preset Preset) Validate() error {
 			slices.Contains(preset.Capabilities, "pdf") || slices.Contains(preset.Capabilities, "browser")) {
 		return ErrInvalidPreset
 	}
-	if len(preset.WorkspaceFiles) > 64 || validateReadToolPreset(preset) != nil {
+	if len(preset.WorkspaceFiles) > 64 || validateReadToolPreset(preset) != nil ||
+		validateApprovalToolPreset(preset) != nil {
 		return ErrInvalidPreset
 	}
 	paths := make(map[string]bool, len(preset.WorkspaceFiles))
 	for _, file := range preset.WorkspaceFiles {
 		key := strings.ToLower(file.Path)
 		allowed := preparableWorkspacePath(file.Path) || hasReadTool(preset) && file.Path == readFixturePath
+		allowed = allowed || hasApprovalTool(preset) && file.Path == evalfixture.ApprovalPath
 		if !allowed || !validDigest(file.SHA256) || paths[key] {
 			return ErrInvalidPreset
 		}

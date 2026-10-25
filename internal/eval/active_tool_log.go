@@ -18,6 +18,7 @@ import (
 
 type activeToolLogEvent struct {
 	ID                 string    `json:"event_id"`
+	TraceID            string    `json:"trace_id"`
 	Kind               string    `json:"event_kind"`
 	Time               time.Time `json:"event_time"`
 	AgentID            string    `json:"agent_id"`
@@ -59,10 +60,19 @@ func readActiveToolLog(
 func readOwnedToolLog(
 	ctx context.Context, target admittedTarget, facts map[string]string, filter *strings.Replacer,
 ) ([]activeToolLogObservation, error) {
+	profileMatches := false
+	if target.preset.ActiveTool != nil {
+		profileMatches = target.activeTool != nil && target.preset.ActiveTool.validate() == nil &&
+			target.activeTool.url == target.preset.ActiveTool.url()
+	} else if hasApprovalTool(target.preset) && target.activeTool == nil {
+		profileMatches = validateApprovalToolPolicy(
+			target.config,
+			target.preset,
+			target.preset.ExpectedWorkspace,
+		) == nil
+	}
 	if ctx == nil || ctx.Err() != nil || target.config == nil ||
-		target.preset.ActiveTool == nil || target.activeTool == nil ||
-		target.preset.ActiveTool.validate() != nil || target.activeTool.url != target.preset.ActiveTool.url() ||
-		target.ownedLog == "" {
+		!profileMatches || target.ownedLog == "" {
 		return nil, errNativeEvidence
 	}
 	home, err := privateHome(target.preset.IsolationRoot)

@@ -65,7 +65,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			return RunReport{}, ErrUnsafeTarget
 		}
 		if validateReadRecoveryBinding(preset, item.Case) != nil ||
-			validateNativeStopBinding(preset, item.Case) != nil {
+			validateNativeStopBinding(preset, item.Case) != nil ||
+			validateApprovalDeniedBinding(preset, item.Case) != nil {
 			return RunReport{}, ErrUnsafeTarget
 		}
 		if item.Case.Steering != nil && (preset.ActiveTool == nil || !options.StartTarget ||
@@ -139,7 +140,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		defer scanCancel()
 		observation := observePrivateSurfaces(scanCtx, child.profile.home, retainedFacts.values,
 			child.profile.config.SensitiveDataReplacer(), retainedFacts.documents,
-			pendingBrowser.approvalKeyWitness(child.profile.home))
+			pendingCore.approvalKeyWitness(child.profile.home, pendingBrowser.approvalKeyWitness(child.profile.home)))
 		privateSurfaces = &observation
 	}
 	defer func() {
@@ -233,6 +234,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		case item.Case.Driver.Mode == "llm_user" && roles.user == nil:
 			trial.Verdict, trial.Code = Skipped, "driver_unavailable"
 		case item.Case.PDF == nil && item.Case.Browser == nil && item.Case.ReadRecovery == nil &&
+			item.Case.ApprovalDenied == nil &&
 			(len(item.Case.Fixtures) != 0 || len(item.Case.Driver.Facts) != 0):
 			trial.Verdict, trial.Code = Skipped, "domain_evidence_unavailable"
 		case suiteCtx.Err() != nil:
@@ -562,6 +564,16 @@ func runAdmittedTrial(
 		}
 		return runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, recovery)
+	}
+	if item.Case.ApprovalDenied != nil {
+		denial, prepareErr := newApprovalDeniedConversation(caseCtx, item.Case, target, sessionID)
+		if prepareErr != nil {
+			client.Close()
+			trial.Verdict, trial.Code = Inconclusive, "approval_denied_preparation_unavailable"
+			return trial
+		}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, denial)
 	}
 	if browser != nil {
 		trial = runDomainConversation(caseCtx, client, item, sessionID,

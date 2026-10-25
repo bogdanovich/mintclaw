@@ -38,8 +38,8 @@ does not reopen C0 or E0-E5.
 | C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | Complete: #1884, #1882, #1885, #1887 and #1888 merged; both cases qualified 1 + fixed 3/3 on `c69659c5` |
 | C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | Implemented, #1890-#1893; boundary/order fixed batches qualified; isolation pending quota |
 | C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Implemented/merged #1895; qualification pass, batch 1 pass/2 judge errors; report #1896 pending review approval |
-| C3b | C2 | Native active stop/reuse, distinct from local driver stop | In progress: #1897 prerequisite merged; native abort/queue/reuse and frozen oracle implemented; validation/qualification pending |
-| C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Queued |
+| C3b | C2 | Native active stop/reuse, distinct from local driver stop | Implemented/merged #1897-#1898; live qualification pending |
+| C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Fixture #1899 merged; full native case/controls implemented, validation/review pending; no live qualification |
 | C3d | C2 | Final-once delivery with streaming/non-streaming controls | Queued |
 | C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Queued |
 | C3f | C1q | Controlled small context and actual compaction witness | Queued |
@@ -60,7 +60,7 @@ or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
 | `general.session.isolation` | C2 scope-pair, #1893 | Distinct owners, enclosed held reads, scoped markers/history/delivery | Qualification pass; batch 3 inconclusive from HTTP 429/unknown usage; pending |
 | `general.tools.recovery` | C3a, #1895 | Failed read then successful pinned-fixture read | Qualification pass; batch 1 pass/2 judge provider errors; pending/non-default |
 | `general.control.stop` | C3b typed in-flight native control | Terminal abort, canceled held read, absent queued B, canonical pairing, outbox census and new final | Pending/non-default; no live qualification |
-| `general.approval.denied` | Queued C3c | Exact prompt denied; unchanged independent target/effect census | Not present |
+| `general.approval.denied` | C3c typed narrow hook/write profile | HMAC-bound exact denial, terminal resolution, canonical pairing, no execution, unchanged target and complete delivery | Pending/non-default; no live qualification |
 | `general.delivery.final-once` | Queued C3d | Request/outbox/delivery identity, not streaming-revision counts | Not present |
 | `general.history.restart` | Queued C3e | Distinct owned processes, preserved session/history | Not present |
 | `general.context.compaction` | Queued C3f | Actual compaction receipt and corrected recall | Not present |
@@ -141,7 +141,7 @@ Operator-owned reports are observations, not hostile-filesystem attestations;
 `compare` summarizes recorded outcomes rather than performing a new grading.
 
 Model-free controls are not live qualification. C1q's separately retained live
-campaign qualifies these two contracts; C2/C3a and the C3b implementation below leave five C3
+campaign qualifies these two contracts; C2/C3a and the C3b/C3c implementations below leave four C3
 contracts remain queued.
 
 ## C2 Active Tool Prerequisite
@@ -219,9 +219,28 @@ native AgentLoop is the sole queue/cancellation authority.
 Model-free CLI controls include real queued input/abort/reuse, failure/unknown
 gates, and frozen regrade after deleting live observations. They are not live
 qualification. Stop stays pending/non-default until its separately bounded fixed
-campaign; five later C3 contracts remain queued. C3a's immutable fixed results are
+campaign; four later C3 contracts remain queued. C3a's immutable fixed results are
 in [#1896](https://github.com/bogdanovich/mintclaw/pull/1896), whose publication
 still awaits complete advisory review/approval, not another paid recovery run.
+
+## C3c Native Denial
+
+The [approval denial contract](../reference/core-approval-denied-eval.md) reuses
+the existing native approver, registry and continuation coordinator. The fixed
+fixture prerequisite was reviewed/merged in
+[#1899](https://github.com/bogdanovich/mintclaw/pull/1899), with green CI,
+SHA-bound review and owner PR-root approval. The full case remains pending.
+
+Its observer passively verifies exact native argument HMAC/prompt identity, sends
+a bound denial, waits for actual terminal resolution and refreshes all native
+proofs after owned shutdown. A real writable target's independent before/after
+census complements denied/unconsumed authority, paired history and native
+no-execution witnesses. Suspension `exec_end` is not confused with execution.
+The existing private signer-key classifier admits only the exact HMAC-verified
+key; neither scanner strictness nor arbitrary binary-file admission is relaxed.
+
+Native model-free controls and frozen regrade pass; this is not live
+qualification. Four later C3 contracts remain, and the overall goal stays active.
 
 ## C1q Provider Primitive
 

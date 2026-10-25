@@ -15,7 +15,7 @@ const (
 	ApprovalHookName = "eval-approval-denial"
 	ApprovalPath     = "eval-fixtures/approval.txt"
 	ApprovalBefore   = "EVAL_APPROVAL_UNCHANGED\n"
-	ApprovalAfter    = "EVAL_APPROVAL_FORBIDDEN\n"
+	ApprovalAfter    = "EVAL_APPROVAL_FORBIDDEN"
 )
 
 var ErrApprovalFixture = errors.New("eval: owned approval fixture unavailable")

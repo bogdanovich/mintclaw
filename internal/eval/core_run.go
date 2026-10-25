@@ -10,8 +10,9 @@ type coreEvidenceRun struct {
 }
 
 type corePendingTrial struct {
-	item    Case
-	session string
+	item              Case
+	session           string
+	approvalKeySHA256 string
 }
 
 func (run *coreEvidenceRun) retain(item Case, trial Trial) {
@@ -19,10 +20,36 @@ func (run *coreEvidenceRun) retain(item Case, trial Trial) {
 		run.trials = map[string]corePendingTrial{}
 	}
 	run.trials[trial.ID] = corePendingTrial{item: item, session: trial.SessionID}
+	if trial.ApprovalDenied != nil {
+		pending := run.trials[trial.ID]
+		pending.approvalKeySHA256 = trial.ApprovalDenied.KeySHA256
+		run.trials[trial.ID] = pending
+	}
+}
+
+func (run *coreEvidenceRun) approvalKeyWitness(home string, previous *interactionKeyWitness) *interactionKeyWitness {
+	for _, pending := range run.trials {
+		if pending.item.ApprovalDenied == nil {
+			continue
+		}
+		if !validDigest(pending.approvalKeySHA256) {
+			return &interactionKeyWitness{}
+		}
+		witness := interactionKeyWitness{
+			home:   home,
+			name:   "workspace/state/interaction_hmac.key",
+			sha256: pending.approvalKeySHA256,
+		}
+		if previous != nil && *previous != witness {
+			return &interactionKeyWitness{}
+		}
+		previous = &witness
+	}
+	return previous
 }
 
 func deferredCoreEvidence(item Case) bool {
-	return item.Steering != nil || item.ReadRecovery != nil || item.NativeStop != nil
+	return item.Steering != nil || item.ReadRecovery != nil || item.NativeStop != nil || item.ApprovalDenied != nil
 }
 
 // One owner captures all bounded core observations after native stop and before
@@ -85,6 +112,13 @@ func (run *coreEvidenceRun) finish(
 				refreshNativeStopScope(ctx, target, &trial, facts, filter)
 			} else {
 				trial.NativeStop.Code = "owned_scope_unavailable"
+			}
+		}
+		if trial.ApprovalDenied != nil && trial.ExecutionVerdict == Pass {
+			if approvalDeniedOwnedReady(*report) {
+				refreshApprovalDeniedScope(ctx, target, &trial, facts, filter)
+			} else {
+				trial.ApprovalDenied.Code = "owned_scope_unavailable"
 			}
 		}
 		finalized = append(finalized, finalizedTrial{index: index, item: pending.item, trial: trial})
