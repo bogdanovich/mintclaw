@@ -17,6 +17,12 @@
   ],
   "cases": [
     {
+      "id": "general.control.stop",
+      "status": "pending",
+      "default": false,
+      "reason": "C3b native stop/reuse contract awaits implementation validation and fixed qualification."
+    },
+    {
       "id": "general.context.correction",
       "status": "active",
       "default": true

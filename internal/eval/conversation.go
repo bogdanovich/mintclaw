@@ -24,17 +24,18 @@ type conversationTransport interface {
 }
 
 type conversation struct {
-	transport conversationTransport
-	trial     *Trial
-	agent     string
-	workspace string
-	frames    int
-	bytes     int
-	inputs    int
-	last      Event
-	filter    *strings.Replacer
-	domain    conversationDomain
-	facts     map[string]string
+	transport  conversationTransport
+	trial      *Trial
+	agent      string
+	workspace  string
+	frames     int
+	bytes      int
+	inputs     int
+	last       Event
+	filter     *strings.Replacer
+	domain     conversationDomain
+	facts      map[string]string
+	nativeStop bool
 }
 
 // Domain adapters bind inputs to native evidence and add independent checks.
@@ -58,6 +59,13 @@ type cancellationObserver interface {
 // each actual send; domains cannot inject synthetic transcript events.
 type inFlightConversationDomain interface {
 	afterSend(context.Context, protocol.MintClawMessage, int, func(string) (Event, error)) error
+}
+
+// Only an admitted native-stop case may select the actually sent /stop input
+// as its terminal request. The observer must prove abort before classification.
+type nativeStopObserver interface {
+	stopRequestID() string
+	observeStop(context.Context, Event) error
 }
 
 type conversationRoles struct {
@@ -144,12 +152,21 @@ func runDomainConversation(
 		trial.ExecutionVerdict, trial.ExecutionCode = trial.Verdict, trial.Code
 		return trial
 	}
+	if item.Case.NativeStop != nil {
+		_, observesStop := domain.(nativeStopObserver)
+		_, sendsInFlight := domain.(inFlightConversationDomain)
+		if !observesStop || !sendsInFlight {
+			trial.Verdict, trial.Code = Inconclusive, "native_stop_driver_unavailable"
+			trial.ExecutionVerdict, trial.ExecutionCode = trial.Verdict, trial.Code
+			return trial
+		}
+	}
 	caseTimeout, _ := time.ParseDuration(item.Case.Limits.CaseTimeout)
 	caseCtx, cancel := context.WithTimeout(ctx, caseTimeout)
 	defer cancel()
 	flow := conversation{
 		transport: transport, trial: &trial, agent: agent, workspace: workspace, filter: roles.filter, domain: domain,
-		facts: item.Case.Driver.Facts,
+		facts: item.Case.Driver.Facts, nativeStop: item.Case.NativeStop != nil,
 	}
 	task := item.Case.Task
 	if domain != nil {
@@ -329,8 +346,11 @@ func (flow *conversation) turn(
 	}) {
 		return Inconclusive, "event_limit"
 	}
+	terminalRequestID := request.ID
+	var stop nativeStopObserver
 	if domain, ok := flow.domain.(inFlightConversationDomain); ok {
 		additional := 0
+		sent := []Event{}
 		var sendErr error
 		refuse := func(err error) (Event, error) {
 			sendErr = err
@@ -357,7 +377,9 @@ func (flow *conversation) turn(
 				return refuse(err)
 			}
 			flow.append(Event{Turn: number, Kind: "input", RequestID: guidance.ID, Content: text})
-			return flow.trial.Events[len(flow.trial.Events)-1], nil
+			input := flow.trial.Events[len(flow.trial.Events)-1]
+			sent = append(sent, input)
+			return input, nil
 		}
 		err := domain.afterSend(turnCtx, request, number, send)
 		if sendErr != nil {
@@ -368,6 +390,19 @@ func (flow *conversation) turn(
 				return Fail, "private_in_flight_input"
 			}
 			return Inconclusive, "in_flight_evidence_unavailable"
+		}
+		if observer, ok := flow.domain.(nativeStopObserver); ok && number == 1 {
+			if !flow.nativeStop {
+				return Inconclusive, "native_stop_not_admitted"
+			}
+			for _, input := range sent {
+				if input.RequestID == observer.stopRequestID() && input.Content == "/stop" {
+					terminalRequestID, stop = input.RequestID, observer
+				}
+			}
+			if stop == nil {
+				return Inconclusive, "native_stop_input_not_observed"
+			}
 		}
 	}
 	for {
@@ -388,13 +423,13 @@ func (flow *conversation) turn(
 			continue
 		}
 		requestID := payloadString(message.Payload, protocol.PayloadKeyRequestID)
-		if message.Type == protocol.TypeError && (requestID == "" || requestID == request.ID) {
+		if message.Type == protocol.TypeError && (requestID == "" || requestID == terminalRequestID) {
 			return Inconclusive, "protocol_rejected"
 		}
 		if message.SessionID == "" {
 			continue
 		}
-		if requestID != request.ID ||
+		if requestID != terminalRequestID ||
 			message.Type != protocol.TypeMessageCreate && message.Type != protocol.TypeMessageUpdate {
 			continue
 		}
@@ -431,13 +466,32 @@ func (flow *conversation) turn(
 				event.Usage = nil
 			}
 		}
+		if stop != nil {
+			if event.Kind == "stream" {
+				continue
+			}
+			if event.Kind != "final" || event.AgentID != flow.agent || event.SessionKey == "" ||
+				len(event.TraceScopes) != 0 {
+				flow.append(event)
+				return Inconclusive, "invalid_native_stop_reply"
+			}
+			if err := stop.observeStop(turnCtx, event); err != nil {
+				flow.append(event)
+				if errors.Is(err, ErrPrivateEvidence) {
+					return Fail, "private_native_evidence"
+				}
+				return Inconclusive, "native_stop_evidence_unavailable"
+			}
+			event.Kind, event.Usage = "stopped", nil
+		}
 		if !flow.append(event) {
 			return Inconclusive, "event_limit"
 		}
 		if event.Kind == "stream" {
 			continue
 		}
-		if event.AgentID == "" || event.SessionKey == "" || len(event.TraceScopes) == 0 && event.Kind != "canceled" {
+		if event.AgentID == "" || event.SessionKey == "" ||
+			len(event.TraceScopes) == 0 && event.Kind != "canceled" && event.Kind != "stopped" {
 			return Inconclusive, "missing_route_identity"
 		}
 		flow.trial.SessionKey = event.SessionKey

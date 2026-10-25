@@ -74,7 +74,8 @@ its current contract instead of treating all control modes as interchangeable.
 
 The sections below specify the twelve target contracts. Correction and
 answer/resume are qualified C1 defaults. C2 implements steering and isolation;
-seven C3 definitions remain queued in the ledger.
+C3a recovery and C3b native stop/reuse have implementation packets with separate
+pending qualification status. Five later C3 definitions remain queued in the ledger.
 P0 is the first useful expansion; P1 follows after its required harness support. Use synthetic random
 markers and local fixtures, never production conversations or accounts. Fixed
 user actions are preferable to an LLM user for these mechanical regressions.
@@ -149,12 +150,14 @@ Budget: 3 inputs, 1 judge call, 5 minutes.
 
 ### P1: Active Stop And Reuse
 
-`general.control.stop`: enter the active-turn barrier, send native `/stop`, prove
-that owner's terminal abort/queue settlement, then submit a new request in the
+`general.control.stop`: enter the active-turn barrier, enqueue real guidance,
+send native `/stop`, prove that owner's terminal abort/queue settlement, then submit a new request in the
 same session. Require no post-stop effect and a new successful final. A stop reply
 or closed WebSocket alone is insufficient. Reuse the steering observer but retain
 stop's distinct semantics; current `Action{kind: stop}` is not this scenario.
-Budget: 3 inputs, 1 judge call, 5 minutes; only owned synthetic work.
+Budget: 4 inputs, 1 judge call, 5 minutes; only owned synthetic work. The queued
+input makes clearing non-vacuous rather than testing an empty queue. See the
+[native stop contract](../reference/core-stop-eval.md).
 
 ### P1: Approval Denial
 

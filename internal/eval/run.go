@@ -64,7 +64,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		if requiresTargetBudget(item.Case) && (preset.TargetCallBudget == nil || !options.StartTarget) {
 			return RunReport{}, ErrUnsafeTarget
 		}
-		if validateReadRecoveryBinding(preset, item.Case) != nil {
+		if validateReadRecoveryBinding(preset, item.Case) != nil ||
+			validateNativeStopBinding(preset, item.Case) != nil {
 			return RunReport{}, ErrUnsafeTarget
 		}
 		if item.Case.Steering != nil && (preset.ActiveTool == nil || !options.StartTarget ||
@@ -541,6 +542,16 @@ func runAdmittedTrial(
 		}
 		return runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, steering)
+	}
+	if item.Case.NativeStop != nil {
+		stop, prepareErr := newNativeStopConversation(item.Case, target, sessionID)
+		if prepareErr != nil {
+			client.Close()
+			trial.Verdict, trial.Code = Inconclusive, "native_stop_preparation_unavailable"
+			return trial
+		}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, stop)
 	}
 	if item.Case.ReadRecovery != nil {
 		recovery, prepareErr := newReadRecoveryConversation(caseCtx, item.Case, target)
