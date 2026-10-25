@@ -93,7 +93,8 @@ func validRecoveryHistory(history []providers.Message, inputs []string, marker s
 				return false
 			}
 			if len(message.ToolCalls) != 0 {
-				if phase > 1 || len(message.ToolCalls) != 1 || callIDs[phase] != "" || finals[phase] != 0 {
+				if phase > 1 || len(message.ToolCalls) != 1 || callIDs[phase] != "" || finals[phase] != 0 ||
+					strings.Contains(message.Content, marker) {
 					return false
 				}
 				call := message.ToolCalls[0]

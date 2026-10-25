@@ -61,7 +61,8 @@ The hard oracle independently requires:
   substitute for the required read error.
 - One corrected-path call with a paired native `success` result containing the
   real marker, then a continuation and recall. No orphan, replay, extra call,
-  missing continuation, early invented marker or stale final may pass.
+  missing continuation, early invented marker (including assistant text attached
+  to either tool call) or stale final may pass.
 - Clean owned process shutdown, an untruncated log, observed leak-free private
   surfaces and a settled known native call budget. A later unknown call in the
   same run also prevents earlier conversations from being judged/promoted.

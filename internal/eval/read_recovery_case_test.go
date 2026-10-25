@@ -81,7 +81,8 @@ func TestRecoveryHistoryRequiresOneErrorThenOneSuccessAcrossActualUserTurns(t *t
 	inputs := []string{"missing input", "corrected path", "recall value"}
 	for _, kind := range []string{
 		"positive", "missing_was_success", "corrected_was_error", "wrong_path", "no_result", "duplicate_result",
-		"extra_call", "same_call_id", "early_value", "lost_continuation", "stale_final", "call_on_tool_role",
+		"extra_call", "same_call_id", "early_value", "early_missing_call", "early_corrected_call",
+		"lost_continuation", "stale_final", "call_on_tool_role",
 	} {
 		t.Run(kind, func(t *testing.T) {
 			history := []providers.Message{
@@ -133,6 +134,10 @@ func TestRecoveryHistoryRequiresOneErrorThenOneSuccessAcrossActualUserTurns(t *t
 				history[5].ToolCalls[0].ID, history[6].ToolCallID = "read-missing", "read-missing"
 			case "early_value":
 				history[3].Content = marker
+			case "early_missing_call":
+				history[1].Content = marker
+			case "early_corrected_call":
+				history[5].Content = marker
 			case "lost_continuation":
 				history = slices.Delete(history, 3, 4)
 			case "stale_final":
