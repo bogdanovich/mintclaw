@@ -7,6 +7,11 @@ follow-up design and delivery plan are
 [Website-discovered browser credentials](credential-discovery-redesign.md).
 Its milestones are not complete merely because the earlier TR milestones are.
 
+The 2026-10-25 follow-up is
+[durable approval and browser continuity](credential-durable-approval.md):
+persist the original approval window across restart, repair continuation image
+delivery, then acquire approval before manual browser challenges.
+
 ## Current decision and intended outcome
 
 Revised on 2026-10-11 following the operator's explicit design clarification:
@@ -29,7 +34,8 @@ Deliver one integrated MintClaw feature, using the existing gateway, first-party
 browser, and paired companion where applicable. Reuse 1Password as the vault;
 do not build another password manager. Android passkey approval grants access
 to selected aliases for at most 20 hours, with revocation, expiry, policy-change
-invalidation, and restart denial. A credential grant does not approve external
+invalidation, and durable reuse of the remaining approval window after restart.
+A credential grant does not approve external
 effects such as purchases, posts, messages, or account changes.
 
 The operator clarified on 2026-10-18 that GitHub access is not needed for the

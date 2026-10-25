@@ -194,6 +194,10 @@ func newController(config Config, store ownerStore) (*Controller, *OwnerSetup, e
 		requests: make(map[string]*pendingRequest), ceremonies: make(map[string]pendingCeremony),
 		grants: make(map[string]credentialbroker.Grant), now: time.Now, random: rand.Reader,
 	}
+	if err = controller.restoreGrants(); err != nil {
+		authority.Close()
+		return nil, nil, ErrUnavailable
+	}
 	var setup *OwnerSetup
 	if controller.enrollmentAllowed() {
 		setup = &OwnerSetup{controller: controller}
@@ -348,6 +352,9 @@ func (controller *Controller) FinishApproval(ctx context.Context, id string, res
 		return credentialbroker.Grant{}, ErrUnavailable
 	}
 	controller.grants[grant.ID] = cloneGrant(grant)
+	if controller.persistGrants() != nil {
+		return credentialbroker.Grant{}, ErrUnavailable
+	}
 	controller.requests[ceremony.request].grant = grant.ID
 	return grant, nil
 }
@@ -409,10 +416,17 @@ func (controller *Controller) FinishRevocation(ctx context.Context, id string, r
 	if err = controller.verifyAssertion(ctx, ceremony, response); err != nil {
 		return err
 	}
-	if controller.authority.Revoke(controller.ownerID, ceremony.scope.GrantID) != nil {
+	if !controller.grantActive(ceremony.scope.GrantID) {
 		return ErrDenied
 	}
 	delete(controller.grants, ceremony.scope.GrantID)
+	if controller.persistGrants() != nil {
+		return ErrUnavailable
+	}
+	if controller.authority.Revoke(controller.ownerID, ceremony.scope.GrantID) != nil {
+		controller.fail()
+		return ErrUnavailable
+	}
 	return nil
 }
 
@@ -471,6 +485,13 @@ func (controller *Controller) ReplacePolicy(ctx context.Context, rules []credent
 		return ErrDenied
 	}
 	if controller.policy.Revision() != policy.Revision() {
+		owner := controller.owner
+		owner.Grants, owner.GrantPolicyRevision = nil, policy.Revision()
+		if len(owner.Credentials) > 0 && controller.store.commit(owner) != nil {
+			controller.fail()
+			return ErrUnavailable
+		}
+		controller.owner = owner
 		if controller.authority.ReplacePolicy(policy) != nil {
 			return ErrUnavailable
 		}
