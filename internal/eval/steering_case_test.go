@@ -7,19 +7,30 @@ import (
 	"testing"
 )
 
-func TestSteeringDefinitionsRemainPendingAndCannotWidenAdmission(t *testing.T) {
+func TestSteeringDefinitionsRespectQualificationAndCannotWidenAdmission(t *testing.T) {
 	corpus, err := LoadCorpus("../../evals")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"general.steering.boundary", "general.steering.order", "general.session.isolation"} {
 		items, err := Select(corpus, Selection{IDs: []string{id}})
-		if err != nil || len(items) != 1 || items[0].Availability().Default ||
-			!errors.Is(CheckRunAvailability(items, false), ErrPendingCases) {
-			t.Fatal("unqualified steering entered defaults", id, err)
+		if err != nil || len(items) != 1 {
+			t.Fatal("steering definition unavailable", id, err)
 		}
-		if _, err := Run(t.Context(), Preset{}, items, RunOptions{}); !errors.Is(err, ErrPendingCases) {
-			t.Fatal("pending gate was bypassed", err)
+		pending := id == "general.session.isolation"
+		policy := items[0].Availability()
+		availabilityErr := CheckRunAvailability(items, false)
+		if policy.Default == pending || pending && policy.Status != "pending" ||
+			!pending && policy.Status != "active" || pending && !errors.Is(availabilityErr, ErrPendingCases) ||
+			!pending && availabilityErr != nil {
+			t.Fatal("steering qualification selection changed", id, availabilityErr)
+		}
+		wantRunErr := ErrUnsafeTarget
+		if pending {
+			wantRunErr = ErrPendingCases
+		}
+		if _, err := Run(t.Context(), Preset{}, items, RunOptions{}); !errors.Is(err, wantRunErr) {
+			t.Fatal("qualification bypassed pending or native target admission", err)
 		}
 		if _, err := Run(
 			t.Context(),
