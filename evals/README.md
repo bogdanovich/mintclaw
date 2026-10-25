@@ -37,6 +37,9 @@ boundary and both order modes with 3/3 batches; it also retains one failed order
 qualification and an inconclusive isolation batch caused by provider quota/unknown usage.
 The pending [read recovery contract](../docs/reference/core-read-recovery-eval.md)
 uses a separate read-only profile and does not widen the default active-tool profile.
+Its [fixed C3a campaign](../docs/operations/manual-agent-evals-core-c3a-20261025.md)
+retains a passing qualification and a batch of one pass/two judge provider errors;
+all native hard checks passed, but it is not qualified or promoted.
 The pending [native stop/reuse contract](../docs/reference/core-stop-eval.md)
 uses the owned active-tool profile with an explicit one-turn pin. It joins a
 genuine queued input, native abort, cancellation/history and final deliveries;

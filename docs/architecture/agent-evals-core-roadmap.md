@@ -74,8 +74,10 @@ its current contract instead of treating all control modes as interchangeable.
 
 The sections below specify the twelve target contracts. Correction and
 answer/resume are qualified C1 defaults. C2 implements steering and isolation;
-C3a recovery, C3b native stop/reuse and C3c exact approval denial have implementation
-packets with separate pending qualification status. Four later C3 definitions remain queued in the ledger.
+C3a recovery is implemented but pending after two judge provider errors in its
+fixed batch. C3b native stop/reuse and C3c exact approval denial are implemented
+and merged, but not yet live-qualified. Four later C3 definitions remain queued
+in the ledger.
 P0 is the first useful expansion; P1 follows after its required harness support. Use synthetic random
 markers and local fixtures, never production conversations or accounts. Fixed
 user actions are preferable to an LLM user for these mechanical regressions.

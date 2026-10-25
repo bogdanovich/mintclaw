@@ -58,7 +58,7 @@
       "id": "general.tools.recovery",
       "status": "pending",
       "default": false,
-      "reason": "C3 native read-only recovery contract awaits implementation validation and fixed qualification; not part of defaults."
+      "reason": "C3a fixed batch not qualified: 1 pass and 2 judge provider_unavailable errors; all three native recovery executions and hard checks passed. Pending/non-default; no reruns."
     }
   ]
 }

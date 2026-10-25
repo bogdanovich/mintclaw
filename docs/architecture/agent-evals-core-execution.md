@@ -37,9 +37,9 @@ does not reopen C0 or E0-E5.
 | C1b | C1a | Ordinary answer/resume native observer and stale/wrong-prompt controls | Complete, [#1881](https://github.com/bogdanovich/mintclaw/pull/1881); qualified in C1q |
 | C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | Complete: #1884, #1882, #1885, #1887 and #1888 merged; both cases qualified 1 + fixed 3/3 on `c69659c5` |
 | C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | Implemented, #1890-#1893; boundary/order fixed batches qualified; isolation pending quota |
-| C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Implemented/merged #1895; qualification pass, batch 1 pass/2 judge errors; report #1896 pending review approval |
-| C3b | C2 | Native active stop/reuse, distinct from local driver stop | Implemented/merged #1897-#1898; live qualification pending |
-| C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Fixture #1899 merged; full native case/controls implemented, validation/review pending; no live qualification |
+| C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Implemented/merged #1895; qualification pass, fixed batch 1 pass/2 judge errors; pending |
+| C3b | C2 | Native active stop/reuse, distinct from local driver stop | Implemented/merged #1897-#1898; native model-free validation and green reviewed CI; live qualification pending |
+| C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Implemented/merged #1899-#1900; native model-free validation and green reviewed CI; live qualification pending |
 | C3d | C2 | Final-once delivery with streaming/non-streaming controls | Queued |
 | C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Queued |
 | C3f | C1q | Controlled small context and actual compaction witness | Queued |
@@ -219,9 +219,25 @@ native AgentLoop is the sole queue/cancellation authority.
 Model-free CLI controls include real queued input/abort/reuse, failure/unknown
 gates, and frozen regrade after deleting live observations. They are not live
 qualification. Stop stays pending/non-default until its separately bounded fixed
-campaign; four later C3 contracts remain queued. C3a's immutable fixed results are
-in [#1896](https://github.com/bogdanovich/mintclaw/pull/1896), whose publication
-still awaits complete advisory review/approval, not another paid recovery run.
+campaign; four later C3 contracts remain queued. The [C3a report](../operations/manual-agent-evals-core-c3a-20261025.md)
+retains recovery's immutable fixed results; no further paid recovery run is planned.
+
+## C3a Read Recovery
+
+The [read-only recovery contract](../reference/core-read-recovery-eval.md) was
+reviewed/merged in [#1895](https://github.com/bogdanovich/mintclaw/pull/1895): all
+14 CI checks green, exact-head substantive review, owner PR-root rocket and no
+actionable feedback. Native CLI/frozen grading, admission/privacy/budget controls
+and race tests cover the real failed read, corrected read and same-session recall.
+The review's premature tool-call-content marker gap has two negative regressions.
+
+The [fixed C3a campaign](../operations/manual-agent-evals-core-c3a-20261025.md)
+retains a passing qualification and a batch of one pass/two judge errors on
+immutable `2853ede5a`. All four target conversations and required hard checks
+passed; two batch judge calls returned `provider_unavailable` without usage.
+Their deeper provider error class was not retained; do not infer quota/HTTP 429.
+Recovery stays pending/non-default, with no retry or candidate change. Four C3
+contracts remain queued; the overall goal is active and incomplete.
 
 ## C3c Native Denial
 

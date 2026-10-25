@@ -22,6 +22,7 @@ func TestQualifiedGeneralDefaultsKeepBudgetAndFrozenDefinitionGates(t *testing.T
 		"general.steering.boundary":      "a362d984dccc1001d5bbfad64879517943981263a09b9fb6b04447818f47c170",
 		"general.steering.order":         "2718aa487cc2523a8e3c0b935e5d812c8814ef85c30cd399f7865be580cc7442",
 		"general.session.isolation":      "e7e56af3cfbb07162e6f468adf2d164a3050e462c1f3252fac78d0f9f817cfb2",
+		"general.tools.recovery":         "58906a951c87734b42ef35f3952d90209ee8c2aa3e2fdea2ea013e8ecfb7ae48",
 	}
 	recorded := 0
 	for _, item := range corpus {
