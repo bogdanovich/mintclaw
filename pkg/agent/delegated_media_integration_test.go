@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
@@ -28,6 +29,9 @@ type routedCaptureFixture struct {
 }
 
 func (tool *routedCaptureFixture) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
+	if args["delivery"] == "interaction" && !toolshared.ToolRecoverableOutbound(ctx) {
+		return toolshared.ErrorResult("browser screenshots require a durable outbound delivery transaction")
+	}
 	owner, err := media.NewMediaOwner(tool.workspace, toolshared.ToolAgentID(ctx), toolshared.ToolActorID(ctx),
 		toolshared.ToolRouteSessionKey(ctx), toolshared.ToolSessionKey(ctx),
 		toolshared.ToolChannel(ctx), toolshared.ToolChatID(ctx), toolshared.ToolTopicID(ctx))
@@ -201,6 +205,17 @@ func (channel *challengeOrderChannel) DeliverText(
 }
 
 func TestDelegatedInteractionImageReachesOwnerBeforeNativeQuestion(t *testing.T) {
+	testDelegatedInteractionImageBeforeQuestion(t, false)
+}
+
+func TestDelegatedInteractionImageAfterExternalWaitReachesOwnerBeforeNativeQuestion(t *testing.T) {
+	testDelegatedInteractionImageBeforeQuestion(t, true)
+}
+
+func testDelegatedInteractionImageBeforeQuestion(t *testing.T, delayed bool) {
+	t.Helper()
+	wait := &externalWaitTestTool{}
+	wait.state.Store(toolshared.ExternalWaitPending)
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{{ID: "delegate-challenge", Name: "delegate", Arguments: map[string]any{
 			"agent_id": "browser", "task": "Show the challenge image, then ask for its answer.",
@@ -214,6 +229,12 @@ func TestDelegatedInteractionImageReachesOwnerBeforeNativeQuestion(t *testing.T)
 			},
 		}}}},
 	}}
+	if delayed {
+		provider.responses = append([]*providers.LLMResponse{
+			provider.responses[0],
+			{ToolCalls: []providers.ToolCall{{ID: "wait-phone", Name: wait.Name(), Arguments: map[string]any{}}}},
+		}, provider.responses[1:]...)
+	}
 	fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
 		cfg.Agents.List = []config.AgentConfig{
 			{
@@ -235,6 +256,11 @@ func TestDelegatedInteractionImageReachesOwnerBeforeNativeQuestion(t *testing.T)
 		t.Fatal(err)
 	}
 	loop.SetMediaStore(store)
+	if err = loop.RegisterRuntimeTool(wait.Name(), func(*config.Config) (toolshared.Tool, error) {
+		return wait, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var claims atomic.Int32
 	if err = loop.RegisterRuntimeTool("browser_capture", func(*config.Config) (toolshared.Tool, error) {
 		return &routedCaptureFixture{
@@ -270,7 +296,7 @@ func TestDelegatedInteractionImageReachesOwnerBeforeNativeQuestion(t *testing.T)
 					Channel:  "telegram",
 					ChatID:   "chat",
 					ActorID:  "actor",
-					SenderID: "actor",
+					SenderID: "user-1",
 					ChatType: "direct",
 				},
 			},
@@ -293,6 +319,22 @@ func TestDelegatedInteractionImageReachesOwnerBeforeNativeQuestion(t *testing.T)
 	)
 	if !ok || record.Status != interactions.StatusWaiting || record.Origin.TaskID == "" {
 		t.Fatal("delegated question did not reach the owner")
+	}
+	if delayed {
+		if record.Kind != interactions.KindExternalWait {
+			t.Fatal("delegated task did not wait for phone approval")
+		}
+		wait.state.Store(toolshared.ExternalWaitReady)
+		// The background phone-ready event has no inbound publication context.
+		loop.recoverHumanInteractionsAt(t.Context(), time.Now())
+		loop.recoverHumanInteractionsAt(t.Context(), time.Now())
+		question, found := activeInteractionForSession(
+			loop.interactionRegistryForWorkspace(fixture.Agent.Workspace),
+			"parent-challenge-session",
+		)
+		if !found || question.Kind != interactions.KindQuestion || question.Origin.TaskID != record.Origin.TaskID {
+			t.Fatal("resumed delegated question lost its owner")
+		}
 	}
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()

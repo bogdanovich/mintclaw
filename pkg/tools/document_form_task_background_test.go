@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/document"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestDocumentFormBackgroundConversationDoesNotReopenAnUnrelatedScopeQuestion(t *testing.T) {
@@ -38,6 +39,10 @@ func TestDocumentFormBackgroundConversationDoesNotReopenAnUnrelatedScopeQuestion
 			strings.Contains(result.ContextText, "PRIVATE_PENDING_PURPOSE") || result.ContextInput == nil {
 			t.Fatal("ordinary conversation was modal, lost its exact request or released another request")
 		}
+		if !strings.Contains(result.ContextText, "recent ordinary conversation") ||
+			strings.Contains(result.ContextText, "Follow only this newly authorized request") {
+			t.Fatal("side conversation was instructed to discard its conversational context")
+		}
 		follow, followErr := tool.ToolResultFollowup(result)
 		if followErr != nil || follow != nil {
 			t.Fatal("fresh side conversation remained in protected-only mode")
@@ -62,5 +67,71 @@ func TestDocumentFormBackgroundConversationDoesNotReopenAnUnrelatedScopeQuestion
 	progress, err := tool.formJobs.FindFormIntake(ctx, owner)
 	if err != nil || progress == nil || progress.JobID != guard.JobID || progress.ModeID != guard.ModeID {
 		t.Fatal("ordinary return selected another draft")
+	}
+	resumed := tool.Execute(ctx, map[string]any{"action": "form", "form_action": "resume", "job_id": guard.JobID})
+	if resumed.IsError || resumed.Control.Suspension != nil || strings.Contains(resumed.ForLLM, pending) {
+		t.Fatal("idempotent resume reopened an unrelated pending scope question")
+	}
+	view, err = tool.formJobs.ReadFormTaskRoute(ctx, pending, owner)
+	if err != nil || view.State != document.FormTaskQuestion || view.Text != "PRIVATE_PENDING_PURPOSE" {
+		t.Fatal("resume erased or authorized the unrelated pending request")
+	}
+}
+
+func TestDocumentFormBackgroundContextBudgetIncludesWholeInstruction(t *testing.T) {
+	tool, ctx, owner, guard, _ := taskWorkflowFixture(t, document.FormTaskIndependent)
+	const request = "Why?"
+	ref, err := tool.AdmitProtectedFormTask(ctx, guard, "follow-up-budget", request, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tooSmall := len(request) + len(formTaskIndependentPrefix) - 1
+	result := executeTaskRoute(tool, toolshared.WithToolLiveContextTextAllowance(ctx, tooSmall), ref)
+	if result.IsError || result.ContextText != "" || !strings.Contains(result.ForLLM, "handoff_context_capacity") {
+		t.Fatal("insufficient instruction budget was granted or released")
+	}
+	view, err := tool.formJobs.ReadFormTaskRoute(ctx, ref, owner)
+	if err != nil || view.State != document.FormTaskReady || view.Text != request {
+		t.Fatal("capacity check consumed the retained follow-up")
+	}
+	result = executeTaskRoute(tool, toolshared.WithToolLiveContextTextAllowance(ctx, tooSmall+1), ref)
+	if result.IsError || result.ContextText != formTaskIndependentPrefix+request || result.ContextInput == nil {
+		t.Fatal("exact full instruction budget did not admit the side conversation")
+	}
+}
+
+func TestDocumentFormResumeDoesNotPromoteUnansweredTaskScope(t *testing.T) {
+	for _, state := range []string{"active", "pause"} {
+		t.Run(state, func(t *testing.T) {
+			tool, ctx, owner, guard, _ := taskWorkflowFixture(t, document.FormTaskAsk)
+			pending, err := tool.AdmitProtectedFormTask(ctx, guard, "unclear", "PRIVATE_PENDING_PURPOSE", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			question := executeTaskRoute(tool, ctx, pending)
+			if question.IsError || question.Control.Suspension == nil {
+				t.Fatal("missing original scope question")
+			}
+			if state == "pause" {
+				paused := tool.Execute(
+					ctx,
+					map[string]any{"action": "form", "form_action": "pause", "job_id": guard.JobID},
+				)
+				if paused.IsError {
+					t.Fatal(paused.ForLLM)
+				}
+			}
+			resumed := tool.Execute(
+				ctx,
+				map[string]any{"action": "form", "form_action": "resume", "job_id": guard.JobID},
+			)
+			if resumed.IsError || resumed.Control.Suspension != nil || strings.Contains(resumed.ForLLM, pending) {
+				t.Fatal("resume treated an unanswered scope question as new runnable input")
+			}
+			view, err := tool.formJobs.ReadFormTaskRoute(ctx, pending, owner)
+			if err != nil || view.State != document.FormTaskQuestion || view.Text != "PRIVATE_PENDING_PURPOSE" {
+				t.Fatal("resume changed unresolved original request authority")
+			}
+		})
 	}
 }

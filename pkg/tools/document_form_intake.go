@@ -109,8 +109,19 @@ func (tool *DocumentTool) setFormIntakeWorkflowState(
 		if workErr != nil {
 			return documentFormToolError(workErr)
 		}
-		if len(work) > 0 {
-			return tool.nextFormTaskResult(ctx, owner, work[0])
+		for _, pending := range work {
+			if _, _, parseErr := document.ParseFormTaskRouteReference(pending); parseErr == nil {
+				view, readErr := tool.formJobs.ReadFormTaskRoute(ctx, pending, owner)
+				if readErr != nil {
+					return documentFormToolError(readErr)
+				}
+				// Resume the draft, not an unrelated unanswered scope question.
+				// Committed replies and not-yet-classified messages still run.
+				if view.State == document.FormTaskQuestion {
+					continue
+				}
+			}
+			return tool.nextFormTaskResult(ctx, owner, pending)
 		}
 	}
 	return tool.formIntakeResult(ctx, owner, schema, record, action, safeDocumentFormIntake{Progress: *progress})

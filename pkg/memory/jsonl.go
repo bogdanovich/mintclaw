@@ -197,11 +197,18 @@ func (s *JSONLStore) sessionLock(key string) *sync.Mutex {
 }
 
 func (s *JSONLStore) jsonlPath(key string) string {
-	return filepath.Join(s.dir, sanitizeKey(key)+".jsonl")
+	name, _ := jsonlFileNames(key)
+	return filepath.Join(s.dir, name)
 }
 
 func (s *JSONLStore) metaPath(key string) string {
-	return filepath.Join(s.dir, sanitizeKey(key)+".meta.json")
+	_, name := jsonlFileNames(key)
+	return filepath.Join(s.dir, name)
+}
+
+func jsonlFileNames(key string) (string, string) {
+	stem := sanitizeKey(key)
+	return stem + ".jsonl", stem + ".meta.json"
 }
 
 // sanitizeKey converts a session key to a safe filename component.
@@ -761,8 +768,17 @@ func readCommittedMessages(
 	}
 	defer func() { _ = f.Close() }()
 
+	return decodeCommittedMessages(ctx, f, committedCount, skip)
+}
+
+func decodeCommittedMessages(
+	ctx context.Context,
+	reader io.Reader,
+	committedCount int,
+	skip int,
+) ([]providers.Message, error) {
 	msgs := make([]providers.Message, 0, max(0, committedCount-skip))
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLRecordBytes)
 
 	lineNum := 0
@@ -1504,9 +1520,9 @@ func BuildJSONLSnapshot(
 	if err != nil {
 		return JSONLSnapshot{}, fmt.Errorf("memory: encode snapshot metadata: %w", err)
 	}
-	stem := sanitizeKey(sessionKey)
+	historyFile, metadataFile := jsonlFileNames(sessionKey)
 	return JSONLSnapshot{
-		JSONLFile: stem + ".jsonl", MetadataFile: stem + ".meta.json",
+		JSONLFile: historyFile, MetadataFile: metadataFile,
 		JSONL: records, Metadata: metadata,
 	}, nil
 }
