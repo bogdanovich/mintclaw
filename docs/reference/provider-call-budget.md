@@ -21,8 +21,10 @@ core evals, not an enabled runtime policy or a completed eval integration.
 - Any admission refusal is sticky. `Seal` prevents new work but does not cancel
   or adopt work already admitted. The caller owns cancellation and settlement.
 - Missing, invalid, overflowing usage or any failed adapter call makes usage
-  unknown and stops further calls. Known zero usage is distinct from missing
-  usage. No successful response is returned for an unknown or exhausted call.
+  unknown and stops further calls. All-zero usage is also ambiguous: adapters
+  can construct that value from an absent provider report. A zero dimension
+  alongside positive counts remains usable. No successful response is returned
+  for an unknown or exhausted call.
 - The reported-token count uses the larger of provider total and input + output
   counts. It does not treat cache dimensions as separately billed tokens.
   Reaching/exceeding the threshold stops work and returns a budget error.

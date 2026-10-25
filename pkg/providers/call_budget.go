@@ -171,6 +171,9 @@ func reportedCallTokens(response *LLMResponse) (int64, bool) {
 	if usage.PromptTokens < 0 || usage.CompletionTokens < 0 || usage.TotalTokens < 0 {
 		return 0, false
 	}
+	if usage.PromptTokens == 0 && usage.CompletionTokens == 0 && usage.TotalTokens == 0 {
+		return 0, false
+	}
 	if (usage.CacheReadInputTokens != nil && *usage.CacheReadInputTokens < 0) ||
 		(usage.CacheWriteInputTokens != nil && *usage.CacheWriteInputTokens < 0) {
 		return 0, false

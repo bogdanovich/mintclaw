@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -167,6 +169,7 @@ func TestCallBudgetUnknownUsageStopsFurtherCalls(t *testing.T) {
 	}{
 		{"nil response", nil, nil, "unknown_usage"},
 		{"missing usage", &LLMResponse{}, nil, "unknown_usage"},
+		{"ambiguous zero usage", &LLMResponse{Usage: &UsageInfo{}}, nil, "unknown_usage"},
 		{"negative usage", &LLMResponse{Usage: &UsageInfo{PromptTokens: -1}}, nil, "unknown_usage"},
 		{"negative cache usage", &LLMResponse{Usage: &UsageInfo{CacheReadInputTokens: new(-1)}}, nil, "unknown_usage"},
 		{"failed call", &LLMResponse{Usage: &UsageInfo{TotalTokens: 30}}, upstreamErr, "unknown_usage"},
@@ -269,7 +272,7 @@ func TestCallBudgetPreservesCancellationAndCallerMediatedOptions(t *testing.T) {
 		if options["native_search"] != false {
 			t.Error("provider-native tools not disabled")
 		}
-		return &LLMResponse{Usage: &UsageInfo{}}, ctx.Err()
+		return &LLMResponse{Usage: &UsageInfo{PromptTokens: 1, TotalTokens: 1}}, ctx.Err()
 	}}
 	provider := budgetProvider(t, budget, delegate)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -281,8 +284,8 @@ func TestCallBudgetPreservesCancellationAndCallerMediatedOptions(t *testing.T) {
 	if _, err := provider.Chat(t.Context(), nil, nil, "test", options); err != nil {
 		t.Fatal(err)
 	}
-	if options["native_search"] != true || budget.Seal().ReportedTokens != 0 {
-		t.Fatal("caller options mutated or known zero usage lost")
+	if options["native_search"] != true || budget.Seal().ReportedTokens != 1 {
+		t.Fatal("caller options mutated or zero output usage lost")
 	}
 }
 
@@ -441,5 +444,41 @@ func TestCallBudgetValidatesEveryLimit(t *testing.T) {
 	}
 	if _, err := NewCallBudget(maximum); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCallBudgetAnthropicMissingUsageIsNotKnownZero(t *testing.T) {
+	for _, test := range []struct {
+		name, usage string
+		known       bool
+	}{
+		{"absent", "", false},
+		{"ambiguous zero", `,"usage":{"input_tokens":0,"output_tokens":0}`, false},
+		{"positive input and zero output", `,"usage":{"input_tokens":2,"output_tokens":0}`, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = writer.Write([]byte(`{"id":"synthetic","type":"message","role":"assistant",` +
+					`"model":"claude-fixture","content":[{"type":"text","text":"synthetic"}],` +
+					`"stop_reason":"end_turn"` + test.usage + `}`))
+			}))
+			defer server.Close()
+			delegate := NewClaudeProviderWithBaseURL("synthetic-fixture-key", server.URL)
+			budget := testCallBudget(t, nil)
+			provider, err := budget.Wrap(delegate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := budgetChat(t.Context(), provider)
+			state := budget.Seal()
+			if test.known {
+				if err != nil || response == nil || !state.UsageKnown || state.ReportedTokens != 2 {
+					t.Fatalf("reported usage = %+v/%v, state %+v", response, err, state)
+				}
+			} else if response != nil || !errors.Is(err, ErrCallBudget) || state.UsageKnown || state.UnknownUsage != 1 {
+				t.Fatalf("unavailable usage = %+v/%v, state %+v", response, err, state)
+			}
+		})
 	}
 }
