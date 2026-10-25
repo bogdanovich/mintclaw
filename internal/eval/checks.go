@@ -39,7 +39,7 @@ func gradeConversation(checks []Check, evidence []Event, last Event) []CheckResu
 			requests := make(map[string]bool)
 			for _, event := range evidence {
 				if event.Kind == "final" || event.Kind == "question" || event.Kind == "approval" ||
-					event.Kind == "canceled" {
+					event.Kind == "canceled" || event.Kind == "stopped" {
 					if key == "" {
 						key = event.SessionKey
 					}

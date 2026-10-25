@@ -44,6 +44,7 @@ type Case struct {
 	Browser      *BrowserCase      `json:"browser,omitempty"`
 	Steering     *SteeringCase     `json:"steering,omitempty"`
 	ReadRecovery *ReadRecoveryCase `json:"read_recovery,omitempty"`
+	NativeStop   *NativeStopCase   `json:"native_stop,omitempty"`
 }
 
 type Fixture struct {
@@ -143,6 +144,9 @@ func (c Case) Validate() error {
 		return ErrInvalidCase
 	}
 	for _, step := range c.Driver.Steps {
+		if step.WaitFor.Kind == "stopped" && c.NativeStop == nil {
+			return ErrInvalidCase
+		}
 		if step.Action.Kind == "answer" && (step.WaitFor.Kind != "question" || !hasQuestionAnswerCheck(c)) {
 			return ErrInvalidCase
 		}
@@ -193,6 +197,10 @@ func (c Case) Validate() error {
 			if c.ReadRecovery == nil || check.Expected != "" {
 				return ErrInvalidCase
 			}
+		case "native_stop":
+			if c.NativeStop == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
 		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write", "pdf_source_fields":
 			if c.PDF == nil || check.Expected != "" {
 				return ErrInvalidCase
@@ -235,6 +243,9 @@ func (c Case) Validate() error {
 		c.ReadRecovery != nil && c.ReadRecovery.validate(c) != nil {
 		return ErrInvalidCase
 	}
+	if c.NativeStop != nil && c.NativeStop.validate(c) != nil {
+		return ErrInvalidCase
+	}
 	return nil
 }
 
@@ -261,7 +272,10 @@ func (driver Driver) validate(limits Limits) error {
 	}
 	for _, step := range driver.Steps {
 		if step.Action.validate(driver.Facts) != nil ||
-			!slices.Contains([]string{"final", "question", "approval", "question_or_approval"}, step.WaitFor.Kind) ||
+			!slices.Contains(
+				[]string{"final", "question", "approval", "question_or_approval", "stopped"},
+				step.WaitFor.Kind,
+			) ||
 			step.WaitFor.Kind == "question_or_approval" && step.Action.Kind != "cancel" ||
 			step.WaitFor.Contains != "" && !boundedText(step.WaitFor.Contains, 4096) {
 			return ErrInvalidCase

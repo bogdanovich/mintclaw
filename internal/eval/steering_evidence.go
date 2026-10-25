@@ -63,4 +63,4 @@ type SteeringOutboxEvidence struct {
 	SHA256 string `json:"sha256"`
 }
 
-func requiresActiveTool(item Case) bool { return item.Steering != nil }
+func requiresActiveTool(item Case) bool { return item.Steering != nil || item.NativeStop != nil }

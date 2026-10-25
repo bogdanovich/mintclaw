@@ -102,7 +102,7 @@ func visibleConversation(events []Event, facts map[string]string) ([]visibleEven
 		}
 		seen[event.ID] = true
 		if event.Content == "" ||
-			!slices.Contains([]string{"input", "final", "question", "approval", "canceled"}, event.Kind) {
+			!slices.Contains([]string{"input", "final", "question", "approval", "canceled", "stopped"}, event.Kind) {
 			continue
 		}
 		if !boundedText(event.Content, MaxInputBytes) {

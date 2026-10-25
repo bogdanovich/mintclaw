@@ -47,6 +47,9 @@ func assessCoreConversation(
 		if item.ReadRecovery != nil {
 			trial.Code = "required_read_recovery_check_not_passed"
 		}
+		if item.NativeStop != nil {
+			trial.Code = "required_native_stop_check_not_passed"
+		}
 		return
 	}
 	judgement := judgeConversation(ctx, judge, item, steeringJudgeEvents(*trial))
@@ -63,6 +66,9 @@ func assessCoreConversation(
 }
 
 func gradeCoreChecks(item Case, trial Trial, report RunReport, workspace string) []CheckResult {
+	if item.NativeStop != nil {
+		return gradeNativeStopChecks(item, trial, report, workspace)
+	}
 	if item.ReadRecovery != nil {
 		return gradeReadRecoveryChecks(item, trial, report, workspace)
 	}

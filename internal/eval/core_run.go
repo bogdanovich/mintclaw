@@ -21,7 +21,9 @@ func (run *coreEvidenceRun) retain(item Case, trial Trial) {
 	run.trials[trial.ID] = corePendingTrial{item: item, session: trial.SessionID}
 }
 
-func deferredCoreEvidence(item Case) bool { return item.Steering != nil || item.ReadRecovery != nil }
+func deferredCoreEvidence(item Case) bool {
+	return item.Steering != nil || item.ReadRecovery != nil || item.NativeStop != nil
+}
 
 // One owner captures all bounded core observations after native stop and before
 // any assessment/model call. A later trial's unknown budget invalidates earlier
@@ -76,6 +78,13 @@ func (run *coreEvidenceRun) finish(
 			trial.ReadRecovery.Code = "owned_scope_unavailable"
 			if readRecoveryOwnedReady(*report) {
 				refreshReadRecoveryScope(ctx, target, &trial, facts, filter)
+			}
+		}
+		if trial.NativeStop != nil && trial.ExecutionVerdict == Pass {
+			if nativeStopOwnedReady(*report) {
+				refreshNativeStopScope(ctx, target, &trial, facts, filter)
+			} else {
+				trial.NativeStop.Code = "owned_scope_unavailable"
 			}
 		}
 		finalized = append(finalized, finalizedTrial{index: index, item: pending.item, trial: trial})

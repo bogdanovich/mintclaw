@@ -25,11 +25,15 @@ type activeToolLogEvent struct {
 	TurnID             string    `json:"turn_id"`
 	Tool               string    `json:"tool"`
 	ToolCallID         string    `json:"tool_call_id"`
+	MessageID          string    `json:"message_id"`
 	ToolCallGeneration string    `json:"tool_call_generation"`
 	MessageHash        string    `json:"message_hash"`
 	InterruptKind      string    `json:"interrupt_kind"`
 	Role               string    `json:"role"`
 	QueueDepth         int       `json:"queue_depth"`
+	Status             string    `json:"status"`
+	LLMCalls           int       `json:"llm_calls"`
+	IsError            bool      `json:"is_error"`
 }
 
 type activeToolLogObservation struct {
@@ -44,8 +48,21 @@ type activeToolLogObservation struct {
 func readActiveToolLog(
 	ctx context.Context, target admittedTarget, facts map[string]string, filter *strings.Replacer,
 ) ([]activeToolLogObservation, error) {
+	if !activeToolMatches(target.preset, target.activeTool) {
+		return nil, errNativeEvidence
+	}
+	return readOwnedToolLog(ctx, target, facts, filter)
+}
+
+// The owned log remains readable after the child and fixture have stopped.
+// Its anchored identity/privacy guards do not assert that a tool is active.
+func readOwnedToolLog(
+	ctx context.Context, target admittedTarget, facts map[string]string, filter *strings.Replacer,
+) ([]activeToolLogObservation, error) {
 	if ctx == nil || ctx.Err() != nil || target.config == nil ||
-		!activeToolMatches(target.preset, target.activeTool) || target.ownedLog == "" {
+		target.preset.ActiveTool == nil || target.activeTool == nil ||
+		target.preset.ActiveTool.validate() != nil || target.activeTool.url != target.preset.ActiveTool.url() ||
+		target.ownedLog == "" {
 		return nil, errNativeEvidence
 	}
 	home, err := privateHome(target.preset.IsolationRoot)

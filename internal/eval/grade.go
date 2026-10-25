@@ -134,6 +134,10 @@ func Grade(
 			!validReadRecoveryEvidence(trial, item.Case, workspace)) {
 			return RunReport{}, ErrGrade
 		}
+		if item.Case.NativeStop != nil && (!nativeStopOwnedReady(original) ||
+			!validNativeStopEvidence(trial, item.Case, workspace, original.ActiveTool.Profile)) {
+			return RunReport{}, ErrGrade
+		}
 		if item.Case.PDF != nil && item.Case.PDF.Output == "required" ||
 			item.Case.Browser != nil && item.Case.Browser.Scenario == "artifact" {
 			var raw []byte
@@ -332,6 +336,7 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 		trial.ActiveToolRequired != requiresActiveTool(item.Case) ||
 		(item.Case.Steering != nil && item.Case.Steering.Peer != nil) != (trial.Isolation != nil) ||
 		(item.Case.ReadRecovery != nil) != (trial.ReadRecovery != nil) ||
+		(item.Case.NativeStop != nil) != (trial.NativeStop != nil) ||
 		trial.Repetition != summary.Repetition ||
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||
@@ -385,8 +390,11 @@ func validTrialConversation(trial Trial, agent, workspace string) bool {
 			!validBrowserCancellation(trial, event, workspace) {
 			return false
 		}
+		if event.Kind == "stopped" && !validNativeStopReply(trial, event, workspace) {
+			return false
+		}
 		if event.Kind != "stream" && (event.AgentID == "" || event.SessionKey == "" ||
-			len(event.TraceScopes) == 0 && event.Kind != "canceled") {
+			len(event.TraceScopes) == 0 && event.Kind != "canceled" && event.Kind != "stopped") {
 			return false
 		}
 	}
@@ -396,7 +404,7 @@ func validTrialConversation(trial Trial, agent, workspace string) bool {
 func lastOutcome(events []Event) Event {
 	for index := len(events) - 1; index >= 0; index-- {
 		if events[index].Kind == "final" || events[index].Kind == "question" || events[index].Kind == "approval" ||
-			events[index].Kind == "canceled" {
+			events[index].Kind == "canceled" || events[index].Kind == "stopped" {
 			return events[index]
 		}
 	}

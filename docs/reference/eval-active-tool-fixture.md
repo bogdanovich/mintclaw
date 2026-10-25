@@ -107,5 +107,7 @@ and native JSONL inspection remain unchanged; it never opens a recovering store.
 The [C2 case-level contracts](../architecture/agent-evals-core-execution.md)
 join native scope/trace, enqueue/injection, ordered emitted-batch results and
 final delivery, with explicit mode controls and independent two-session routes.
-Their fixed qualification outcomes remain unchanged. These cancellation
-primitives do not implement or qualify the forthcoming C3b stop/reuse case.
+Their fixed qualification outcomes remain unchanged. The
+[native stop/reuse contract](core-stop-eval.md) joins these cancellation primitives
+with native abort, history and delivery; neither implementation nor model-free
+controls alone qualify the case.

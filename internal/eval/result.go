@@ -72,6 +72,7 @@ type Trial struct {
 	Steering             *SteeringEvidence             `json:"steering,omitempty"`
 	Isolation            *IsolationEvidence            `json:"isolation,omitempty"`
 	ReadRecovery         *ReadRecoveryEvidence         `json:"read_recovery,omitempty"`
+	NativeStop           *NativeStopEvidence           `json:"native_stop,omitempty"`
 }
 
 // Private, bounded native observations. They are not model input, authorization,
