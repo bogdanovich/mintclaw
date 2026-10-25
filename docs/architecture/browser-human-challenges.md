@@ -5,6 +5,19 @@ No CAPTCHA solver, extra credential service or new browser-control endpoint is
 introduced. A Security Measure page is not necessarily an image-code CAPTCHA;
 show the available evidence rather than inventing an answer field.
 
+For account login, discover the saved Login on the current official website and
+complete `browser_login authorize` before the owner's manual challenge. This
+operation needs no login form or private values. Automatic access returns
+`authorized` for a configured principal; phone mode can suspend and close the
+idle browser before any human effort is invested. After manual challenge work,
+resume that same browser through protected login and verification.
+
+Start from a working public homepage and follow its observed sign-in link.
+Check the page itself, since HTTP 200 can still be a security challenge. A
+bounded retry of a failed public GET in the same context can avoid an
+unnecessary handoff; preserve an explicit screenshot-first request. Do not
+retry a private form submission or imply that another entry URL defeats a CAPTCHA.
+
 ## Text answer
 
 Before private login starts, observe the current challenge and send its image

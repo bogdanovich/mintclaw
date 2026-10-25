@@ -28,6 +28,13 @@ func (source *credentialWaitToolFixture) CredentialApprovalState(
 }
 
 func TestBrowserLoginApprovalUsesPrivateDurableWaitControl(t *testing.T) {
+	for _, step := range []string{"credentials", "authorize"} {
+		t.Run(step, func(t *testing.T) { testBrowserLoginApprovalWait(t, step) })
+	}
+}
+
+func testBrowserLoginApprovalWait(t *testing.T, step string) {
+	t.Helper()
 	deadline := time.Now().Add(2 * time.Hour)
 	reference := strings.Repeat("a", 64)
 	source := &credentialWaitToolFixture{credentialBrowserToolFixture: credentialBrowserToolFixture{
@@ -38,7 +45,7 @@ func TestBrowserLoginApprovalUsesPrivateDurableWaitControl(t *testing.T) {
 	}, state: toolshared.ExternalWaitReady}
 	tool := NewBrowserLoginTool(browserToolTestConfig(), source)
 	ctx := browserToolTestContext()
-	result := tool.Execute(ctx, websiteStepArguments("credentials"))
+	result := tool.Execute(ctx, websiteStepArguments(step))
 	if result.Control.Suspension == nil || result.Control.Suspension.Kind != interactions.KindExternalWait ||
 		result.Control.Suspension.ConditionRef != reference || result.Control.Suspension.Deadline != deadline || len(result.WriteAudit) != 0 {
 		t.Fatal("approval did not transfer safe durable control")

@@ -11,6 +11,9 @@ The 2026-10-25 follow-up is
 [durable approval and browser continuity](credential-durable-approval.md):
 persist the original approval window across restart, repair continuation image
 delivery, then acquire approval before manual browser challenges.
+The operator subsequently selected
+[optional phone approval with automatic scoped access](credential-approval-modes.md)
+for the trusted agent. Durable consent remains available in phone mode.
 
 ## Current decision and intended outcome
 

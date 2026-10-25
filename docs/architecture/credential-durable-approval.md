@@ -20,8 +20,11 @@ ordinary logs and diagnostic traces.
    link; allow bounded safe navigation retries without replaying an uncertain
    login submission. Qualify the combined lifecycle and deploy merged changes.
 
-The latter two steps remain pending until their own implementation and
-qualification. A real eBay login is not certified by synthetic tests.
+Continuation image delivery is implemented in
+[PR #1879](https://github.com/bogdanovich/mintclaw/pull/1879). The preflight and
+the operator's subsequent choice of optional approval are described in
+[approval modes](credential-approval-modes.md). Deployment and an owner pilot
+remain separate evidence; a real eBay login is not certified by synthetic tests.
 
 ## Durable grant contract
 

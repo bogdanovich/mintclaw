@@ -42,7 +42,9 @@ func (*BrowserLoginTool) RuntimeCapabilities() []runtimecap.CapabilityID {
 }
 
 func (*BrowserLoginTool) Description() string {
-	return "Find and use saved website Logins privately. Open the HTTPS login page and use operation discover " +
+	return "Find and use saved website Logins privately. For a requested login, open the site's HTTPS homepage " +
+		"and use discover, then authorize before any manual CAPTCHA or human handoff. Authorize needs only " +
+		"current page refs, reads no secret values and does not fill a form. Use operation discover " +
 		"to find matching names and credential_ids in the dedicated vault. No per-site setup is needed. " +
 		"Use credentials for a combined form, username/password for separate steps, and totp for a stored " +
 		"authenticator code. Supply only current observed field/submit refs and the selected credential_id; " +
@@ -53,9 +55,10 @@ func (*BrowserLoginTool) Description() string {
 		"On observe_required, no values were read or submitted: observe the current form and retry once with " +
 		"fresh refs; if it repeats, hand off. Do not reuse old refs or retry denied/outcome_unknown submissions. " +
 		"If an unsupported challenge appears, hand off without guessing codes or repeating failed logins. " +
-		"Values stay inside the trusted runtime. Phone approval is required when no current vault grant exists. " +
+		"Values stay inside the trusted runtime. The operator chooses phone approval or automatic scoped access. " +
 		"Never supply passwords or tokens. Do not replay an outcome_unknown submission. " +
-		"Phone approval suspends this task automatically; after approval open a fresh session and observe fresh fields."
+		"Phone approval suspends this task automatically; after approval open a fresh session and observe fresh fields. " +
+		"Complete authorization before asking the human to solve a challenge, then keep that same browser through login."
 }
 
 func (*BrowserLoginTool) Parameters() map[string]any {
@@ -67,7 +70,8 @@ func (*BrowserLoginTool) Parameters() map[string]any {
 		properties[key] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 	}
 	properties["operation"] = map[string]any{
-		"type": "string", "enum": []string{"discover", "credentials", "username", "password", "totp", "verify"},
+		"type": "string",
+		"enum": []string{"discover", "authorize", "credentials", "username", "password", "totp", "verify"},
 	}
 	properties["login_name"] = map[string]any{
 		"type": "string", "minLength": 1, "maxLength": 256,
@@ -155,14 +159,15 @@ func (tool *BrowserLoginTool) Execute(ctx context.Context, args map[string]any) 
 	// projection against an accidental future source returning private detail.
 	switch result.Outcome {
 	case "logged_in", "approval_required", "handoff_required", "denied", "failed", "outcome_unknown",
-		"found", "not_found", "choice_required", "unavailable", "submitted", "unverified", "observe_required":
+		"found", "not_found", "choice_required", "unavailable", "submitted", "unverified", "observe_required", "authorized":
 	default:
 		return denied()
 	}
 	if request.Fields.Step == "" {
 		result.Alias = request.Account
 	} else if !validBrowserLoginProjection(result) ||
-		(result.Outcome == "logged_in" && request.Fields.Step != "verify") {
+		(result.Outcome == "logged_in" && request.Fields.Step != "verify") ||
+		(result.Outcome == "authorized" && request.Fields.Step != "authorize") {
 		return denied()
 	}
 	receiptID := ""

@@ -58,7 +58,7 @@ func credentialProviderFixture(
 	discoveryMode := cfg.Credentials.Accounts[0].DiscoverLogins
 	websiteScript := &credentialWebsiteProviderScript{}
 	if discoveryMode {
-		stepsPerTurn = 11
+		stepsPerTurn = 12
 	}
 	if connectorMode {
 		stepsPerTurn = 2
@@ -355,7 +355,7 @@ func credentialProviderFixture(
 		mu.Unlock()
 		prompt := "Log in to fixture-account, observe the result, close the browser, then report completion."
 		if discoveryMode {
-			prompt = "Find the saved website Login, submit it, fill its stored authenticator code, verify login, close the browser."
+			prompt = "Find the saved website Login, authorize before manual challenges, submit it, fill its stored authenticator code, verify login, close the browser."
 		}
 		if connectorMode {
 			prompt = "Read open pull requests from fixture-owner/fixture-repo with fixture-account, then report completion."
