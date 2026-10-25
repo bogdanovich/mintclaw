@@ -33,6 +33,8 @@ type admittedTarget struct {
 	config       *config.Config
 	probe        health.RuntimeProbe
 	serviceToken string
+	activeTool   *activeToolFixture
+	ownedLog     string
 }
 
 func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admittedTarget, error) {
@@ -45,6 +47,12 @@ func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admit
 func admitPreparedTargetWithBrowser(
 	ctx context.Context, preset Preset, home string, fixture *browserFixtureHost,
 ) (admittedTarget, error) {
+	return admitPreparedTargetWithFixtures(ctx, preset, home, fixture, nil)
+}
+
+func admitPreparedTargetWithFixtures(
+	ctx context.Context, preset Preset, home string, fixture *browserFixtureHost, active *activeToolFixture,
+) (admittedTarget, error) {
 	var target admittedTarget
 	if preset.Validate() != nil || runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return target, ErrUnsafeTarget
@@ -55,7 +63,8 @@ func admitPreparedTargetWithBrowser(
 	}
 	cfg, physicalHome := profile.config, profile.home
 	if validateConversationProfile(cfg, preset, profile.workspace) != nil ||
-		cfg.Diagnostics.TraceCapture.Enabled != preset.CaptureModelMetadata || !browserFixtureMatches(cfg, fixture) {
+		cfg.Diagnostics.TraceCapture.Enabled != preset.CaptureModelMetadata || !browserFixtureMatches(cfg, fixture) ||
+		!activeToolMatches(preset, active) {
 		return target, ErrUnsafeTarget
 	}
 	root, err := os.OpenRoot(physicalHome)
@@ -82,7 +91,7 @@ func admitPreparedTargetWithBrowser(
 	if err != nil || pathErr != nil || probe.Version != 1 || probe.PID != process.PID ||
 		probe.ConfigSHA256 != fingerprint || probe.HomeSHA256 != admissionHash(physicalHome) ||
 		probe.ConfigPathSHA256 != admissionHash(configPath) || probe.InstanceSHA256 != admissionHash(process.Token) ||
-		!slices.Contains([]string{"warn", "error", "fatal"}, probe.LogLevel) ||
+		!admittedEvalLogLevel(preset, probe.LogLevel) ||
 		probe.GOOS != runtime.GOOS || probe.GOARCH != runtime.GOARCH {
 		return target, ErrUnsafeTarget
 	}
@@ -114,7 +123,7 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		cfg.Gateway.HotReload || cfg.Gateway.Deploy.Enabled || cfg.Gateway.SafeRestart.Enabled ||
 		cfg.Gateway.CodingRemote.Enabled || cfg.Coding.Remote.Enabled || cfg.Nodes.Enabled ||
 		cfg.Nodes.TerminalEnabled || cfg.Heartbeat.Enabled || cfg.Devices.Enabled || cfg.Hooks.Enabled ||
-		cfg.Tools.Cron.Enabled || cfg.Tools.Exec.Enabled || cfg.Tools.MCP.Enabled ||
+		cfg.Tools.Cron.Enabled || cfg.Tools.Exec.Enabled || cfg.Tools.MCP.Enabled != (preset.ActiveTool != nil) ||
 		cfg.Tools.Browser.Enabled != browserEnabled || cfg.Tools.Document.Enabled != pdfEnabled ||
 		!admittedModelMetadataPolicy(cfg.Diagnostics.TraceCapture, preset) ||
 		cfg.Tools.Approval.EffectiveMode() != config.ToolApprovalModeRequired ||
@@ -123,7 +132,7 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		cfg.Agents.Defaults.TargetPolicy != nil || cfg.Agents.Defaults.Subagents != nil ||
 		cfg.Agents.Defaults.Routing != nil && cfg.Agents.Defaults.Routing.Enabled ||
 		cfg.Agents.Dispatch != nil && len(cfg.Agents.Dispatch.Rules) != 0 ||
-		len(cfg.Agents.Defaults.ContextManagerConfig) != 0 {
+		len(cfg.Agents.Defaults.ContextManagerConfig) != 0 || validateActiveToolPolicy(cfg, preset) != nil {
 		return ErrUnsafeTarget
 	}
 	channels, nativeChannels := 0, 0
@@ -154,8 +163,11 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 	if agent.ID != preset.ExpectedAgent || agent.Workspace != "" && !samePhysicalPath(agent.Workspace, workspace) ||
 		agent.TargetPolicy != nil || agent.Subagents != nil || agent.ToolPolicy == nil ||
 		agent.ToolPolicy.Default != config.AgentCapabilityDefaultDeny ||
-		agent.MCPServerPolicy == nil || agent.MCPServerPolicy.Default != config.AgentCapabilityDefaultDeny ||
-		len(agent.MCPServerPolicy.Allow) != 0 {
+		agent.MCPServerPolicy == nil || agent.MCPServerPolicy.Default != config.AgentCapabilityDefaultDeny {
+		return ErrUnsafeTarget
+	}
+	if preset.ActiveTool == nil && len(agent.MCPServerPolicy.Allow) != 0 || preset.ActiveTool != nil &&
+		(!slices.Equal(agent.MCPServerPolicy.Allow, []string{activeToolServer}) || len(agent.MCPServerPolicy.Deny) != 0) {
 		return ErrUnsafeTarget
 	}
 	// ClientSessionID is metadata, not a native history-key dimension. The
@@ -167,13 +179,14 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 	for _, tool := range agent.ToolPolicy.Allow {
 		if tool != "request_user_input" && (tool != "document" || !pdfEnabled) &&
 			(tool != tools.BM25SearchToolName || !pdfEnabled) &&
-			(!browserEnabled || !slices.Contains(browserEvalTools, tool)) {
+			(!browserEnabled || !slices.Contains(browserEvalTools, tool)) &&
+			(preset.ActiveTool == nil || tool != activeToolNativeName) {
 			return ErrUnsafeTarget
 		}
 	}
 	for _, capability := range preset.Capabilities {
 		if capability != "conversation" && capability != "interactions" && capability != "pdf" &&
-			capability != "browser" && capability != boundedCallsCapability ||
+			capability != "browser" && capability != boundedCallsCapability && capability != activeToolCapability ||
 			capability == "interactions" && (!cfg.Tools.RequestUserInput.Enabled ||
 				!slices.Contains(agent.ToolPolicy.Allow, "request_user_input") || len(agent.ToolPolicy.Deny) != 0) {
 			return ErrUnsafeTarget

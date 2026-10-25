@@ -52,7 +52,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		return RunReport{}, err
 	}
 	seen := make(map[string]bool)
-	if preset.Validate() != nil || preset.TargetCallBudget != nil && !options.StartTarget {
+	if preset.Validate() != nil ||
+		(preset.TargetCallBudget != nil || preset.ActiveTool != nil) && !options.StartTarget {
 		return RunReport{}, ErrUnsafeTarget
 	}
 	for _, item := range cases {
@@ -77,12 +78,16 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	defer cancel()
 	var child *ownedGateway
 	var fixtures *browserFixtureHost
+	var active *activeToolFixture
 	var target admittedTarget
 	var err error
 	if options.StartTarget {
-		fixtures, err = bindOwnedBrowserFixture(preset, options.Home)
+		active, err = bindOwnedActiveTool(preset, options.Home)
 		if err == nil {
-			child, target, err = startOwnedGatewayWithBrowser(suiteCtx, preset, options.Home, fixtures)
+			fixtures, err = bindOwnedBrowserFixture(preset, options.Home)
+		}
+		if err == nil {
+			child, target, err = startOwnedGatewayWithFixtures(suiteCtx, preset, options.Home, fixtures, active)
 		}
 	} else {
 		target, err = admitPreparedTarget(suiteCtx, preset, options.Home)
@@ -115,6 +120,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	defer func() {
 		stopTarget()
+		_ = closeActiveTool(active)
 		pendingBrowser.close(lifecycle)
 		// Even report I/O failures must not discard the only private fact set
 		// before attempting the post-stop raw observation.
@@ -238,6 +244,10 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	result.WorkspaceInputs.After = observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter)
 	stopTarget()
+	activeCloseErr := closeActiveTool(active)
+	if activeCloseErr != nil {
+		result.Verdict = combineVerdicts(result.Verdict, Inconclusive)
+	}
 	result.TargetBudget = observeTargetBudget(child, retainedFacts.values, filter)
 	result.BrowserFixtures = pendingBrowser.close(lifecycle)
 	observeOwnedSurfaces()
@@ -393,7 +403,7 @@ func runAdmittedTrial(
 	}
 	// Recheck the running instance between trials before any new task is sent.
 	probe, err := requestRuntimeProbe(caseCtx, target.config, target.serviceToken)
-	if err != nil || probe != target.probe {
+	if err != nil || probe != target.probe || !activeToolMatches(target.preset, target.activeTool) {
 		trial.Verdict, trial.Code = Inconclusive, "target_changed"
 		return trial
 	}

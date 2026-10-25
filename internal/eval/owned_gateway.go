@@ -116,6 +116,12 @@ func startOwnedGateway(ctx context.Context, preset Preset, home string) (*ownedG
 func startOwnedGatewayWithBrowser(
 	ctx context.Context, preset Preset, home string, fixture *browserFixtureHost,
 ) (*ownedGateway, admittedTarget, error) {
+	return startOwnedGatewayWithFixtures(ctx, preset, home, fixture, nil)
+}
+
+func startOwnedGatewayWithFixtures(
+	ctx context.Context, preset Preset, home string, fixture *browserFixtureHost, active *activeToolFixture,
+) (*ownedGateway, admittedTarget, error) {
 	var target admittedTarget
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" || ctx == nil || ctx.Err() != nil {
 		return nil, target, ErrOwnedGateway
@@ -125,7 +131,8 @@ func startOwnedGatewayWithBrowser(
 		profile.config.Diagnostics.TraceCapture.Enabled != preset.CaptureModelMetadata ||
 		validateFreshOwnedProfile(profile) != nil ||
 		!browserFixtureMatches(profile.config, fixture) ||
-		!slices.Contains([]string{"warn", "error", "fatal"}, config.EffectiveGatewayLogLevel(profile.config)) {
+		!activeToolMatches(preset, active) ||
+		!admittedEvalLogLevel(preset, config.EffectiveGatewayLogLevel(profile.config)) {
 		return nil, target, ErrOwnedGateway
 	}
 	executable, err := os.Executable()
@@ -141,7 +148,7 @@ func startOwnedGatewayWithBrowser(
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if !browserFixtureMatches(profile.config, fixture) {
+		if !browserFixtureMatches(profile.config, fixture) || !activeToolMatches(preset, active) {
 			return child, admittedTarget{}, ErrOwnedGateway
 		}
 		select {
@@ -149,12 +156,13 @@ func startOwnedGatewayWithBrowser(
 			return child, target, ErrOwnedGateway
 		default:
 		}
-		target, err = admitPreparedTargetWithBrowser(startupCtx, preset, home, fixture)
+		target, err = admitPreparedTargetWithFixtures(startupCtx, preset, home, fixture, active)
 		if err == nil {
 			if target.probe.PID != child.command.Process.Pid {
 				return child, admittedTarget{}, ErrOwnedGateway
 			}
 			child.admitted = true
+			target.activeTool, target.ownedLog = active, child.log.file.Name()
 			return child, target, nil
 		}
 		select {

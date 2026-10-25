@@ -36,7 +36,7 @@ does not reopen C0 or E0-E5.
 | C1b transport | C0 | [Prompt-bound ordinary answers](../channels/mintclaw.md) through existing native projection | Complete, [#1874](https://github.com/bogdanovich/mintclaw/pull/1874); reviewed green merge including wire UTF-8 regression |
 | C1b | C1a | Ordinary answer/resume native observer and stale/wrong-prompt controls | Complete, [#1881](https://github.com/bogdanovich/mintclaw/pull/1881); qualified in C1q |
 | C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | Complete: #1884, #1882, #1885, #1887 and #1888 merged; both cases qualified 1 + fixed 3/3 on `c69659c5` |
-| C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | Queued |
+| C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | In progress; native fixture #1890 merged; owned-profile/driver foundations next |
 | C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Queued |
 | C3b | C2 | Native active stop/reuse, distinct from local driver stop | Queued |
 | C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Queued |
@@ -153,11 +153,27 @@ Missing, canceled and closed calls cannot masquerade as successful release.
 The existing native enqueue summary retains its filtered message hash without
 raw text. Native event logging remains asynchronous and may drop evidence.
 
-This packet does not widen eval profile admission, add scenario definitions or
-claim C2 qualification. The next packet must admit only this owned fixture,
-send bounded in-flight actions and join real active-turn/scope, enqueue/injection,
-complete ordered tool results and delivery evidence. The native scheduler stays
-the sole steering authority. C2 remains incomplete until those contracts exist.
+The primitive was reviewed/merged in
+[#1890](https://github.com/bogdanovich/mintclaw/pull/1890), with all applicable CI
+green, exact-head substantive review and owner PR-root approval. It did not widen
+eval admission or claim C2 qualification.
+
+The following foundation admits only this exact owned fixture with the existing
+native budget, metadata capture, pinned steering mode and a narrow info-level
+event filter. Its synchronous in-flight sender owns actual wire IDs, privacy and
+sticky input limits. A bounded raw-inspecting log observer waits for one native
+enqueue hash while the registered fixture remains active and unreleased. The
+passive native-history reader is reused with unchanged guards.
+
+Model-free controls include a real CLI run for both ordinary and active-tool
+profiles, each with three native sessions, six logical provider calls and one
+shared ceiling. The active profile exposes only the selected MCP tool; no paid
+model or production profile is used. These controls are not live steering proof.
+
+Next: loadable boundary/order/isolation definitions and their full frozen oracle
+joining native scope/trace, enqueue/injection, complete ordered emitted-batch
+results and delivery. No new scenario/default is added by the foundations alone.
+The native scheduler remains the sole steering authority; C2 is incomplete.
 
 ## C1q Provider Primitive
 

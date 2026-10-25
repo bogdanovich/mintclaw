@@ -23,6 +23,7 @@ type Preset struct {
 	WorkspaceFiles       []WorkspaceFile             `json:"workspace_files,omitempty"`
 	CaptureModelMetadata bool                        `json:"capture_model_metadata,omitempty"`
 	TargetCallBudget     *providers.CallBudgetLimits `json:"target_call_budget,omitempty"`
+	ActiveTool           *ActiveToolProfile          `json:"active_tool,omitempty"`
 }
 
 // WorkspaceFile admits one reviewed input, not a directory or runtime state.
@@ -78,6 +79,12 @@ func (preset Preset) Validate() error {
 		}
 	}
 	if (preset.TargetCallBudget != nil) != slices.Contains(preset.Capabilities, boundedCallsCapability) {
+		return ErrInvalidPreset
+	}
+	if (preset.ActiveTool != nil) != slices.Contains(preset.Capabilities, activeToolCapability) ||
+		preset.ActiveTool != nil && (preset.ActiveTool.validate() != nil || preset.TargetCallBudget == nil ||
+			!preset.CaptureModelMetadata || preset.UserModel != "" ||
+			slices.Contains(preset.Capabilities, "pdf") || slices.Contains(preset.Capabilities, "browser")) {
 		return ErrInvalidPreset
 	}
 	if len(preset.WorkspaceFiles) > 64 {

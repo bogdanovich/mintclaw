@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -65,7 +64,7 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 	snapshot, err := config.NewRepository(preset.ConfigPath).ReadDurable()
 	if err != nil || !profileConfigUnchanged(seed.home, before) ||
 		validateConversationProfile(snapshot.Config, preset, seed.workspace) != nil ||
-		!slices.Contains([]string{"warn", "error", "fatal"}, config.EffectiveGatewayLogLevel(snapshot.Config)) {
+		!admittedEvalLogLevel(preset, config.EffectiveGatewayLogLevel(snapshot.Config)) {
 		return result, ErrPreparation
 	}
 	seed.config = snapshot.Config
@@ -113,6 +112,10 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 		newHome,
 		"workspace",
 	)
+	clone.Gateway.Host, clone.Gateway.Port = "127.0.0.1", port
+	if prepareActiveToolProfile(clone, &prepared) != nil {
+		return result, ErrPreparation
+	}
 	presetData, err := json.Marshal(prepared)
 	if prepared.Validate() != nil || err != nil || len(presetData)+1 > MaxManifestBytes || ctx.Err() != nil {
 		return result, ErrPreparation
@@ -137,7 +140,6 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 	}
 	clone.Agents.Defaults.Workspace = result.Workspace
 	clone.Agents.List[0].Workspace = result.Workspace
-	clone.Gateway.Host, clone.Gateway.Port = "127.0.0.1", port
 	if preset.CaptureModelMetadata {
 		clone.Diagnostics.TraceCapture = evalModelMetadataCapture()
 		result.ModelMetadataPrepared = true
