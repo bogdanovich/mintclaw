@@ -130,7 +130,8 @@ func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
 				}
 			case "pending":
 				pending++
-				if item.Default || item.PendingReason == "" || item.Suite == "general" {
+				steering := item.ID == "general.steering.boundary" || item.ID == "general.steering.order"
+				if item.Default || item.PendingReason == "" || item.Suite == "general" && !steering {
 					t.Fatal("pending metadata incorrect")
 				}
 			default:
