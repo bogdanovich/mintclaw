@@ -39,12 +39,13 @@ type FormIntakeApplyRequest struct {
 	PassID           string
 	ExpectedRevision int64
 	Owner            FormJobOwner
-	Schema           FormFieldsFacts              `json:"-"`
-	Proposals        []FormIntakeProposal         `json:"-"`
-	NonData          []FormIntakeLiteral          `json:"-"`
-	Findings         []FormFieldMappingBlocker    `json:"-"`
-	Intent           FormIntakeDialogIntent       `json:"-"`
-	Output           *FormIntakeOutputInstruction `json:"-"`
+	Schema           FormFieldsFacts                `json:"-"`
+	Proposals        []FormIntakeProposal           `json:"-"`
+	NonData          []FormIntakeLiteral            `json:"-"`
+	Findings         []FormFieldMappingBlocker      `json:"-"`
+	Intent           FormIntakeDialogIntent         `json:"-"`
+	Output           *FormIntakeOutputInstruction   `json:"-"`
+	Exclusions       []FormIntakeCandidateExclusion `json:"-"`
 }
 
 // FormIntakeAccountedLiteral is an ephemeral private view for the next pass.
@@ -82,8 +83,9 @@ type formIntakeStoredOutcome struct {
 	ScopedInstruction bool                      `json:"scoped_instruction,omitempty"`
 	ScopedIDs         []string                  `json:"scoped_ids,omitempty"`
 	// Native-derived settlement of advisory uncertainty, never a value or approval.
-	ResolvedGuidanceIDs []string                     `json:"resolved_guidance_ids,omitempty"`
-	PriorResolutions    []formIntakeStoredResolution `json:"prior_resolutions,omitempty"`
+	ResolvedGuidanceIDs  []string                     `json:"resolved_guidance_ids,omitempty"`
+	ExcludedCandidateIDs []string                     `json:"excluded_candidate_ids,omitempty"`
+	PriorResolutions     []formIntakeStoredResolution `json:"prior_resolutions,omitempty"`
 }
 
 // ApplyFormIntakePass publishes accepted ledger events, raw-input accounting
@@ -146,6 +148,10 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		if selectErr != nil {
 			return false, selectErr
 		}
+		excluded, exclusionErr := validateFormIntakeCandidateExclusions(source.Intake, index, *pass, request)
+		if exclusionErr != nil {
+			return false, exclusionErr
+		}
 		if len(record.Events)+len(selection.Payloads) > store.maxEventsPerJob ||
 			len(selection.Accounted) > MaxFormIntakeAccountedSpans {
 			return false, ErrFormJobCapacityExceeded
@@ -170,8 +176,9 @@ func (store *FormJobStore) ApplyFormIntakePass(
 		pass.Outcome = &formIntakeStoredOutcome{
 			Digest: digest, AppliedRevision: record.Public.Revision, AcceptedIDs: selection.AcceptedIDs,
 			AcknowledgedIDs: selection.AcknowledgedIDs, Findings: selection.Findings, Intent: request.Intent,
-			ScopedInstruction: selection.ScopedInstruction,
-			ScopedIDs:         selection.ScopedIDs,
+			ScopedInstruction:    selection.ScopedInstruction,
+			ScopedIDs:            selection.ScopedIDs,
+			ExcludedCandidateIDs: excluded,
 		}
 		pass.Outcome.ResolvedGuidanceIDs = formIntakeResolvedGuidanceIDs(*input, *pass)
 		if resolveErr := store.resolvePriorFormIntakeLiterals(
@@ -236,6 +243,13 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		Mode    FormIntakeOutputMode
 		Literal literal
 	}
+	type exclusion struct {
+		FieldID   string
+		Reference string
+		Passes    int
+		Evidence  literal
+		Verified  bool
+	}
 	count, bytes, valid := 0, 0, true
 	resolutionCount := 0
 	convert := func(refs []FormIntakeLiteral) []literal {
@@ -253,7 +267,7 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 	if request.Intent != "" && !request.Intent.Valid() {
 		return "", ErrFormJobAnswerConflict
 	}
-	if len(request.Proposals)+len(request.Findings) > MaxFormIntakeCandidates ||
+	if len(request.Proposals)+len(request.Findings)+len(request.Exclusions) > MaxFormIntakeCandidates ||
 		len(request.NonData) > MaxFormIntakeAccountedSpans {
 		return "", ErrFormJobCapacityExceeded
 	}
@@ -288,6 +302,21 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		}
 	}
 	nonData := convert(request.NonData)
+	exclusions := make([]exclusion, 0, len(request.Exclusions))
+	for _, item := range request.Exclusions {
+		if !opaqueFieldID.MatchString(item.FieldID) || item.ExpectedPasses < 0 ||
+			item.ExpectedPasses > MaxFormIntakeExtractionPasses {
+			return "", ErrFormJobAnswerConflict
+		}
+		if _, _, err := parseFormIntakeReceipt(item.EvidenceReference); err != nil {
+			return "", ErrFormJobAnswerConflict
+		}
+		refs := convert([]FormIntakeLiteral{item.Evidence})
+		exclusions = append(exclusions, exclusion{
+			item.FieldID, item.EvidenceReference,
+			item.ExpectedPasses, refs[0], item.Verified,
+		})
+	}
 	var outputInstruction *output
 	if request.Output != nil {
 		if !request.Output.Mode.valid() {
@@ -303,18 +332,20 @@ func (store *FormJobStore) formIntakeProposalDigest(request FormIntakeApplyReque
 		return "", ErrFormJobCapacityExceeded
 	}
 	return formJobJSONKeyedDigest(store.profileKey, struct {
-		Reference string
-		PassID    string
-		Revision  int64
-		Schema    FormFieldsFacts
-		Proposals []proposal
-		NonData   []literal
-		Findings  []FormFieldMappingBlocker `json:"Findings,omitempty"`
-		Intent    FormIntakeDialogIntent    `json:"Intent,omitempty"`
-		Output    *output                   `json:"Output,omitempty"`
+		Reference  string
+		PassID     string
+		Revision   int64
+		Schema     FormFieldsFacts
+		Proposals  []proposal
+		NonData    []literal
+		Findings   []FormFieldMappingBlocker `json:"Findings,omitempty"`
+		Intent     FormIntakeDialogIntent    `json:"Intent,omitempty"`
+		Output     *output                   `json:"Output,omitempty"`
+		Exclusions []exclusion               `json:"Exclusions,omitempty"`
 	}{
 		request.Reference, request.PassID, request.ExpectedRevision, request.Schema, proposals, nonData,
 		request.Findings, request.Intent, outputInstruction,
+		exclusions,
 	})
 }
 

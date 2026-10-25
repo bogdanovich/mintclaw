@@ -67,7 +67,7 @@ func formIntakeFindingsThrough(
 			}
 			current[finding.FieldID] = finding.Code
 		}
-		for _, id := range pass.Outcome.ResolvedGuidanceIDs {
+		for _, id := range append(slices.Clone(pass.Outcome.ResolvedGuidanceIDs), pass.Outcome.ExcludedCandidateIDs...) {
 			// Only advisory uncertainty in this exact window may settle.
 			// Native invalid/conflicting facts still require their own resolution.
 			if current[id] == "field_ambiguous" || current[id] == "field_confirmation_required" {
@@ -104,7 +104,7 @@ func formIntakeResolvedGuidanceIDs(input formIntakeStoredInput, pass formIntakeS
 }
 
 func formIntakeGuidanceOnlyOutcome(outcome formIntakeStoredOutcome) bool {
-	if outcome.ScopedInstruction ||
+	if outcome.ScopedInstruction || len(outcome.ExcludedCandidateIDs) != 0 ||
 		len(outcome.AcceptedIDs)+len(outcome.AcknowledgedIDs)+len(outcome.ScopedIDs)+len(outcome.Findings) != 0 {
 		return false
 	}
@@ -185,6 +185,8 @@ func validateFormIntakeOutcome(record FormJobRecord, pass formIntakeStoredPass) 
 			outcome.ScopedIDs,
 		)+len(
 			outcome.ResolvedGuidanceIDs,
+		)+len(
+			outcome.ExcludedCandidateIDs,
 		) > len(
 			pass.CandidateIDs,
 		) {
@@ -196,6 +198,7 @@ func validateFormIntakeOutcome(record FormJobRecord, pass formIntakeStoredPass) 
 	}
 	for _, ids := range [][]string{
 		outcome.AcceptedIDs, outcome.AcknowledgedIDs, outcome.ScopedIDs, outcome.ResolvedGuidanceIDs,
+		outcome.ExcludedCandidateIDs,
 	} {
 		if !slices.IsSorted(ids) {
 			return ErrFormJobRecordCorrupt
