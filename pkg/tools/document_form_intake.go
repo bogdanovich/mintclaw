@@ -721,6 +721,7 @@ func (tool *DocumentTool) processFormIntakeInput(
 				Findings:         proposal.Findings,
 				Intent:           proposal.Intent,
 				Output:           proposal.Output,
+				Exclusions:       proposal.Exclusions,
 			})
 			if errors.Is(err, document.ErrFormJobConflict) && attempt == 0 {
 				continue

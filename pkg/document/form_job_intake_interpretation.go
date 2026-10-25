@@ -62,11 +62,22 @@ type FormIntakeInterpretationView struct {
 }
 
 type FormIntakeInterpretation struct {
-	Intent    FormIntakeDialogIntent       `json:"-"`
-	Proposals []FormIntakeProposal         `json:"-"`
-	NonData   []FormIntakeLiteral          `json:"-"`
-	Findings  []FormFieldMappingBlocker    `json:"-"`
-	Output    *FormIntakeOutputInstruction `json:"-"`
+	Intent     FormIntakeDialogIntent         `json:"-"`
+	Proposals  []FormIntakeProposal           `json:"-"`
+	NonData    []FormIntakeLiteral            `json:"-"`
+	Findings   []FormFieldMappingBlocker      `json:"-"`
+	Output     *FormIntakeOutputInstruction   `json:"-"`
+	Exclusions []FormIntakeCandidateExclusion `json:"-"`
+}
+
+// A verified later clarification excludes an earlier candidate association,
+// never the field itself or its required/optional status. It grants no value.
+type FormIntakeCandidateExclusion struct {
+	FieldID           string            `json:"-"`
+	EvidenceReference string            `json:"-"`
+	ExpectedPasses    int               `json:"-"`
+	Evidence          FormIntakeLiteral `json:"-"`
+	Verified          bool              `json:"-"`
 }
 
 type FormIntakeInterpreter interface {

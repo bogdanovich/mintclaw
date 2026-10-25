@@ -16,128 +16,191 @@ import (
 func TestDocumentFormIntakeRoleClarificationUsesNativeChronologyAndReportsActualFields(t *testing.T) {
 	for _, language := range []string{"en", "ru"} {
 		for _, size := range []int{13, 37} {
-			t.Run(fmt.Sprintf("%s/%d", language, size), func(t *testing.T) {
-				model := &intakeWorkflowTestInterpreter{}
-				tool, ctx, schema, jobID, _ := intakeWorkflowFixture(t, model, func(schema *document.FormFieldsFacts) {
-					for index := len(schema.Fields); index < size; index++ {
-						field := schema.Fields[0]
-						field.ID, field.Name = fmt.Sprintf(
-							"field_%064x",
-							index+1,
-						), fmt.Sprintf(
-							"Other detail %d",
-							index,
-						)
-						field.Widgets = []document.FormFieldWidget{{
-							ID: fmt.Sprintf("widget_%064x", index+1), Page: index/8 + 1, Ordinal: 1,
-						}}
-						schema.Fields = append(schema.Fields, field)
+			for _, exclusions := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%d/exclusions=%t", language, size, exclusions), func(t *testing.T) {
+					model := &intakeWorkflowTestInterpreter{}
+					tool, ctx, schema, jobID, _ := intakeWorkflowFixture(
+						t,
+						model,
+						func(schema *document.FormFieldsFacts) {
+							for index := len(schema.Fields); index < size; index++ {
+								field := schema.Fields[0]
+								field.ID, field.Name = fmt.Sprintf(
+									"field_%064x",
+									index+1,
+								), fmt.Sprintf(
+									"Other detail %d",
+									index,
+								)
+								field.Widgets = []document.FormFieldWidget{{
+									ID: fmt.Sprintf("widget_%064x", index+1), Page: index/8 + 1, Ordinal: 1,
+								}}
+								schema.Fields = append(schema.Fields, field)
+							}
+						},
+					)
+					original := "Borrower Casey Mint. Contact Robin Mint. Telephone 202-555-0147; owner unspecified."
+					clarification := "The previous telephone belongs only to the borrower. Contact telephone not supplied. City Mintford."
+					if language == "ru" {
+						original = "Я заёмщик Casey Mint. Контакт Robin Mint. Телефон 202-555-0147; пока не указываю, чей он."
+						clarification = "Предыдущий телефон принадлежит только заёмщику. Телефон контакта пока не указан. Город Mintford."
 					}
-				})
-				original := "Borrower Casey Mint. Contact Robin Mint. Telephone 202-555-0147; owner unspecified."
-				clarification := "The previous telephone belongs only to the borrower. Contact telephone not supplied. City Mintford."
-				if language == "ru" {
-					original = "Я заёмщик Casey Mint. Контакт Robin Mint. Телефон 202-555-0147; пока не указываю, чей он."
-					clarification = "Предыдущий телефон принадлежит только заёмщику. Телефон контакта пока не указан. Город Mintford."
-				}
-				model.interpret = func(view document.FormIntakeInterpretationView) (document.FormIntakeInterpretation, error) {
-					result := document.FormIntakeInterpretation{Intent: document.FormIntakeIntentFacts}
-					clarified := false
-					for _, related := range view.RelatedInputs {
-						clarified = clarified || related.Text == clarification &&
-							view.Pass.Input.AdmissionOrder > 0 && related.AdmissionOrder > view.Pass.Input.AdmissionOrder
-					}
-					facts := map[int]string{}
-					if view.Pass.Input.Text == original {
-						facts[2], facts[3] = "Casey Mint", "Robin Mint"
-						if clarified {
-							facts[0] = "202-555-0147"
-						} else {
-							for _, index := range []int{0, 1} {
-								if slices.Contains(view.Pass.CandidateIDs, schema.Fields[index].ID) {
-									result.Findings = append(result.Findings, document.FormFieldMappingBlocker{
-										FieldID: schema.Fields[index].ID, Code: "field_ambiguous",
-									})
+					model.interpret = func(view document.FormIntakeInterpretationView) (document.FormIntakeInterpretation, error) {
+						result := document.FormIntakeInterpretation{Intent: document.FormIntakeIntentFacts}
+						clarified := false
+						for _, related := range view.RelatedInputs {
+							clarified = clarified || related.Text == clarification &&
+								view.Pass.Input.AdmissionOrder > 0 && related.AdmissionOrder > view.Pass.Input.AdmissionOrder
+						}
+						facts := map[int]string{}
+						if view.Pass.Input.Text == original {
+							facts[2], facts[3] = "Casey Mint", "Robin Mint"
+							if clarified {
+								facts[0] = "202-555-0147"
+								if exclusions && slices.Contains(view.Pass.CandidateIDs, schema.Fields[1].ID) &&
+									slices.ContainsFunc(
+										view.Pass.Input.Findings,
+										func(f document.FormFieldMappingBlocker) bool { return f.FieldID == schema.Fields[1].ID },
+									) {
+									for _, related := range view.RelatedInputs {
+										if related.Text == clarification &&
+											related.AdmissionOrder > view.Pass.Input.AdmissionOrder {
+											result.Exclusions = append(
+												result.Exclusions,
+												document.FormIntakeCandidateExclusion{
+													FieldID:           schema.Fields[1].ID,
+													EvidenceReference: related.Reference,
+													ExpectedPasses:    related.Passes,
+													Evidence: document.FormIntakeLiteral{
+														Text:       clarification,
+														Occurrence: 1,
+													},
+													Verified: true,
+												},
+											)
+										}
+									}
+								}
+							} else {
+								for _, index := range []int{0, 1} {
+									if slices.Contains(view.Pass.CandidateIDs, schema.Fields[index].ID) {
+										result.Findings = append(result.Findings, document.FormFieldMappingBlocker{
+											FieldID: schema.Fields[index].ID, Code: "field_ambiguous",
+										})
+									}
 								}
 							}
+						} else {
+							facts[4] = "Mintford"
 						}
-					} else {
-						facts[4] = "Mintford"
+						for index, value := range facts {
+							if slices.Contains(view.Pass.CandidateIDs, schema.Fields[index].ID) {
+								result.Proposals = append(result.Proposals, document.FormIntakeProposal{
+									FieldID:  schema.Fields[index].ID,
+									Literals: []document.FormIntakeLiteral{{Text: value, Occurrence: 1}},
+								})
+							}
+						}
+						if exclusions {
+							var prose []string
+							if view.Pass.Input.Text == original {
+								prose = []string{"Borrower", "Contact", "Telephone", "owner unspecified"}
+								if language == "ru" {
+									prose = []string{"Я заёмщик", "Контакт", "Телефон", "пока не указываю, чей он"}
+								}
+							} else {
+								prose = []string{
+									"The previous telephone belongs only to the borrower",
+									"Contact telephone not supplied",
+									"City",
+								}
+								if language == "ru" {
+									prose = []string{
+										"Предыдущий телефон принадлежит только заёмщику",
+										"Телефон контакта пока не указан",
+										"Город",
+									}
+								}
+							}
+							for _, text := range prose {
+								result.NonData = append(
+									result.NonData,
+									document.FormIntakeLiteral{Text: text, Occurrence: 1},
+								)
+							}
+						}
+						return result, nil
 					}
-					for index, value := range facts {
-						if slices.Contains(view.Pass.CandidateIDs, schema.Fields[index].ID) {
-							result.Proposals = append(result.Proposals, document.FormIntakeProposal{
-								FieldID:  schema.Fields[index].ID,
-								Literals: []document.FormIntakeLiteral{{Text: value, Occurrence: 1}},
-							})
+					progress, err := tool.FindProtectedFormIntake(ctx)
+					if err != nil || progress == nil {
+						t.Fatal(err)
+					}
+					guard := bus.InboundDocumentIntakeGuard{JobID: jobID, ModeID: progress.ModeID}
+					var continued *toolshared.ToolResult
+					for index, message := range []string{original, clarification} {
+						ref, admitErr := tool.AdmitProtectedFormIntake(ctx, guard, fmt.Sprint("input-", index), message)
+						if admitErr != nil {
+							t.Fatal(admitErr)
+						}
+						callCtx := toolshared.WithToolExecutionIdentity(ctx, "workspace", fmt.Sprint("turn-", index))
+						continued = tool.Execute(callCtx, map[string]any{
+							"action": "form", "form_action": "continue", "answer_ref": ref,
+						})
+						if continued.IsError {
+							t.Fatal("safe continuation failed")
 						}
 					}
-					return result, nil
-				}
-				progress, err := tool.FindProtectedFormIntake(ctx)
-				if err != nil || progress == nil {
-					t.Fatal(err)
-				}
-				guard := bus.InboundDocumentIntakeGuard{JobID: jobID, ModeID: progress.ModeID}
-				var continued *toolshared.ToolResult
-				for index, message := range []string{original, clarification} {
-					ref, admitErr := tool.AdmitProtectedFormIntake(ctx, guard, fmt.Sprint("input-", index), message)
-					if admitErr != nil {
-						t.Fatal(admitErr)
+					owner, err := documentFormOwner(ctx)
+					if err != nil {
+						t.Fatal(err)
 					}
-					callCtx := toolshared.WithToolExecutionIdentity(ctx, "workspace", fmt.Sprint("turn-", index))
-					continued = tool.Execute(callCtx, map[string]any{
-						"action": "form", "form_action": "continue", "answer_ref": ref,
+					values, err := tool.formJobs.ReadValues(ctx, jobID, owner, []string{
+						schema.Fields[0].ID, schema.Fields[2].ID, schema.Fields[3].ID, schema.Fields[4].ID,
 					})
-					if continued.IsError {
-						t.Fatal("safe continuation failed")
+					if err != nil || len(values) != 4 || values[schema.Fields[0].ID].Value.Text != "202-555-0147" ||
+						values[schema.Fields[2].ID].Value.Text != "Casey Mint" ||
+						values[schema.Fields[3].ID].Value.Text != "Robin Mint" ||
+						values[schema.Fields[4].ID].Value.Text != "Mintford" {
+						t.Fatal(
+							"clarification did not preserve the two people and apply the retained value only to its owner",
+						)
 					}
-				}
-				owner, err := documentFormOwner(ctx)
-				if err != nil {
-					t.Fatal(err)
-				}
-				values, err := tool.formJobs.ReadValues(ctx, jobID, owner, []string{
-					schema.Fields[0].ID, schema.Fields[2].ID, schema.Fields[3].ID, schema.Fields[4].ID,
+					if _, err = tool.formJobs.ReadValues(
+						ctx,
+						jobID,
+						owner,
+						[]string{schema.Fields[1].ID},
+					); !errors.Is(
+						err,
+						document.ErrFormJobNotFound,
+					) {
+						t.Fatal("the other person's unspecified value was invented")
+					}
+					var wire struct {
+						Intake struct {
+							AcceptedFields []safeDocumentFormField            `json:"accepted_fields"`
+							Findings       []document.FormFieldMappingBlocker `json:"findings"`
+							Progress       document.FormIntakeProgress        `json:"progress"`
+						} `json:"intake"`
+					}
+					if json.Unmarshal([]byte(continued.ForLLM), &wire) != nil || len(wire.Intake.AcceptedFields) != 2 {
+						t.Fatal("ordinary progress omits which native fields were actually accepted")
+					}
+					if exclusions && (len(wire.Intake.Findings) != 0 || wire.Intake.Progress.PendingInputs != 0) {
+						t.Fatal("explicit clarification retained stale candidate ambiguity or raw input")
+					}
+					for _, field := range wire.Intake.AcceptedFields {
+						if field.FieldID != schema.Fields[0].ID && field.FieldID != schema.Fields[4].ID {
+							t.Fatal("progress presented another field as newly accepted")
+						}
+					}
+					for _, value := range []string{"Casey Mint", "Robin Mint", "202-555-0147", "Mintford"} {
+						if strings.Contains(continued.ForLLM, value) {
+							t.Fatal("protected value escaped ordinary progress")
+						}
+					}
 				})
-				if err != nil || len(values) != 4 || values[schema.Fields[0].ID].Value.Text != "202-555-0147" ||
-					values[schema.Fields[2].ID].Value.Text != "Casey Mint" ||
-					values[schema.Fields[3].ID].Value.Text != "Robin Mint" ||
-					values[schema.Fields[4].ID].Value.Text != "Mintford" {
-					t.Fatal(
-						"clarification did not preserve the two people and apply the retained value only to its owner",
-					)
-				}
-				if _, err = tool.formJobs.ReadValues(
-					ctx,
-					jobID,
-					owner,
-					[]string{schema.Fields[1].ID},
-				); !errors.Is(
-					err,
-					document.ErrFormJobNotFound,
-				) {
-					t.Fatal("the other person's unspecified value was invented")
-				}
-				var wire struct {
-					Intake struct {
-						AcceptedFields []safeDocumentFormField `json:"accepted_fields"`
-					} `json:"intake"`
-				}
-				if json.Unmarshal([]byte(continued.ForLLM), &wire) != nil || len(wire.Intake.AcceptedFields) != 2 {
-					t.Fatal("ordinary progress omits which native fields were actually accepted")
-				}
-				for _, field := range wire.Intake.AcceptedFields {
-					if field.FieldID != schema.Fields[0].ID && field.FieldID != schema.Fields[4].ID {
-						t.Fatal("progress presented another field as newly accepted")
-					}
-				}
-				for _, value := range []string{"Casey Mint", "Robin Mint", "202-555-0147", "Mintford"} {
-					if strings.Contains(continued.ForLLM, value) {
-						t.Fatal("protected value escaped ordinary progress")
-					}
-				}
-			})
+			}
 		}
 	}
 }

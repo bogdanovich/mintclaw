@@ -1,6 +1,7 @@
 package document
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -43,6 +44,21 @@ func formIntakeFindingsThrough(
 	if input.State == formIntakeInputConsumed {
 		return nil
 	}
+	// A completed outcome can be reserved after the exclusion pass but applied
+	// before it. Settle advice through the native apply-time cutoff, not merely
+	// by folding outcomes in reservation order. Never mutate caller-owned maps.
+	guidanceThrough = maps.Clone(guidanceThrough)
+	for _, pass := range input.Reservations {
+		if pass.Outcome == nil {
+			continue
+		}
+		for _, id := range pass.Outcome.ExcludedCandidateIDs {
+			if guidanceThrough == nil {
+				guidanceThrough = make(map[string]int)
+			}
+			guidanceThrough[id] = max(guidanceThrough[id], pass.Outcome.ExclusionThroughPasses)
+		}
+	}
 	current := make(map[string]string, MaxFormIntakeCandidates)
 	for passIndex, pass := range input.Reservations {
 		if pass.Outcome == nil {
@@ -67,7 +83,7 @@ func formIntakeFindingsThrough(
 			}
 			current[finding.FieldID] = finding.Code
 		}
-		for _, id := range pass.Outcome.ResolvedGuidanceIDs {
+		for _, id := range append(slices.Clone(pass.Outcome.ResolvedGuidanceIDs), pass.Outcome.ExcludedCandidateIDs...) {
 			// Only advisory uncertainty in this exact window may settle.
 			// Native invalid/conflicting facts still require their own resolution.
 			if current[id] == "field_ambiguous" || current[id] == "field_confirmation_required" {
@@ -104,7 +120,7 @@ func formIntakeResolvedGuidanceIDs(input formIntakeStoredInput, pass formIntakeS
 }
 
 func formIntakeGuidanceOnlyOutcome(outcome formIntakeStoredOutcome) bool {
-	if outcome.ScopedInstruction ||
+	if outcome.ScopedInstruction || len(outcome.ExcludedCandidateIDs) != 0 ||
 		len(outcome.AcceptedIDs)+len(outcome.AcknowledgedIDs)+len(outcome.ScopedIDs)+len(outcome.Findings) != 0 {
 		return false
 	}
@@ -136,6 +152,16 @@ func formIntakeAccountedLiterals(input formIntakeStoredInput) []FormIntakeAccoun
 }
 
 func validateFormIntakeAccounting(record FormJobRecord, input formIntakeStoredInput) error {
+	for index, pass := range input.Reservations {
+		if outcome := pass.Outcome; outcome != nil {
+			cutoff := outcome.ExclusionThroughPasses
+			if len(outcome.ExcludedCandidateIDs) == 0 && cutoff != 0 ||
+				len(outcome.ExcludedCandidateIDs) != 0 && (cutoff < index+1 || cutoff > len(input.Reservations) ||
+					cutoff > MaxFormIntakeExtractionPasses) {
+				return ErrFormJobRecordCorrupt
+			}
+		}
+	}
 	if len(input.Accounted) > MaxFormIntakeAccountedSpans || input.OriginalBytes < 0 ||
 		input.OriginalBytes > MaxFormIntakeInputBytes ||
 		(input.State == formIntakeInputStaged && (len(input.Accounted) != 0 || input.OriginalBytes != 0)) ||
@@ -185,6 +211,8 @@ func validateFormIntakeOutcome(record FormJobRecord, pass formIntakeStoredPass) 
 			outcome.ScopedIDs,
 		)+len(
 			outcome.ResolvedGuidanceIDs,
+		)+len(
+			outcome.ExcludedCandidateIDs,
 		) > len(
 			pass.CandidateIDs,
 		) {
@@ -196,6 +224,7 @@ func validateFormIntakeOutcome(record FormJobRecord, pass formIntakeStoredPass) 
 	}
 	for _, ids := range [][]string{
 		outcome.AcceptedIDs, outcome.AcknowledgedIDs, outcome.ScopedIDs, outcome.ResolvedGuidanceIDs,
+		outcome.ExcludedCandidateIDs,
 	} {
 		if !slices.IsSorted(ids) {
 			return ErrFormJobRecordCorrupt
