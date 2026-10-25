@@ -173,7 +173,22 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join(report.ReportDirectory, report.Trials[0].File))
 			var trial Trial
 			if err != nil || json.Unmarshal(data, &trial) != nil {
-				t.Fatal("native trial", err)
+				checkpointPath := ""
+				matches, _ := filepath.Glob(filepath.Join(report.ReportDirectory, "scratch-*", trialCheckpointName))
+				if len(matches) == 1 {
+					checkpointPath = matches[0]
+				}
+				checkpoint, checkpointErr := os.ReadFile(checkpointPath)
+				staged, decodeErr := decodeDocument[Trial](checkpoint, 8*1024*1024)
+				proofCode := "missing"
+				if staged.Steering != nil {
+					proofCode = staged.Steering.Code
+				}
+				t.Logf("checkpoint: read=%v decode=%v bytes=%d credential=%v proof=%s execution=%s/%s",
+					checkpointErr, decodeErr, len(checkpoint),
+					credentialJSONValue(staged, fixture.cfg.SensitiveDataReplacer()), proofCode,
+					staged.ExecutionVerdict, staged.ExecutionCode)
+				t.Fatalf("native trial: %v; run: %v\n%s\n%s", err, runErr, output, stderr.Bytes())
 			}
 			if runErr != nil || report.Verdict != Pass || trial.Verdict != Pass || judges.Load() != 1 ||
 				report.TargetBudget == nil || report.TargetBudget.verdict() != Pass {
