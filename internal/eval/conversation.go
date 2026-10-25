@@ -206,10 +206,10 @@ func runDomainConversation(
 		len(item.Case.Fixtures) == 0 {
 		trial.EvidenceEligible = true
 	}
-	if item.Case.Steering != nil && trial.Verdict != Pass {
+	if deferredCoreEvidence(item.Case) && trial.Verdict != Pass {
 		trial.EvidenceEligible = false
 	}
-	if len(item.Case.Rubric) > 0 && item.Case.Steering == nil {
+	if len(item.Case.Rubric) > 0 && !deferredCoreEvidence(item.Case) {
 		judgement := Judgement{
 			Version: Version, Verdict: Inconclusive, Code: "ineligible_judge_evidence",
 			Findings: JudgeFindings{Version: Version, Criteria: []JudgeFinding{}},

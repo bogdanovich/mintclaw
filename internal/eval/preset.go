@@ -87,13 +87,14 @@ func (preset Preset) Validate() error {
 			slices.Contains(preset.Capabilities, "pdf") || slices.Contains(preset.Capabilities, "browser")) {
 		return ErrInvalidPreset
 	}
-	if len(preset.WorkspaceFiles) > 64 {
+	if len(preset.WorkspaceFiles) > 64 || validateReadToolPreset(preset) != nil {
 		return ErrInvalidPreset
 	}
 	paths := make(map[string]bool, len(preset.WorkspaceFiles))
 	for _, file := range preset.WorkspaceFiles {
 		key := strings.ToLower(file.Path)
-		if !preparableWorkspacePath(file.Path) || !validDigest(file.SHA256) || paths[key] {
+		allowed := preparableWorkspacePath(file.Path) || hasReadTool(preset) && file.Path == readFixturePath
+		if !allowed || !validDigest(file.SHA256) || paths[key] {
 			return ErrInvalidPreset
 		}
 		paths[key] = true

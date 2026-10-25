@@ -130,6 +130,10 @@ func Grade(
 			!validSteeringEvidence(trial, item.Case, workspace, original.ActiveTool.Profile, original.Runtime)) {
 			return RunReport{}, ErrGrade
 		}
+		if item.Case.ReadRecovery != nil && (!readRecoveryOwnedReady(original) ||
+			!validReadRecoveryEvidence(trial, item.Case, workspace)) {
+			return RunReport{}, ErrGrade
+		}
 		if item.Case.PDF != nil && item.Case.PDF.Output == "required" ||
 			item.Case.Browser != nil && item.Case.Browser.Scenario == "artifact" {
 			var raw []byte
@@ -227,8 +231,8 @@ func Grade(
 		if item.Case.Browser != nil {
 			trial.Checks = gradeFinalizedBrowserChecks(item.Case, trial)
 		}
-		if item.Case.Steering != nil {
-			trial.Checks = gradeSteeringChecks(item.Case, trial, original, workspace)
+		if deferredCoreEvidence(item.Case) {
+			trial.Checks = gradeCoreChecks(item.Case, trial, original, workspace)
 		}
 		trial.Verdict, trial.Code = trial.ExecutionVerdict, trial.ExecutionCode
 		for _, check := range trial.Checks {
@@ -327,11 +331,13 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 		trial.TargetBudgetRequired != requiresTargetBudget(item.Case) ||
 		trial.ActiveToolRequired != requiresActiveTool(item.Case) ||
 		(item.Case.Steering != nil && item.Case.Steering.Peer != nil) != (trial.Isolation != nil) ||
+		(item.Case.ReadRecovery != nil) != (trial.ReadRecovery != nil) ||
 		trial.Repetition != summary.Repetition ||
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||
 		!trial.TransportClosed || !trial.EvidenceEligible || trial.ExecutionVerdict != Pass ||
-		!offlineGradeFactsEligible(item.Case) || item.Case.PDF == nil && len(item.Case.Fixtures) != 0 ||
+		!offlineGradeFactsEligible(item.Case) ||
+		item.Case.PDF == nil && item.Case.ReadRecovery == nil && len(item.Case.Fixtures) != 0 ||
 		(item.Case.Browser == nil) != (trial.Browser == nil) ||
 		len(item.Case.Rubric) == 0 ||
 		len(trial.Events) == 0 || len(trial.Events) > 256 {

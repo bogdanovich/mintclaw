@@ -130,6 +130,7 @@ func startOwnedGatewayWithFixtures(
 	if err != nil || validateConversationProfile(profile.config, preset, profile.workspace) != nil ||
 		profile.config.Diagnostics.TraceCapture.Enabled != preset.CaptureModelMetadata ||
 		validateFreshOwnedProfile(profile) != nil ||
+		!validReadToolWorkspace(ctx, preset, profile.workspace) ||
 		!browserFixtureMatches(profile.config, fixture) ||
 		!activeToolMatches(preset, active) ||
 		!admittedEvalLogLevel(preset, config.EffectiveGatewayLogLevel(profile.config)) {
@@ -190,6 +191,10 @@ func validateFreshOwnedProfile(profile preparedProfile) error {
 	if profile.config.Tools.Browser.Enabled && validateFreshBrowserRuntime(root) != nil {
 		return ErrOwnedGateway
 	}
+	if nativeReadToolEnabled(profile.config) &&
+		observeWorkspaceReadFixture(context.Background(), profile.workspace).Code != "observed" {
+		return ErrOwnedGateway
+	}
 	for _, directory := range []string{".", "workspace"} {
 		file, openErr := root.Open(directory)
 		if openErr != nil {
@@ -212,6 +217,9 @@ func validateFreshOwnedProfile(profile preparedProfile) error {
 		}
 		if directory == "workspace" {
 			allowed = []string{"AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "skills"}
+			if nativeReadToolEnabled(profile.config) {
+				allowed = append(allowed, readFixtureDirectory)
+			}
 		}
 		for _, entry := range entries {
 			if !slices.Contains(allowed, entry.Name()) || entry.Type()&os.ModeSymlink != 0 {

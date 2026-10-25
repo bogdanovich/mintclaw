@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "general.tools.recovery",
+  "suite": "general",
+  "tags": ["tools", "recovery", "multi-turn"],
+  "description": "Recover from one genuine missing-file read using a corrected pinned read-only fixture, without inventing content.",
+  "task": "Use read_file exactly once to read eval-fixtures/missing.txt. If it cannot be read, explain the failure and wait for a corrected path. Do not create anything, guess the content, or try another path.",
+  "requires": ["conversation", "bounded_calls", "read_tool"],
+  "fixtures": [
+    {"id": "recovery", "path": "fixtures/general/read-recovery.txt", "kind": "file", "sha256": "8a0c13cee498b7b386c2f2ee27c1deb803d314f9190eb6f3ddd62923f07dcbf8"}
+  ],
+  "driver": {
+    "mode": "scripted",
+    "steps": [
+      {
+        "wait_for": {"kind": "final"},
+        "action": {"kind": "message", "text": "The corrected path is eval-fixtures/recovery.txt. Use read_file exactly once to read it, then report its value."}
+      },
+      {
+        "wait_for": {"kind": "final"},
+        "action": {"kind": "message", "text": "What value did the corrected file contain? Return that value from this same conversation only, without further tool calls."}
+      }
+    ]
+  },
+  "limits": {"max_user_turns": 3, "turn_timeout": "2m", "case_timeout": "5m", "max_driver_calls": 1},
+  "read_recovery": {"marker": "mc-c3-read-recovered-s67"},
+  "checks": [
+    {"id": "native-read-recovery", "kind": "read_recovery"},
+    {"id": "fixture-value", "kind": "response_contains", "expected": "mc-c3-read-recovered-s67"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"}
+  ],
+  "rubric": [
+    {
+      "id": "grounded-recovery",
+      "description": "The first reply acknowledges the actual failed read instead of inventing its content. After the corrected path, the agent reports and later recalls the real fixture value without claiming a write or other unseen work.",
+      "required": true
+    }
+  ]
+}

@@ -132,7 +132,8 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		cfg.Agents.Defaults.TargetPolicy != nil || cfg.Agents.Defaults.Subagents != nil ||
 		cfg.Agents.Defaults.Routing != nil && cfg.Agents.Defaults.Routing.Enabled ||
 		cfg.Agents.Dispatch != nil && len(cfg.Agents.Dispatch.Rules) != 0 ||
-		len(cfg.Agents.Defaults.ContextManagerConfig) != 0 || validateActiveToolPolicy(cfg, preset) != nil {
+		len(cfg.Agents.Defaults.ContextManagerConfig) != 0 || validateActiveToolPolicy(cfg, preset) != nil ||
+		validateReadToolPolicy(cfg, preset) != nil {
 		return ErrUnsafeTarget
 	}
 	channels, nativeChannels := 0, 0
@@ -180,13 +181,15 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		if tool != "request_user_input" && (tool != "document" || !pdfEnabled) &&
 			(tool != tools.BM25SearchToolName || !pdfEnabled) &&
 			(!browserEnabled || !slices.Contains(browserEvalTools, tool)) &&
-			(preset.ActiveTool == nil || tool != activeToolNativeName) {
+			(preset.ActiveTool == nil || tool != activeToolNativeName) &&
+			(!hasReadTool(preset) || tool != "read_file") {
 			return ErrUnsafeTarget
 		}
 	}
 	for _, capability := range preset.Capabilities {
 		if capability != "conversation" && capability != "interactions" && capability != "pdf" &&
-			capability != "browser" && capability != boundedCallsCapability && capability != activeToolCapability ||
+			capability != "browser" && capability != boundedCallsCapability && capability != activeToolCapability &&
+			capability != readToolCapability ||
 			capability == "interactions" && (!cfg.Tools.RequestUserInput.Enabled ||
 				!slices.Contains(agent.ToolPolicy.Allow, "request_user_input") || len(agent.ToolPolicy.Deny) != 0) {
 			return ErrUnsafeTarget

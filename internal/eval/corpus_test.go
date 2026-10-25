@@ -142,7 +142,7 @@ func TestFixtureContract(t *testing.T) {
 
 func TestRepositoryCorpus(t *testing.T) {
 	corpus, err := LoadCorpus("../../evals")
-	if err != nil || len(corpus) != 19 {
+	if err != nil || len(corpus) != 20 {
 		t.Fatal("repository cases invalid", err)
 	}
 	defaults, err := Select(corpus, Selection{DefaultOnly: true})
@@ -157,13 +157,14 @@ func TestRepositoryCorpus(t *testing.T) {
 		policy := item.Availability()
 		if policy.Status == "pending" {
 			pending++
+			core := item.Case.ID == "general.session.isolation" || item.Case.ID == "general.tools.recovery"
 			if policy.Default || policy.Reason == "" ||
-				item.Case.Suite == "general" && item.Case.ID != "general.session.isolation" {
+				item.Case.Suite == "general" && !core {
 				t.Fatal("invalid deferred coverage")
 			}
 		}
 	}
-	if pending != 13 || !errors.Is(CheckRunAvailability(corpus, false), ErrPendingCases) {
+	if pending != 14 || !errors.Is(CheckRunAvailability(corpus, false), ErrPendingCases) {
 		t.Fatal("deferred domain cases were lost or implicitly enabled")
 	}
 	pdf, err := Select(corpus, Selection{Suite: "pdf"})

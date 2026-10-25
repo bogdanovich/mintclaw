@@ -64,6 +64,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		if requiresTargetBudget(item.Case) && (preset.TargetCallBudget == nil || !options.StartTarget) {
 			return RunReport{}, ErrUnsafeTarget
 		}
+		if validateReadRecoveryBinding(preset, item.Case) != nil {
+			return RunReport{}, ErrUnsafeTarget
+		}
 		if item.Case.Steering != nil && (preset.ActiveTool == nil || !options.StartTarget ||
 			!slices.Contains(item.Case.Steering.Modes, preset.ActiveTool.SteeringMode)) {
 			return RunReport{}, ErrUnsafeTarget
@@ -104,7 +107,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	var retainedFacts privateFactRetention
 	var pendingPDF pdfRunFinalization
 	pendingBrowser := browserRun{host: fixtures}
-	pendingSteering := steeringRun{}
+	pendingCore := coreEvidenceRun{}
 	var privateSurfaces *PrivateSurfaceObservation
 	var activeHost *ActiveToolHostEvidence
 	closeActive := func() {
@@ -228,7 +231,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			trial.Verdict, trial.Code = Skipped, "capability_unavailable"
 		case item.Case.Driver.Mode == "llm_user" && roles.user == nil:
 			trial.Verdict, trial.Code = Skipped, "driver_unavailable"
-		case item.Case.PDF == nil && item.Case.Browser == nil &&
+		case item.Case.PDF == nil && item.Case.Browser == nil && item.Case.ReadRecovery == nil &&
 			(len(item.Case.Fixtures) != 0 || len(item.Case.Driver.Facts) != 0):
 			trial.Verdict, trial.Code = Skipped, "domain_evidence_unavailable"
 		case suiteCtx.Err() != nil:
@@ -240,8 +243,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		trial.Repetition = ordinal%options.Repeat + 1
 		result.TargetUsage.addTrial(trial)
 		pendingPDF.observeTrial(trial)
-		if item.Case.Steering != nil {
-			pendingSteering.retain(item.Case, trial)
+		if deferredCoreEvidence(item.Case) {
+			pendingCore.retain(item.Case, trial)
 		}
 		name := "trial-" + trial.ID + ".json"
 		roleCalls = append(roleCalls, trial.DriverCalls...)
@@ -258,7 +261,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		result.Verdict = combineVerdicts(result.Verdict, trial.Verdict)
 		_, pdfPending := pendingPDF.trials[trial.ID]
 		_, browserPending := pendingBrowser.trials[trial.ID]
-		if writer.checkpointTrial(name, trial, pdfPending || browserPending || item.Case.Steering != nil) != nil {
+		if writer.checkpointTrial(name, trial, pdfPending || browserPending || deferredCoreEvidence(item.Case)) != nil {
 			result.Trials[len(result.Trials)-1].File = ""
 			result.Verdict = combineVerdicts(result.Verdict, Error)
 			result.DurationMS = time.Since(result.StartedAt).Milliseconds()
@@ -329,16 +332,16 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	if browserErr != nil {
 		err = ErrReport
 	}
-	steeringCtx, steeringCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	steeringErr := pendingSteering.finish(steeringCtx, target, writer, &result, retainedFacts.values, filter,
+	coreCtx, coreCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	coreErr := pendingCore.finish(coreCtx, target, writer, &result, retainedFacts.values, filter,
 		func(item Case, trial *Trial) {
-			assessSteering(suiteCtx, roles.judge, item, trial, result, target.preset.ExpectedWorkspace)
+			assessCoreConversation(suiteCtx, roles.judge, item, trial, result, target.preset.ExpectedWorkspace)
 			if trial.Judge != nil && trial.Judge.Call != nil {
 				roleCalls = append(roleCalls, *trial.Judge.Call)
 			}
 		})
-	steeringCancel()
-	if steeringErr != nil {
+	coreCancel()
+	if coreErr != nil {
 		err = ErrReport
 	}
 	result.RoleUsage = []RoleUsage{summarizeRoleCalls("user", roleCalls), summarizeRoleCalls("judge", roleCalls)}
@@ -538,6 +541,16 @@ func runAdmittedTrial(
 		}
 		return runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, steering)
+	}
+	if item.Case.ReadRecovery != nil {
+		recovery, prepareErr := newReadRecoveryConversation(caseCtx, item.Case, target)
+		if prepareErr != nil {
+			client.Close()
+			trial.Verdict, trial.Code = Inconclusive, "read_recovery_preparation_unavailable"
+			return trial
+		}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, recovery)
 	}
 	if browser != nil {
 		trial = runDomainConversation(caseCtx, client, item, sessionID,
