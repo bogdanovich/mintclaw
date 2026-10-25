@@ -14,8 +14,13 @@ type ProviderCapabilities struct {
 	// providers.CallerMediatedToolsOptions. False is the conservative value for
 	// agentic, configurable tool-override, and unknown transports.
 	CallerMediatedTools bool
-	ImageGeneration     ImageGenerationCapabilities
-	ToolSchema          ToolSchemaLimits
+	// OutputTokenLimit declares that a positive integer max_tokens option is
+	// transmitted as an explicit output-token ceiling by Chat and every
+	// advertised streaming operation. It does not attest server enforcement or
+	// billed-token coverage. Unknown/unsupported adapters leave this false.
+	OutputTokenLimit bool
+	ImageGeneration  ImageGenerationCapabilities
+	ToolSchema       ToolSchemaLimits
 }
 
 // ImageGenerationCapabilities describes provider-owned image generation behavior.
