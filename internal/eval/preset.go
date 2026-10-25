@@ -4,21 +4,25 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 type Preset struct {
-	Version              int             `json:"version"`
-	ID                   string          `json:"id"`
-	ConfigPath           string          `json:"config_path"`
-	ExpectedAgent        string          `json:"expected_agent"`
-	ExpectedWorkspace    string          `json:"expected_workspace"`
-	IsolationRoot        string          `json:"isolation_root"`
-	Capabilities         []string        `json:"capabilities"`
-	UserModel            string          `json:"user_model,omitempty"`
-	JudgeModel           string          `json:"judge_model,omitempty"`
-	WorkspaceFiles       []WorkspaceFile `json:"workspace_files,omitempty"`
-	CaptureModelMetadata bool            `json:"capture_model_metadata,omitempty"`
+	Version              int                         `json:"version"`
+	ID                   string                      `json:"id"`
+	ConfigPath           string                      `json:"config_path"`
+	ExpectedAgent        string                      `json:"expected_agent"`
+	ExpectedWorkspace    string                      `json:"expected_workspace"`
+	IsolationRoot        string                      `json:"isolation_root"`
+	Capabilities         []string                    `json:"capabilities"`
+	UserModel            string                      `json:"user_model,omitempty"`
+	JudgeModel           string                      `json:"judge_model,omitempty"`
+	WorkspaceFiles       []WorkspaceFile             `json:"workspace_files,omitempty"`
+	CaptureModelMetadata bool                        `json:"capture_model_metadata,omitempty"`
+	TargetCallBudget     *providers.CallBudgetLimits `json:"target_call_budget,omitempty"`
 }
 
 // WorkspaceFile admits one reviewed input, not a directory or runtime state.
@@ -66,6 +70,14 @@ func (preset Preset) Validate() error {
 		!localPath(preset.ExpectedWorkspace) || !localPath(preset.IsolationRoot) ||
 		preset.UserModel != "" && !validID(preset.UserModel) ||
 		preset.JudgeModel != "" && !validID(preset.JudgeModel) {
+		return ErrInvalidPreset
+	}
+	if preset.TargetCallBudget != nil {
+		if _, err := providers.NewCallBudget(*preset.TargetCallBudget); err != nil {
+			return ErrInvalidPreset
+		}
+	}
+	if (preset.TargetCallBudget != nil) != slices.Contains(preset.Capabilities, boundedCallsCapability) {
 		return ErrInvalidPreset
 	}
 	if len(preset.WorkspaceFiles) > 64 {

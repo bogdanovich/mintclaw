@@ -91,6 +91,7 @@ func runDomainConversation(
 		SessionID: sessionID, AgentID: agent, Verdict: Inconclusive, Code: "not_completed",
 		StartedAt: time.Now().UTC(), Events: []Event{}, Checks: []CheckResult{}, RemoteState: "unknown",
 		ExecutionVerdict: Inconclusive, ExecutionCode: "not_completed",
+		TargetBudgetRequired: requiresTargetBudget(item.Case),
 	}
 	defer func() {
 		transport.Close()

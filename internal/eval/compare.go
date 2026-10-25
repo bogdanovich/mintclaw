@@ -110,6 +110,7 @@ func Compare(baselineDirectory, currentDirectory string) (Comparison, error) {
 		{"target_lifecycle_mode", targetLifecycleMode(baseline.report.TargetLifecycle) !=
 			targetLifecycleMode(current.report.TargetLifecycle)},
 		{"trial_scratch_scope", (baseline.report.TrialScratch == nil) != (current.report.TrialScratch == nil)},
+		{"target_call_budget", targetBudgetLimitsDiffer(baseline.report.TargetBudget, current.report.TargetBudget)},
 	} {
 		if difference.changed {
 			result.EnvironmentChanges = append(result.EnvironmentChanges, difference.name)
@@ -184,7 +185,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		len(report.Trials) > MaxCorpusCases || report.DurationMS < 0 || report.StartedAt.IsZero() ||
 		report.Runtime.Version != 1 || !validDigest(report.Runtime.ConfigSHA256) || !report.TargetLifecycle.valid() ||
 		!report.WorkspaceInputs.valid() || !report.PrivateSurfaces.valid() || !report.BrowserFixtures.valid() ||
-		!report.TrialScratch.validFor(report) {
+		!report.TrialScratch.validFor(report) || !report.TargetBudget.valid(report) {
 		return result, ErrCompare
 	}
 	seen, sessions, roles := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -214,6 +215,9 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 			!validID(trial.SessionID) || sessions[trial.SessionID] || !validID(trial.AgentID) ||
 			!consistentComparisonVerdict(trial) || !validTrialRoleBoundaries(trial) ||
 			!report.TrialScratch.matches(trial) {
+			return result, ErrCompare
+		}
+		if trial.TargetBudgetRequired && report.TargetBudget == nil {
 			return result, ErrCompare
 		}
 		calls := trial.DriverCalls
@@ -281,6 +285,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		report.BrowserFixtures.verdict(),
 		report.NativeModels.verdict(),
 		report.TrialScratch.verdict(),
+		report.TargetBudget.verdict(),
 	)
 	if report.Verdict != combineVerdicts(verdicts...) {
 		return result, ErrCompare

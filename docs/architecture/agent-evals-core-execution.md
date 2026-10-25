@@ -35,7 +35,7 @@ does not reopen C0 or E0-E5.
 | C1a | C0 | Per-case narrowing and three-turn correction with final-only absence oracle | Complete, [#1872](https://github.com/bogdanovich/mintclaw/pull/1872); 14/14 CI and reviewed merge |
 | C1b transport | C0 | [Prompt-bound ordinary answers](../channels/mintclaw.md) through existing native projection | Complete, [#1874](https://github.com/bogdanovich/mintclaw/pull/1874); reviewed green merge including wire UTF-8 regression |
 | C1b | C1a | Ordinary answer/resume native observer and stale/wrong-prompt controls | Complete, [#1881](https://github.com/bogdanovich/mintclaw/pull/1881); candidate remains pending live qualification |
-| C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | In progress: #1884 and #1882 merged; native generation candidate validated; owned launch and frozen receipt still required |
+| C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | In progress: #1884, #1882 and #1885 merged; child protocol in #1887; runner/frozen checks in progress; live qualification not started |
 | C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | Queued |
 | C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Queued |
 | C3b | C2 | Native active stop/reuse, distinct from local driver stop | Queued |
@@ -155,10 +155,12 @@ Wrapping also requires the explicit output-limit capability supplied by
 omits that request field and is therefore refused in bounded mode, including
 through schema wrappers; ordinary unwrapped behavior is unchanged.
 
-This prerequisite does not yet wire the budget through owned gateway provider
-creation, final rendering or compaction, and does not qualify/promote a case.
-Those wiring and frozen-evidence checks remain C1q acceptance work. Existing
-native-model evidence keeps its conservative `AllCalls: unknown` meaning.
+The primitive alone does not wire owned gateway provider creation or qualify a
+case. Existing native-model evidence keeps its conservative `AllCalls: unknown`
+meaning. The generation wiring was reviewed on its final immutable head and
+merged in [#1885](https://github.com/bogdanovich/mintclaw/pull/1885), with green CI,
+owner PR-root approval and a regression that fails on the old dynamic-fallback
+factory path.
 
 The agent-generation integration wraps existing registry primary/light/candidate
 providers and future model-selection providers before the context manager and
@@ -167,3 +169,20 @@ mode; existing provider cleanup owners stay unchanged. Native turn/final-render,
 captured summary-boundary and local HTTP factory controls cover these paths.
 This does not cover independent provider-owning tools, grant authority, wire
 owned gateway launch, or establish a C3f compaction/live-qualification witness.
+
+The [owned child protocol](../reference/owned-eval-call-budget.md) is a separate
+focused prerequisite in [#1887](https://github.com/bogdanovich/mintclaw/pull/1887).
+Its real CLI/local-model integration is deterministic evidence, not a live model
+qualification. The dependent runner adds one run-wide ceiling and retains the
+terminal proof; offline grading checks mandatory manifest requirements before
+judge work. Both new General candidates remain pending/non-default. Their new
+budget requirement changes only these unqualified candidate digests; no original
+default or PDF/browser case is rewritten.
+
+Current unqualified C1q case identities (the added `bounded_calls` requirement
+is part of the definition, not a relabeling of an earlier run):
+
+| Case | SHA-256 |
+| --- | --- |
+| `general.context.correction` | `2fd7760a9d5f54a530a48b3197f0440a02759c3ca42fc837d99af1823c82240b` |
+| `general.interaction.answer` | `a8eaee4e5515b36c0f320a30a96c7bfc2ea853d11f5670a54ec79ec50c1b20f4` |

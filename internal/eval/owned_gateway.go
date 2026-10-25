@@ -15,7 +15,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bogdanovich/mintclaw/internal/evaltarget"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 var ErrOwnedGateway = errors.New("eval: owned gateway could not be admitted or stopped cleanly")
@@ -74,14 +76,15 @@ func targetLifecycleMode(receipt *TargetLifecycle) string {
 }
 
 type ownedGateway struct {
-	command  *exec.Cmd
-	profile  preparedProfile
-	done     chan struct{}
-	err      error
-	log      *boundedGatewayLog
-	stop     sync.Once
-	forced   atomic.Bool
-	admitted bool
+	command    *exec.Cmd
+	profile    preparedProfile
+	done       chan struct{}
+	err        error
+	log        *boundedGatewayLog
+	stop       sync.Once
+	forced     atomic.Bool
+	admitted   bool
+	budgetSpec *evaltarget.Spec
 }
 
 type boundedGatewayLog struct {
@@ -129,7 +132,7 @@ func startOwnedGatewayWithBrowser(
 	if err != nil {
 		return nil, target, ErrOwnedGateway
 	}
-	child, err := launchOwnedGateway(profile, executable)
+	child, err := launchOwnedGatewayWithBudget(profile, executable, preset.TargetCallBudget)
 	if err != nil {
 		return nil, target, ErrOwnedGateway
 	}
@@ -246,6 +249,23 @@ func validateFreshPDFJournal(root *os.Root) error {
 }
 
 func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGateway, error) {
+	return launchOwnedGatewayWithBudget(profile, executable, nil)
+}
+
+func launchOwnedGatewayWithBudget(
+	profile preparedProfile, executable string, limits *providers.CallBudgetLimits,
+) (*ownedGateway, error) {
+	var spec *evaltarget.Spec
+	args := []string{"gateway"}
+	if limits != nil {
+		value := evaltarget.Spec{Version: evaltarget.Version, Nonce: uuid.NewString(), Limits: *limits}
+		encoded, err := value.Encode()
+		if err != nil {
+			return nil, ErrOwnedGateway
+		}
+		spec = &value
+		args = append(args, "--"+evaltarget.FlagName, encoded)
+	}
 	root, err := os.OpenRoot(profile.home)
 	if err != nil {
 		return nil, ErrOwnedGateway
@@ -272,7 +292,7 @@ func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGatew
 		return nil, ErrOwnedGateway
 	}
 	log := &boundedGatewayLog{file: logFile, remaining: ownedGatewayLogBytes}
-	command := exec.Command(executable, "gateway")
+	command := exec.Command(executable, args...)
 	command.Dir = profile.home
 	command.Env = []string{
 		"HOME=" + profile.home, config.EnvHome + "=" + profile.home,
@@ -288,7 +308,7 @@ func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGatew
 		_ = root.Remove(".eval-gateway-owner")
 		return nil, ErrOwnedGateway
 	}
-	child := &ownedGateway{command: command, profile: profile, done: make(chan struct{}), log: log}
+	child := &ownedGateway{command: command, profile: profile, done: make(chan struct{}), log: log, budgetSpec: spec}
 	go func() {
 		defer close(child.done)
 		child.err = command.Wait()

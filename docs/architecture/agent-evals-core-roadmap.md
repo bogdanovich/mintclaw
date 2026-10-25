@@ -204,9 +204,12 @@ Budget: 2 inputs plus control, 1 judge call, 5 minutes.
   it cannot override hard failures, missing native evidence or unsafe admission.
 - Future presets use isolated synthetic workspaces and least privilege. No
   credentials, real URLs/accounts, private transcripts or artifacts in Git.
-- The scenario budgets above are proposed ceilings, not latency predictions or
-  today-enforced limits on target-internal model calls. Add native call/token
-  bounds before promotion; user-turn limits alone do not bound a tool loop.
+- The scenario budgets above are proposed ceilings, not latency predictions.
+  The two pending core candidates require the explicit owned, run-wide
+  [target call budget](../reference/owned-eval-call-budget.md), shared across
+  cases/repetitions rather than attributed to individual trials. New C2/C3
+  packs must retain native call/token bounds before promotion; user-turn limits
+  alone do not bound a tool loop. Provider-internal/billed work remains unknown.
 - After each new scenario: stub controls must distinguish pass/fail/unknown,
   one admitted live qualification, then three independent trials on one immutable
   candidate with 3/3 pass before promotion to the default. Preserve every attempt;

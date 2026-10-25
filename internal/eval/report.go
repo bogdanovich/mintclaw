@@ -50,6 +50,7 @@ type RunReport struct {
 	PrivateSurfaces *PrivateSurfaceObservation  `json:"private_surfaces,omitempty"`
 	BrowserFixtures *BrowserFixtureHostEvidence `json:"browser_fixtures,omitempty"`
 	TrialScratch    *TrialScratchObservation    `json:"trial_scratch,omitempty"`
+	TargetBudget    *TargetBudgetObservation    `json:"target_budget,omitempty"`
 }
 
 type privateReport struct {
@@ -178,6 +179,13 @@ func (report *privateReport) finish(result RunReport) error {
 			_, writeErr = fmt.Fprintf(file,
 				"\nRouted native model records: %s (%s, %s); %d requests, %d responses, %d observed usage.\n",
 				counts, observation.Code, usage.Coverage, usage.Requests, usage.Responses, usage.UsageResponses)
+		}
+	}
+	if writeErr == nil {
+		if observation := result.TargetBudget; observation != nil {
+			_, writeErr = fmt.Fprintf(file,
+				"\nOwned target call budget: %s (%s); shared across all repetitions, not a billing total.\n",
+				observation.Code, observation.verdict())
 		}
 	}
 	if writeErr == nil {
