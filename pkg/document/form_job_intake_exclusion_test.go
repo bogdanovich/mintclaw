@@ -393,3 +393,90 @@ func TestFormIntakeExclusionFencesReservationsMadeAfterItsReservationBeforeApply
 		t.Fatal("settlement blocked a genuinely later interpretation of the still-pending field", err)
 	}
 }
+
+func TestFormIntakeExclusionSettlesLaterReservedCompletedAdviceThroughCutoff(t *testing.T) {
+	for _, code := range []string{"field_ambiguous", "field_confirmation_required"} {
+		t.Run(code, func(t *testing.T) {
+			store, options, start, _, exclusion := exclusionFixture(t)
+			advice := reserveIntakeApply(t, store, start, exclusion.Reference, exclusion.ExpectedRevision,
+				[]int{1}, "later-reserved-completed-advice")
+			advice.Intent = FormIntakeIntentClarify
+			advice.Findings = []FormFieldMappingBlocker{{FieldID: start.Schema.Fields[1].ID, Code: code}}
+			if _, err := store.ApplyFormIntakePass(t.Context(), advice); err != nil {
+				t.Fatal(err)
+			}
+			exclusion.Proposals, exclusion.Intent = nil, FormIntakeIntentClarify
+			settled, err := store.ApplyFormIntakePass(t.Context(), exclusion)
+			if err != nil || settled.Job.Revision != exclusion.ExpectedRevision || settled.Consumed {
+				t.Fatal("fixture did not retain only the other pending candidate", err)
+			}
+			store.Close()
+			store, err = OpenFormJobStore(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(store.Close)
+			input, err := store.ReadFormIntakeInput(t.Context(), exclusion.Reference, start.Owner)
+			if err != nil || len(input.Findings) != 1 || input.Findings[0].FieldID != start.Schema.Fields[0].ID {
+				t.Fatal("a completed pre-settlement advisory outcome restored the excluded ambiguity")
+			}
+			replay, err := store.ApplyFormIntakePass(t.Context(), advice)
+			if err != nil || !replay.Reused || !slices.Equal(replay.Findings, advice.Findings) ||
+				replay.Job.LedgerRevision != 0 {
+				t.Fatal("settlement rewrote a completed outcome or replayed an assignment")
+			}
+			fresh := reserveIntakeApply(t, store, start, exclusion.Reference, exclusion.ExpectedRevision,
+				[]int{1}, "genuinely-later-advice")
+			fresh.Intent = FormIntakeIntentClarify
+			fresh.Findings = advice.Findings
+			if _, err = store.ApplyFormIntakePass(t.Context(), fresh); err != nil {
+				t.Fatal(err)
+			}
+			input, err = store.ReadFormIntakeInput(t.Context(), exclusion.Reference, start.Owner)
+			if err != nil || len(input.Findings) != 2 || !slices.Contains(input.Findings, advice.Findings[0]) {
+				t.Fatal("old cutoff hid genuinely later advice")
+			}
+		})
+	}
+}
+
+func TestFormIntakeExclusionAggregationDoesNotHideNativeBlockersOrMutateCallerCutoffs(t *testing.T) {
+	field := fillFieldID(1)
+	for _, code := range []string{"field_invalid", "field_conflicting", "field_unsupported", "field_unresolved"} {
+		input := formIntakeStoredInput{State: formIntakeInputCommitted, Reservations: []formIntakeStoredPass{
+			{Outcome: &formIntakeStoredOutcome{Findings: []FormFieldMappingBlocker{{FieldID: field, Code: code}}}},
+			{Outcome: &formIntakeStoredOutcome{ExcludedCandidateIDs: []string{field}, ExclusionThroughPasses: 3}},
+			{Outcome: &formIntakeStoredOutcome{
+				Findings: []FormFieldMappingBlocker{{FieldID: field, Code: "field_ambiguous"}},
+			}},
+		}}
+		guidance := map[string]int{fillFieldID(0): 1}
+		findings := formIntakeFindingsThrough(input, nil, guidance)
+		if len(findings) != 1 || findings[0].FieldID != field || findings[0].Code != code ||
+			len(guidance) != 1 || guidance[field] != 0 {
+			t.Fatal("exclusion aggregation hid a native blocker or mutated caller-owned guidance")
+		}
+	}
+}
+
+func TestFormIntakeExclusionConsumesAccountedInputDespiteCompletedStaleAdvice(t *testing.T) {
+	store, _, start, _, exclusion := exclusionFixture(t)
+	advice := reserveIntakeApply(t, store, start, exclusion.Reference, exclusion.ExpectedRevision,
+		[]int{1}, "completed-before-positive-and-negative-settlement")
+	advice.Findings = []FormFieldMappingBlocker{{FieldID: start.Schema.Fields[1].ID, Code: "field_ambiguous"}}
+	if _, err := store.ApplyFormIntakePass(t.Context(), advice); err != nil {
+		t.Fatal(err)
+	}
+	settled, err := store.ApplyFormIntakePass(t.Context(), exclusion)
+	if err != nil || !settled.Consumed || settled.Job.LedgerRevision != 1 || len(settled.AcceptedFieldIDs) != 1 ||
+		settled.AcceptedFieldIDs[0] != start.Schema.Fields[0].ID {
+		t.Fatal("completed old advice kept an otherwise accounted input pending", err)
+	}
+	if replay, replayErr := store.ApplyFormIntakePass(t.Context(), advice); replayErr != nil || !replay.Reused {
+		t.Fatal("completed historical advice could not replay without effects", replayErr)
+	}
+	input, err := store.ReadFormIntakeInput(t.Context(), exclusion.Reference, start.Owner)
+	if err != nil || !input.Consumed || input.Text != "" || len(input.Findings) != 0 {
+		t.Fatal("exact historical replay resurrected consumed input or obsolete findings")
+	}
+}

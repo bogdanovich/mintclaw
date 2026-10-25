@@ -1,6 +1,7 @@
 package document
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -42,6 +43,21 @@ func formIntakeFindingsThrough(
 ) []FormFieldMappingBlocker {
 	if input.State == formIntakeInputConsumed {
 		return nil
+	}
+	// A completed outcome can be reserved after the exclusion pass but applied
+	// before it. Settle advice through the native apply-time cutoff, not merely
+	// by folding outcomes in reservation order. Never mutate caller-owned maps.
+	guidanceThrough = maps.Clone(guidanceThrough)
+	for _, pass := range input.Reservations {
+		if pass.Outcome == nil {
+			continue
+		}
+		for _, id := range pass.Outcome.ExcludedCandidateIDs {
+			if guidanceThrough == nil {
+				guidanceThrough = make(map[string]int)
+			}
+			guidanceThrough[id] = max(guidanceThrough[id], pass.Outcome.ExclusionThroughPasses)
+		}
 	}
 	current := make(map[string]string, MaxFormIntakeCandidates)
 	for passIndex, pass := range input.Reservations {
