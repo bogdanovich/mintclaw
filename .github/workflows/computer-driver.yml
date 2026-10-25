@@ -19,9 +19,13 @@ concurrency:
 
 jobs:
   linux-window-keys:
-    name: Private Linux window-key primitive
+    name: Private Linux ${{ matrix.candidate }} primitive
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: [window-keys, native-keyboard]
     env:
       CUA_TELEMETRY: '0'
       DO_NOT_TRACK: '1'
@@ -45,7 +49,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential clang pkg-config libdbus-1-dev \
-            libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev xvfb xauth
+            libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev xvfb xauth \
+            libgtk-3-0t64 gir1.2-gtk-3.0 python3-gi
 
       - name: Install pinned upstream Rust toolchain
         uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
@@ -57,7 +62,34 @@ jobs:
         run: |
           bash scripts/internal/computer-driver/build-linux-key-probe.sh \
             --source "$GITHUB_WORKSPACE/.private-cua-source" \
-            --output "$RUNNER_TEMP/mintclaw-window-keys"
+            --output "$RUNNER_TEMP/mintclaw-window-keys" \
+            --candidate "${{ matrix.candidate }}"
+
+      - name: Set up pinned Go for the default-disabled original-host join
+        if: ${{ matrix.candidate == 'native-keyboard' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build private original-host qualification, not a production input host
+        if: ${{ matrix.candidate == 'native-keyboard' }}
+        env:
+          CGO_ENABLED: '1'
+          GOMAXPROCS: '2'
+        run: |
+          go test -race -tags=mintclaw_private_native_keyboard ./pkg/computer/desktop \
+            -run '^TestPrivateKeyboard' -count=1 -timeout=30s
+          go test -race -tags=mintclaw_private_native_keyboard -c ./pkg/computer/desktop \
+            -o "$RUNNER_TEMP/mintclaw-window-keys/native-host.test"
+          {
+            echo 'PRIVATE QUALIFICATION ONLY; NOT AN ADMITTED INPUT HOST'
+            git rev-parse HEAD
+            sha256sum go.mod go.sum pkg/computer/desktop/private_keyboard_linux.go \
+              pkg/computer/desktop/private_keyboard_linux_test.go \
+              "$RUNNER_TEMP/mintclaw-window-keys/native-host.test" \
+              "$RUNNER_TEMP/mintclaw-window-keys/build-receipt.txt"
+          } > "$RUNNER_TEMP/mintclaw-window-keys/native-host-receipt.txt"
 
       - name: Qualify only owned native window events, twenty repetitions
         env:
@@ -73,11 +105,26 @@ jobs:
               input::mintclaw_window_keys::native:: --ignored --test-threads=1
           done
 
+      - name: Exercise private native keyboard ownership and teardown
+        if: ${{ matrix.candidate == 'native-keyboard' }}
+        run: |
+          python3 scripts/internal/computer-driver/native-keyboard-fixture.py \
+            --xvfb /usr/bin/Xvfb --xvfb-sha256 "$(sha256sum /usr/bin/Xvfb | cut -d ' ' -f 1)" \
+            --probe "$RUNNER_TEMP/mintclaw-window-keys/window-keys.test" \
+            --probe-sha256 "$(sha256sum "$RUNNER_TEMP/mintclaw-window-keys/window-keys.test" | cut -d ' ' -f 1)" \
+            --output "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-fixture" --gtk \
+            --process-worker "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-worker" \
+            --process-worker-sha256 "$(sha256sum "$RUNNER_TEMP/mintclaw-window-keys/native-keyboard-worker" | cut -d ' ' -f 1)" \
+            --process-modes normal cancel_held blocked_stop crash_held foreign_stop duplicate_permit wire_loss \
+              keeper_crash_held group_term_held \
+            --host-probe "$RUNNER_TEMP/mintclaw-window-keys/native-host.test" \
+            --host-probe-sha256 "$(sha256sum "$RUNNER_TEMP/mintclaw-window-keys/native-host.test" | cut -d ' ' -f 1)"
+
       - name: Preserve private probe and build receipt, not an admitted driver
         if: ${{ always() && steps.window_key_probe.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: computer-window-keys-probe-${{ github.event.pull_request.head.sha || github.sha }}
+          name: computer-${{ matrix.candidate }}-probe-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/mintclaw-window-keys/
           if-no-files-found: error
           retention-days: 3
