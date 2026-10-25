@@ -28,9 +28,9 @@ trials (1-64 per case, at most 256 total), and `grade` rejudges all eligible sou
 Native PDF execution/artifact controls have domain-specific admission and unresolved qualification checks;
 browser/owned-target execution and baseline comparison have their own evidence contracts. Stub tests are not
 live scenario qualification.
-The two general cases now require a configured judge for their quality rubric, in addition to mandatory hard checks.
+General cases require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
-The corpus has 14 cases: two active/default general, six pending PDF and six pending browser.
+The corpus has 15 cases: two active/default general, one pending general correction, six pending PDF and six pending browser.
 The [full baseline](../docs/operations/manual-agent-evals-baseline-20261024.md) remains nonpassing. Pending cases
 remain inspectable offline, but no default live run includes them. Corpus presence or a valid manifest is not
 domain qualification; the [browser guide](../docs/operations/manual-agent-evals-browser.md) retains its limits.
@@ -51,6 +51,7 @@ The second command deliberately resumes pending tasks; it does not bypass capabi
 `list`/`validate` default to all cases and expose `status`, `default` and optional `pending_reason` per case, including
 in `--json`. `grade`/`compare` still analyze frozen historical evidence without requiring pending execution permission.
 Reports cover the selected trials, not invented passed/skipped records for excluded pending scenarios.
+Explicit `--suite general` includes pending general candidates; omit filters for the unchanged default baseline.
 
 Optional root `catalog.json` is version 1 with exactly one entry per suite:
 
@@ -64,6 +65,19 @@ The catalog is a bounded regular JSON file (at most 64 KiB); unknown/duplicate f
 suite policies and pending/default contradictions are rejected. It is operational selection metadata, not task
 authority or part of a case digest. Changing a case still changes its identity. Private corpora without a catalog
 retain their existing all-active/all-default behavior and arbitrary valid suite names.
+
+Optional `cases` uses the same policy fields with full case IDs instead of suite IDs. Each entry must name a unique
+existing case; unspecified cases inherit their suite. Overrides may narrow availability/default membership but cannot
+activate a pending suite or enable default membership forbidden by the suite. For example:
+
+```json
+{"version":1,"suites":[{"id":"general","status":"active","default":true}],
+ "cases":[{"id":"general.context.correction","status":"pending","default":false,"reason":"Awaiting qualification."}]}
+```
+
+This metadata does not change case digests or historical grading eligibility. The
+[execution ledger](../docs/architecture/agent-evals-core-execution.md) tracks qualification separately from implementation.
+`final_response_absent` checks only the last final reply; existing `response_absent` checks all retained assistant responses.
 
 Preset paths resolve relative to the preset file, not the shell's working directory. The included preset is a
 template, not a configured or safe running gateway. Runtime preflight must separately verify actual policy,

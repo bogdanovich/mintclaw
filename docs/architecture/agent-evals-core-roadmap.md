@@ -3,6 +3,10 @@
 Date: 2026-10-24. This is a bounded follow-up to the completed
 [first-release program](agent-evals-goal.md), not a reopening of E0-E5.
 
+Implementation of C1-C3 is now authorized in a new goal. The
+[execution ledger](agent-evals-core-execution.md) records dependencies, current
+status, qualification and stop criteria without relabeling controls as live passes.
+
 ## Decision And Current Baseline
 
 Focus occasional manual/paid evals on core agent behavior. Defer PDF and browser
@@ -11,7 +15,7 @@ the [fourteen-case baseline](../operations/manual-agent-evals-baseline-20261024.
 remains **2 pass, 7 fail, 2 error, 3 inconclusive** on `1013693a9`.
 
 The operational [catalog](../../evals/catalog.json) marks `general` active/default
-and `pdf`/`browser` pending/non-default. All fourteen case definitions, fixture
+and `pdf`/`browser` pending/non-default. The original fourteen case definitions, fixture
 hashes and case digests remain unchanged. Offline list/validate include pending
 cases; execution refuses any selected pending case without `--include-pending`,
 including explicit `--suite all`. The flag alone does not widen the default set.
@@ -60,8 +64,9 @@ its current contract instead of treating all control modes as interchangeable.
 
 ## Proposed Scenarios
 
-All IDs below are **proposed**, not loadable case files. P0 is the first useful
-expansion; P1 follows after its required harness support. Use synthetic random
+The sections below specify the twelve target contracts. Correction has a
+loadable **pending** candidate; the other definitions remain queued in the ledger.
+P0 is the first useful expansion; P1 follows after its required harness support. Use synthetic random
 markers and local fixtures, never production conversations or accounts. Fixed
 user actions are preferable to an LLM user for these mechanical regressions.
 
@@ -211,6 +216,8 @@ Budget: 2 inputs plus control, 1 judge call, 5 minutes.
   new general definitions on their candidate branch/private corpus before adding
   them to the active/default suite on main; merely merging a new general JSON
   file would otherwise include it in defaults.
+  C1a adds a compatible per-case narrowing list so new candidates can remain
+  pending on main without widening their parent suite's gate.
 - Record immutable binary/corpus/case identities and scope with each baseline.
   A two-case default pass never supersedes the fourteen-case red record.
 - Defer provider failover/retry to deterministic injected failures first: never
@@ -222,13 +229,14 @@ Budget: 2 inputs plus control, 1 judge call, 5 minutes.
 
 | Packet | Status | Acceptance And Stop |
 | --- | --- | --- |
-| C0: Catalog + this proposal | Implemented in this change | Default = 2 general; 12 visible pending; deliberate opt-in; unchanged case identities/historical eligibility; model-free regression tests; reviewed green code PR merged |
-| C1: Correction + answer/resume | Proposed | Two new cases, narrow answer evidence, stale-answer controls, honest live qualification; no concurrent driver yet |
-| C2: In-flight evidence + steering | Proposed | One bounded native-boundary fixture/observer, steering boundary/order and two-session isolation; no copied scheduler or timing-only oracle |
-| C3: Focused P1 packs | Proposed, independently selected | Add only a pack whose prerequisite is admitted and useful; separate lifecycle/tools/delivery/skill scope and stop criteria |
+| C0: Catalog + proposal | Complete, #1868 | Default = 2 general; 12 domain cases pending; deliberate opt-in; unchanged identities/historical eligibility |
+| C1: Correction + answer/resume | In progress | Two new cases, answer evidence, stale-answer controls, bounded live qualification |
+| C2: In-flight evidence + steering | Authorized, queued | One bounded native-boundary fixture/observer, steering/order and two-session isolation; no copied scheduler or timing-only oracle |
+| C3: Focused P1 packs | All seven authorized, queued | Admit prerequisites; separate lifecycle/tools/delivery/skill scope and stop criteria |
 
-The current goal ends after C0 is validated, reviewed and merged, with the list
-delivered to the operator. It does **not** implement C1-C3 automatically, run/fix
-pending PDF/browser scenarios, deploy production or promise a growing all-green
-suite indefinitely. Start with C1, then C2; steering has high value but needs a
-real in-flight oracle before it can be claimed as coverage.
+The initial C0 goal ended after reviewed merge and delivery of the proposal.
+The new C1-C3 goal ends at twelve implemented/merged contracts, deterministic
+validation and the bounded honest qualification matrix in the ledger. It does
+not run/fix pending PDF/browser cases, deploy production or promise a growing
+all-green suite indefinitely. Steering needs a real in-flight oracle before
+it can be claimed as coverage.

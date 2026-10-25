@@ -11,7 +11,12 @@ import (
 
 func writeCatalog(t *testing.T, root string, policies ...SuitePolicy) {
 	t.Helper()
-	data, err := json.Marshal(corpusCatalog{Version: Version, Suites: policies})
+	writeCatalogDocument(t, root, corpusCatalog{Version: Version, Suites: policies})
+}
+
+func writeCatalogDocument(t *testing.T, root string, catalog corpusCatalog) {
+	t.Helper()
+	data, err := json.Marshal(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,11 +192,109 @@ func TestCatalogAllowsDeferredOnlyCorpusWithoutInventingDefaultPass(t *testing.T
 func TestDeferredPolicyDoesNotInvalidateHistoricalGrade(t *testing.T) {
 	fixture, item, source, calls := gradeFixture(t, false)
 	probes, tasks := fixture.probes.Load(), fixture.tasks.Load()
-	item.Policy = &SuitePolicy{ID: item.Case.Suite, Status: "pending", Reason: "Deferred after source execution."}
-	result, err := Grade(t.Context(), fixture.preset, []LoadedCase{item}, source.ReportDir,
+	root := t.TempDir()
+	writeCase(t, root, "source.json", item.Case)
+	writeCatalogDocument(t, root, corpusCatalog{
+		Version: Version,
+		Suites:  []SuitePolicy{{ID: item.Case.Suite, Status: "active", Default: true}},
+		Cases:   []SuitePolicy{{ID: item.Case.ID, Status: "pending", Reason: "Deferred after source execution."}},
+	})
+	loaded, err := LoadCorpus(root)
+	if err != nil || len(loaded) != 1 || loaded[0].Digest != item.Digest {
+		t.Fatal("case override changed historical identity", err)
+	}
+	result, err := Grade(t.Context(), fixture.preset, loaded, source.ReportDir,
 		RunOptions{Home: fixture.home, OutputParent: fixture.output})
 	if err != nil || result.Verdict != Pass || calls.Load() != 1 || result.Trials[0].CaseSHA256 != item.Digest ||
 		fixture.probes.Load() != probes || fixture.tasks.Load() != tasks {
 		t.Fatal("policy-only change blocked frozen grading or replayed target", err)
+	}
+}
+
+func TestCasePolicyNarrowsSuiteWithoutChangingCaseIdentity(t *testing.T) {
+	for _, status := range []string{"pending", "active"} {
+		t.Run(status, func(t *testing.T) {
+			root := t.TempDir()
+			first, second := testCase(), testCase()
+			first.ID, second.ID = "general.one", "general.two"
+			writeCase(t, root, "one.json", first)
+			writeCase(t, root, "two.json", second)
+			before, err := LoadCorpus(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := SuitePolicy{ID: first.ID, Status: status}
+			if status == "pending" {
+				policy.Reason = "Candidate not qualified."
+			}
+			writeCatalogDocument(t, root, corpusCatalog{
+				Version: Version,
+				Suites:  []SuitePolicy{{ID: "general", Status: "active", Default: true}},
+				Cases:   []SuitePolicy{policy},
+			})
+			after, err := LoadCorpus(root)
+			if err != nil || len(after) != 2 {
+				t.Fatal(err)
+			}
+			for index := range before {
+				if before[index].Digest != after[index].Digest {
+					t.Fatal("case policy changed scenario bytes/digest")
+				}
+			}
+			defaults, err := Select(after, Selection{DefaultOnly: true})
+			if err != nil || len(defaults) != 1 || defaults[0].Case.ID != second.ID {
+				t.Fatal("individual override changed another suite member's default", err)
+			}
+			selected, err := Select(after, Selection{IDs: []string{first.ID}})
+			if err != nil || len(selected) != 1 || selected[0].Availability().ID != first.Suite ||
+				selected[0].Availability().Status != status || selected[0].Availability().Default {
+				t.Fatal("effective case status lost suite identity or explicit selection", err)
+			}
+			err = CheckRunAvailability(after, false)
+			if status == "pending" && !errors.Is(err, ErrPendingCases) || status == "active" && err != nil {
+				t.Fatal("case status admission incorrect", err)
+			}
+			if CheckRunAvailability(after, true) != nil {
+				t.Fatal("explicit pending opt-in rejected valid case policy")
+			}
+		})
+	}
+}
+
+func TestCasePolicyRejectsUnknownDuplicateInvalidAndWidenedGates(t *testing.T) {
+	for _, mode := range []string{"unknown", "duplicate", "invalid", "no-reason", "pending-default", "suite-status", "suite-default"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			item := testCase()
+			writeCase(t, root, "one.json", item)
+			parent := SuitePolicy{ID: item.Suite, Status: "active", Default: true}
+			child := SuitePolicy{ID: item.ID, Status: "pending", Reason: "Not qualified."}
+			children := []SuitePolicy{child}
+			switch mode {
+			case "unknown":
+				children[0].ID = "general.unknown"
+			case "duplicate":
+				children = append(children, child)
+			case "invalid":
+				children[0].Status = "off"
+			case "no-reason":
+				children[0].Reason = ""
+			case "pending-default":
+				children[0].Default = true
+			case "suite-status":
+				parent.Status, parent.Default, parent.Reason = "pending", false, "Suite deferred."
+				children[0].Status, children[0].Reason = "active", ""
+			case "suite-default":
+				parent.Default = false
+				children[0].Status, children[0].Reason, children[0].Default = "active", "", true
+			}
+			writeCatalogDocument(t, root, corpusCatalog{
+				Version: Version,
+				Suites:  []SuitePolicy{parent}, Cases: children,
+			})
+			if _, err := LoadCorpus(root); !errors.Is(err, ErrInvalidCorpus) {
+				t.Fatal("invalid case override admitted", err)
+			}
+		})
 	}
 }

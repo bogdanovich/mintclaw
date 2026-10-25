@@ -10,9 +10,13 @@ PDF/browser are now **pending**, not fixed or passed. The [core follow-up](../ar
 records the operator decision and proposed general regressions. `run` without suite/tag/case filters selects only
 the two active/default general cases. Explicit filters (including `--suite all`) that select pending cases refuse
 before profile/model work unless `--include-pending` is supplied. That flag alone does not broaden defaults or
-bypass isolation/authority admission. Offline `list`/`validate` still show all fourteen cases with status, default
+bypass isolation/authority admission. Offline `list`/`validate` show all cases with status, default
 membership and deferral reason. `grade`/`compare` remain available for historical evidence. A general-only pass
 does not replace the red full-suite baseline. See the [catalog contract](../../evals/README.md#active-and-pending-sets).
+
+The [core execution ledger](../architecture/agent-evals-core-execution.md) now tracks C1-C3 implementation.
+The correction candidate is individually pending: the corpus has 15 cases, still only two defaults. Explicit
+`--suite general` includes candidates and may require `--include-pending`; omit selection filters for defaults.
 
 `mintclaw eval list` and `validate` remain offline. `run` attaches to an already prepared isolated loopback gateway
 on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,
@@ -341,7 +345,7 @@ profile and outside the workspace; it cannot be a workspace ancestor or descenda
 mintclaw eval validate --root ./evals --preset /absolute/preset.json --json
 MINTCLAW_HOME=/absolute/PRIVATE_HOME mintclaw eval run \
   --root ./evals --preset /absolute/preset.json \
-  --suite general --out /absolute/PRIVATE_HOME/reports --json
+  --out /absolute/PRIVATE_HOME/reports --json
 ```
 
 Suite, all requested tags, and case IDs intersect. Each selected case gets a fresh session; follow-ups use only

@@ -161,7 +161,7 @@ func (c Case) Validate() error {
 			return ErrInvalidCase
 		}
 		switch check.Kind {
-		case "response_contains", "response_absent":
+		case "response_contains", "response_absent", "final_response_absent":
 			if !boundedText(check.Expected, 4096) {
 				return ErrInvalidCase
 			}

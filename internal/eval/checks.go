@@ -12,6 +12,10 @@ func gradeConversation(checks []Check, evidence []Event, last Event) []CheckResu
 				matched := strings.Contains(last.Content, check.Expected)
 				result = booleanCheck(check.ID, matched, []string{last.ID})
 			}
+		case "final_response_absent":
+			if last.ID != "" && last.Kind == "final" {
+				result = booleanCheck(check.ID, !strings.Contains(last.Content, check.Expected), []string{last.ID})
+			}
 		case "response_absent":
 			for _, event := range evidence {
 				if event.Kind == "input" || event.Content == "" {
