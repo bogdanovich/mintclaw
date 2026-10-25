@@ -55,22 +55,18 @@ func (run *steeringRun) finish(
 		}
 		if trial.Steering != nil && trial.ExecutionVerdict == Pass {
 			trial.Steering.Code = "owned_scope_unavailable"
+			if trial.Isolation != nil && trial.Isolation.Peer.Steering != nil {
+				trial.Isolation.Peer.Steering.Code = "owned_scope_unavailable"
+			}
 			if report.ActiveTool != nil && report.ActiveTool.valid(*report) &&
 				report.ActiveTool.verdict(report.TargetLifecycle) == Pass &&
 				observedOwnedProfile(report.TargetLifecycle, report.PrivateSurfaces) &&
 				report.TargetBudget != nil && report.TargetBudget.verdict() == Pass {
-				history, historyErr := readNativeSessionHistory(ctx, target.preset.IsolationRoot,
-					target.preset.ExpectedWorkspace, trial.SessionKey, facts, filter)
-				rows, names, outboxErr := readSteeringOutbox(ctx, target)
-				if historyErr == nil && outboxErr == nil && trial.Steering.Trace != "" &&
-					len(trial.Steering.Guidance) == len(pending.item.Steering.Updates) {
-					trial.Steering.Metadata, trial.Steering.History = history.metadata, history.history
-					trial.Steering.MetadataSHA256 = digest([]byte(history.metadata))
-					trial.Steering.HistorySHA256 = digest([]byte(strings.Join(history.history, "\n")))
-					trial.Steering.Outbox, trial.Steering.OutboxNames = rows, names
-					trial.Steering.Code = "observed"
-				} else {
-					trial.Steering.Code = "post_stop_evidence_unavailable"
+				refreshSteeringScope(ctx, target, &trial, pending.item, facts, filter)
+				if pending.item.Steering.Peer != nil && trial.Isolation != nil {
+					peer := trial.Isolation.Peer.trial(trial)
+					refreshSteeringScope(ctx, target, &peer, isolationPeerCase(pending.item), facts, filter)
+					trial.Isolation.Peer = isolationScope(peer)
 				}
 			}
 		}
@@ -92,4 +88,26 @@ func (run *steeringRun) finish(
 		delete(run.trials, trial.ID)
 	}
 	return nil
+}
+
+func refreshSteeringScope(
+	ctx context.Context, target admittedTarget, trial *Trial, item Case,
+	facts map[string]string, filter *strings.Replacer,
+) {
+	if trial.Steering == nil || trial.ExecutionVerdict != Pass {
+		return
+	}
+	trial.Steering.Code = "post_stop_evidence_unavailable"
+	history, historyErr := readNativeSessionHistory(ctx, target.preset.IsolationRoot,
+		target.preset.ExpectedWorkspace, trial.SessionKey, facts, filter)
+	rows, names, outboxErr := readSteeringOutbox(ctx, target)
+	if historyErr != nil || outboxErr != nil || trial.Steering.Trace == "" ||
+		len(trial.Steering.Guidance) != len(item.Steering.Updates) {
+		return
+	}
+	trial.Steering.Metadata, trial.Steering.History = history.metadata, history.history
+	trial.Steering.MetadataSHA256 = digest([]byte(history.metadata))
+	trial.Steering.HistorySHA256 = digest([]byte(strings.Join(history.history, "\n")))
+	trial.Steering.Outbox, trial.Steering.OutboxNames = rows, names
+	trial.Steering.Code = "observed"
 }

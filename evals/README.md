@@ -30,7 +30,7 @@ browser/owned-target execution and baseline comparison have their own evidence c
 live scenario qualification.
 General cases require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
-The corpus has 18 cases: four active/default General, two pending steering,
+The corpus has 19 cases: four active/default General, three pending core steering/isolation,
 six pending PDF and six pending browser. Steering order records separate explicit
 `one-at-a-time`/`all` profile variants; native same-sender inputs coalesce in FIFO
 order in both modes. These live cases hold one read, not a parallel tool batch or

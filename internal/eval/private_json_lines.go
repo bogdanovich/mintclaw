@@ -9,6 +9,30 @@ import (
 
 const maxPrivateJSONRecords = 8192
 
+// A bounded storage document can exceed the model-context string ceiling.
+// Decode its outer container directly; nested escaped strings retain their
+// existing byte/depth limits and share the file census token budget.
+func (scan *privateContentScan) jsonDocument(data []byte) bool {
+	if scan.filter != nil && scan.filter.Replace(string(data)) != string(data) ||
+		containsRetainedLiteral(data, scan.facts) {
+		return true
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	matched, valid := scan.value(decoder, 0)
+	if matched && !scan.uncertain {
+		return true
+	}
+	if matched || !valid || scan.uncertain {
+		scan.uncertain = true
+		return true
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		scan.uncertain = true
+		return true
+	}
+	return false
+}
+
 // Native logs and histories contain one JSON value per line, not one value per
 // file. Keep this format-specific admission out of the model-context scanner.
 func (scan *privateContentScan) jsonLines(data []byte) bool {

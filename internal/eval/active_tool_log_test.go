@@ -18,7 +18,10 @@ import (
 )
 
 func TestActiveToolEnqueueLogRequiresUniqueNativeMetadata(t *testing.T) {
-	for _, mode := range []string{"observed", "missing", "duplicate", "wrong_agent", "zero_depth", "partial", "private"} {
+	for _, mode := range []string{
+		"observed", "nullable", "missing", "duplicate", "duplicate_key", "wrong_agent", "zero_depth",
+		"partial", "private", "nullable_private",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := newAdmissionFixture(t)
 			enableTestActiveTool(fixture)
@@ -69,32 +72,38 @@ func TestActiveToolEnqueueLogRequiresUniqueNativeMetadata(t *testing.T) {
 			}
 			data = append(data, '\n')
 			switch mode {
+			case "nullable":
+				data = append([]byte("{\"unrelated\":{\"optional\":null}}\n"), data...)
 			case "duplicate":
 				data = append(data, data...)
+			case "duplicate_key":
+				data = append(data, []byte("{\"unrelated\":null,\"unrelated\":1}\n")...)
 			case "partial":
 				data = append(data, []byte(`{"event_kind":`)...)
 			case "private":
 				data = append(data, []byte("{\"ignored_field\":\"private-log-canary\"}\n")...)
+			case "nullable_private":
+				data = append(data, []byte("{\"optional\":null,\"ignored_field\":\"private-log-canary\"}\n")...)
 			}
 			if err := os.WriteFile(path, data, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			limit := 2 * time.Second
-			if mode == "missing" || mode == "partial" {
+			if mode == "missing" || mode == "partial" || mode == "duplicate_key" {
 				limit = 40 * time.Millisecond
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), limit)
 			defer cancel()
 			observed, err := waitActiveToolEnqueue(ctx, target, args, input,
 				strings.NewReplacer("private-log-canary", "[REDACTED]"))
-			if mode == "observed" {
+			if mode == "observed" || mode == "nullable" {
 				if err != nil || observed.event.ID != record.ID || observed.raw == "" ||
 					observed.barrier.State != "active" || observed.observedAt.IsZero() {
 					t.Fatal("native observation missing", observed, err)
 				}
 			} else if err == nil {
 				t.Fatal("missing/invalid native evidence became passing")
-			} else if mode == "private" && !errors.Is(err, ErrPrivateEvidence) {
+			} else if (mode == "private" || mode == "nullable_private") && !errors.Is(err, ErrPrivateEvidence) {
 				t.Fatal("unrelated raw private field was projected away", err)
 			}
 		})

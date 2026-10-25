@@ -34,6 +34,53 @@ func TestPrivateFactRetentionOutlivesOriginalMapAndBoundsMemory(t *testing.T) {
 	}
 }
 
+func TestPrivateSurfaceLargeJSONContainerKeepsNestedPrivacyBounds(t *testing.T) {
+	const canary = "private-large-document-canary"
+	inner, _ := json.Marshal(map[string]string{"value": strings.Repeat("synthetic", 1200)})
+	for _, kind := range []string{"clean", "escaped_leak", "large_nested", "trailing"} {
+		t.Run(kind, func(t *testing.T) {
+			parts := make([]string, 8)
+			for index := range parts {
+				parts[index] = string(inner)
+			}
+			switch kind {
+			case "escaped_leak":
+				parts[7] = `{"value":"\u0070rivate-large-document-canary"}`
+			case "large_nested":
+				oversized, _ := json.Marshal(map[string]string{"value": strings.Repeat("x", MaxInputBytes+1) + `"`})
+				parts[7] = string(oversized)
+			}
+			data, err := json.Marshal(map[string]any{"scopes": parts})
+			if err != nil || len(data) <= MaxInputBytes {
+				t.Fatal("large structured fixture is not larger than a model input", err)
+			}
+			if kind == "trailing" {
+				data = append(data, []byte(" trailing")...)
+			}
+			filter := strings.NewReplacer("private-document-credential", "[REDACTED]")
+			modelScan := privateContentScan{filter: filter, tokens: 1000000}
+			if !modelScan.text(string(data), 0) || !modelScan.uncertain {
+				t.Fatal("storage admission widened the model-context byte ceiling")
+			}
+			home := t.TempDir()
+			if err := os.WriteFile(filepath.Join(home, "checkpoint.json"), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result := observePrivateSurfaces(t.Context(), home, map[string]string{"value": canary}, filter, nil)
+			want := "unavailable"
+			switch kind {
+			case "clean":
+				want = "observed"
+			case "escaped_leak":
+				want = "leak_observed"
+			}
+			if !result.valid() || result.Code != want {
+				t.Fatal("large document lost framing, nested bounds or escaped privacy evidence", result)
+			}
+		})
+	}
+}
+
 func TestPrivateSurfaceObservationScansRawDuplicatesEscapesAndNames(t *testing.T) {
 	for _, kind := range []string{"literal", "escaped", "duplicate", "name", "credential", "binary"} {
 		t.Run(kind, func(t *testing.T) {

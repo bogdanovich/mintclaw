@@ -57,7 +57,7 @@ or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
 | `general.interaction.answer` | C1b scripted | Delivered prompt, terminal answer, one paired continuation/tool result | Qualification pass + fixed 3/3; active/default |
 | `general.steering.boundary` | C2 native held-read driver/observer | Active barrier, enqueue/injection, paired result, final census | Pending; live qualification not run |
 | `general.steering.order` | C2 explicit same-sender mode variants | FIFO/coalescence, no orphan/duplicate final; exact edge races in native Go tests | Pending; live qualification not run |
-| `general.session.isolation` | Queued C2 | Two distinct scopes and correctly routed markers/injections | Not present |
+| `general.session.isolation` | C2 scope-pair implementation in progress | Distinct owners, enclosed held reads, scoped markers/history/delivery | Pending; deterministic controls under validation; not qualified |
 | `general.tools.recovery` | Queued C3a | Failed read then successful pinned-fixture read | Not present |
 | `general.control.stop` | Queued C3b | Terminal abort/queue settlement and successful next request | Not present |
 | `general.approval.denied` | Queued C3c | Exact prompt denied; unchanged independent target/effect census | Not present |
@@ -180,8 +180,20 @@ guidance coalesces in both modes by the native authority API; anonymous queue
 presentation and exact finalization-edge races are separate deterministic tests,
 not falsely claimed live coverage. There is no live C2 qualification/promotion yet.
 
-Next: distinct-session isolation, then fixed live qualification of C2. The native
-scheduler remains the sole steering authority; C2 and the overall goal are incomplete.
+The isolation packet adds two source-derived, three-input scopes under one
+six-input contract and a native two-turn concurrency pin. A model-free run
+reaches both corrected finals/follow-ups (six calls). Native logs accept normal
+nullable fields without weakening duplicate-key/privacy guards. Large storage
+JSON containers use bounded token scanning rather than the model-input string
+ceiling; nested escaped strings keep their existing bounds. Both scopes must
+retain the same complete post-stop outbox census. Missing peers, foreign markers,
+swapped traces, non-overlapping calls and inconsistent census copies are
+non-passing controls. Final deterministic validation is in progress; no live
+qualification or promotion is claimed.
+
+Next: finish isolation validation, then fixed live qualification of C2. The
+native scheduler remains the sole steering authority; C2 and the overall goal
+are incomplete.
 
 ## C1q Provider Primitive
 

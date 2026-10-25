@@ -7,10 +7,16 @@ import (
 
 // Modes are separate profile-selected variants. They never change mid-trial.
 type SteeringCase struct {
-	Scenario      string   `json:"scenario"`
-	Modes         []string `json:"modes"`
-	InitialMarker string   `json:"initial_marker"`
-	Updates       []string `json:"updates"`
+	Scenario      string        `json:"scenario"`
+	Modes         []string      `json:"modes"`
+	InitialMarker string        `json:"initial_marker"`
+	Updates       []string      `json:"updates"`
+	Peer          *SteeringPeer `json:"peer,omitempty"`
+}
+
+type SteeringPeer struct {
+	InitialMarker string `json:"initial_marker"`
+	Update        string `json:"update"`
 }
 
 func (steering SteeringCase) validate(item Case) error {
@@ -24,24 +30,35 @@ func (steering SteeringCase) validate(item Case) error {
 		return ErrInvalidCase
 	}
 	wantUpdates := 1
+	wantInputs := 3
 	switch steering.Scenario {
 	case "boundary":
-		if !slices.Equal(steering.Modes, []string{"one-at-a-time"}) {
+		if steering.Peer != nil || !slices.Equal(steering.Modes, []string{"one-at-a-time"}) {
 			return ErrInvalidCase
 		}
 	case "order":
 		wantUpdates = 2
-		if !slices.Equal(steering.Modes, []string{"one-at-a-time", "all"}) {
+		wantInputs = 4
+		if steering.Peer != nil || !slices.Equal(steering.Modes, []string{"one-at-a-time", "all"}) {
+			return ErrInvalidCase
+		}
+	case "isolation":
+		wantInputs = 6
+		if steering.Peer == nil || !slices.Equal(steering.Modes, []string{"one-at-a-time"}) {
 			return ErrInvalidCase
 		}
 	default:
 		return ErrInvalidCase
 	}
-	if len(steering.Updates) != wantUpdates || item.Limits.MaxUserTurns != wantUpdates+2 {
+	if len(steering.Updates) != wantUpdates || item.Limits.MaxUserTurns != wantInputs {
 		return ErrInvalidCase
 	}
 	seen := map[string]bool{steering.InitialMarker: true}
-	for _, marker := range steering.Updates {
+	markers := slices.Clone(steering.Updates)
+	if steering.Peer != nil {
+		markers = append(markers, steering.Peer.InitialMarker, steering.Peer.Update)
+	}
+	for _, marker := range markers {
 		if !validID(marker) || seen[marker] || strings.Contains(item.Task, marker) {
 			return ErrInvalidCase
 		}

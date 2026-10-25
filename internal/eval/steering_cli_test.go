@@ -54,6 +54,7 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 		{"boundary", "steering-boundary.json", "one-at-a-time", false},
 		{"order-one", "steering-order.json", "one-at-a-time", false},
 		{"order-all", "steering-order.json", "all", false},
+		{"isolation", "session-isolation.json", "one-at-a-time", false},
 		{"missing-source", "steering-boundary.json", "one-at-a-time", true},
 	} {
 		t.Run(variant.name, func(t *testing.T) {
@@ -68,6 +69,11 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 			item := LoadedCase{Case: parsed, Digest: digest(definition)}
 			fixture, parent := preparationFixture(t)
 			enableTestActiveTool(fixture)
+			if item.Case.Steering.Peer != nil {
+				fixture.cfg.Agents.List[0].MaxParallelTurns = 2
+				fixture.cfg.Agents.Defaults.MaxParallelTurns = 2
+				fixture.preset.ActiveTool.MaxParallelTurns = 2
+			}
 			fixture.preset.ActiveTool.SteeringMode, fixture.cfg.Agents.Defaults.SteeringMode = variant.mode, variant.mode
 			fixture.preset.JudgeModel = "eval-model"
 			fixture.cfg.Agents.Defaults.ContextManager = "seahorse"
@@ -87,10 +93,20 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 				finish := "stop"
 				if bytes.Contains(raw, []byte("You are an independent conversation judge")) {
 					judges.Add(1)
-					message = map[string]any{
-						"role":    "assistant",
-						"content": `{"version":1,"criteria":[{"id":"grounded-steering","verdict":"pass","reason":"Synthetic native control.","evidence_ids":["event-000001"]}]}`,
+					if item.Case.Steering.Peer != nil && (!bytes.Contains(raw, []byte("[scope a]")) ||
+						!bytes.Contains(raw, []byte("[scope b]"))) {
+						w.WriteHeader(http.StatusBadRequest)
+						return
 					}
+					evidenceID := "event-000001"
+					if item.Case.Steering.Peer != nil {
+						evidenceID = "scope-a-" + evidenceID
+					}
+					findings, _ := json.Marshal(JudgeFindings{Version: Version, Criteria: []JudgeFinding{{
+						ID: "grounded-steering", Verdict: Pass, Reason: "Synthetic native control.",
+						EvidenceIDs: []string{evidenceID},
+					}}})
+					message = map[string]any{"role": "assistant", "content": string(findings)}
 				} else {
 					targets.Add(1)
 					var body struct {
@@ -127,6 +143,13 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 						for _, update := range item.Case.Steering.Updates {
 							if bytes.Contains(raw, []byte(update)) {
 								marker = update
+							}
+						}
+						if peer := item.Case.Steering.Peer; peer != nil {
+							for _, value := range []string{peer.InitialMarker, peer.Update} {
+								if bytes.Contains(raw, []byte(value)) {
+									marker = value
+								}
 							}
 						}
 						message = map[string]any{"role": "assistant", "content": marker}
@@ -218,9 +241,23 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 			}
 			if runErr != nil || report.Verdict != Pass || trial.Verdict != Pass || judges.Load() != 1 ||
 				report.TargetBudget == nil || report.TargetBudget.verdict() != Pass {
+				t.Logf("native prerequisites host=%+v lifecycle=%+v private=%+v budget=%s",
+					report.ActiveTool, report.TargetLifecycle, report.PrivateSurfaces, report.TargetBudget.verdict())
+				if report.PrivateSurfaces != nil {
+					t.Logf("native SQLite=%+v", report.PrivateSurfaces.SQLite)
+				}
 				proofCode := "missing"
 				if trial.Steering != nil {
 					proofCode = trial.Steering.Code
+				}
+				if trial.Isolation != nil {
+					peer := trial.Isolation.Peer
+					t.Logf("peer execution=%s/%s session=%s closed=%v",
+						peer.ExecutionVerdict, peer.ExecutionCode, peer.SessionKey, peer.TransportClosed)
+					if peer.Steering != nil {
+						t.Logf("peer proof=%s fixture=%+v guidance=%d",
+							peer.Steering.Code, peer.Steering.Fixture, len(peer.Steering.Guidance))
+					}
 				}
 				t.Fatalf(
 					"native steering failed: %v report=%s trial=%s/%s proof=%s targets=%d judges=%d checks=%+v\n%s",
@@ -239,7 +276,14 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 				report.ActiveTool.Profile, report.Runtime) {
 				t.Fatal("native positive lost its independently replayable hard evidence")
 			}
+			if item.Case.Steering.Peer != nil && (targets.Load() != 6 || report.TargetUsage == nil ||
+				report.TargetUsage.Finals != 4 || trial.Isolation == nil) {
+				t.Fatal("two-scope target work or returned usage was omitted")
+			}
 			assertSteeringFrozenControls(t, trial, item.Case, report.RunReport, prepared.Workspace)
+			if item.Case.Steering.Peer != nil {
+				assertIsolationFrozenControls(t, trial, item.Case, report.RunReport, prepared.Workspace)
+			}
 			for _, path := range []string{"sessions", "state/outbox", "state/diagnostics/traces"} {
 				if err := os.RemoveAll(filepath.Join(prepared.Workspace, path)); err != nil {
 					t.Fatal("remove owned synthetic live evidence", err)
@@ -258,7 +302,11 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 				targets.Load() != targetsBeforeGrade || judges.Load() != 2 {
 				t.Fatalf("offline native regrade: %v\n%s", err, gradeOutput)
 			}
-			trial.Steering = nil
+			if item.Case.Steering.Peer != nil {
+				trial.Isolation.Peer.Steering = nil
+			} else {
+				trial.Steering = nil
+			}
 			invalid, err := json.Marshal(trial)
 			if err != nil ||
 				os.WriteFile(filepath.Join(report.ReportDirectory, report.Trials[0].File), invalid, 0o600) != nil {

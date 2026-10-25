@@ -130,7 +130,8 @@ func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
 				}
 			case "pending":
 				pending++
-				steering := item.ID == "general.steering.boundary" || item.ID == "general.steering.order"
+				steering := item.ID == "general.steering.boundary" || item.ID == "general.steering.order" ||
+					item.ID == "general.session.isolation"
 				if item.Default || item.PendingReason == "" || item.Suite == "general" && !steering {
 					t.Fatal("pending metadata incorrect")
 				}
@@ -138,7 +139,7 @@ func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
 				t.Fatal("catalog status unavailable")
 			}
 		}
-		if active != 4 || pending != 14 || result.RuntimeRun {
+		if active != 4 || pending != 15 || result.RuntimeRun {
 			t.Fatal("offline inspection hid deferred coverage or claimed execution")
 		}
 	}

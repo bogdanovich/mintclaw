@@ -16,6 +16,11 @@ func gradeSteeringChecks(item Case, trial Trial, report RunReport, workspace str
 			checks[index].Code = "native_steering_unavailable"
 			continue
 		}
+		if item.Steering.Peer != nil && (trial.Isolation == nil || trial.Isolation.Peer.Steering == nil ||
+			trial.Isolation.Peer.Steering.Code != "observed") {
+			checks[index].Code = "native_isolation_unavailable"
+			continue
+		}
 		checks[index] = booleanCheck(check.ID,
 			validSteeringEvidence(trial, item, workspace, report.ActiveTool.Profile, report.Runtime),
 			[]string{"steering"})
@@ -41,7 +46,7 @@ func assessSteering(
 		trial.Code = "required_steering_check_not_passed"
 		return
 	}
-	judgement := judgeConversation(ctx, judge, item, trial.Events)
+	judgement := judgeConversation(ctx, judge, item, steeringJudgeEvents(*trial))
 	trial.Judge = &judgement
 	if !roleBoundaryEligible(judgement.Call) {
 		trial.EvidenceEligible = false

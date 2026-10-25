@@ -234,7 +234,7 @@ func Grade(
 		for _, check := range trial.Checks {
 			trial.Verdict = combineVerdicts(trial.Verdict, check.Verdict)
 		}
-		judgement := judgeConversation(ctx, judge, item.Case, trial.Events)
+		judgement := judgeConversation(ctx, judge, item.Case, steeringJudgeEvents(trial))
 		if credentialJSONValue(judgement, filter) {
 			judgement.Findings = JudgeFindings{Version: Version, Criteria: []JudgeFinding{}}
 			judgement.Verdict, judgement.Code = Fail, "private_judge_output"
@@ -326,6 +326,7 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 	if trial.Version != Version || trial.ID != summary.ID || trial.CaseID != item.Case.ID ||
 		trial.TargetBudgetRequired != requiresTargetBudget(item.Case) ||
 		trial.ActiveToolRequired != requiresActiveTool(item.Case) ||
+		(item.Case.Steering != nil && item.Case.Steering.Peer != nil) != (trial.Isolation != nil) ||
 		trial.Repetition != summary.Repetition ||
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||

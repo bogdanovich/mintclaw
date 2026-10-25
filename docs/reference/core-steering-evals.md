@@ -60,10 +60,41 @@ These live contracts deliberately hold one read. Multi-call emitted-batch and
 precise finalization-edge races remain deterministic native agent tests; this
 is not a claim of live coverage for an artificially paused finalization edge,
 anonymous coding steering, multiple senders or physical Telegram rendering.
-Distinct-session isolation is the next C2 scenario, not covered by these cases.
+Distinct-session isolation is a separate C2 scenario, described below.
+
+## Scope Isolation
+
+`general.session.isolation` is a separate pending contract, never a default.
+It requires an active-tool preset with `max_parallel_turns: 2`, matching exactly
+both `agents.defaults.max_parallel_turns` and the sole agent's corresponding
+setting. An omitted pin preserves legacy profile behavior but cannot run this
+scenario. No native scheduler or runtime authority is replaced.
+
+The driver holds A's read, completes B's read/correction/follow-up on a fresh
+native connection, then corrects/releases A and queries A. Both per-scope flows
+have three-input ceilings, totaling the source contract's six. The two scope
+materializations retain the original case identity/digest, not alternate public
+case identities. One owned host's monotonic fixture sequence must enclose B's
+read lifecycle inside A's held read. Both native scopes, trace roots, canonical
+histories and deliveries are independently checked, including absence of the
+other scope's markers. History/outbox are refreshed for both after native stop;
+the two complete outbox census copies must agree.
+
+One judge sees two scope-labeled visible transcripts, grouped by scope with
+namespaced display event IDs. These labels are presentation, not additional
+native events; raw proof never enters the judge prompt. Offline grading uses
+the same projection. Returned-final usage includes both scopes; optional routed
+model telemetry still describes the main trial's projected events, not all calls.
+The independent shared native call budget covers both scopes.
+
+Implementation validation is in progress. The native-log reader permits normal
+nullable values while preserving duplicate-key/privacy rejection. The closing
+private census scans large storage JSON containers separately from bounded
+model-input strings, without relaxing nested escaped-content limits. This is
+not live qualification and must not promote the case.
 
 Each case permits one judge call, no model-user calls, at most three/four user
-inputs, a two-minute turn and five-minute conversation budget. The existing
+inputs (six total for isolation), a two-minute turn and five-minute conversation budget. The existing
 run-wide provider budget and suite deadline remain independent hard bounds;
 post-stop observation has a separate bounded cleanup allowance. Durations for
 the conversation exclude deferred judging; role calls retain their own timings.

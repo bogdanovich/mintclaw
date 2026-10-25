@@ -37,6 +37,12 @@
       "status": "pending",
       "default": false,
       "reason": "C2 FIFO contract awaits separate fixed one-at-a-time/all qualification; not part of defaults."
+    },
+    {
+      "id": "general.session.isolation",
+      "status": "pending",
+      "default": false,
+      "reason": "C2 distinct-scope contract awaits fixed native qualification; not part of defaults."
     }
   ]
 }

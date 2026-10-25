@@ -70,6 +70,7 @@ type Trial struct {
 	Cancellation         *QuestionCancellationEvidence `json:"question_cancellation,omitempty"`
 	Answer               *QuestionAnswerEvidence       `json:"question_answer,omitempty"`
 	Steering             *SteeringEvidence             `json:"steering,omitempty"`
+	Isolation            *IsolationEvidence            `json:"isolation,omitempty"`
 }
 
 // Private, bounded native observations. They are not model input, authorization,
