@@ -33,7 +33,7 @@ func (p *agentBudgetTestProvider) Chat(
 func (p *agentBudgetTestProvider) GetDefaultModel() string { return "fixture-model" }
 func (p *agentBudgetTestProvider) Close()                  { p.closes.Add(1) }
 func (p *agentBudgetTestProvider) Capabilities() providers.ProviderCapabilities {
-	return providers.ProviderCapabilities{CallerMediatedTools: !p.unsupported}
+	return providers.ProviderCapabilities{CallerMediatedTools: !p.unsupported, OutputTokenLimit: true}
 }
 
 func newAgentCallBudget(t *testing.T, calls int) *providers.CallBudget {
@@ -254,5 +254,24 @@ func TestAgentProviderBudgetAdmissionAndFactoryCleanup(t *testing.T) {
 	); provider != nil ||
 		!errors.Is(err, providers.ErrCallBudget) {
 		t.Fatalf("typed nil factory = %v/%v", provider, err)
+	}
+}
+
+func TestAgentProviderBudgetInvalidOptionDoesNotCaptureContextProvider(t *testing.T) {
+	for _, manager := range []string{"none", "seahorse"} {
+		t.Run(manager, func(t *testing.T) {
+			cfg := agentBudgetConfig(t)
+			cfg.Agents.Defaults.ContextManager = manager
+			delegate := &agentBudgetTestProvider{}
+			messageBus := bus.NewMessageBus()
+			defer messageBus.Close()
+			loop := NewAgentLoop(cfg, messageBus, delegate,
+				WithIsolatedToolBootstrap(), WithIsolatedSkillBootstrap(), WithProviderCallBudget(nil))
+			defer loop.Close()
+			if !errors.Is(loop.runtimeInitErr, providers.ErrCallBudget) || loop.contextManager != nil ||
+				delegate.calls.Load() != 0 {
+				t.Fatal("invalid budget option captured an unbounded context provider")
+			}
+		})
 	}
 }

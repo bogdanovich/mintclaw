@@ -60,6 +60,8 @@ every registry primary/light/candidate provider, and future model-selection
 providers. Registry ownership is unchanged: wrappers do not add cleanup owners
 for already-owned delegates. A newly created unsupported provider is closed by
 the creating factory. Constructor failures do not transfer injected ownership.
+Fatal initialization errors stop construction before a context manager can
+capture an unbounded provider, including an invalid nil budget option.
 
 This opt-in mode is one immutable generation: configured hot reload, reload
 validation and reload preparation are refused. Normal loops without the option
