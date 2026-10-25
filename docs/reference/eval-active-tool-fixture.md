@@ -2,8 +2,8 @@
 
 The internal eval fixture is a prerequisite for C2, not a completed steering
 eval, a public tool or permission to enable arbitrary MCP servers. Ordinary eval
-profile admission still refuses MCP. No live/default case is added by the
-fixture alone.
+profile admission still refuses MCP; the explicit owned `active_tool` profile
+below admits only this fixture. No live/default case is added by these primitives.
 
 It uses the existing MCP Go SDK and native MintClaw MCP client, on an owned
 numeric loopback listener. It exposes exactly one read-only `eval_barrier` tool.
@@ -46,3 +46,51 @@ with no paid model or production profile. They cover active-before-release,
 single-use identity, missing calls, cancellation, the concurrency limit,
 shutdown, HTTP admission and refusal to serialize private host state. These
 controls are not live model qualification.
+
+## Owned Profile Integration
+
+An optional preset `active_tool` object pins a numeric IPv4 loopback address,
+canonical UUIDv4 namespace and `one-at-a-time`/`all` steering mode. It requires
+the matching capability, `bounded_calls`/`target_call_budget`, metadata capture
+and owned `--start-target`. Adaptive model users and PDF/browser combinations
+are refused. Ordinary presets keep their existing log/admission rules.
+
+The native config must select exactly the `corefixture` HTTP server and
+`mcp_corefixture_eval_barrier` tool, with default-deny server/tool policies.
+No headers, stdio commands, environment, lock files, deferred discovery, extra
+servers or wildcard tools are allowed. The mode must match native configuration.
+Info-level logging admits an exact five-kind metadata event filter, never debug,
+raw event payloads or glob filters. Existing global private-surface observation
+and target budgets remain mandatory; this does not grant approval bypasses.
+
+`prepare` generates a new path identity and unused port without launching a
+server. `run` must bind and retain that exact listener before starting its
+fresh child. A port collision, closed host or changed probe refuses further
+admission; no listening service or PID is adopted. Host shutdown follows native
+child stop and remains distinct from a native tool/turn terminal outcome.
+
+## In-Flight Inputs And Evidence
+
+An internal synchronous `afterSend` boundary runs after the actual initial send
+and before waiting for its terminal response. The flow owns each guidance send,
+wire identity and transcript event. It enforces the case's total user-input
+limit, at most two added inputs per boundary and privacy checks before send.
+Failures are sticky even if a domain ignores a sender error. This is transport
+support, not permission to substitute a follow-up after final for steering.
+
+The enqueue observer reads only the launched child's bounded private log file.
+It scans raw JSONL before projection and rejects duplicate keys. Guidance must
+contain its unique registered trial identity. While the fixture remains active
+and unreleased, it waits at most two seconds for exactly one matching native
+filtered-hash event with turn, session and agent identity. Missing/dropped,
+malformed, duplicate, canceled or private evidence stays non-passing. Polling
+waits for an actual event; elapsed time alone is never success.
+
+The existing bounded passive session-history reader is shared with C1 answer
+observation. Its file anchoring, raw privacy inspection, equal metadata reads
+and native JSONL inspection remain unchanged; it never opens a recovering store.
+
+These foundations do not yet define or qualify boundary/order/isolation cases.
+Their final oracle must join native scope/trace, enqueue/injection, ordered
+emitted-batch results and final delivery, with explicit mode controls and
+independent two-session routes. The overall C2 packet remains incomplete.

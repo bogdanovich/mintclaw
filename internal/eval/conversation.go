@@ -30,6 +30,7 @@ type conversation struct {
 	workspace string
 	frames    int
 	bytes     int
+	inputs    int
 	last      Event
 	filter    *strings.Replacer
 	domain    conversationDomain
@@ -49,6 +50,14 @@ type conversationDomain interface {
 // establish its outcome without inventing a missing LLM trace scope.
 type cancellationObserver interface {
 	observeCancellation(context.Context, Event, Event) error
+}
+
+// Called after the initial send, before receiving its terminal response. The
+// native target runs independently; a domain must observe a real active barrier
+// before sending guidance. The flow-owned sender enforces bounds and records
+// each actual send; domains cannot inject synthetic transcript events.
+type inFlightConversationDomain interface {
+	afterSend(context.Context, protocol.MintClawMessage, int, func(string) (Event, error)) error
 }
 
 type conversationRoles struct {
@@ -284,6 +293,9 @@ func (flow *conversation) turn(
 	prompt Event,
 	number int,
 ) (Verdict, string) {
+	if flow.inputs >= limits.MaxUserTurns {
+		return Inconclusive, "user_input_limit"
+	}
 	turnTimeout, _ := time.ParseDuration(limits.TurnTimeout)
 	turnCtx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
@@ -302,6 +314,7 @@ func (flow *conversation) turn(
 	if err := flow.transport.Send(turnCtx, request); err != nil {
 		return Inconclusive, transportCode(err)
 	}
+	flow.inputs++
 	content := payloadString(request.Payload, protocol.PayloadKeyContent)
 	if action.Kind == "protected_answer" {
 		content = "[protected answer supplied using an admitted fact handle]"
@@ -311,6 +324,47 @@ func (flow *conversation) turn(
 		Content: content,
 	}) {
 		return Inconclusive, "event_limit"
+	}
+	if domain, ok := flow.domain.(inFlightConversationDomain); ok {
+		additional := 0
+		var sendErr error
+		refuse := func(err error) (Event, error) {
+			sendErr = err
+			return Event{}, err
+		}
+		send := func(text string) (Event, error) {
+			if sendErr != nil {
+				return Event{}, sendErr
+			}
+			if additional >= 2 || flow.inputs >= limits.MaxUserTurns || len(flow.trial.Events) >= 256 ||
+				!boundedText(text, MaxInputBytes) {
+				return refuse(ErrRunOptions)
+			}
+			guidance := protocol.MintClawMessage{
+				Type: protocol.TypeMessageSend, ID: uuid.NewString(), SessionID: flow.trial.SessionID,
+				Timestamp: time.Now().UnixMilli(), Payload: map[string]any{protocol.PayloadKeyContent: text},
+			}
+			if credentialJSONValue(guidance, flow.filter) || privateJSONValue(guidance, flow.facts) {
+				return refuse(ErrPrivateEvidence)
+			}
+			additional++
+			flow.inputs++
+			if err := flow.transport.Send(turnCtx, guidance); err != nil {
+				return refuse(err)
+			}
+			flow.append(Event{Turn: number, Kind: "input", RequestID: guidance.ID, Content: text})
+			return flow.trial.Events[len(flow.trial.Events)-1], nil
+		}
+		err := domain.afterSend(turnCtx, request, number, send)
+		if sendErr != nil {
+			err = sendErr
+		}
+		if err != nil {
+			if errors.Is(err, ErrPrivateEvidence) {
+				return Fail, "private_in_flight_input"
+			}
+			return Inconclusive, "in_flight_evidence_unavailable"
+		}
 	}
 	for {
 		message, err := flow.transport.Receive(turnCtx)

@@ -9,6 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,7 +21,23 @@ import (
 )
 
 func TestTargetBudgetRunUsesRealCLIAndOneCeilingAcrossRepetitions(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("prepared runtime admission currently supports Linux and macOS")
+	}
+	binary := buildTargetBudgetTestCLI(t)
+	for _, mode := range []string{"conversation", "active_tool"} {
+		t.Run(mode, func(t *testing.T) {
+			testTargetBudgetRunRealCLI(t, binary, mode == "active_tool")
+		})
+	}
+}
+
+func testTargetBudgetRunRealCLI(t *testing.T, binary string, active bool) {
+	t.Helper()
 	fixture, parent := preparationFixture(t)
+	if active {
+		enableTestActiveTool(fixture)
+	}
 	var requests atomic.Int32
 	model := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body map[string]any
@@ -28,6 +47,26 @@ func TestTargetBudgetRunUsesRealCLIAndOneCeilingAcrossRepetitions(t *testing.T) 
 		}
 		if body["max_tokens"] != float64(128) && body["max_completion_tokens"] != float64(128) {
 			t.Error("requested output limit did not reach the real provider request")
+		}
+		if active {
+			var definitions []struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			}
+			raw, err := json.Marshal(body["tools"])
+			if err != nil || json.Unmarshal(raw, &definitions) != nil {
+				t.Error("native tool schema unavailable")
+			}
+			mcpTools := []string{}
+			for _, definition := range definitions {
+				if strings.HasPrefix(definition.Function.Name, "mcp_") {
+					mcpTools = append(mcpTools, definition.Function.Name)
+				}
+			}
+			if !slices.Equal(mcpTools, []string{activeToolNativeName}) {
+				t.Error("native gateway did not discover only the owned MCP fixture", mcpTools)
+			}
 		}
 		requests.Add(1)
 		writer.Header().Set("Content-Type", "application/json")
@@ -46,7 +85,9 @@ func TestTargetBudgetRunUsesRealCLIAndOneCeilingAcrossRepetitions(t *testing.T) 
 	limits := targetBudgetTestLimits()
 	limits.MaxCalls = 6
 	fixture.preset.TargetCallBudget = &limits
-	fixture.preset.Capabilities = append(fixture.preset.Capabilities, boundedCallsCapability)
+	if !slices.Contains(fixture.preset.Capabilities, boundedCallsCapability) {
+		fixture.preset.Capabilities = append(fixture.preset.Capabilities, boundedCallsCapability)
+	}
 	prepared, err := PrepareProfile(t.Context(), fixture.preset, fixture.home, parent)
 	if err != nil {
 		t.Fatal("native isolated profile preparation", err)
@@ -57,19 +98,6 @@ func TestTargetBudgetRunUsesRealCLIAndOneCeilingAcrossRepetitions(t *testing.T) 
 	item.Requires = append(item.Requires, boundedCallsCapability)
 	item.Checks = append(item.Checks, Check{ID: "marker", Kind: "response_contains", Expected: "synthetic-marker"})
 	writeCase(t, corpus, "bounded.json", item)
-	binary := filepath.Join(t.TempDir(), "mintclaw")
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	buildCtx, buildCancel := context.WithTimeout(t.Context(), 3*time.Minute)
-	build := exec.CommandContext(buildCtx, "go", "build", "-tags", "goolm,stdjson", "-o", binary, "./cmd/mintclaw")
-	build.Dir, build.Env = root, append(os.Environ(), "CGO_ENABLED=0")
-	output, err := build.CombinedOutput()
-	buildCancel()
-	if err != nil {
-		t.Fatalf("real CLI build: %v\n%s", err, output)
-	}
 	runCtx, runCancel := context.WithTimeout(t.Context(), time.Minute)
 	defer runCancel()
 	command := exec.CommandContext(runCtx, binary, "eval", "run", "--root", corpus,
@@ -77,13 +105,13 @@ func TestTargetBudgetRunUsesRealCLIAndOneCeilingAcrossRepetitions(t *testing.T) 
 	command.Env = []string{
 		"HOME=" + prepared.Home, config.EnvHome + "=" + prepared.Home,
 		config.EnvConfig + "=" + prepared.ConfigPath, "PATH=" + os.Getenv("PATH"), "LANG=C",
-		"MINTCLAW_LOG_LEVEL=warn", "MINTCLAW_LOG_FORMAT=json",
+		"MINTCLAW_LOG_LEVEL=" + config.EffectiveGatewayLogLevel(fixture.cfg), "MINTCLAW_LOG_FORMAT=json",
 	}
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	command.Cancel = func() error { return command.Process.Signal(os.Interrupt) }
 	command.WaitDelay = 40 * time.Second
-	output, err = command.Output()
+	output, err := command.Output()
 	if err != nil {
 		t.Fatalf("real CLI eval: %v\n%s\n%s", err, output, stderr.Bytes())
 	}
@@ -124,4 +152,22 @@ func TestTargetBudgetRunUsesRealCLIAndOneCeilingAcrossRepetitions(t *testing.T) 
 	if _, err = Compare(result.ReportDirectory, result.ReportDirectory); err != nil {
 		t.Fatal("comparison needed live child state instead of retained native proof", err)
 	}
+}
+
+func buildTargetBudgetTestCLI(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "mintclaw")
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildCtx, buildCancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer buildCancel()
+	build := exec.CommandContext(buildCtx, "go", "build", "-tags", "goolm,stdjson", "-o", binary, "./cmd/mintclaw")
+	build.Dir, build.Env = root, append(os.Environ(), "CGO_ENABLED=0")
+	output, err := build.CombinedOutput()
+	if err != nil {
+		t.Fatalf("real CLI build: %v\n%s", err, output)
+	}
+	return binary
 }
