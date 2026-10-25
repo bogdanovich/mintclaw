@@ -143,6 +143,22 @@ Operator-owned reports are observations, not hostile-filesystem attestations;
 Model-free controls are not live qualification. C1q's separately retained live
 campaign now qualifies these two contracts; ten C2/C3 contracts remain queued.
 
+## C2 Active Tool Prerequisite
+
+The [active tool fixture](../reference/eval-active-tool-fixture.md) uses the real
+MCP SDK/native client to hold a synthetic read until driver release. It has no
+model-facing release authority, file/network target arguments or paid CI work.
+At most two calls are active; entry/release/settlement are independently ordered.
+Missing, canceled and closed calls cannot masquerade as successful release.
+The existing native enqueue summary retains its filtered message hash without
+raw text. Native event logging remains asynchronous and may drop evidence.
+
+This packet does not widen eval profile admission, add scenario definitions or
+claim C2 qualification. The next packet must admit only this owned fixture,
+send bounded in-flight actions and join real active-turn/scope, enqueue/injection,
+complete ordered tool results and delivery evidence. The native scheduler stays
+the sole steering authority. C2 remains incomplete until those contracts exist.
+
 ## C1q Provider Primitive
 
 The opt-in [owned provider call budget](../reference/provider-call-budget.md)
