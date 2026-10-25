@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	nativemcp "github.com/bogdanovich/mintclaw/pkg/mcp"
@@ -15,7 +18,7 @@ import (
 
 func newTestActiveToolFixture(t *testing.T) *activeToolFixture {
 	t.Helper()
-	fixture, err := newActiveToolFixture("127.0.0.1:0", strings.Repeat("a", 64))
+	fixture, err := newActiveToolFixture("127.0.0.1:0", uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +38,6 @@ func TestActiveToolFixtureNativeMCPWaitsForDriver(t *testing.T) {
 	t.Cleanup(func() { _ = manager.Close() })
 	if err := manager.ConnectServer(ctx, "fixture", config.MCPServerConfig{
 		Enabled: true, Type: "http", URL: fixture.url,
-		Headers: map[string]string{"Authorization": "Bearer " + fixture.token},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -167,22 +169,29 @@ func TestActiveToolFixtureShutdownUnblocksOwnedCalls(t *testing.T) {
 
 func TestActiveToolFixtureHTTPAndSerializationBoundary(t *testing.T) {
 	fixture := newTestActiveToolFixture(t)
+	base, err := url.Parse(fixture.url)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
-		path, token, host, origin string
-		status                    int
+		path, host, origin string
+		status             int
 	}{
-		{path: "/mcp", status: http.StatusUnauthorized},
-		{path: "/release", token: fixture.token, status: http.StatusBadRequest},
-		{path: "/mcp?release=1", token: fixture.token, status: http.StatusBadRequest},
-		{path: "/mcp", token: fixture.token, host: "example.invalid", status: http.StatusBadRequest},
-		{path: "/mcp", token: fixture.token, origin: "https://example.invalid", status: http.StatusBadRequest},
+		{path: "/mcp", status: http.StatusBadRequest},
+		{path: "/release", status: http.StatusBadRequest},
+		{path: "?release=1", status: http.StatusBadRequest},
+		{host: "example.invalid", status: http.StatusBadRequest},
+		{origin: "https://example.invalid", status: http.StatusBadRequest},
 	} {
-		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-			strings.TrimSuffix(fixture.url, "/mcp")+test.path, strings.NewReader("{}"))
+		reference, err := url.Parse(test.path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		request.Header.Set("Authorization", "Bearer "+test.token)
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+			base.ResolveReference(reference).String(), strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
 		request.Header.Set("Origin", test.origin)
 		if test.host != "" {
 			request.Host = test.host
@@ -198,12 +207,18 @@ func TestActiveToolFixtureHTTPAndSerializationBoundary(t *testing.T) {
 		}
 	}
 	if _, err := json.Marshal(fixture); err == nil {
-		t.Fatal("private host/token serialized")
+		t.Fatal("mutable host state serialized")
 	}
 	for _, address := range []string{"0.0.0.0:0", "localhost:1234", "127.0.0.1:80", "127.0.0.1:01234"} {
-		if host, err := newActiveToolFixture(address, fixture.token); err == nil {
+		if host, err := newActiveToolFixture(address, uuid.NewString()); err == nil {
 			_ = host.shutdown()
 			t.Fatal("unsafe listener accepted", address)
+		}
+	}
+	for _, namespace := range []string{"", "not-a-uuid", uuid.Nil.String(), uuid.NewString() + "/mcp"} {
+		if host, err := newActiveToolFixture("127.0.0.1:0", namespace); err == nil {
+			_ = host.shutdown()
+			t.Fatal("invalid routing namespace accepted", namespace)
 		}
 	}
 }

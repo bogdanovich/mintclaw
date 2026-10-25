@@ -17,17 +17,19 @@ name files, URLs, shell commands or operations with external effects.
 
 - At most 128 registered slots per host, two slots per trial and two active
   calls across the host. Completed identities cannot be replaced or replayed.
-- A 256-bit bearer token, exact Host/path checks, no Origin, 16 KiB request
-  bodies and bounded HTTP timeouts protect the loopback endpoint. The host and
-  token cannot be JSON-serialized into a report. Token provisioning belongs to
-  the later owned-profile integration, not a public corpus manifest.
+- A unique canonical UUIDv4 path, exact Host/path checks, no Origin, 16 KiB
+  request bodies and bounded HTTP timeouts constrain the loopback endpoint.
+  Mutable host state cannot be JSON-serialized into a report. The path is a
+  routing identity, not a credential or protection from hostile local processes.
+  Only pre-registered trial/slot arguments can enter a barrier.
 - In-memory observations retain trial/session/slot, state and ordered entry,
   release and settlement sequence numbers, never model/tool payloads or tokens.
 - A missing call, cancellation, shutdown or timeout is not successful release.
   Shutdown unblocks owned calls; it does not assert native gateway settlement.
 
 The fixture observes a local MCP handler, **not** native AgentLoop ownership or
-steering injection. A later C2 observer must join this activity with the native
+steering injection, nor does it attest against a hostile local operator. A later
+C2 observer must join this activity with the native
 tool call/history, active turn/scope and correlated enqueue/injection, then
 retain complete emitted-batch results and final delivery. A fluent final alone
 cannot satisfy those requirements. Do not promote a scenario on this primitive's

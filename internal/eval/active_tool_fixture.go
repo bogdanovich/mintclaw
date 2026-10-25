@@ -2,7 +2,6 @@ package eval
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"io"
 	"log"
@@ -12,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -23,7 +23,6 @@ const activeToolName = "eval_barrier"
 // Only the owning driver can release a call; the model has no release tool.
 type activeToolFixture struct {
 	url     string
-	token   string
 	server  *http.Server
 	done    chan struct{}
 	closing chan struct{}
@@ -63,12 +62,14 @@ type activeToolBarrier struct {
 
 func (*activeToolFixture) MarshalJSON() ([]byte, error) { return nil, errActiveToolFixture }
 
-func newActiveToolFixture(address, token string) (*activeToolFixture, error) {
+func newActiveToolFixture(address, namespace string) (*activeToolFixture, error) {
 	host, port, err := net.SplitHostPort(address)
 	number, portErr := strconv.Atoi(port)
+	id, idErr := uuid.Parse(namespace)
 	if err != nil || portErr != nil || strconv.Itoa(number) != port ||
 		host != "127.0.0.1" && host != "::1" || address != net.JoinHostPort(host, port) ||
-		number != 0 && (number < 1024 || number > 65535) || !validDigest(token) {
+		number != 0 && (number < 1024 || number > 65535) || idErr != nil || id.Version() != 4 ||
+		id.Variant() != uuid.RFC4122 || id.String() != namespace {
 		return nil, errActiveToolFixture
 	}
 	listener, err := net.Listen("tcp", address)
@@ -76,7 +77,7 @@ func newActiveToolFixture(address, token string) (*activeToolFixture, error) {
 		return nil, errActiveToolFixture
 	}
 	fixture := &activeToolFixture{
-		url: "http://" + listener.Addr().String() + "/mcp", token: token,
+		url:  "http://" + listener.Addr().String() + "/eval/" + namespace + "/mcp",
 		done: make(chan struct{}), closing: make(chan struct{}),
 		barriers: make(map[activeToolArgs]*activeToolBarrier),
 	}
@@ -92,14 +93,12 @@ func newActiveToolFixture(address, token string) (*activeToolFixture, error) {
 		WriteTimeout: 50 * time.Second, IdleTimeout: 2 * time.Second, MaxHeaderBytes: 8192,
 		ErrorLog: log.New(io.Discard, "", 0),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-			if request.URL.Path != "/mcp" || request.URL.RawPath != "" || request.URL.RawQuery != "" ||
-				request.URL.ForceQuery || request.Host != listener.Addr().String() ||
+			if request.URL.Path != "/eval/"+namespace+"/mcp" || request.URL.RawPath != "" ||
+				request.URL.RawQuery != "" ||
+				request.URL.ForceQuery ||
+				request.Host != listener.Addr().String() ||
 				request.Header.Get("Origin") != "" {
 				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			if subtle.ConstantTimeCompare([]byte(request.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
-				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 			request.Body = http.MaxBytesReader(w, request.Body, 16384)
