@@ -60,7 +60,7 @@ These live contracts deliberately hold one read. Multi-call emitted-batch and
 precise finalization-edge races remain deterministic native agent tests; this
 is not a claim of live coverage for an artificially paused finalization edge,
 anonymous coding steering, multiple senders or physical Telegram rendering.
-Distinct-session isolation is the next C2 scenario, not covered by these cases.
+Distinct-session isolation is a separate C2 scenario, described below.
 
 ## Scope Isolation
 
@@ -77,7 +77,8 @@ materializations retain the original case identity/digest, not alternate public
 case identities. One owned host's monotonic fixture sequence must enclose B's
 read lifecycle inside A's held read. Both native scopes, trace roots, canonical
 histories and deliveries are independently checked, including absence of the
-other scope's markers. History/outbox are refreshed for both after native stop.
+other scope's markers. History/outbox are refreshed for both after native stop;
+the two complete outbox census copies must agree.
 
 One judge sees two scope-labeled visible transcripts, grouped by scope with
 namespaced display event IDs. These labels are presentation, not additional
@@ -86,12 +87,14 @@ the same projection. Returned-final usage includes both scopes; optional routed
 model telemetry still describes the main trial's projected events, not all calls.
 The independent shared native call budget covers both scopes.
 
-Implementation validation is in progress: genuine six-call execution is
-observed, but a post-stop privacy census is currently unavailable. This is not
-a passing native control or live qualification and must not promote the case.
+Implementation validation is in progress. The native-log reader permits normal
+nullable values while preserving duplicate-key/privacy rejection. The closing
+private census scans large storage JSON containers separately from bounded
+model-input strings, without relaxing nested escaped-content limits. This is
+not live qualification and must not promote the case.
 
 Each case permits one judge call, no model-user calls, at most three/four user
-inputs, a two-minute turn and five-minute conversation budget. The existing
+inputs (six total for isolation), a two-minute turn and five-minute conversation budget. The existing
 run-wide provider budget and suite deadline remain independent hard bounds;
 post-stop observation has a separate bounded cleanup allowance. Durations for
 the conversation exclude deferred judging; role calls retain their own timings.

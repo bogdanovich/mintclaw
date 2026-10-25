@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
-	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 )
 
 func buildSteeringTestCLI(t *testing.T, binary, root, commit string) {
@@ -130,10 +129,6 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 								_ = json.Unmarshal([]byte(encoded), &args)
 							}
 						}
-					}
-					if item.Case.Steering.Peer != nil {
-						t.Logf("model target=%d at=%s scope=%s has_tool_result=%v",
-							targets.Load(), time.Now().UTC().Format(time.RFC3339Nano), args.TrialID, toolResult)
 					}
 					if args.TrialID != "" && !toolResult {
 						arguments, _ := json.Marshal(args)
@@ -256,49 +251,12 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 					proofCode = trial.Steering.Code
 				}
 				if trial.Isolation != nil {
-					for _, event := range trial.Events {
-						if event.Kind == "input" {
-							t.Logf("main input id=%s hash=%s", event.RequestID,
-								diagnostictrace.FilteredHash(event.Content, nil))
-						}
-					}
 					peer := trial.Isolation.Peer
 					t.Logf("peer execution=%s/%s session=%s closed=%v",
 						peer.ExecutionVerdict, peer.ExecutionCode, peer.SessionKey, peer.TransportClosed)
 					if peer.Steering != nil {
 						t.Logf("peer proof=%s fixture=%+v guidance=%d",
 							peer.Steering.Code, peer.Steering.Fixture, len(peer.Steering.Guidance))
-					}
-					for _, event := range peer.Events {
-						if event.Kind == "input" {
-							t.Logf("peer input id=%s hash=%s", event.RequestID,
-								diagnostictrace.FilteredHash(event.Content, nil))
-						}
-					}
-					logs, _ := filepath.Glob(filepath.Join(prepared.Home, "eval-gateway-*.jsonl"))
-					for _, name := range logs {
-						rawLog, _ := os.ReadFile(name)
-						for index, line := range bytes.Split(rawLog, []byte{'\n'}) {
-							if len(bytes.TrimSpace(line)) != 0 {
-								_, parseErr := decodeValue(json.NewDecoder(bytes.NewReader(line)), 0)
-								if parseErr != nil {
-									t.Logf("native log line=%d strict_parse=%v bytes=%d", index, parseErr, len(line))
-								}
-							}
-							scan := privateContentScan{filter: fixture.cfg.SensitiveDataReplacer(), tokens: 65536}
-							if scan.jsonLines(line) {
-								t.Logf(
-									"native log line=%d privacy_blocked uncertain=%v bytes=%d",
-									index,
-									scan.uncertain,
-									len(line),
-								)
-							}
-							var event activeToolLogEvent
-							if json.Unmarshal(line, &event) == nil && event.Kind != "" {
-								t.Logf("native event=%+v", event)
-							}
-						}
 					}
 				}
 				t.Fatalf(
@@ -323,6 +281,9 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 				t.Fatal("two-scope target work or returned usage was omitted")
 			}
 			assertSteeringFrozenControls(t, trial, item.Case, report.RunReport, prepared.Workspace)
+			if item.Case.Steering.Peer != nil {
+				assertIsolationFrozenControls(t, trial, item.Case, report.RunReport, prepared.Workspace)
+			}
 			for _, path := range []string{"sessions", "state/outbox", "state/diagnostics/traces"} {
 				if err := os.RemoveAll(filepath.Join(prepared.Workspace, path)); err != nil {
 					t.Fatal("remove owned synthetic live evidence", err)
@@ -341,7 +302,11 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 				targets.Load() != targetsBeforeGrade || judges.Load() != 2 {
 				t.Fatalf("offline native regrade: %v\n%s", err, gradeOutput)
 			}
-			trial.Steering = nil
+			if item.Case.Steering.Peer != nil {
+				trial.Isolation.Peer.Steering = nil
+			} else {
+				trial.Steering = nil
+			}
 			invalid, err := json.Marshal(trial)
 			if err != nil ||
 				os.WriteFile(filepath.Join(report.ReportDirectory, report.Trials[0].File), invalid, 0o600) != nil {

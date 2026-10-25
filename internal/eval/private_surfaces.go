@@ -232,6 +232,8 @@ func observePrivateSurfaces(
 				var matched bool
 				if privateJSONLinesFile(fileName) {
 					matched = scan.jsonLines(data)
+				} else if path.Ext(fileName) == ".json" {
+					matched = scan.jsonDocument(data)
 				} else {
 					matched = scan.text(string(data), 0)
 				}

@@ -1,6 +1,10 @@
 package eval
 
-import "github.com/bogdanovich/mintclaw/pkg/health"
+import (
+	"slices"
+
+	"github.com/bogdanovich/mintclaw/pkg/health"
+)
 
 func validSteeringEvidence(
 	trial Trial, item Case, workspace string, profile ActiveToolProfile, runtime health.RuntimeProbe,
@@ -29,6 +33,10 @@ func validSteeringEvidence(
 	// Both fixture calls use one owned host's monotonic sequence. B's admitted
 	// read and actual steering are enclosed by A's still-active read.
 	if a.EnteredSequence >= b.EnteredSequence || b.SettledSequence >= a.ReleaseSequence {
+		return false
+	}
+	if !slices.Equal(trial.Steering.Outbox, peer.Steering.Outbox) ||
+		!slices.Equal(trial.Steering.OutboxNames, peer.Steering.OutboxNames) {
 		return false
 	}
 	return !scopeContainsMarkers(trial, item.Steering.Peer.InitialMarker, item.Steering.Peer.Update) &&
