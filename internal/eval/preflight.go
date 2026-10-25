@@ -122,7 +122,8 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		cfg.WorkspacePath() != workspace || preset.ExpectedWorkspace != workspace ||
 		cfg.Gateway.HotReload || cfg.Gateway.Deploy.Enabled || cfg.Gateway.SafeRestart.Enabled ||
 		cfg.Gateway.CodingRemote.Enabled || cfg.Coding.Remote.Enabled || cfg.Nodes.Enabled ||
-		cfg.Nodes.TerminalEnabled || cfg.Heartbeat.Enabled || cfg.Devices.Enabled || cfg.Hooks.Enabled ||
+		cfg.Nodes.TerminalEnabled || cfg.Heartbeat.Enabled || cfg.Devices.Enabled ||
+		cfg.Hooks.Enabled != hasApprovalTool(preset) ||
 		cfg.Tools.Cron.Enabled || cfg.Tools.Exec.Enabled || cfg.Tools.MCP.Enabled != (preset.ActiveTool != nil) ||
 		cfg.Tools.Browser.Enabled != browserEnabled || cfg.Tools.Document.Enabled != pdfEnabled ||
 		!admittedModelMetadataPolicy(cfg.Diagnostics.TraceCapture, preset) ||
@@ -133,7 +134,7 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		cfg.Agents.Defaults.Routing != nil && cfg.Agents.Defaults.Routing.Enabled ||
 		cfg.Agents.Dispatch != nil && len(cfg.Agents.Dispatch.Rules) != 0 ||
 		len(cfg.Agents.Defaults.ContextManagerConfig) != 0 || validateActiveToolPolicy(cfg, preset) != nil ||
-		validateReadToolPolicy(cfg, preset) != nil {
+		validateReadToolPolicy(cfg, preset) != nil || validateApprovalToolPolicy(cfg, preset, workspace) != nil {
 		return ErrUnsafeTarget
 	}
 	channels, nativeChannels := 0, 0
@@ -182,14 +183,14 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 			(tool != tools.BM25SearchToolName || !pdfEnabled) &&
 			(!browserEnabled || !slices.Contains(browserEvalTools, tool)) &&
 			(preset.ActiveTool == nil || tool != activeToolNativeName) &&
-			(!hasReadTool(preset) || tool != "read_file") {
+			(!hasReadTool(preset) || tool != "read_file") && (!hasApprovalTool(preset) || tool != "write_file") {
 			return ErrUnsafeTarget
 		}
 	}
 	for _, capability := range preset.Capabilities {
 		if capability != "conversation" && capability != "interactions" && capability != "pdf" &&
 			capability != "browser" && capability != boundedCallsCapability && capability != activeToolCapability &&
-			capability != readToolCapability ||
+			capability != readToolCapability && capability != approvalToolCapability ||
 			capability == "interactions" && (!cfg.Tools.RequestUserInput.Enabled ||
 				!slices.Contains(agent.ToolPolicy.Allow, "request_user_input") || len(agent.ToolPolicy.Deny) != 0) {
 			return ErrUnsafeTarget

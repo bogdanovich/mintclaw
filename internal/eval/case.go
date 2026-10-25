@@ -28,23 +28,24 @@ var (
 )
 
 type Case struct {
-	Version      int               `json:"version"`
-	ID           string            `json:"id"`
-	Suite        string            `json:"suite"`
-	Tags         []string          `json:"tags"`
-	Description  string            `json:"description"`
-	Task         string            `json:"task"`
-	Requires     []string          `json:"requires"`
-	Fixtures     []Fixture         `json:"fixtures"`
-	Driver       Driver            `json:"driver"`
-	Limits       Limits            `json:"limits"`
-	Checks       []Check           `json:"checks"`
-	Rubric       []Criterion       `json:"rubric"`
-	PDF          *PDFCase          `json:"pdf,omitempty"`
-	Browser      *BrowserCase      `json:"browser,omitempty"`
-	Steering     *SteeringCase     `json:"steering,omitempty"`
-	ReadRecovery *ReadRecoveryCase `json:"read_recovery,omitempty"`
-	NativeStop   *NativeStopCase   `json:"native_stop,omitempty"`
+	Version        int                 `json:"version"`
+	ID             string              `json:"id"`
+	Suite          string              `json:"suite"`
+	Tags           []string            `json:"tags"`
+	Description    string              `json:"description"`
+	Task           string              `json:"task"`
+	Requires       []string            `json:"requires"`
+	Fixtures       []Fixture           `json:"fixtures"`
+	Driver         Driver              `json:"driver"`
+	Limits         Limits              `json:"limits"`
+	Checks         []Check             `json:"checks"`
+	Rubric         []Criterion         `json:"rubric"`
+	PDF            *PDFCase            `json:"pdf,omitempty"`
+	Browser        *BrowserCase        `json:"browser,omitempty"`
+	Steering       *SteeringCase       `json:"steering,omitempty"`
+	ReadRecovery   *ReadRecoveryCase   `json:"read_recovery,omitempty"`
+	NativeStop     *NativeStopCase     `json:"native_stop,omitempty"`
+	ApprovalDenied *ApprovalDeniedCase `json:"approval_denied,omitempty"`
 }
 
 type Fixture struct {
@@ -144,6 +145,9 @@ func (c Case) Validate() error {
 		return ErrInvalidCase
 	}
 	for _, step := range c.Driver.Steps {
+		if step.Action.Kind == "deny" && (c.ApprovalDenied == nil || step.WaitFor.Kind != "approval") {
+			return ErrInvalidCase
+		}
 		if step.WaitFor.Kind == "stopped" && c.NativeStop == nil {
 			return ErrInvalidCase
 		}
@@ -201,6 +205,10 @@ func (c Case) Validate() error {
 			if c.NativeStop == nil || check.Expected != "" {
 				return ErrInvalidCase
 			}
+		case "approval_denied":
+			if c.ApprovalDenied == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
 		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write", "pdf_source_fields":
 			if c.PDF == nil || check.Expected != "" {
 				return ErrInvalidCase
@@ -244,6 +252,10 @@ func (c Case) Validate() error {
 		return ErrInvalidCase
 	}
 	if c.NativeStop != nil && c.NativeStop.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if slices.Contains(c.Requires, approvalToolCapability) != (c.ApprovalDenied != nil) ||
+		c.ApprovalDenied != nil && c.ApprovalDenied.validate(c) != nil {
 		return ErrInvalidCase
 	}
 	return nil
@@ -297,7 +309,7 @@ func (action Action) validate(facts map[string]string) error {
 		if !validID(action.Fact) || facts[action.Fact] == "" || action.Text != "" {
 			return ErrInvalidCase
 		}
-	case "clarify", "back", "skip", "not_applicable", "cancel", "stop", "confirm", "allow_once":
+	case "clarify", "back", "skip", "not_applicable", "cancel", "stop", "confirm", "allow_once", "deny":
 		if action.Text != "" || action.Fact != "" {
 			return ErrInvalidCase
 		}

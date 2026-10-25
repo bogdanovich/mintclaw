@@ -73,16 +73,17 @@ type ReadFixtureSnapshot struct {
 	Entries []string `json:"entries,omitempty"`
 }
 
-func observeReadFixture(ctx context.Context, root *os.Root) ReadFixtureSnapshot {
+func observeSingleFixture(ctx context.Context, root *os.Root, path string) ReadFixtureSnapshot {
 	unavailable := ReadFixtureSnapshot{Code: "unavailable"}
+	directoryPath, fileName := filepath.Dir(path), filepath.Base(path)
 	if ctx.Err() != nil {
 		return unavailable
 	}
-	before, err := root.Lstat(readFixtureDirectory)
+	before, err := root.Lstat(directoryPath)
 	if err != nil || !before.IsDir() || before.Mode().Perm() != 0o700 {
 		return unavailable
 	}
-	directory, err := root.Open(readFixtureDirectory)
+	directory, err := root.Open(directoryPath)
 	if err != nil {
 		return unavailable
 	}
@@ -90,28 +91,32 @@ func observeReadFixture(ctx context.Context, root *os.Root) ReadFixtureSnapshot 
 	entries, readErr := directory.ReadDir(2)
 	closeErr := directory.Close()
 	if statErr != nil || !sameCensusFile(before, opened) || closeErr != nil ||
-		readErr != nil && !errors.Is(readErr, io.EOF) || len(entries) != 1 || entries[0].Name() != "recovery.txt" {
+		readErr != nil && !errors.Is(readErr, io.EOF) || len(entries) != 1 || entries[0].Name() != fileName {
 		return unavailable
 	}
-	fileBefore, err := root.Lstat(readFixturePath)
+	fileBefore, err := root.Lstat(path)
 	if err != nil || !fileBefore.Mode().IsRegular() || fileBefore.Mode().Perm() != 0o600 {
 		return unavailable
 	}
-	data, err := readBoundedFile(root, readFixturePath, MaxManifestBytes)
-	fileAfter, fileErr := root.Lstat(readFixturePath)
-	after, dirErr := root.Lstat(readFixtureDirectory)
+	data, err := readBoundedFile(root, path, MaxManifestBytes)
+	fileAfter, fileErr := root.Lstat(path)
+	after, dirErr := root.Lstat(directoryPath)
 	if ctx.Err() != nil || err != nil || fileErr != nil || dirErr != nil || len(data) == 0 ||
 		!sameCensusFile(fileBefore, fileAfter) || !sameCensusFile(before, after) {
 		return unavailable
 	}
-	return ReadFixtureSnapshot{Code: "observed", SHA256: digest(data), Entries: []string{"recovery.txt"}}
+	return ReadFixtureSnapshot{Code: "observed", SHA256: digest(data), Entries: []string{fileName}}
 }
 
 func observeWorkspaceReadFixture(ctx context.Context, workspace string) ReadFixtureSnapshot {
+	return observeWorkspaceFixture(ctx, workspace, readFixturePath)
+}
+
+func observeWorkspaceFixture(ctx context.Context, workspace, path string) ReadFixtureSnapshot {
 	root, err := os.OpenRoot(filepath.Clean(workspace))
 	if err != nil {
 		return ReadFixtureSnapshot{Code: "unavailable"}
 	}
 	defer func() { _ = root.Close() }()
-	return observeReadFixture(ctx, root)
+	return observeSingleFixture(ctx, root, path)
 }
