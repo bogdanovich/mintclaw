@@ -113,3 +113,15 @@ confidently unrelated conversation as normal chat history while keeping form
 facts, mixed/uncertain inputs and unresolved attachments protected. Do not add a
 new transcript store, silently change retention, or claim general conversational
 continuity from a single arithmetic example.
+
+## Deployed foundation and remaining decision — 2026-10-25
+
+PR [#1883](https://github.com/bogdanovich/mintclaw/pull/1883) passed exact-head
+CI/review/rocket and was normally merged, then deployed at `541e3a56…`.
+The [dated partial qualification](pdf-intake-background-draft-foundation-qualification.md)
+records successful native exclusion, ordinary ping, preserved pending authority
+and same-draft return, plus a deliberately nontrivial historical-reference
+failure. Earlier side-message text is still absent from ordinary history;
+retention has not been changed without the user's decision. The goal stays
+incomplete. No further phrase tuning or full PDFI4 admission follows from the
+passing native checks.
