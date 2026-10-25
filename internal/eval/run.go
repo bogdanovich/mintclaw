@@ -66,7 +66,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		}
 		if validateReadRecoveryBinding(preset, item.Case) != nil ||
 			validateNativeStopBinding(preset, item.Case) != nil ||
-			validateApprovalDeniedBinding(preset, item.Case) != nil {
+			validateApprovalDeniedBinding(preset, item.Case) != nil ||
+			validateFinalDeliveryBinding(preset, item.Case) != nil {
 			return RunReport{}, ErrUnsafeTarget
 		}
 		if item.Case.Steering != nil && (preset.ActiveTool == nil || !options.StartTarget ||
@@ -544,6 +545,16 @@ func runAdmittedTrial(
 		}
 		return runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, steering)
+	}
+	if item.Case.FinalDelivery != nil {
+		if !finalDeliveryStreamingMatches(target, item.Case) {
+			client.Close()
+			trial.Verdict, trial.Code = Inconclusive, "final_delivery_profile_mismatch"
+			return trial
+		}
+		delivery := &finalDeliveryConversation{item: item.Case, target: target, sessionID: sessionID}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, delivery)
 	}
 	if item.Case.NativeStop != nil {
 		stop, prepareErr := newNativeStopConversation(item.Case, target, sessionID)

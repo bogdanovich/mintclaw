@@ -89,7 +89,7 @@ func (preset Preset) Validate() error {
 		return ErrInvalidPreset
 	}
 	if len(preset.WorkspaceFiles) > 64 || validateReadToolPreset(preset) != nil ||
-		validateApprovalToolPreset(preset) != nil {
+		validateApprovalToolPreset(preset) != nil || validateFinalDeliveryPreset(preset) != nil {
 		return ErrInvalidPreset
 	}
 	paths := make(map[string]bool, len(preset.WorkspaceFiles))

@@ -30,7 +30,8 @@ browser/owned-target execution and baseline comparison have their own evidence c
 live scenario qualification.
 General cases require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
-The corpus has 22 cases: six active/default General, pending isolation, tool recovery, native stop and approval denial,
+The corpus has 23 cases: six active/default General, pending isolation, tool recovery,
+native stop, approval denial and final delivery,
 six pending PDF and six pending browser. The fixed
 [C2 campaign](../docs/operations/manual-agent-evals-core-c2-20261025.md) qualified
 boundary and both order modes with 3/3 batches; it also retains one failed order

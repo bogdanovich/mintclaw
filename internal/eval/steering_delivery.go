@@ -12,6 +12,12 @@ func validSteeringDeliveries(proof *SteeringEvidence, trial Trial, workspace str
 }
 
 func validCoreFinalDeliveries(rows []SteeringOutboxEvidence, names []string, trial Trial, workspace string) bool {
+	return validCoreDeliveryCensus(rows, names, trial, workspace, 2)
+}
+
+func validCoreDeliveryCensus(
+	rows []SteeringOutboxEvidence, names []string, trial Trial, workspace string, expected int,
+) bool {
 	if len(rows) == 0 || len(rows) > 128 || len(names) != len(rows) || !slices.IsSorted(names) {
 		return false
 	}
@@ -24,7 +30,7 @@ func validCoreFinalDeliveries(rows []SteeringOutboxEvidence, names []string, tri
 			finals[event.RequestID] = event
 		}
 	}
-	if len(finals) != 2 {
+	if len(finals) != expected || expected < 1 || expected > 2 {
 		return false
 	}
 	total, seen := 0, map[string]bool{}

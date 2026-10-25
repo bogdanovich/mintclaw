@@ -142,6 +142,10 @@ func Grade(
 			approvalDeniedEvidenceCode(trial, item.Case, workspace) != "") {
 			return RunReport{}, ErrGrade
 		}
+		if item.Case.FinalDelivery != nil && (!readRecoveryOwnedReady(original) ||
+			finalDeliveryEvidenceCode(trial, item.Case, workspace) != "") {
+			return RunReport{}, ErrGrade
+		}
 		if item.Case.PDF != nil && item.Case.PDF.Output == "required" ||
 			item.Case.Browser != nil && item.Case.Browser.Scenario == "artifact" {
 			var raw []byte
@@ -342,6 +346,7 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 		(item.Case.ReadRecovery != nil) != (trial.ReadRecovery != nil) ||
 		(item.Case.NativeStop != nil) != (trial.NativeStop != nil) ||
 		(item.Case.ApprovalDenied != nil) != (trial.ApprovalDenied != nil) ||
+		(item.Case.FinalDelivery != nil) != (trial.FinalDelivery != nil) ||
 		trial.Repetition != summary.Repetition ||
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||

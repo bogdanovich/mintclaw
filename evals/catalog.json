@@ -23,6 +23,12 @@
       "reason": "C3c exact native denial/no-effect contract awaits implementation validation and fixed qualification."
     },
     {
+      "id": "general.delivery.final-once",
+      "status": "pending",
+      "default": false,
+      "reason": "C3d requires native streaming plus durable final delivery. The gateway intentionally disables configured streaming inside durable outbound transactions; no streaming qualification is claimed."
+    },
+    {
       "id": "general.control.stop",
       "status": "pending",
       "default": false,

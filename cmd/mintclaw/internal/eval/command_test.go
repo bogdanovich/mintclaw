@@ -141,7 +141,7 @@ func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
 				t.Fatal("catalog status unavailable")
 			}
 		}
-		if active != 6 || pending != 16 || result.RuntimeRun {
+		if active != 6 || pending != 17 || result.RuntimeRun {
 			t.Fatal("offline inspection hid deferred coverage or claimed execution")
 		}
 	}
