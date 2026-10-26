@@ -10,6 +10,11 @@ func gradeFinalDeliveryChecks(item Case, trial Trial, report RunReport, workspac
 			checks[index].Code = "native_final_delivery_unavailable"
 			continue
 		}
+		if trial.FinalDelivery.Wire == nil || !trial.FinalDelivery.Wire.Complete ||
+			trial.FinalDelivery.Wire.Code != "observed" {
+			checks[index].Code = "native_final_delivery_wire_unavailable"
+			continue
+		}
 		code := finalDeliveryEvidenceCode(trial, item, workspace)
 		checks[index] = booleanCheck(check.ID, code == "", []string{"final-delivery"})
 		if code != "" {

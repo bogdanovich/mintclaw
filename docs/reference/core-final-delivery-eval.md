@@ -15,6 +15,16 @@ MintClaw channel streaming settings must match the case's explicit `streaming`
 flag. Existing general profiles and historical case digests are unchanged.
 
 The wire observer retains the actual `message.create`/`message.update` type.
+It runs in the SDK reader before the conversation loop filters by its current
+request. Both actually sent request IDs remain observed until connection close
+joins that reader. A repeated first final, or an update after that final, cannot
+disappear merely because the loop is already waiting for the second response.
+The frozen wire census is bounded to two owned requests, 256 create/update
+frames (including auxiliary frames) and 2 MiB of decoded-message JSON. Missing,
+incomplete, foreign-session or oversized capture is non-passing before judging.
+Frozen grading binds the census back to the actual inputs and transcript finals;
+the canonical history and native outbox cannot substitute for wire evidence.
+
 Each request must have exactly one final, one physical message ID and one
 complete native turn scope. Revisions must update that message, not create
 another one. The second request must have distinct request/message/turn IDs
@@ -71,12 +81,16 @@ The harness also supports an explicitly defined `streaming: false` case. The
 model-free real-CLI control uses that variant to exercise native delivery,
 settlement, history, cleanup and frozen offline grading across three distinct
 sessions in one owned gateway. On Linux this combined native control passed in
-6.94 seconds, including sixteen frozen negative and five global-unknown checks.
+6.94 seconds, including the initial sixteen frozen negative and five
+global-unknown checks. Additional wire regressions cover missing/incomplete
+capture, late first-request finals, request binding, projection and byte limits.
 Its eight target calls and six judge calls are local synthetic HTTP responses,
 not paid model qualification. A separate native
 control with `streaming: true` verifies refusal before judging. Synthetic
 revision-parser controls test create/update semantics but are not evidence
-that the gateway streamed.
+that the gateway streamed. A separate transport control queues a duplicate
+first-request final (or late update) ahead of the second final: the filtered
+transcript alone still passes, but the complete wire census rejects it.
 
 Coverage is one owned MintClaw client connection and its retained native
 delivery census, not Telegram/Slack transport, reconnection replay, arbitrary

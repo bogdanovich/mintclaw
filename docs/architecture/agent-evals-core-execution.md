@@ -72,6 +72,10 @@ C3d's [delivery contract](../reference/core-final-delivery-eval.md) retains a
 real stream requirement instead of accepting ordinary finals. Its explicit
 nonstreaming native control is not a streaming qualification. No runtime
 delivery guard or durable spool is bypassed to manufacture a green result.
+The bounded wire census observes both sent request IDs before follow-up
+filtering and through reader shutdown. A late duplicate first final or update
+is rejected even when unchanged canonical history/outbox and the filtered
+transcript would pass; frozen grading requires that complete capture.
 
 Optional catalog `cases` narrows individual suite members without changing case
 JSON/digests. Overrides name unique existing cases, validate like suite policies,

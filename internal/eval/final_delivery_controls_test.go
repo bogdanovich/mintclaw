@@ -35,11 +35,11 @@ func assertFinalDeliveryFrozenControls(t *testing.T, original Trial, item Case, 
 		chunk.ID, chunk.Kind, chunk.Usage, chunk.Content = "synthetic-stream-event", "stream", nil, "Synthetic"
 		trial.Events[first].WireType = protocol.TypeMessageUpdate
 		trial.Events = slices.Insert(trial.Events, first, chunk)
-		if code := finalDeliveryEvidenceCode(trial, streamed, workspace); code != "" {
+		if _, code := finalDeliveryRevisions(trial, streamed, workspace); code != "" {
 			t.Fatal("same-message revision rejected", code)
 		}
 		trial.Events[first+1].MessageID = "second-physical-message"
-		if finalDeliveryEvidenceCode(trial, streamed, workspace) == "" {
+		if _, code := finalDeliveryRevisions(trial, streamed, workspace); code == "" {
 			t.Fatal("stream replaced by second final message passed")
 		}
 	})
@@ -47,6 +47,7 @@ func assertFinalDeliveryFrozenControls(t *testing.T, original Trial, item Case, 
 		"missing", "settlement", "census", "extra_intent", "history_digest", "history_missing",
 		"foreign_session", "duplicate_final", "missing_create", "lost_wire_type", "wrong_content",
 		"wrong_platform", "wrong_trace", "pending_delivery", "retired_payload", "multiple_attempts",
+		"missing_wire", "incomplete_wire", "late_first_final", "wire_binding", "wire_projection", "wire_limit",
 	} {
 		t.Run(kind, func(t *testing.T) {
 			trial := clone()
@@ -54,6 +55,20 @@ func assertFinalDeliveryFrozenControls(t *testing.T, original Trial, item Case, 
 			switch kind {
 			case "missing":
 				trial.FinalDelivery = nil
+			case "missing_wire":
+				proof.Wire = nil
+			case "incomplete_wire":
+				proof.Wire.Complete = false
+			case "late_first_final":
+				duplicate := proof.Wire.Frames[0]
+				duplicate.Event.ID = "wire-late-duplicate"
+				proof.Wire.Frames = append(proof.Wire.Frames, duplicate)
+			case "wire_binding":
+				proof.Wire.Requests[0] = "different-request"
+			case "wire_projection":
+				proof.Wire.Frames[0].Event.Content = "Unobserved final content."
+			case "wire_limit":
+				proof.Wire.Bytes = 2*1024*1024 + 1
 			case "settlement":
 				proof.Settled = proof.Settled[:1]
 			case "census":

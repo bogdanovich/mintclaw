@@ -65,6 +65,9 @@ func finalDeliveryEvidenceCode(trial Trial, item Case, workspace string) string 
 		!validFinalDeliveryCensus(proof.Outbox, proof.OutboxNames, trial, workspace, 2) {
 		return "final_delivery_proof_invalid"
 	}
+	if code := finalDeliveryWireCode(trial, item, workspace); code != "" {
+		return code
+	}
 	finals, code := finalDeliveryRevisions(trial, item, workspace)
 	if code != "" {
 		return code

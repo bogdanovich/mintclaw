@@ -455,6 +455,18 @@ func runAdmittedTrial(
 		return inspectNativeJSON(data, retainedFacts.values, roles.filter)
 	}}
 	var browser *browserConversation
+	var delivery *finalDeliveryConversation
+	if item.Case.FinalDelivery != nil {
+		if !finalDeliveryStreamingMatches(target, item.Case) {
+			trial.Verdict, trial.Code = Inconclusive, "final_delivery_profile_mismatch"
+			return trial
+		}
+		delivery = &finalDeliveryConversation{
+			item: item.Case, target: target, sessionID: sessionID,
+			wire: &finalDeliveryWire{sessionID: sessionID},
+		}
+		options.ObserveMessage = delivery.wire.observe
+	}
 	if item.Case.Browser != nil {
 		name, _ := browserEvalProfile(target.config)
 		if pendingBrowser.host == nil || name != item.Case.Browser.Profile ||
@@ -547,14 +559,10 @@ func runAdmittedTrial(
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, steering)
 	}
 	if item.Case.FinalDelivery != nil {
-		if !finalDeliveryStreamingMatches(target, item.Case) {
-			client.Close()
-			trial.Verdict, trial.Code = Inconclusive, "final_delivery_profile_mismatch"
-			return trial
-		}
-		delivery := &finalDeliveryConversation{item: item.Case, target: target, sessionID: sessionID}
-		return runDomainConversation(caseCtx, client, item, sessionID,
+		trial = runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, delivery)
+		delivery.freezeWire(&trial, client.Failure() == nil)
+		return trial
 	}
 	if item.Case.NativeStop != nil {
 		stop, prepareErr := newNativeStopConversation(item.Case, target, sessionID)

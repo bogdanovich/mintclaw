@@ -6,19 +6,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 )
 
 type FinalDeliveryEvidence struct {
-	Version        int                      `json:"version"`
-	Code           string                   `json:"code"`
-	Settled        []SteeringOutboxEvidence `json:"settled"`
-	Metadata       string                   `json:"metadata"`
-	MetadataSHA256 string                   `json:"metadata_sha256"`
-	History        []string                 `json:"history"`
-	HistorySHA256  string                   `json:"history_sha256"`
-	Outbox         []SteeringOutboxEvidence `json:"outbox"`
-	OutboxNames    []string                 `json:"outbox_names"`
+	Version        int                        `json:"version"`
+	Code           string                     `json:"code"`
+	Settled        []SteeringOutboxEvidence   `json:"settled"`
+	Metadata       string                     `json:"metadata"`
+	MetadataSHA256 string                     `json:"metadata_sha256"`
+	History        []string                   `json:"history"`
+	HistorySHA256  string                     `json:"history_sha256"`
+	Outbox         []SteeringOutboxEvidence   `json:"outbox"`
+	OutboxNames    []string                   `json:"outbox_names"`
+	Wire           *FinalDeliveryWireEvidence `json:"wire,omitempty"`
 }
 
 type finalDeliveryConversation struct {
@@ -27,12 +30,30 @@ type finalDeliveryConversation struct {
 	sessionID string
 	finals    []Event
 	settled   []SteeringOutboxEvidence
+	wire      *finalDeliveryWire
 }
 
 func (domain *finalDeliveryConversation) initialTask() string { return domain.item.Task }
 
-func (*finalDeliveryConversation) request(context.Context, Action, Event) (protocol.MintClawMessage, bool, error) {
-	return protocol.MintClawMessage{}, false, nil
+func (domain *finalDeliveryConversation) request(
+	_ context.Context,
+	action Action,
+	_ Event,
+) (protocol.MintClawMessage, bool, error) {
+	if domain.wire == nil || action.Kind != "message" {
+		return protocol.MintClawMessage{}, true, errNativeEvidence
+	}
+	request := protocol.MintClawMessage{
+		Type: protocol.TypeMessageSend, ID: uuid.NewString(), SessionID: domain.sessionID,
+		Timestamp: time.Now().UnixMilli(), Payload: map[string]any{protocol.PayloadKeyContent: action.Text},
+	}
+	return request, true, domain.wire.register(request)
+}
+
+func (domain *finalDeliveryConversation) freezeWire(trial *Trial, complete bool) {
+	if trial.FinalDelivery != nil && domain.wire != nil {
+		trial.FinalDelivery.Wire = domain.wire.snapshot(complete && trial.TransportClosed)
+	}
 }
 
 func (domain *finalDeliveryConversation) observe(ctx context.Context, event Event) error {
