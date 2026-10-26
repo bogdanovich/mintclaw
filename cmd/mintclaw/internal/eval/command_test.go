@@ -25,10 +25,11 @@ func TestOfflineCommands(t *testing.T) {
 		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 			t.Fatal(err)
 		}
-		if result.RuntimeRun || result.Outcome != "valid" || len(result.Cases) != 6 ||
+		if result.RuntimeRun || result.Outcome != "valid" || len(result.Cases) != 7 ||
 			result.Cases[0].ID != "browser.fixture.followup" || result.Cases[1].ID != "general.context.correction" ||
 			result.Cases[2].ID != "general.context.followup" || result.Cases[3].ID != "general.control.stop" ||
-			result.Cases[4].ID != "general.interaction.answer" || result.Cases[5].ID != "general.tools.recovery" ||
+			result.Cases[4].ID != "general.delivery.final-once" || result.Cases[5].ID != "general.interaction.answer" ||
+			result.Cases[6].ID != "general.tools.recovery" ||
 			strings.Contains(output.String(), "MC_EVAL_CONTEXT") ||
 			strings.Contains(output.String(), "use request_user_input to ask exactly") {
 			t.Fatal("offline command leaked task contents or claimed a runtime run")
@@ -132,7 +133,8 @@ func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
 			case "pending":
 				pending++
 				core := item.ID == "general.session.isolation" || item.ID == "general.tools.recovery" ||
-					item.ID == "general.control.stop" || item.ID == "general.approval.denied"
+					item.ID == "general.control.stop" || item.ID == "general.approval.denied" ||
+					item.ID == "general.delivery.final-once"
 				if item.Default || item.PendingReason == "" ||
 					item.Suite == "general" && !core {
 					t.Fatal("pending metadata incorrect")
