@@ -2,7 +2,9 @@
 
 `general.tools.recovery` is a pending, explicit General scenario. It performs
 one real failed `read_file`, one corrected successful read, then same-session
-recall. It is not qualified by this implementation or by a fluent error message.
+recall. The [fixed campaign](../operations/manual-agent-evals-core-c3a-20261025.md)
+passed qualification, then retained one pass/two judge provider errors in its
+batch. All native executions/hard checks passed, but it is not qualified.
 
 ## Profile
 
@@ -85,7 +87,7 @@ not hostile-filesystem attestation or proof of unrelated workspace state.
 
 Model-free controls exercise real native read failure/success, invalid profile
 admission, wrong/replayed results, changed fixture observations, removed proof,
-and offline regrading. They are not live qualification. After reviewed merge,
-retain one qualification attempt plus one immutable fixed three-trial batch;
-promote only independently hard-checked/judged 3/3. Preserve failed/unavailable
+and offline regrading. They are not live qualification. The reviewed implementation
+and fixed campaign are recorded above; recovery remains pending/non-default.
+Promotion requires independently hard-checked/judged 3/3. Preserve failed/unavailable
 outcomes; never rerun this campaign until green or resume deferred PDF/browser work.
