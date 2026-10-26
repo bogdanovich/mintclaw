@@ -12,7 +12,8 @@ func projectNativeModelTrace(
 	trace diagnostictrace.Trace, binding nativeModelBinding, sha string, filter func(string) string,
 ) NativeModelTurn {
 	result := NativeModelTurn{
-		TrialID: binding.TrialID, TraceScope: binding.TraceScope,
+		Generation: binding.Generation,
+		TrialID:    binding.TrialID, TraceScope: binding.TraceScope,
 		BindingSHA256: binding.hash(), Code: "invalid_trace",
 	}
 	session := diagnostictrace.FilteredHash(binding.SessionKey, filter)

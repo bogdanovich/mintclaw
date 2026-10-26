@@ -23,6 +23,12 @@
       "reason": "C3g native selection/revision and no-selection controls are implemented; separate bounded live qualification and immutable fixed batch have not run."
     },
     {
+      "id": "general.history.restart",
+      "status": "pending",
+      "default": false,
+      "reason": "C3e owned restart and retained generation evidence await bounded live qualification."
+    },
+    {
       "id": "general.approval.denied",
       "status": "pending",
       "default": false,

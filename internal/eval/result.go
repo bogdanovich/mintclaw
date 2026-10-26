@@ -17,6 +17,7 @@ const (
 )
 
 type Event struct {
+	Generation         int                 `json:"generation,omitempty"`
 	ID                 string              `json:"id"`
 	Turn               int                 `json:"turn"`
 	Kind               string              `json:"kind"`
@@ -77,6 +78,7 @@ type Trial struct {
 	ApprovalDenied       *ApprovalDeniedEvidence       `json:"approval_denied,omitempty"`
 	FinalDelivery        *FinalDeliveryEvidence        `json:"final_delivery,omitempty"`
 	SkillSelection       *SkillSelectionEvidence       `json:"skill_selection,omitempty"`
+	Restart              *RestartEvidence              `json:"restart,omitempty"`
 }
 
 // Private, bounded native observations. They are not model input, authorization,

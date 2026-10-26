@@ -10,6 +10,7 @@ import (
 )
 
 type nativeModelBinding struct {
+	Generation int               `json:"generation,omitempty"`
 	TrialID    string            `json:"trial_id"`
 	CaseSHA256 string            `json:"case_sha256"`
 	AgentID    string            `json:"agent_id"`
@@ -24,21 +25,27 @@ func (binding nativeModelBinding) hash() string {
 }
 
 func nativeModelBindings(trial Trial, workspace string) ([]nativeModelBinding, bool) {
-	inputs := map[string]int{}
+	type inputIdentity struct{ Turn, Generation int }
+	inputs := map[string]inputIdentity{}
 	for _, event := range trial.Events {
 		if event.Kind == "input" {
-			if !validID(event.RequestID) || event.Turn < 1 || inputs[event.RequestID] != 0 {
+			if !validID(event.RequestID) || event.Turn < 1 || event.Generation < 0 ||
+				event.Generation > maxOwnedGatewayGenerations || inputs[event.RequestID].Turn != 0 {
 				return nil, false
 			}
-			inputs[event.RequestID] = event.Turn
+			inputs[event.RequestID] = inputIdentity{event.Turn, event.Generation}
 		}
 	}
-	scopes := map[events.TraceScope][]string{}
+	type generationScope struct {
+		Generation int
+		Scope      events.TraceScope
+	}
+	scopes := map[generationScope][]string{}
 	for _, event := range trial.Events {
 		if event.Kind == "input" || event.Kind == "stream" || len(event.TraceScopes) == 0 {
 			continue
 		}
-		if event.Turn < 1 || inputs[event.RequestID] != event.Turn ||
+		if event.Turn < 1 || inputs[event.RequestID] != (inputIdentity{event.Turn, event.Generation}) ||
 			event.AgentID != trial.AgentID || event.SessionKey == "" || event.SessionKey != trial.SessionKey {
 			return nil, false
 		}
@@ -46,8 +53,12 @@ func nativeModelBindings(trial Trial, workspace string) ([]nativeModelBinding, b
 			if !scope.Complete() || !validID(scope.TurnID) || workspace != "" && scope.Workspace != workspace {
 				return nil, false
 			}
-			if !slices.Contains(scopes[scope], event.RequestID) {
-				scopes[scope] = append(scopes[scope], event.RequestID)
+			key := generationScope{event.Generation, scope}
+			if event.Generation < 0 || event.Generation > maxOwnedGatewayGenerations {
+				return nil, false
+			}
+			if !slices.Contains(scopes[key], event.RequestID) {
+				scopes[key] = append(scopes[key], event.RequestID)
 			}
 		}
 	}
@@ -56,7 +67,7 @@ func nativeModelBindings(trial Trial, workspace string) ([]nativeModelBinding, b
 		slices.Sort(requests)
 		result = append(result, nativeModelBinding{
 			TrialID: trial.ID, CaseSHA256: trial.CaseSHA256, AgentID: trial.AgentID,
-			SessionKey: trial.SessionKey, TraceScope: scope, RequestIDs: requests,
+			SessionKey: trial.SessionKey, TraceScope: scope.Scope, RequestIDs: requests, Generation: scope.Generation,
 		})
 	}
 	slices.SortFunc(result, func(a, b nativeModelBinding) int { return strings.Compare(a.hash(), b.hash()) })
@@ -93,7 +104,8 @@ func selectNativeModels(
 	}
 	for _, binding := range bindings {
 		if !slices.ContainsFunc(copy.Turns, func(turn NativeModelTurn) bool {
-			return turn.TrialID == binding.TrialID && turn.TraceScope == binding.TraceScope &&
+			return turn.Generation == binding.Generation && turn.TrialID == binding.TrialID &&
+				turn.TraceScope == binding.TraceScope &&
 				turn.BindingSHA256 == binding.hash()
 		}) {
 			return nil, false

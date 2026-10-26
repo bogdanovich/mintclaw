@@ -27,10 +27,12 @@ type ownedLaunchIdentity struct {
 }
 
 type ownedGatewayGeneration struct {
+	Number    int                        `json:"number"`
 	Runtime   health.RuntimeProbe        `json:"runtime"`
 	Lifecycle TargetLifecycle            `json:"lifecycle"`
 	Budget    *TargetBudgetObservation   `json:"budget,omitempty"`
 	Surfaces  *PrivateSurfaceObservation `json:"surfaces,omitempty"`
+	Models    *NativeModelObservation    `json:"models,omitempty"`
 }
 
 func newOwnedLaunchIdentity(
@@ -167,6 +169,7 @@ func restartOwnedGateway(
 		return nil, admittedTarget{}, generation, ErrOwnedGateway
 	}
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 35*time.Second)
+	generation.Number = previous.identity.generation
 	generation.Runtime, generation.Lifecycle = previous.identity.probe, previous.stopAndWait(cleanupCtx)
 	cleanupCancel()
 	if !previous.cleanOwnedExit() {

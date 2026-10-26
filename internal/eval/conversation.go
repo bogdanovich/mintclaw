@@ -47,6 +47,12 @@ type conversationDomain interface {
 	conclude(context.Context, *Trial)
 }
 
+// The flow supplies its actual transcript before the next input. Native
+// lifecycle authority remains with the admitted run owner, not this engine.
+type betweenTurnConversationDomain interface {
+	beforeTurn(context.Context, Trial, int) error
+}
+
 // A control reply is not an LLM turn. Only native terminal evidence can
 // establish its outcome without inventing a missing LLM trace scope.
 type cancellationObserver interface {
@@ -182,6 +188,15 @@ func runDomainConversation(
 			if step.Action.Kind == "stop" {
 				verdict, code = Inconclusive, "driver_stopped"
 				break
+			}
+			if boundary, ok := domain.(betweenTurnConversationDomain); ok {
+				if err := boundary.beforeTurn(caseCtx, trial, index+2); err != nil {
+					verdict, code = Inconclusive, "native_boundary_unavailable"
+					if errors.Is(err, ErrPrivateEvidence) {
+						verdict, code = Fail, "private_native_boundary"
+					}
+					break
+				}
 			}
 			verdict, code = flow.turn(caseCtx, item.Case.Limits, step.Action, flow.last, index+2)
 			if verdict != Pass {
@@ -565,6 +580,9 @@ func (flow *conversation) append(event Event) bool {
 		return false
 	}
 	event.ID = fmt.Sprintf("event-%06d", len(flow.trial.Events)+1)
+	if transport, ok := flow.transport.(interface{ generation() int }); ok {
+		event.Generation = transport.generation()
+	}
 	flow.trial.Events = append(flow.trial.Events, event)
 	return true
 }

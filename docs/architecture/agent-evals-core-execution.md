@@ -41,9 +41,9 @@ does not reopen C0 or E0-E5.
 | C3b | C2 | Native active stop/reuse, distinct from local driver stop | Implemented/merged #1897-#1898; native model-free validation and green reviewed CI; live qualification pending |
 | C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Implemented/merged #1899-#1900; native model-free validation and green reviewed CI; live qualification pending |
 | C3d | C2 | Final-once delivery with streaming/non-streaming controls | Implemented; real-CLI repeat-three control, negative/unknown controls and frozen grading validated; durable gateway streaming guard is an explicit qualification blocker |
-| C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Owner/successor prerequisite merged in #1903 and model-free validated on macOS/Linux; versioned case and run-scoped frozen rollup still required |
+| C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Foundation #1903 merged; full typed case/run-scoped rollup and real-CLI repeat-three/frozen grading pass; review/merge and live qualification pending |
 | C3f | C1q | Controlled small context and actual compaction witness | Queued |
-| C3g | C1q | Pinned native skill selection and no-skill control | Typed case/profile/native controls implemented; #1904 metadata prerequisite merged; broader validation/review pending; live qualification not started |
+| C3g | C1q | Pinned native skill selection and no-skill control | Complete implementation #1906 merged after all-green CI and SHA-bound review; native model-free repeat-three/frozen controls pass; live qualification not started |
 | Qualification | All prerequisites | Fixed attempts/batches, result matrix, explicit promotion | C1/C2/C3a fixed campaigns complete; C3b and later live campaigns not started; goal active |
 
 Split genuine prerequisites when needed, but do not silently redefine contracts
@@ -60,11 +60,14 @@ and contrasting controls. It remains pending/non-default, not live-qualified.
 The C3g model-free native repeat-three control passes locally. Broader and
 rebased race attempts on this macOS host stalled in `_dyld_start` before Go
 started (12 KiB RSS, zero CPU); those attempts were sampled and stopped, not
-counted as passes. Exact-head CI must supply the broader/race merge gates.
+counted as passes. Exact-head CI for #1906 subsequently supplied all-green
+broader/race and platform merge gates before its reviewed merge.
 
 The [owned restart foundation](../reference/eval-owned-restart.md) is an
-internal prerequisite only. It does not make `history.restart` an implemented
-or qualified scenario and introduces no public used-home/attach option.
+internal prerequisite. The [full restart contract](../reference/core-owned-restart-eval.md)
+adds actual same-session continuation and independently retained generation
+evidence; it remains pending/non-default, not live-qualified. Neither path
+introduces a public used-home/attach option.
 
 | Scenario | Definition/Harness | Required Native Evidence | Live/Default |
 | --- | --- | --- | --- |
@@ -77,7 +80,7 @@ or qualified scenario and introduces no public used-home/attach option.
 | `general.control.stop` | C3b typed in-flight native control | Terminal abort, canceled held read, absent queued B, canonical pairing, outbox census and new final | Pending/non-default; no live qualification |
 | `general.approval.denied` | C3c, #1900 | HMAC-bound exact denial, terminal resolution, canonical pairing, no execution, unchanged target and complete delivery | Pending/non-default; no live qualification |
 | `general.delivery.final-once` | C3d typed native settlement/history/delivery observer | Stable create/update identity; delivered receipt per request; complete terminal census | Pending/non-default: durable gateway intentionally disables configured streaming; no paid qualification |
-| `general.history.restart` | Queued C3e | Distinct owned processes, preserved session/history | Not present |
+| `general.history.restart` | C3e retained owner/successor and generation-scoped observer | Distinct native child receipts; decreasing budget ceiling; unchanged history prefix and grounded recall | Pending/non-default; model-free native repeat-three/offline grade and broader controls pass; no live qualification |
 | `general.context.compaction` | Queued C3f | Actual compaction receipt and corrected recall | Not present |
 | `general.skills.selection` | C3g typed native selection observer and pinned read-only profile | Complete native revision digest; selected turn and two empty controls; unchanged file/history/delivery census | Pending/non-default; model-free real-CLI repeat-three and frozen grading pass; no live qualification |
 

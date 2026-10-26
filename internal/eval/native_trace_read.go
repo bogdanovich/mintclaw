@@ -139,10 +139,21 @@ func visitNativeTraceSnapshotsRaw(
 			continue
 		}
 		seen[trace.TraceID] = true
+		if previous, exists := target.priorTraces[trace.TraceID]; exists {
+			if previous != sha {
+				invalid = true
+			}
+			continue
+		}
 		for index, binding := range bindings {
 			if binding.TraceScope.TurnID == trace.Metadata.RootTurnID {
 				visit(index, trace, sha, raw)
 			}
+		}
+	}
+	for id := range target.priorTraces {
+		if !seen[id] {
+			invalid = true
 		}
 	}
 	if invalid {

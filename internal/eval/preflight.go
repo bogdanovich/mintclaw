@@ -35,6 +35,7 @@ type admittedTarget struct {
 	serviceToken string
 	activeTool   *activeToolFixture
 	ownedLog     string
+	priorTraces  map[string]string
 }
 
 func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admittedTarget, error) {
@@ -135,7 +136,8 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		cfg.Agents.Dispatch != nil && len(cfg.Agents.Dispatch.Rules) != 0 ||
 		len(cfg.Agents.Defaults.ContextManagerConfig) != 0 || validateActiveToolPolicy(cfg, preset) != nil ||
 		validateReadToolPolicy(cfg, preset) != nil || validateApprovalToolPolicy(cfg, preset, workspace) != nil ||
-		validateFinalDeliveryPolicy(cfg, preset) != nil || validateSkillSelectionPolicy(cfg, preset) != nil {
+		validateFinalDeliveryPolicy(cfg, preset) != nil || validateSkillSelectionPolicy(cfg, preset) != nil ||
+		validateRestartPolicy(cfg, preset) != nil {
 		return ErrUnsafeTarget
 	}
 	channels, nativeChannels := 0, 0
@@ -192,7 +194,7 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		if capability != "conversation" && capability != "interactions" && capability != "pdf" &&
 			capability != "browser" && capability != boundedCallsCapability && capability != activeToolCapability &&
 			capability != readToolCapability && capability != approvalToolCapability &&
-			capability != finalDeliveryCapability && capability != skillSelectionCapability ||
+			capability != finalDeliveryCapability && capability != skillSelectionCapability && capability != ownedRestartCapability ||
 			capability == "interactions" && (!cfg.Tools.RequestUserInput.Enabled ||
 				!slices.Contains(agent.ToolPolicy.Allow, "request_user_input") || len(agent.ToolPolicy.Deny) != 0) {
 			return ErrUnsafeTarget

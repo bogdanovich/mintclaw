@@ -21,17 +21,19 @@ var (
 const MaxRepeat = 64
 
 type RunOptions struct {
-	Home            string
-	OutputParent    string
-	SuiteTimeout    time.Duration
-	PDFOraclePython string
-	Repeat          int
-	StartTarget     bool
-	IncludePending  bool
+	Home              string
+	OutputParent      string
+	SuiteTimeout      time.Duration
+	PDFOraclePython   string
+	Repeat            int
+	StartTarget       bool
+	IncludePending    bool
+	restart           func(context.Context, Trial) (admittedTarget, int, error)
+	restartGeneration int
 }
 
 // Run defaults to attachment after prepared-target admission. StartTarget owns
-// one fresh gateway child, never adopts/restarts a PID or replays a task.
+// a fresh gateway; only an admitted owned_restart case can request a successor.
 func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOptions) (RunReport, error) {
 	if len(cases) == 0 || len(cases) > MaxCorpusCases {
 		return RunReport{}, ErrRunOptions
@@ -52,6 +54,11 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	if err := CheckRunAvailability(cases, options.IncludePending); err != nil {
 		return RunReport{}, err
 	}
+	options.restart, options.restartGeneration = nil, 0
+	if hasOwnedRestart(preset) && (len(cases) != 1 || options.Repeat > maxOwnedGatewayGenerations-1 ||
+		!options.StartTarget) {
+		return RunReport{}, ErrUnsafeTarget
+	}
 	seen := make(map[string]bool)
 	if preset.Validate() != nil ||
 		(preset.TargetCallBudget != nil || preset.ActiveTool != nil) && !options.StartTarget {
@@ -68,7 +75,10 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			validateNativeStopBinding(preset, item.Case) != nil ||
 			validateApprovalDeniedBinding(preset, item.Case) != nil ||
 			validateFinalDeliveryBinding(preset, item.Case) != nil ||
-			validateSkillSelectionBinding(preset, item.Case) != nil {
+			validateSkillSelectionBinding(
+				preset,
+				item.Case,
+			) != nil || validateRestartBinding(preset, item.Case) != nil {
 			return RunReport{}, ErrUnsafeTarget
 		}
 		if item.Case.Steering != nil && (preset.ActiveTool == nil || !options.StartTarget ||
@@ -206,6 +216,21 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		Before: observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter),
 	}
 	roles := prepareConversationRoles(target, cases)
+	var restart *ownedRestartRun
+	if hasOwnedRestart(preset) {
+		restart = &ownedRestartRun{child: &child, target: &target, preset: preset}
+		options.restart = func(ctx context.Context, trial Trial) (admittedTarget, int, error) {
+			previous := child
+			next, generation, restartErr := restart.next(ctx, trial)
+			if child != previous {
+				lifecycle, privateSurfaces = nil, nil
+			}
+			if restartErr != nil {
+				cancel()
+			}
+			return next, generation, restartErr
+		}
+	}
 	for _, role := range []*ModelRole{roles.user, roles.judge} {
 		if role != nil {
 			role.retained = &retainedFacts
@@ -220,6 +245,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	roleCalls := []RoleCall{}
 	// Case-major repetitions are independent trials, not retries of one session.
 	for ordinal := range len(cases) * options.Repeat {
+		if restart != nil && child != nil {
+			options.restartGeneration = child.identity.generation
+		}
 		item := cases[ordinal/options.Repeat]
 		trial := newUnattemptedTrial(item, preset.ExpectedAgent)
 		switch {
@@ -246,6 +274,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 				&retainedFacts, &pendingPDF, &pendingBrowser)
 		}
 		trial.Repetition = ordinal%options.Repeat + 1
+		if restart != nil && restart.remember(trial) != nil {
+			trial.Verdict, trial.Code = Inconclusive, "restart_binding_unavailable"
+		}
 		result.TargetUsage.addTrial(trial)
 		pendingPDF.observeTrial(trial)
 		if deferredCoreEvidence(item.Case) {
@@ -296,6 +327,11 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			result.Verdict = combineVerdicts(result.Verdict, Inconclusive)
 			result.Cleanup = "owned_gateway_cleanup_uncertain"
 		}
+	}
+	if restart != nil {
+		observation, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		restart.finish(observation, &result, retainedFacts.values, filter)
+		stop()
 	}
 	finalCtx, finalCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	err = pendingPDF.finish(finalCtx, writer, &result, lifecycle, retainedFacts.values, filter, privateSurfaces,
@@ -360,7 +396,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		result.Verdict = combineVerdicts(result.Verdict, Error)
 		return result, ErrReport
 	}
-	if preset.CaptureModelMetadata {
+	if preset.CaptureModelMetadata && restart == nil {
 		bindings, bindingErr := readRunModelBindings(writer, result, preset.ExpectedWorkspace)
 		if errors.Is(bindingErr, ErrReport) {
 			result.Verdict = combineVerdicts(result.Verdict, Error)
@@ -376,9 +412,16 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		}
 	}
 	result.Coverage = map[Verdict]int{}
-	result.Verdict = combineVerdicts(result.TargetLifecycle.verdict(), result.PrivateSurfaces.verdict(),
-		result.BrowserFixtures.verdict(), result.NativeModels.verdict(), result.TrialScratch.verdict(),
-		result.TargetBudget.verdict(), result.ActiveTool.verdict(result.TargetLifecycle))
+	result.Verdict = combineVerdicts(
+		result.TargetLifecycle.verdict(),
+		result.PrivateSurfaces.verdict(),
+		result.BrowserFixtures.verdict(),
+		result.NativeModels.verdict(),
+		result.TrialScratch.verdict(),
+		result.TargetBudget.verdict(),
+		result.ActiveTool.verdict(result.TargetLifecycle),
+		targetGenerationsVerdict(result),
+	)
 	for _, summary := range result.Trials {
 		result.Coverage[summary.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, summary.Verdict)
@@ -548,6 +591,21 @@ func runAdmittedTrial(
 	if selection != nil {
 		return runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, selection)
+	}
+	if item.Case.Restart != nil {
+		if runOptions.restart == nil || validateRestartPolicy(target.config, target.preset) != nil {
+			client.Close()
+			trial.Verdict, trial.Code = Inconclusive, "restart_owner_unavailable"
+			return trial
+		}
+		transport := &restartTransport{conversationTransport: client, number: runOptions.restartGeneration}
+		restart := &restartConversation{
+			item: item.Case, target: target, transport: transport, options: options,
+			next: runOptions.restart, firstGeneration: runOptions.restartGeneration,
+			settlement: finalDeliveryConversation{item: item.Case, target: target, sessionID: sessionID},
+		}
+		return runDomainConversation(caseCtx, transport, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, restart)
 	}
 	if item.Case.Steering != nil {
 		if item.Case.Steering.Peer != nil {

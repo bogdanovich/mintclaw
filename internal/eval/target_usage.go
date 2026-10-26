@@ -78,7 +78,8 @@ func (usage *TargetUsage) valid() bool {
 }
 
 func validEventUsage(event Event) bool {
-	return event.Usage == nil || event.Kind == "final" && event.Usage.valid()
+	return event.Generation >= 0 && event.Generation <= maxOwnedGatewayGenerations &&
+		(event.Usage == nil || event.Kind == "final" && event.Usage.valid())
 }
 
 func (usage *TargetUsage) addTrial(trial Trial) {
@@ -89,15 +90,24 @@ func (usage *TargetUsage) addTrial(trial Trial) {
 }
 
 func (usage *TargetUsage) addScope(trial Trial) {
-	inputs, finals := make(map[string]int), make(map[string]bool)
-	turns := make(map[events.TraceScope]bool)
+	type inputIdentity struct{ Turn, Generation int }
+	inputs, finals := make(map[string]inputIdentity), make(map[string]bool)
+	type generationScope struct {
+		Generation int
+		Scope      events.TraceScope
+	}
+	turns := make(map[generationScope]bool)
 	for _, event := range trial.Events {
 		if event.Kind == "input" && event.RequestID != "" {
-			inputs[event.RequestID] = event.Turn
+			inputs[event.RequestID] = inputIdentity{event.Turn, event.Generation}
 		}
-		if event.Kind != "final" || inputs[event.RequestID] != event.Turn || event.Turn < 1 ||
-			event.AgentID != trial.AgentID || event.SessionKey == "" || event.SessionKey != trial.SessionKey ||
-			len(event.TraceScopes) == 0 || !completeUsageScopes(event.TraceScopes) {
+		expected := inputIdentity{event.Turn, event.Generation}
+		if event.Kind != "final" || inputs[event.RequestID] != expected || event.Turn < 1 ||
+			event.AgentID != trial.AgentID ||
+			event.SessionKey == "" ||
+			event.SessionKey != trial.SessionKey ||
+			len(event.TraceScopes) == 0 ||
+			!completeUsageScopes(event.TraceScopes) {
 			continue
 		}
 		if finals[event.RequestID] {
@@ -108,12 +118,12 @@ func (usage *TargetUsage) addScope(trial Trial) {
 		finals[event.RequestID] = true
 		usage.Finals++
 		for _, scope := range event.TraceScopes {
-			if turns[scope] {
+			if turns[generationScope{event.Generation, scope}] {
 				usage.Coverage = "conflicting_final_events"
 			}
 		}
 		for _, scope := range event.TraceScopes {
-			turns[scope] = true
+			turns[generationScope{event.Generation, scope}] = true
 		}
 		if event.Usage == nil || !event.Usage.valid() {
 			continue
