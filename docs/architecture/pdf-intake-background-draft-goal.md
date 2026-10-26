@@ -1,5 +1,12 @@
 # PDF Intake: Explicit Clarification And Background Draft Goal
 
+This goal was cleared, not completed. The operator approved a different history
+policy on 2026-10-26: all ordinary form and unrelated conversation belongs in
+normal chat history, with verified values also kept in the structured draft.
+Continue from [the replacement goal](pdf-chat-history-and-draft-goal.md).
+The stricter live-only requirements below are historical where they conflict
+with that explicit decision; native field and execution-authority checks remain.
+
 ## Operator Outcome
 
 A form is a retained draft, not a modal chat session. Ordinary conversation,
