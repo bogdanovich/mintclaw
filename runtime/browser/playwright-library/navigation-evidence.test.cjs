@@ -20,7 +20,20 @@ test('navigation evidence distinguishes challenges from ordinary HTTP failures',
     '/imperva': [403, '<title>Access denied</title><iframe src="/_Incapsula_Resource"></iframe>', 'imperva'],
     '/login': [200, '<title>Login</title><form><input type="password"><div id="px-captcha"></div></form>', ''],
   };
+  const cookieGateRequests = [];
   const server = http.createServer((request, response) => {
+    if (request.url === '/cookie-gate') {
+      const admitted = /(?:^|; )navigation_ready=public-fixture(?:;|$)/.test(request.headers.cookie || '');
+      cookieGateRequests.push({method: request.method, admitted});
+      response.writeHead(admitted ? 200 : 403, {
+        'content-type': 'text/html',
+        'set-cookie': 'navigation_ready=public-fixture; Path=/; HttpOnly; SameSite=Lax',
+      });
+      response.end(admitted
+        ? '<title>Public homepage</title><a href="/login">Sign in</a>'
+        : '<title>Error Page</title><p>Something went wrong</p>');
+      return;
+    }
     const fixture = fixtures[request.url] || [200, '<p>Frame</p>', ''];
     response.writeHead(fixture[0], {
       'content-type': 'text/html', ...(request.url === '/header' ? { 'cf-mitigated': 'challenge' } : {}),
@@ -66,6 +79,38 @@ test('navigation evidence distinguishes challenges from ordinary HTTP failures',
     const evidence = JSON.parse(marker.slice('- Navigation evidence: '.length));
     assert.deepEqual(evidence, { http_status: fixture[0], anti_bot_block: fixture[2] }, pathname);
   }
+  // The production navigation driver uses CDP, not address-bar keystrokes.
+  // A public error response must keep its cookies through capture and a repeat.
+  const navigateCookieGate = async () => {
+    const result = await call('browser_run_code_unsafe', {code: `async page => {
+      const cdp = await page.context().newCDPSession(page);
+      try {
+        const loaded = page.waitForEvent('load', {timeout: 10000});
+        await cdp.send('Page.navigate', {url: ${JSON.stringify(base + '/cookie-gate')}});
+        await loaded;
+      } finally { await cdp.detach(); }
+      return 'navigated';
+    }`});
+    assert.equal(result.is_error, false, 'public navigation failed');
+    const snapshot = await call('browser_snapshot', {});
+    assert.equal(snapshot.is_error, false, 'public observation failed');
+    return snapshot.content[0].text;
+  };
+  const denied = await navigateCookieGate();
+  assert.match(denied, /"http_status":403/);
+  const capture = await call('browser_take_screenshot', {});
+  assert.equal(capture.content[0].type, 'image', 'capture must precede the repeat');
+  assert.equal(capture.content[0].mime_type, 'image/png');
+  const recovered = await navigateCookieGate();
+  assert.match(recovered, /"http_status":200/);
+  assert.match(recovered, /Public homepage/);
+  assert.match(recovered, /Sign in/);
+  // This test-only negative control clears only synthetic fixture cookies.
+  await call('browser_run_code_unsafe', {code: 'async page => { await page.context().clearCookies(); }'});
+  assert.match(await navigateCookieGate(), /"http_status":403/);
+  assert.deepEqual(cookieGateRequests, [
+    {method: 'GET', admitted: false}, {method: 'GET', admitted: true}, {method: 'GET', admitted: false},
+  ]);
   await call('shutdown', {});
   child.stdin.end();
 });

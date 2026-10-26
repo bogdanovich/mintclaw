@@ -14,9 +14,28 @@ resume that same browser through protected login and verification.
 
 Start from a working public homepage and follow its observed sign-in link.
 Check the page itself, since HTTP 200 can still be a security challenge. A
-bounded retry of a failed public GET in the same context can avoid an
-unnecessary handoff; preserve an explicit screenshot-first request. Do not
-retry a private form submission or imply that another entry URL defeats a CAPTCHA.
+failed public GET, including a plain 403/Error Page, follows this default
+sequence before manual help: deliver the obstacle image when permitted, allow
+about three seconds for settling, observe, repeat the exact public URL once in
+the same session if still blocked, then observe the result. Preserve response
+cookies, tab, profile and network identity. If the page is available, continue;
+otherwise show the remaining obstacle and hand off that same visible browser.
+An explicit immediate-handoff/no-retry request takes precedence. Screenshot-first
+alone does not skip the bounded recovery. A failed protected deep link instead
+uses the existing origin/authentication recovery; do not combine both budgets.
+Never retry a private form submission, POST or unknown external effect, or run
+this recovery after private login starts. Another entry URL does not defeat a CAPTCHA.
+
+Public-only Chrome probes on 2026-10-26 UTC reproduced the owner's observation:
+an initial eBay GET returned 403 and response cookies; another automatic GET in
+the same browser could load its homepage. Removing those response cookies kept
+the 403, while restoring the original cookies allowed the homepage to load.
+The admitted production URL was the correct `https://www.ebay.com/`; changing
+CDP navigation to a typed transition or ordinary Playwright `goto` did not
+prevent the first 403. This demonstrates the cookie dependency in the isolated
+control, not every future eBay failure or a successful account login. No login
+credentials, private browser state or CAPTCHA solver were used. The native
+navigation fixture models the cookie-gated 403/200 behavior on a local server.
 
 ## Text answer
 
