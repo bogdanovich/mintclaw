@@ -28,7 +28,8 @@ func observeNativeModels(
 	}
 	for _, binding := range bindings {
 		result.Turns = append(result.Turns, NativeModelTurn{
-			TrialID: binding.TrialID, TraceScope: binding.TraceScope,
+			Generation: binding.Generation,
+			TrialID:    binding.TrialID, TraceScope: binding.TraceScope,
 			BindingSHA256: binding.hash(), Code: "missing_trace",
 		})
 	}
@@ -41,7 +42,8 @@ func observeNativeModels(
 			binding := bindings[index]
 			if result.Turns[index].Code != "missing_trace" {
 				result.Turns[index] = NativeModelTurn{
-					TrialID: binding.TrialID, TraceScope: binding.TraceScope,
+					Generation: binding.Generation,
+					TrialID:    binding.TrialID, TraceScope: binding.TraceScope,
 					BindingSHA256: binding.hash(), Code: "ambiguous_trace",
 				}
 				return

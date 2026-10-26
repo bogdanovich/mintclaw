@@ -12,8 +12,9 @@ import (
 
 const boundedCallsCapability = "bounded_calls"
 
-// TargetBudgetObservation is run-scoped: repetitions share one owned child and
-// ceiling. It never claims per-trial billing or coverage of provider-internal work.
+// TargetBudgetObservation is one native child's receipt. Ordinary repetitions
+// share it; restart runs retain each decreasing generation separately. It never
+// claims per-trial billing or coverage of provider-internal work.
 type TargetBudgetObservation struct {
 	Version     int             `json:"version"`
 	Spec        evaltarget.Spec `json:"spec"`

@@ -63,9 +63,10 @@ single-use predecessor authority, refusal of fresh-home admission after use,
 four clean canonical messages, exactly two delivered native finals and final
 clean shutdown. No paid models or production data are used.
 
-## Remaining C3e Work
+## Full C3e Contract
 
-The versioned case/profile, transport reconnection at the conversation engine's
-owned boundary, complete run-scoped generation/budget rollup, per-generation
-native model correlation, frozen grading and bounded live qualification remain
-separate work. This prerequisite alone cannot promote or pass the restart eval.
+The [full scenario](core-owned-restart-eval.md) adds the versioned case/profile,
+transport reconnection at the conversation engine's owned boundary, run-scoped
+generation/budget rollup, per-generation native model correlation and frozen
+grading. Bounded live qualification remains separate. This prerequisite alone
+cannot promote or pass the restart eval.

@@ -75,6 +75,7 @@ func Grade(
 		!original.TrialScratch.validFor(original) || original.TrialScratch.verdict() != Pass ||
 		!original.NativeModels.valid(original.Runtime) || original.NativeModels.verdict() == Fail ||
 		!original.TargetBudget.valid(original) || original.TargetBudget.verdict() != Pass ||
+		!validTargetGenerations(original) || targetGenerationsVerdict(original) != Pass ||
 		!original.ActiveTool.valid(original) || original.ActiveTool.verdict(original.TargetLifecycle) != Pass ||
 		original.PrivateSurfaces != nil && original.PrivateSurfaces.LeakObserved {
 		return RunReport{}, ErrGrade
@@ -150,6 +151,12 @@ func Grade(
 			skillSelectionEvidenceCode(trial, item.Case, workspace) != "") {
 			return RunReport{}, ErrGrade
 		}
+		if item.Case.Restart != nil && (validateRestartBinding(preset, item.Case) != nil ||
+			len(original.TargetGenerations) < 2 ||
+			restartEvidenceCode(trial, item.Case, original, workspace) != "" ||
+			initialTargetBudget(original).Spec.Limits != *preset.TargetCallBudget) {
+			return RunReport{}, ErrGrade
+		}
 		if item.Case.PDF != nil && item.Case.PDF.Output == "required" ||
 			item.Case.Browser != nil && item.Case.Browser.Scenario == "artifact" {
 			var raw []byte
@@ -206,15 +213,16 @@ func Grade(
 		Mode: "grade", SourceRun: original.ID, Verdict: Pass, StartedAt: time.Now().UTC(),
 		Repeat: original.Repeat,
 		Trials: []TrialSummary{}, Coverage: map[Verdict]int{}, Usage: "unknown", Cleanup: "no_target_or_tool_work",
-		TargetLifecycle: original.TargetLifecycle,
-		WorkspaceInputs: original.WorkspaceInputs,
-		PrivateSurfaces: original.PrivateSurfaces,
-		BrowserFixtures: original.BrowserFixtures,
-		TargetUsage:     newTargetUsage(),
-		NativeModels:    models,
-		TrialScratch:    selectTrialScratch(original.TrialScratch, identities),
-		TargetBudget:    original.TargetBudget,
-		ActiveTool:      original.ActiveTool,
+		TargetLifecycle:   original.TargetLifecycle,
+		WorkspaceInputs:   original.WorkspaceInputs,
+		PrivateSurfaces:   original.PrivateSurfaces,
+		BrowserFixtures:   original.BrowserFixtures,
+		TargetUsage:       newTargetUsage(),
+		NativeModels:      models,
+		TrialScratch:      selectTrialScratch(original.TrialScratch, identities),
+		TargetBudget:      original.TargetBudget,
+		ActiveTool:        original.ActiveTool,
+		TargetGenerations: original.TargetGenerations,
 	}
 	writer, err := newPrivateReport(options.OutputParent, home, workspace, result.ID)
 	if err != nil {
@@ -304,6 +312,7 @@ func Grade(
 		result.TrialScratch.verdict(),
 		result.TargetBudget.verdict(),
 		result.ActiveTool.verdict(original.TargetLifecycle),
+		targetGenerationsVerdict(result),
 	)
 	result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 	result.Complete = true
@@ -335,6 +344,11 @@ func readPrivateReportFile(root *os.Root, name string) ([]byte, error) {
 }
 
 func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Preset, workspace string) bool {
+	for _, event := range trial.Events {
+		if item.Case.Restart == nil && event.Generation != 0 {
+			return false
+		}
+	}
 	if !validTrialRoleBoundaries(trial) || trial.Judge != nil && !roleBoundaryEligible(trial.Judge.Call) {
 		return false
 	}
@@ -352,6 +366,7 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 		(item.Case.ApprovalDenied != nil) != (trial.ApprovalDenied != nil) ||
 		(item.Case.FinalDelivery != nil) != (trial.FinalDelivery != nil) ||
 		(item.Case.SkillSelection != nil) != (trial.SkillSelection != nil) ||
+		(item.Case.Restart != nil) != (trial.Restart != nil) ||
 		trial.Repetition != summary.Repetition ||
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||

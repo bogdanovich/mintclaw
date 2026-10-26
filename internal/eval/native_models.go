@@ -45,6 +45,7 @@ type NativeModelCall struct {
 }
 
 type NativeModelTurn struct {
+	Generation           int               `json:"generation,omitempty"`
 	TrialID              string            `json:"trial_id"`
 	TraceScope           events.TraceScope `json:"trace_scope"`
 	BindingSHA256        string            `json:"binding_sha256"`
@@ -149,7 +150,8 @@ func (observation *NativeModelObservation) valid(runtime health.RuntimeProbe) bo
 	}
 	seen, traces, partial := map[string]bool{}, map[string]bool{}, false
 	for _, turn := range observation.Turns {
-		if !validID(turn.TrialID) || !turn.TraceScope.Complete() || !localPath(turn.TraceScope.Workspace) ||
+		if turn.Generation < 0 || turn.Generation > maxOwnedGatewayGenerations ||
+			!validID(turn.TrialID) || !turn.TraceScope.Complete() || !localPath(turn.TraceScope.Workspace) ||
 			!validID(turn.TraceScope.TurnID) ||
 			!validDigest(turn.BindingSHA256) || seen[turn.BindingSHA256] {
 			return false

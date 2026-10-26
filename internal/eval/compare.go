@@ -110,7 +110,7 @@ func Compare(baselineDirectory, currentDirectory string) (Comparison, error) {
 		{"target_lifecycle_mode", targetLifecycleMode(baseline.report.TargetLifecycle) !=
 			targetLifecycleMode(current.report.TargetLifecycle)},
 		{"trial_scratch_scope", (baseline.report.TrialScratch == nil) != (current.report.TrialScratch == nil)},
-		{"target_call_budget", targetBudgetLimitsDiffer(baseline.report.TargetBudget, current.report.TargetBudget)},
+		{"target_call_budget", targetBudgetLimitsDiffer(initialTargetBudget(baseline.report), initialTargetBudget(current.report))},
 	} {
 		if difference.changed {
 			result.EnvironmentChanges = append(result.EnvironmentChanges, difference.name)
@@ -187,7 +187,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		!report.WorkspaceInputs.valid() || !report.PrivateSurfaces.valid() || !report.BrowserFixtures.valid() ||
 		!report.TrialScratch.validFor(
 			report,
-		) || !report.TargetBudget.valid(report) || !report.ActiveTool.valid(report) {
+		) || !report.TargetBudget.valid(report) || !report.ActiveTool.valid(report) || !validTargetGenerations(report) {
 		return result, ErrCompare
 	}
 	seen, sessions, roles := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -292,6 +292,7 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		report.TrialScratch.verdict(),
 		report.TargetBudget.verdict(),
 		report.ActiveTool.verdict(report.TargetLifecycle),
+		targetGenerationsVerdict(report),
 	)
 	if report.Verdict != combineVerdicts(verdicts...) {
 		return result, ErrCompare

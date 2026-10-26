@@ -79,7 +79,8 @@ fixed batch. C3b native stop/reuse and C3c exact approval denial are implemented
 and merged, but not yet live-qualified. C3d final delivery is implemented with a
 native durable-streaming qualification blocker. C3g skill selection is implemented
 with native revision/control evidence but remains pending qualification.
-Restart and compaction remain queued in the ledger.
+Restart has a typed native generation contract with passing model-free controls.
+Compaction remains queued in the ledger.
 P0 is the first useful expansion; P1 follows after its required harness support. Use synthetic random
 markers and local fixtures, never production conversations or accounts. Fixed
 user actions are preferable to an LLM user for these mechanical regressions.
