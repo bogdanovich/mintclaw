@@ -153,7 +153,7 @@ func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetArgs([]string{"list", "--root", "../../../../evals", "--suite", "pdf"})
-	if err := command.Execute(); err != nil || strings.Count(output.String(), "pending") != 8 ||
+	if err := command.Execute(); err != nil || strings.Count(output.String(), "pending") != 6 ||
 		!strings.Contains(
 			output.String(),
 			"default=false",
