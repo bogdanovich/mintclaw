@@ -2,6 +2,11 @@
 
 Times in this report are UTC.
 
+Historical report: the decision was pending during this run. On 2026-10-26 the
+operator approved normal history for all ordinary form/unrelated messages plus
+a separate structured draft. The [replacement goal](pdf-chat-history-and-draft-goal.md)
+now governs implementation; this report is not evidence that it is complete.
+
 ## Status
 
 The [bounded background-draft goal](pdf-intake-background-draft-goal.md) is
