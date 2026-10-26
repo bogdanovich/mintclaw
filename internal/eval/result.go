@@ -76,6 +76,7 @@ type Trial struct {
 	NativeStop           *NativeStopEvidence           `json:"native_stop,omitempty"`
 	ApprovalDenied       *ApprovalDeniedEvidence       `json:"approval_denied,omitempty"`
 	FinalDelivery        *FinalDeliveryEvidence        `json:"final_delivery,omitempty"`
+	SkillSelection       *SkillSelectionEvidence       `json:"skill_selection,omitempty"`
 }
 
 // Private, bounded native observations. They are not model input, authorization,

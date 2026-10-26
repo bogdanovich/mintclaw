@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "id": "general.skills.selection",
+  "suite": "general",
+  "tags": ["general", "multi-turn", "skills", "core-candidate"],
+  "description": "Prove a pinned native skill is selected only for its explicit turn, with contrasting no-selection controls.",
+  "task": "Transform the synthetic value cedar using the skill explicitly selected for this turn. If no skill was explicitly selected for this turn, return exactly cedar. Return only the result.",
+  "requires": ["conversation", "bounded_calls", "skill_selection"],
+  "fixtures": [{"id": "skill", "path": "fixtures/general/eval-synthetic-format/SKILL.md", "sha256": "e746249a8fceb0c204a0af7f45f81c643e3dde45e706e418db46fc07d908a43b", "kind": "file"}],
+  "driver": {
+    "mode": "scripted",
+    "steps": [
+      {"action": {"kind": "message", "text": "/use eval-synthetic-format Transform the synthetic value cedar using the skill explicitly selected for this turn. If no skill was explicitly selected for this turn, return exactly cedar. Return only the result."}, "wait_for": {"kind": "final"}},
+      {"action": {"kind": "message", "text": "Transform the synthetic value cedar using the skill explicitly selected for this turn. If no skill was explicitly selected for this turn, return exactly cedar. Return only the result."}, "wait_for": {"kind": "final"}}
+    ]
+  },
+  "limits": {"max_user_turns": 3, "turn_timeout": "2m", "case_timeout": "5m", "max_driver_calls": 1},
+  "checks": [
+    {"id": "native-selection", "kind": "skill_selection"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"},
+    {"id": "unselected-control", "kind": "response_contains", "expected": "cedar"},
+    {"id": "no-sticky-selection", "kind": "final_response_absent", "expected": "EVAL_SKILL[CEDAR]"}
+  ],
+  "rubric": [{"id": "selected-and-controls", "description": "The explicitly selected turn returns EVAL_SKILL[CEDAR], while both unselected turns return only cedar. Replies are coherent and do not claim tools or effects.", "required": true}],
+  "skill_selection": {"name": "eval-synthetic-format", "value": "cedar", "output": "EVAL_SKILL[CEDAR]"}
+}

@@ -67,7 +67,8 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		if validateReadRecoveryBinding(preset, item.Case) != nil ||
 			validateNativeStopBinding(preset, item.Case) != nil ||
 			validateApprovalDeniedBinding(preset, item.Case) != nil ||
-			validateFinalDeliveryBinding(preset, item.Case) != nil {
+			validateFinalDeliveryBinding(preset, item.Case) != nil ||
+			validateSkillSelectionBinding(preset, item.Case) != nil {
 			return RunReport{}, ErrUnsafeTarget
 		}
 		if item.Case.Steering != nil && (preset.ActiveTool == nil || !options.StartTarget ||
@@ -235,7 +236,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		case item.Case.Driver.Mode == "llm_user" && roles.user == nil:
 			trial.Verdict, trial.Code = Skipped, "driver_unavailable"
 		case item.Case.PDF == nil && item.Case.Browser == nil && item.Case.ReadRecovery == nil &&
-			item.Case.ApprovalDenied == nil &&
+			item.Case.ApprovalDenied == nil && item.Case.SkillSelection == nil &&
 			(len(item.Case.Fixtures) != 0 || len(item.Case.Driver.Facts) != 0):
 			trial.Verdict, trial.Code = Skipped, "domain_evidence_unavailable"
 		case suiteCtx.Err() != nil:
@@ -456,6 +457,14 @@ func runAdmittedTrial(
 	}}
 	var browser *browserConversation
 	var delivery *finalDeliveryConversation
+	var selection *skillSelectionConversation
+	if item.Case.SkillSelection != nil {
+		selection, err = newSkillSelectionConversation(caseCtx, item.Case, target)
+		if err != nil {
+			trial.Verdict, trial.Code = Inconclusive, "skill_selection_preparation_unavailable"
+			return trial
+		}
+	}
 	if item.Case.FinalDelivery != nil {
 		if !finalDeliveryStreamingMatches(target, item.Case) {
 			trial.Verdict, trial.Code = Inconclusive, "final_delivery_profile_mismatch"
@@ -535,6 +544,10 @@ func runAdmittedTrial(
 		trial.Verdict, trial.Code = Inconclusive, "gateway_unavailable"
 		trial.DurationMS = time.Since(trial.StartedAt).Milliseconds()
 		return trial
+	}
+	if selection != nil {
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, selection)
 	}
 	if item.Case.Steering != nil {
 		if item.Case.Steering.Peer != nil {

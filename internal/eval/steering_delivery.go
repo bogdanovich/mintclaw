@@ -30,7 +30,7 @@ func validCoreDeliveryCensus(
 			finals[event.RequestID] = event
 		}
 	}
-	if len(finals) != expected || expected < 1 || expected > 2 {
+	if len(finals) != expected || expected < 1 || expected > 3 {
 		return false
 	}
 	total, seen := 0, map[string]bool{}
