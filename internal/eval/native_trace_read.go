@@ -23,7 +23,7 @@ func visitBoundNativeTraces(
 ) string {
 	if lifecycle == nil || !lifecycle.valid() || lifecycle.Code != "native_exit_zero" ||
 		lifecycle.PID != target.probe.PID || target.config == nil ||
-		target.config.Diagnostics.TraceCapture != evalModelMetadataCapture() {
+		target.config.Diagnostics.TraceCapture != evalTargetMetadataCapture(target.preset) {
 		return "not_stopped"
 	}
 	if surfaces == nil || !surfaces.valid() || surfaces.Code != "observed" {
@@ -51,7 +51,7 @@ func visitNativeTraceSnapshotsRaw(
 	visit func(int, diagnostictrace.Trace, string, string),
 ) string {
 	if ctx == nil || ctx.Err() != nil || target.config == nil ||
-		target.config.Diagnostics.TraceCapture != evalModelMetadataCapture() {
+		target.config.Diagnostics.TraceCapture != evalTargetMetadataCapture(target.preset) {
 		return "native_evidence_unavailable"
 	}
 	if !nativeModelSourceKnown(target.probe) {
@@ -91,7 +91,7 @@ func visitNativeTraceSnapshotsRaw(
 	if err != nil {
 		return "native_evidence_unavailable"
 	}
-	limits := evalModelMetadataCapture()
+	limits := evalTargetMetadataCapture(target.preset)
 	entries, err := directory.ReadDir(limits.MaxTraces + 1)
 	closeErr := directory.Close()
 	if err != nil && !errors.Is(err, io.EOF) || closeErr != nil || len(entries) > limits.MaxTraces {

@@ -54,7 +54,7 @@ func activeToolLogging() config.EventLoggingConfig {
 }
 
 func admittedEvalLogLevel(preset Preset, level string) bool {
-	if preset.ActiveTool != nil || hasApprovalTool(preset) || hasSkillSelection(preset) {
+	if preset.ActiveTool != nil || hasApprovalTool(preset) || hasSkillSelection(preset) || hasCompaction(preset) {
 		return level == "info"
 	}
 	return slices.Contains([]string{"warn", "error", "fatal"}, level)

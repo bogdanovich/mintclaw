@@ -25,6 +25,7 @@ type Preset struct {
 	CaptureModelMetadata bool                        `json:"capture_model_metadata,omitempty"`
 	TargetCallBudget     *providers.CallBudgetLimits `json:"target_call_budget,omitempty"`
 	ActiveTool           *ActiveToolProfile          `json:"active_tool,omitempty"`
+	Compaction           *CompactionProfile          `json:"compaction,omitempty"`
 }
 
 // WorkspaceFile admits one reviewed input, not a directory or runtime state.
@@ -90,7 +91,8 @@ func (preset Preset) Validate() error {
 	}
 	if len(preset.WorkspaceFiles) > 64 || validateReadToolPreset(preset) != nil ||
 		validateApprovalToolPreset(preset) != nil || validateFinalDeliveryPreset(preset) != nil ||
-		validateSkillSelectionPreset(preset) != nil || validateRestartPreset(preset) != nil {
+		validateSkillSelectionPreset(preset) != nil || validateRestartPreset(preset) != nil ||
+		validateCompactionPreset(preset) != nil {
 		return ErrInvalidPreset
 	}
 	paths := make(map[string]bool, len(preset.WorkspaceFiles))

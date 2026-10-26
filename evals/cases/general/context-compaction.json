@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "general.context.compaction",
+  "suite": "general",
+  "tags": ["core", "context", "compaction", "multi-turn"],
+  "description": "Recall a corrected synthetic marker only after a witnessed native Seahorse compaction completes.",
+  "task": "Remember the synthetic code mc-compact-old-31ac for this conversation. Reply only Noted.",
+  "requires": ["conversation", "bounded_calls", "compaction"],
+  "fixtures": [],
+  "driver": {"mode": "scripted", "steps": [
+    {"wait_for": {"kind": "final"}, "action": {"kind": "message", "text": "Correction: replace the previous synthetic code with mc-compact-new-582b. Only this new value is current. Reply only Noted."}},
+    {"wait_for": {"kind": "final"}, "action": {"kind": "message", "text": "For this unrelated synthetic note, the test blocks are red, green and white. Acknowledge only with Noted. Keep the current conversation code unchanged."}},
+    {"wait_for": {"kind": "final"}, "action": {"kind": "message", "text": "For this unrelated synthetic note, the test blocks are red, green and white. Acknowledge only with Noted. Keep the current conversation code unchanged."}},
+    {"wait_for": {"kind": "final"}, "action": {"kind": "message", "text": "Reply only with the current synthetic code, incorporating any correction I supplied earlier."}}
+  ]},
+  "limits": {"max_user_turns": 5, "turn_timeout": "2m", "case_timeout": "5m", "max_driver_calls": 1},
+  "checks": [
+    {"id": "native-compaction", "kind": "compaction"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"},
+    {"id": "corrected", "kind": "response_contains", "expected": "mc-compact-new-582b"}
+  ],
+  "rubric": [{"id": "corrected-recall", "description": "The final answer returns only the corrected current code, not the superseded one, without guessing or asking for it again.", "required": true}],
+  "compaction": {
+    "old_marker": "mc-compact-old-31ac",
+    "marker": "mc-compact-new-582b",
+    "correction": "Correction: replace the previous synthetic code with mc-compact-new-582b. Only this new value is current. Reply only Noted.",
+    "filler": "For this unrelated synthetic note, the test blocks are red, green and white. Acknowledge only with Noted. Keep the current conversation code unchanged.",
+    "recall": "Reply only with the current synthetic code, incorporating any correction I supplied earlier."
+  }
+}

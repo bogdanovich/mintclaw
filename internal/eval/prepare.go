@@ -141,7 +141,7 @@ func PrepareProfile(ctx context.Context, preset Preset, home, parent string) (Pr
 	clone.Agents.Defaults.Workspace = result.Workspace
 	clone.Agents.List[0].Workspace = result.Workspace
 	if preset.CaptureModelMetadata {
-		clone.Diagnostics.TraceCapture = evalModelMetadataCapture()
+		clone.Diagnostics.TraceCapture = evalTargetMetadataCapture(preset)
 		result.ModelMetadataPrepared = true
 	}
 	if prepareBrowserRuntime(root, clone, newHome) != nil {

@@ -49,6 +49,7 @@ type Case struct {
 	FinalDelivery  *FinalDeliveryCase  `json:"final_delivery,omitempty"`
 	SkillSelection *SkillSelectionCase `json:"skill_selection,omitempty"`
 	Restart        *RestartCase        `json:"restart,omitempty"`
+	Compaction     *CompactionCase     `json:"compaction,omitempty"`
 }
 
 type Fixture struct {
@@ -224,6 +225,10 @@ func (c Case) Validate() error {
 			if c.Restart == nil || check.Expected != "" {
 				return ErrInvalidCase
 			}
+		case "compaction":
+			if c.Compaction == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
 		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write", "pdf_source_fields":
 			if c.PDF == nil || check.Expected != "" {
 				return ErrInvalidCase
@@ -283,6 +288,10 @@ func (c Case) Validate() error {
 	}
 	if slices.Contains(c.Requires, ownedRestartCapability) != (c.Restart != nil) ||
 		c.Restart != nil && c.Restart.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if slices.Contains(c.Requires, compactionCapability) != (c.Compaction != nil) ||
+		c.Compaction != nil && c.Compaction.validate(c) != nil {
 		return ErrInvalidCase
 	}
 	return nil

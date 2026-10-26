@@ -79,6 +79,7 @@ type Trial struct {
 	FinalDelivery        *FinalDeliveryEvidence        `json:"final_delivery,omitempty"`
 	SkillSelection       *SkillSelectionEvidence       `json:"skill_selection,omitempty"`
 	Restart              *RestartEvidence              `json:"restart,omitempty"`
+	Compaction           *CompactionEvidence           `json:"compaction,omitempty"`
 }
 
 // Private, bounded native observations. They are not model input, authorization,

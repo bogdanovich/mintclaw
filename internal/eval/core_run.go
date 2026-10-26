@@ -50,7 +50,8 @@ func (run *coreEvidenceRun) approvalKeyWitness(home string, previous *interactio
 
 func deferredCoreEvidence(item Case) bool {
 	return item.Steering != nil || item.ReadRecovery != nil || item.NativeStop != nil ||
-		item.ApprovalDenied != nil || item.FinalDelivery != nil || item.SkillSelection != nil || item.Restart != nil
+		item.ApprovalDenied != nil || item.FinalDelivery != nil || item.SkillSelection != nil || item.Restart != nil ||
+		item.Compaction != nil
 }
 
 // One owner captures all bounded core observations after native stop and before
@@ -138,6 +139,12 @@ func (run *coreEvidenceRun) finish(
 			trial.Restart.Code = "owned_scope_unavailable"
 			if targetGenerationsVerdict(*report) == Pass && len(report.TargetGenerations) >= 2 {
 				refreshRestartScope(ctx, target, &trial)
+			}
+		}
+		if trial.Compaction != nil && trial.ExecutionVerdict == Pass {
+			trial.Compaction.Code = "owned_scope_unavailable"
+			if readRecoveryOwnedReady(*report) {
+				refreshCompactionScope(ctx, target, &trial, facts, filter)
 			}
 		}
 		finalized = append(finalized, finalizedTrial{index: index, item: pending.item, trial: trial})
