@@ -248,7 +248,8 @@ func TestProviderAndSeahorseConversionsPreserveDetachedTurnEnvelope(t *testing.T
 		Role:    "user",
 		Content: "visible request",
 		TurnEnvelope: &protocoltypes.TurnEnvelope{
-			Version: protocoltypes.TurnEnvelopeVersion1,
+			Version:                protocoltypes.TurnEnvelopeVersion1,
+			DocumentConversationID: "docmsg_derived-round-trip",
 			Parts: []protocoltypes.TurnEnvelopePart{
 				{ID: "current-time", Content: "2026-09-26T12:00:00-07:00"},
 			},
@@ -265,6 +266,9 @@ func TestProviderAndSeahorseConversionsPreserveDetachedTurnEnvelope(t *testing.T
 	})
 	if len(result) != 1 || result[0].TurnEnvelope == nil {
 		t.Fatalf("round-trip envelope = %#v", result)
+	}
+	if documentConversationID(result[0]) != "docmsg_derived-round-trip" {
+		t.Fatal("derived context lost canonical diagnostic provenance")
 	}
 	stored.TurnEnvelope.Parts[0].Content = "mutated derived copy"
 	if got := result[0].TurnEnvelope.Parts[0].Content; got != "2026-09-26T12:00:00-07:00" {

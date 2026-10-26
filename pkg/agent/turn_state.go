@@ -435,6 +435,7 @@ func (state *LLMIterationState) setCanonicalAttemptMessages(
 		return nil
 	}
 	state.diagnosticMessages = cloneProviderMessages(messages)
+	state.protectedDiagnosticContext = state.protectedDiagnosticContext || hasDocumentConversation(messages)
 	state.promptCacheTailStart = boundary.Start
 	state.promptCacheTailBoundaryFound = boundary.Found
 	projected, err := projectLiveUserInputs(messages, state.liveUserInputs)
@@ -462,7 +463,11 @@ func (state *LLMIterationState) diagnosticMessagesForAttempt() []providers.Messa
 	if state == nil {
 		return nil
 	}
-	return stripCanonicalMessageStateFromAll(state.diagnosticMessages)
+	messages := state.diagnosticMessages
+	if hasDocumentConversation(messages) {
+		messages = omitProtectedDiagnosticContext(messages)
+	}
+	return stripCanonicalMessageStateFromAll(messages)
 }
 
 func (state *LLMIterationState) recordResponseSource(
