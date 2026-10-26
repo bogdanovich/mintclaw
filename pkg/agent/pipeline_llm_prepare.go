@@ -119,6 +119,7 @@ func (p *Pipeline) prepareLLMRequest(
 	// must never clear it.
 	llm.liveUserInputs = append([]liveToolContextProjection(nil), exec.liveToolContexts...)
 	llm.protectedDiagnosticContext = diagnosticCurrentTurnContainsSensitiveEvidence(llm.callMessages) ||
+		hasDocumentConversation(llm.callMessages) ||
 		hasLiveUserInput(llm.liveUserInputs)
 	promptCacheTailStart, promptCacheTailBoundaryFound := promptCacheDynamicTailStart(llm.callMessages)
 	frozenTurnMessages := cloneProviderMessages(llm.callMessages)

@@ -10,6 +10,8 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
+const protectedConversationDiagnosticReceipt = "Ordinary form conversation omitted from diagnostic state."
+
 const (
 	protectedTurnFinalDiagnosticReceipt = "Protected model response omitted from diagnostic state."
 	diagnosticTurnInputBytes            = 4 * 1024
@@ -161,7 +163,7 @@ func diagnosticMessageContainsSensitiveEvidence(
 		!diagnosticToolPreviewAllowed(result.toolName)) {
 		return true
 	}
-	return len(message.Attachments) > 0 || len(message.Media) > 0 ||
+	return documentConversationID(message) != "" || len(message.Attachments) > 0 || len(message.Media) > 0 ||
 		diagnosticToolCallsContainSensitiveEvidence(message.ToolCalls) ||
 		messageMentionsLocalPDFPath(message.Content) ||
 		messageMentionsLocalPDFPath(message.ReasoningContent) ||
@@ -386,6 +388,42 @@ func diagnosticMessageClassifications(messages []providers.Message) []diagnostic
 		}
 	}
 	return result
+}
+
+// Ordinary-history permission does not authorize diagnostic export. Once the
+// model can read authored form conversation, any part of its response may quote
+// it, even during a later unrelated turn. Preserve metadata, not raw context.
+func hasDocumentConversation(messages []providers.Message) bool {
+	for _, message := range messages {
+		if documentConversationID(message) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func documentConversationID(message providers.Message) string {
+	if message.TurnEnvelope == nil {
+		return ""
+	}
+	return message.TurnEnvelope.DocumentConversationID
+}
+
+func omitProtectedDiagnosticContext(messages []providers.Message) []providers.Message {
+	projected := cloneProviderMessages(messages)
+	for index := range projected {
+		projected[index].Content = protectedConversationDiagnosticReceipt
+		projected[index].ReasoningContent = ""
+		projected[index].Media = nil
+		projected[index].Attachments = nil
+		projected[index].SystemParts = nil
+		for callIndex := range projected[index].ToolCalls {
+			projected[index].ToolCalls[callIndex].Arguments = nil
+			projected[index].ToolCalls[callIndex].ThoughtSignature = ""
+			projected[index].ToolCalls[callIndex].ToolFeedbackExplanation = ""
+		}
+	}
+	return projected
 }
 
 func addDiagnosticValue[T comparable](item map[string]any, key string, value T) {

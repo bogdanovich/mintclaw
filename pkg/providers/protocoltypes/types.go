@@ -207,6 +207,12 @@ const TurnEnvelopeVersion1 = 1
 type TurnEnvelope struct {
 	Version int                `json:"version"`
 	Parts   []TurnEnvelopePart `json:"parts,omitempty"`
+	// DocumentConversationID binds ordinary PDF-chat input to durable ingress
+	// and diagnostic provenance. It is never rendered into the model prompt,
+	// and grants no field, task or output authority. The existing envelope
+	// carries it through canonical and derived context storage without a second
+	// transcript, an additional database column or a new prompt part.
+	DocumentConversationID string `json:"document_conversation_id,omitempty"`
 }
 
 // Clone returns a detached copy suitable for crossing a session boundary.
