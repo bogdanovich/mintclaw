@@ -43,13 +43,17 @@ does not reopen C0 or E0-E5.
 | C3d | C2 | Final-once delivery with streaming/non-streaming controls | Implemented; real-CLI repeat-three control, negative/unknown controls and frozen grading validated; durable gateway streaming guard is an explicit qualification blocker |
 | C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Queued |
 | C3f | C1q | Controlled small context and actual compaction witness | Queued |
-| C3g | C1q | Pinned native skill selection and no-skill control | Queued |
+| C3g | C1q | Pinned native skill selection and no-skill control | Bounded typed snapshot hash implemented/model-free validated in existing metadata logger; review/merge pending; full scenario remains queued |
 | Qualification | All prerequisites | Fixed attempts/batches, result matrix, explicit promotion | C1/C2/C3a fixed campaigns complete; C3b and later live campaigns not started; goal active |
 
 Split genuine prerequisites when needed, but do not silently redefine contracts
 or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
 
 ## Scenario Matrix
+
+The [skill context observation](../reference/skill-context-observation.md)
+commits to existing typed native snapshots without raw identity or full-payload
+logging. This prerequisite does not itself implement or qualify C3g.
 
 | Scenario | Definition/Harness | Required Native Evidence | Live/Default |
 | --- | --- | --- | --- |
