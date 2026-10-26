@@ -56,6 +56,9 @@ func assessCoreConversation(
 		if item.FinalDelivery != nil {
 			trial.Code = "required_final_delivery_check_not_passed"
 		}
+		if item.SkillSelection != nil {
+			trial.Code = "required_skill_selection_check_not_passed"
+		}
 		return
 	}
 	judgement := judgeConversation(ctx, judge, item, steeringJudgeEvents(*trial))
@@ -72,6 +75,9 @@ func assessCoreConversation(
 }
 
 func gradeCoreChecks(item Case, trial Trial, report RunReport, workspace string) []CheckResult {
+	if item.SkillSelection != nil {
+		return gradeSkillSelectionChecks(item, trial, report, workspace)
+	}
 	if item.ApprovalDenied != nil {
 		return gradeApprovalDeniedChecks(item, trial, report, workspace)
 	}

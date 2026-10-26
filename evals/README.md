@@ -30,8 +30,8 @@ browser/owned-target execution and baseline comparison have their own evidence c
 live scenario qualification.
 General cases require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
-The corpus has 23 cases: six active/default General, pending isolation, tool recovery,
-native stop, approval denial and final delivery,
+The corpus has 24 cases: six active/default General, pending isolation, tool recovery,
+native stop, approval denial, final delivery and skill selection,
 six pending PDF and six pending browser. The fixed
 [C2 campaign](../docs/operations/manual-agent-evals-core-c2-20261025.md) qualified
 boundary and both order modes with 3/3 batches; it also retains one failed order
@@ -48,6 +48,9 @@ it is distinct from local driver stop and is not yet live-qualified.
 The pending [approval denial contract](../docs/reference/core-approval-denied-eval.md)
 uses a separate single-file protected-write profile, native prompt-bound denial,
 terminal/history/log witnesses and an independent unchanged-target census.
+The pending [skill selection contract](../docs/reference/core-skill-selection-eval.md)
+uses a pinned read-only skill, native `/use` and complete typed revision digests
+with contrasting controls. Model-free native validation is not live qualification.
 Steering order records separate explicit
 `one-at-a-time`/`all` profile variants; native same-sender inputs coalesce in FIFO
 order in both modes. These live cases hold one read, not a parallel tool batch or

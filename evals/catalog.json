@@ -17,6 +17,12 @@
   ],
   "cases": [
     {
+      "id": "general.skills.selection",
+      "status": "pending",
+      "default": false,
+      "reason": "C3g native selection/revision and no-selection controls are implemented; separate bounded live qualification and immutable fixed batch have not run."
+    },
+    {
       "id": "general.approval.denied",
       "status": "pending",
       "default": false,

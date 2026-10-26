@@ -146,6 +146,10 @@ func Grade(
 			finalDeliveryEvidenceCode(trial, item.Case, workspace) != "") {
 			return RunReport{}, ErrGrade
 		}
+		if item.Case.SkillSelection != nil && (!readRecoveryOwnedReady(original) ||
+			skillSelectionEvidenceCode(trial, item.Case, workspace) != "") {
+			return RunReport{}, ErrGrade
+		}
 		if item.Case.PDF != nil && item.Case.PDF.Output == "required" ||
 			item.Case.Browser != nil && item.Case.Browser.Scenario == "artifact" {
 			var raw []byte
@@ -347,12 +351,14 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 		(item.Case.NativeStop != nil) != (trial.NativeStop != nil) ||
 		(item.Case.ApprovalDenied != nil) != (trial.ApprovalDenied != nil) ||
 		(item.Case.FinalDelivery != nil) != (trial.FinalDelivery != nil) ||
+		(item.Case.SkillSelection != nil) != (trial.SkillSelection != nil) ||
 		trial.Repetition != summary.Repetition ||
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||
 		!trial.TransportClosed || !trial.EvidenceEligible || trial.ExecutionVerdict != Pass ||
 		!offlineGradeFactsEligible(item.Case) ||
 		item.Case.PDF == nil && item.Case.ReadRecovery == nil && item.Case.ApprovalDenied == nil &&
+			item.Case.SkillSelection == nil &&
 			len(item.Case.Fixtures) != 0 ||
 		(item.Case.Browser == nil) != (trial.Browser == nil) ||
 		len(item.Case.Rubric) == 0 ||

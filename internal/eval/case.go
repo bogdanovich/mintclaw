@@ -47,6 +47,7 @@ type Case struct {
 	NativeStop     *NativeStopCase     `json:"native_stop,omitempty"`
 	ApprovalDenied *ApprovalDeniedCase `json:"approval_denied,omitempty"`
 	FinalDelivery  *FinalDeliveryCase  `json:"final_delivery,omitempty"`
+	SkillSelection *SkillSelectionCase `json:"skill_selection,omitempty"`
 }
 
 type Fixture struct {
@@ -214,6 +215,10 @@ func (c Case) Validate() error {
 			if c.FinalDelivery == nil || check.Expected != "" {
 				return ErrInvalidCase
 			}
+		case "skill_selection":
+			if c.SkillSelection == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
 		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write", "pdf_source_fields":
 			if c.PDF == nil || check.Expected != "" {
 				return ErrInvalidCase
@@ -265,6 +270,10 @@ func (c Case) Validate() error {
 	}
 	if slices.Contains(c.Requires, finalDeliveryCapability) != (c.FinalDelivery != nil) ||
 		c.FinalDelivery != nil && c.FinalDelivery.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if slices.Contains(c.Requires, skillSelectionCapability) != (c.SkillSelection != nil) ||
+		c.SkillSelection != nil && c.SkillSelection.validate(c) != nil {
 		return ErrInvalidCase
 	}
 	return nil
