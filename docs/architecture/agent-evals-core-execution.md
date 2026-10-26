@@ -85,8 +85,18 @@ and five run-wide unknown controls. Compaction-attempt traces required a fixed
 64-file retention limit only in this dedicated profile; all ordinary profiles
 retain sixteen files and unchanged byte/record/content limits. An earlier
 broader local run failed at the existing skill-selection CLI time bound; no
-cause was established and it is not counted as a broader pass. The latest
-broader/race run and the compaction PR gates remain outstanding.
+cause was established and it is not counted as a broader pass. The selected
+broader race run passes locally (114.258s). The complete local package run did
+not pass: an owned-restart privacy observation was unavailable, then the
+declared twelve-minute package bound expired during a later test. The CLI
+package passed (9.358s). A current Linux model-free selection passes all
+58 tests, including all seven native C3 controls and frozen grading. The
+compaction PR's review/merge gates remain outstanding. Its initial CI exposed
+an existing worker-process cancellation-race test that omitted the valid
+pre-write disconnect outcome; the independent test-only
+[#1912](https://github.com/bogdanovich/mintclaw/pull/1912) fix was reviewed and
+merged after green exact-head CI and owner PR-root approval. No runtime
+behavior, terminal assertion, timeout or test skip changed.
 
 | Scenario | Definition/Harness | Required Native Evidence | Live/Default |
 | --- | --- | --- | --- |
