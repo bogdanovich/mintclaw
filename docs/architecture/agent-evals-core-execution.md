@@ -41,7 +41,7 @@ does not reopen C0 or E0-E5.
 | C3b | C2 | Native active stop/reuse, distinct from local driver stop | Implemented/merged #1897-#1898; native model-free validation and green reviewed CI; live qualification pending |
 | C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Implemented/merged #1899-#1900; native model-free validation and green reviewed CI; live qualification pending |
 | C3d | C2 | Final-once delivery with streaming/non-streaming controls | Implemented; real-CLI repeat-three control, negative/unknown controls and frozen grading validated; durable gateway streaming guard is an explicit qualification blocker |
-| C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Queued |
+| C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Owner/successor prerequisite implemented and model-free validated on macOS/Linux; review/merge pending; versioned case and run-scoped frozen rollup still required |
 | C3f | C1q | Controlled small context and actual compaction witness | Queued |
 | C3g | C1q | Pinned native skill selection and no-skill control | Bounded typed snapshot hash implemented/model-free validated in existing metadata logger; review/merge pending; full scenario remains queued |
 | Qualification | All prerequisites | Fixed attempts/batches, result matrix, explicit promotion | C1/C2/C3a fixed campaigns complete; C3b and later live campaigns not started; goal active |
@@ -54,6 +54,10 @@ or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
 The [skill context observation](../reference/skill-context-observation.md)
 commits to existing typed native snapshots without raw identity or full-payload
 logging. This prerequisite does not itself implement or qualify C3g.
+
+The [owned restart foundation](../reference/eval-owned-restart.md) is an
+internal prerequisite only. It does not make `history.restart` an implemented
+or qualified scenario and introduces no public used-home/attach option.
 
 | Scenario | Definition/Harness | Required Native Evidence | Live/Default |
 | --- | --- | --- | --- |
