@@ -40,7 +40,7 @@ does not reopen C0 or E0-E5.
 | C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Implemented/merged #1895; qualification pass, fixed batch 1 pass/2 judge errors; pending |
 | C3b | C2 | Native active stop/reuse, distinct from local driver stop | Implemented/merged #1897-#1898; native model-free validation and green reviewed CI; live qualification pending |
 | C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Implemented/merged #1899-#1900; native model-free validation and green reviewed CI; live qualification pending |
-| C3d | C2 | Final-once delivery with streaming/non-streaming controls | Queued |
+| C3d | C2 | Final-once delivery with streaming/non-streaming controls | Implemented; real-CLI repeat-three control, negative/unknown controls and frozen grading validated; durable gateway streaming guard is an explicit qualification blocker |
 | C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Queued |
 | C3f | C1q | Controlled small context and actual compaction witness | Queued |
 | C3g | C1q | Pinned native skill selection and no-skill control | Queued |
@@ -60,13 +60,22 @@ or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
 | `general.session.isolation` | C2 scope-pair, #1893 | Distinct owners, enclosed held reads, scoped markers/history/delivery | Qualification pass; batch 3 inconclusive from HTTP 429/unknown usage; pending |
 | `general.tools.recovery` | C3a, #1895 | Failed read then successful pinned-fixture read | Qualification pass; batch 1 pass/2 judge provider errors; pending/non-default |
 | `general.control.stop` | C3b typed in-flight native control | Terminal abort, canceled held read, absent queued B, canonical pairing, outbox census and new final | Pending/non-default; no live qualification |
-| `general.approval.denied` | C3c typed narrow hook/write profile | HMAC-bound exact denial, terminal resolution, canonical pairing, no execution, unchanged target and complete delivery | Pending/non-default; no live qualification |
-| `general.delivery.final-once` | Queued C3d | Request/outbox/delivery identity, not streaming-revision counts | Not present |
+| `general.approval.denied` | C3c, #1900 | HMAC-bound exact denial, terminal resolution, canonical pairing, no execution, unchanged target and complete delivery | Pending/non-default; no live qualification |
+| `general.delivery.final-once` | C3d typed native settlement/history/delivery observer | Stable create/update identity; delivered receipt per request; complete terminal census | Pending/non-default: durable gateway intentionally disables configured streaming; no paid qualification |
 | `general.history.restart` | Queued C3e | Distinct owned processes, preserved session/history | Not present |
 | `general.context.compaction` | Queued C3f | Actual compaction receipt and corrected recall | Not present |
 | `general.skills.selection` | Queued C3g | Selected pinned skill/revision and contrasting control | Not present |
 
 ## C1a Contract
+
+C3d's [delivery contract](../reference/core-final-delivery-eval.md) retains a
+real stream requirement instead of accepting ordinary finals. Its explicit
+nonstreaming native control is not a streaming qualification. No runtime
+delivery guard or durable spool is bypassed to manufacture a green result.
+The bounded wire census observes both sent request IDs before follow-up
+filtering and through reader shutdown. A late duplicate first final or update
+is rejected even when unchanged canonical history/outbox and the filtered
+transcript would pass; frozen grading requires that complete capture.
 
 Optional catalog `cases` narrows individual suite members without changing case
 JSON/digests. Overrides name unique existing cases, validate like suite policies,
@@ -141,8 +150,8 @@ Operator-owned reports are observations, not hostile-filesystem attestations;
 `compare` summarizes recorded outcomes rather than performing a new grading.
 
 Model-free controls are not live qualification. C1q's separately retained live
-campaign qualifies these two contracts; C2/C3a and the C3b/C3c implementations below leave four C3
-contracts remain queued.
+campaign qualifies these two contracts. C3e restart, C3f compaction and C3g skill
+selection remain queued; C3b-C3d implementations do not claim live qualification.
 
 ## C2 Active Tool Prerequisite
 
@@ -219,7 +228,8 @@ native AgentLoop is the sole queue/cancellation authority.
 Model-free CLI controls include real queued input/abort/reuse, failure/unknown
 gates, and frozen regrade after deleting live observations. They are not live
 qualification. Stop stays pending/non-default until its separately bounded fixed
-campaign; four later C3 contracts remain queued. The [C3a report](../operations/manual-agent-evals-core-c3a-20261025.md)
+campaign; restart, compaction and skill selection remain queued. The
+[C3a report](../operations/manual-agent-evals-core-c3a-20261025.md)
 retains recovery's immutable fixed results; no further paid recovery run is planned.
 
 ## C3a Read Recovery
@@ -236,7 +246,7 @@ retains a passing qualification and a batch of one pass/two judge errors on
 immutable `2853ede5a`. All four target conversations and required hard checks
 passed; two batch judge calls returned `provider_unavailable` without usage.
 Their deeper provider error class was not retained; do not infer quota/HTTP 429.
-Recovery stays pending/non-default, with no retry or candidate change. Four C3
+Recovery stays pending/non-default, with no retry or candidate change. Three C3
 contracts remain queued; the overall goal is active and incomplete.
 
 ## C3c Native Denial

@@ -20,6 +20,7 @@ type Event struct {
 	ID                 string              `json:"id"`
 	Turn               int                 `json:"turn"`
 	Kind               string              `json:"kind"`
+	WireType           string              `json:"wire_type,omitempty"`
 	RequestID          string              `json:"request_id"`
 	MessageID          string              `json:"message_id,omitempty"`
 	Content            string              `json:"content,omitempty"`
@@ -74,6 +75,7 @@ type Trial struct {
 	ReadRecovery         *ReadRecoveryEvidence         `json:"read_recovery,omitempty"`
 	NativeStop           *NativeStopEvidence           `json:"native_stop,omitempty"`
 	ApprovalDenied       *ApprovalDeniedEvidence       `json:"approval_denied,omitempty"`
+	FinalDelivery        *FinalDeliveryEvidence        `json:"final_delivery,omitempty"`
 }
 
 // Private, bounded native observations. They are not model input, authorization,

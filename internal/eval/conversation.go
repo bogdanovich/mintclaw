@@ -595,7 +595,8 @@ func responseEvent(message protocol.MintClawMessage, turn int) (Event, error) {
 		return Event{}, ErrInvalidJSON
 	}
 	event := Event{
-		Turn: turn, Kind: "stream", RequestID: payloadString(message.Payload, protocol.PayloadKeyRequestID),
+		WireType: message.Type,
+		Turn:     turn, Kind: "stream", RequestID: payloadString(message.Payload, protocol.PayloadKeyRequestID),
 		MessageID: payloadString(message.Payload, protocol.PayloadKeyMessageID), Content: content,
 		AgentID:            payloadString(message.Payload, protocol.PayloadKeyAgentID),
 		SessionKey:         payloadString(message.Payload, protocol.PayloadKeySessionKey),

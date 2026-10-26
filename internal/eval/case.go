@@ -46,6 +46,7 @@ type Case struct {
 	ReadRecovery   *ReadRecoveryCase   `json:"read_recovery,omitempty"`
 	NativeStop     *NativeStopCase     `json:"native_stop,omitempty"`
 	ApprovalDenied *ApprovalDeniedCase `json:"approval_denied,omitempty"`
+	FinalDelivery  *FinalDeliveryCase  `json:"final_delivery,omitempty"`
 }
 
 type Fixture struct {
@@ -209,6 +210,10 @@ func (c Case) Validate() error {
 			if c.ApprovalDenied == nil || check.Expected != "" {
 				return ErrInvalidCase
 			}
+		case "final_delivery":
+			if c.FinalDelivery == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
 		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write", "pdf_source_fields":
 			if c.PDF == nil || check.Expected != "" {
 				return ErrInvalidCase
@@ -256,6 +261,10 @@ func (c Case) Validate() error {
 	}
 	if slices.Contains(c.Requires, approvalToolCapability) != (c.ApprovalDenied != nil) ||
 		c.ApprovalDenied != nil && c.ApprovalDenied.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if slices.Contains(c.Requires, finalDeliveryCapability) != (c.FinalDelivery != nil) ||
+		c.FinalDelivery != nil && c.FinalDelivery.validate(c) != nil {
 		return ErrInvalidCase
 	}
 	return nil
