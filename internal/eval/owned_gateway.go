@@ -76,15 +76,17 @@ func targetLifecycleMode(receipt *TargetLifecycle) string {
 }
 
 type ownedGateway struct {
-	command    *exec.Cmd
-	profile    preparedProfile
-	done       chan struct{}
-	err        error
-	log        *boundedGatewayLog
-	stop       sync.Once
-	forced     atomic.Bool
-	admitted   bool
-	budgetSpec *evaltarget.Spec
+	command     *exec.Cmd
+	profile     preparedProfile
+	done        chan struct{}
+	err         error
+	log         *boundedGatewayLog
+	stop        sync.Once
+	forced      atomic.Bool
+	admitted    bool
+	budgetSpec  *evaltarget.Spec
+	identity    ownedLaunchIdentity
+	restartUsed atomic.Bool
 }
 
 type boundedGatewayLog struct {
@@ -145,33 +147,49 @@ func startOwnedGatewayWithFixtures(
 	if err != nil {
 		return nil, target, ErrOwnedGateway
 	}
+	target, err = admitOwnedGateway(ctx, child, preset, home, fixture, active)
+	return child, target, err
+}
+
+func admitOwnedGateway(
+	ctx context.Context, child *ownedGateway, preset Preset, home string,
+	fixture *browserFixtureHost, active *activeToolFixture,
+) (admittedTarget, error) {
+	var target admittedTarget
+	if ctx == nil || ctx.Err() != nil || child == nil || child.command == nil ||
+		child.command.Process == nil || child.profile.config == nil {
+		return target, ErrOwnedGateway
+	}
+	profile := child.profile
 	startupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		if !browserFixtureMatches(profile.config, fixture) || !activeToolMatches(preset, active) {
-			return child, admittedTarget{}, ErrOwnedGateway
+			return admittedTarget{}, ErrOwnedGateway
 		}
 		select {
 		case <-child.done:
-			return child, target, ErrOwnedGateway
+			return target, ErrOwnedGateway
 		default:
 		}
+		var err error
 		target, err = admitPreparedTargetWithFixtures(startupCtx, preset, home, fixture, active)
 		if err == nil {
 			if target.probe.PID != child.command.Process.Pid {
-				return child, admittedTarget{}, ErrOwnedGateway
+				return admittedTarget{}, ErrOwnedGateway
 			}
+			child.identity.bind(preset, profile, target)
 			child.admitted = true
 			target.activeTool, target.ownedLog = active, child.log.file.Name()
-			return child, target, nil
+			return target, nil
 		}
 		select {
 		case <-child.done:
-			return child, admittedTarget{}, ErrOwnedGateway
+			return admittedTarget{}, ErrOwnedGateway
 		case <-startupCtx.Done():
-			return child, admittedTarget{}, ErrOwnedGateway
+			return admittedTarget{}, ErrOwnedGateway
 		case <-ticker.C:
 		}
 	}
@@ -276,6 +294,12 @@ func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGatew
 func launchOwnedGatewayWithBudget(
 	profile preparedProfile, executable string, limits *providers.CallBudgetLimits,
 ) (*ownedGateway, error) {
+	return launchOwnedGatewayGeneration(profile, executable, limits, nil)
+}
+
+func launchOwnedGatewayGeneration(
+	profile preparedProfile, executable string, limits *providers.CallBudgetLimits, previous *ownedGateway,
+) (*ownedGateway, error) {
 	var spec *evaltarget.Spec
 	args := []string{"gateway"}
 	if limits != nil {
@@ -292,6 +316,16 @@ func launchOwnedGatewayWithBudget(
 		return nil, ErrOwnedGateway
 	}
 	defer func() { _ = root.Close() }()
+	identity, err := newOwnedLaunchIdentity(root, profile, executable, previous)
+	if err != nil {
+		return nil, ErrOwnedGateway
+	}
+	if previous != nil {
+		_, remaining, budgetErr := remainingOwnedBudget(previous)
+		if budgetErr != nil || limits == nil || *limits != remaining {
+			return nil, ErrOwnedGateway
+		}
+	}
 	// A stale ownership marker is deliberately not adopted or removed.
 	lock, err := root.OpenFile(".eval-gateway-owner", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -302,11 +336,18 @@ func launchOwnedGatewayWithBudget(
 	}
 	// Keep native tools' os.TempDir scratch inside the observed private home.
 	// An existing directory is never adopted, including after an earlier run.
-	if root.Mkdir(ownedGatewayTempDirectory, 0o700) != nil {
+	temporaryName := ownedGatewayTempDirectory
+	if previous != nil {
+		temporaryName = filepath.Join(ownedGatewayTempDirectory, "generation-"+uuid.NewString())
+	}
+	if root.Mkdir(temporaryName, 0o700) != nil {
 		_ = root.Remove(".eval-gateway-owner")
 		return nil, ErrOwnedGateway
 	}
-	temporary := filepath.Join(profile.home, ownedGatewayTempDirectory)
+	if previous == nil {
+		identity.temporary, _ = root.Lstat(ownedGatewayTempDirectory)
+	}
+	temporary := filepath.Join(profile.home, temporaryName)
 	logFile, err := root.OpenFile("eval-gateway-"+uuid.NewString()+".jsonl", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = root.Remove(".eval-gateway-owner")
@@ -329,7 +370,10 @@ func launchOwnedGatewayWithBudget(
 		_ = root.Remove(".eval-gateway-owner")
 		return nil, ErrOwnedGateway
 	}
-	child := &ownedGateway{command: command, profile: profile, done: make(chan struct{}), log: log, budgetSpec: spec}
+	child := &ownedGateway{
+		command: command, profile: profile, done: make(chan struct{}), log: log, budgetSpec: spec,
+		identity: identity,
+	}
 	go func() {
 		defer close(child.done)
 		child.err = command.Wait()
