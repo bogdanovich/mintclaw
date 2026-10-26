@@ -59,6 +59,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		!options.StartTarget) {
 		return RunReport{}, ErrUnsafeTarget
 	}
+	if hasCompaction(preset) && (len(cases) != 1 || options.Repeat > 3) {
+		return RunReport{}, ErrUnsafeTarget
+	}
 	seen := make(map[string]bool)
 	if preset.Validate() != nil ||
 		(preset.TargetCallBudget != nil || preset.ActiveTool != nil) && !options.StartTarget {
@@ -78,7 +81,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			validateSkillSelectionBinding(
 				preset,
 				item.Case,
-			) != nil || validateRestartBinding(preset, item.Case) != nil {
+			) != nil || validateRestartBinding(preset, item.Case) != nil || validateCompactionBinding(preset, item.Case) != nil {
 			return RunReport{}, ErrUnsafeTarget
 		}
 		if item.Case.Steering != nil && (preset.ActiveTool == nil || !options.StartTarget ||
@@ -606,6 +609,11 @@ func runAdmittedTrial(
 		}
 		return runDomainConversation(caseCtx, transport, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, restart)
+	}
+	if item.Case.Compaction != nil {
+		domain := &compactionConversation{item: item.Case, target: target, session: sessionID}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, domain)
 	}
 	if item.Case.Steering != nil {
 		if item.Case.Steering.Peer != nil {

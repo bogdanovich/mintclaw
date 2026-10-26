@@ -41,8 +41,8 @@ does not reopen C0 or E0-E5.
 | C3b | C2 | Native active stop/reuse, distinct from local driver stop | Implemented/merged #1897-#1898; native model-free validation and green reviewed CI; live qualification pending |
 | C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Implemented/merged #1899-#1900; native model-free validation and green reviewed CI; live qualification pending |
 | C3d | C2 | Final-once delivery with streaming/non-streaming controls | Implemented; real-CLI repeat-three control, negative/unknown controls and frozen grading validated; durable gateway streaming guard is an explicit qualification blocker |
-| C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Foundation #1903 merged; full typed case/run-scoped rollup and real-CLI repeat-three/frozen grading pass; review/merge and live qualification pending |
-| C3f | C1q | Controlled small context and actual compaction witness | Queued |
+| C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Foundation #1903 and complete scenario #1907 merged after all-green exact-head CI, substantive review and owner PR-root approval; live qualification not started |
+| C3f | C1q | Controlled small context and actual compaction witness | Typed five-input/numeric-profile/native barrier and frozen grading implemented; model-free native repeat-three passes; broader validation/review pending |
 | C3g | C1q | Pinned native skill selection and no-skill control | Complete implementation #1906 merged after all-green CI and SHA-bound review; native model-free repeat-three/frozen controls pass; live qualification not started |
 | Qualification | All prerequisites | Fixed attempts/batches, result matrix, explicit promotion | C1/C2/C3a fixed campaigns complete; C3b and later live campaigns not started; goal active |
 
@@ -69,6 +69,25 @@ adds actual same-session continuation and independently retained generation
 evidence; it remains pending/non-default, not live-qualified. Neither path
 introduces a public used-home/attach option.
 
+The complete restart implementation was reviewed and merged in
+[#1907](https://github.com/bogdanovich/mintclaw/pull/1907). Its model-free
+repeat-three control starts four actual owned generations and accounts for six
+target calls. Offline grading succeeds after deleting live stores and logs.
+The first CI run caught an incorrect PDF-only catalog count in a CLI test;
+correcting that assertion left all six deferred PDF cases unchanged. The final
+head passed all fourteen checks and substantive SHA-bound review before merge.
+
+The compaction control uses five actual inputs per session and waits for the
+native completed eight-message frontier before recall. The latest model-free
+repeat-three run passes with fifteen observed root traces, auxiliary summary
+calls included in native budget counters, fourteen frozen negative controls
+and five run-wide unknown controls. Compaction-attempt traces required a fixed
+64-file retention limit only in this dedicated profile; all ordinary profiles
+retain sixteen files and unchanged byte/record/content limits. An earlier
+broader local run failed at the existing skill-selection CLI time bound; no
+cause was established and it is not counted as a broader pass. The latest
+broader/race run and the compaction PR gates remain outstanding.
+
 | Scenario | Definition/Harness | Required Native Evidence | Live/Default |
 | --- | --- | --- | --- |
 | `general.context.correction` | C1a scripted | Same session, corrected final, old marker absent from final; semantic judge | Qualification pass + fixed 3/3; active/default |
@@ -81,7 +100,7 @@ introduces a public used-home/attach option.
 | `general.approval.denied` | C3c, #1900 | HMAC-bound exact denial, terminal resolution, canonical pairing, no execution, unchanged target and complete delivery | Pending/non-default; no live qualification |
 | `general.delivery.final-once` | C3d typed native settlement/history/delivery observer | Stable create/update identity; delivered receipt per request; complete terminal census | Pending/non-default: durable gateway intentionally disables configured streaming; no paid qualification |
 | `general.history.restart` | C3e retained owner/successor and generation-scoped observer | Distinct native child receipts; decreasing budget ceiling; unchanged history prefix and grounded recall | Pending/non-default; model-free native repeat-three/offline grade and broader controls pass; no live qualification |
-| `general.context.compaction` | Queued C3f | Actual compaction receipt and corrected recall | Not present |
+| `general.context.compaction` | C3f numeric-only pressure profile and native completion barrier | Paired positive count-eight receipt before recall; native turn ordering; ten canonical messages and five deliveries | Pending/non-default; native repeat-three/frozen controls pass; no live qualification |
 | `general.skills.selection` | C3g typed native selection observer and pinned read-only profile | Complete native revision digest; selected turn and two empty controls; unchanged file/history/delivery census | Pending/non-default; model-free real-CLI repeat-three and frozen grading pass; no live qualification |
 
 ## C1a Contract

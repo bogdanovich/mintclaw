@@ -157,6 +157,11 @@ func Grade(
 			initialTargetBudget(original).Spec.Limits != *preset.TargetCallBudget) {
 			return RunReport{}, ErrGrade
 		}
+		if item.Case.Compaction != nil && (validateCompactionBinding(preset, item.Case) != nil ||
+			!readRecoveryOwnedReady(original) || trial.Compaction.Profile != *preset.Compaction ||
+			compactionEvidenceCode(trial, item.Case, workspace) != "") {
+			return RunReport{}, ErrGrade
+		}
 		if item.Case.PDF != nil && item.Case.PDF.Output == "required" ||
 			item.Case.Browser != nil && item.Case.Browser.Scenario == "artifact" {
 			var raw []byte
@@ -367,6 +372,7 @@ func gradeEligible(trial Trial, item LoadedCase, summary TrialSummary, preset Pr
 		(item.Case.FinalDelivery != nil) != (trial.FinalDelivery != nil) ||
 		(item.Case.SkillSelection != nil) != (trial.SkillSelection != nil) ||
 		(item.Case.Restart != nil) != (trial.Restart != nil) ||
+		(item.Case.Compaction != nil) != (trial.Compaction != nil) ||
 		trial.Repetition != summary.Repetition ||
 		trial.Verdict != summary.Verdict || trial.Code != summary.Code ||
 		trial.CaseSHA256 != item.Digest || trial.AgentID != preset.ExpectedAgent || !validID(trial.SessionID) ||

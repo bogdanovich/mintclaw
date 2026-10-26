@@ -62,6 +62,9 @@ func assessCoreConversation(
 		if item.Restart != nil {
 			trial.Code = "required_restart_check_not_passed"
 		}
+		if item.Compaction != nil {
+			trial.Code = "required_compaction_check_not_passed"
+		}
 		return
 	}
 	judgement := judgeConversation(ctx, judge, item, steeringJudgeEvents(*trial))
@@ -78,6 +81,9 @@ func assessCoreConversation(
 }
 
 func gradeCoreChecks(item Case, trial Trial, report RunReport, workspace string) []CheckResult {
+	if item.Compaction != nil {
+		return gradeCompactionChecks(item, trial, report, workspace)
+	}
 	if item.SkillSelection != nil {
 		return gradeSkillSelectionChecks(item, trial, report, workspace)
 	}

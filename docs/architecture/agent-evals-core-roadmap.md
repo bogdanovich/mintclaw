@@ -80,7 +80,8 @@ and merged, but not yet live-qualified. C3d final delivery is implemented with a
 native durable-streaming qualification blocker. C3g skill selection is implemented
 with native revision/control evidence but remains pending qualification.
 Restart has a typed native generation contract with passing model-free controls.
-Compaction remains queued in the ledger.
+Compaction has a typed pressure/barrier contract with passing model-free controls.
+These implementations do not imply live qualification or roadmap completion.
 P0 is the first useful expansion; P1 follows after its required harness support. Use synthetic random
 markers and local fixtures, never production conversations or accounts. Fixed
 user actions are preferable to an LLM user for these mechanical regressions.

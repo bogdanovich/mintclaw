@@ -17,6 +17,12 @@
   ],
   "cases": [
     {
+      "id": "general.context.compaction",
+      "status": "pending",
+      "default": false,
+      "reason": "C3f native compaction/corrected-recall contract awaits bounded live qualification."
+    },
+    {
       "id": "general.skills.selection",
       "status": "pending",
       "default": false,

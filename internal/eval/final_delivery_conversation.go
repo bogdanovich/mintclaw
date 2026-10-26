@@ -65,6 +65,16 @@ func (domain *finalDeliveryConversation) observe(ctx context.Context, event Even
 		SessionID: domain.sessionID, SessionKey: event.SessionKey,
 		AgentID: domain.target.preset.ExpectedAgent, Events: domain.finals,
 	}
+	row, err := waitFinalDeliverySettlement(ctx, domain.target, trial, event, len(domain.finals))
+	if err == nil {
+		domain.settled = append(domain.settled, row)
+	}
+	return err
+}
+
+func waitFinalDeliverySettlement(
+	ctx context.Context, target admittedTarget, trial Trial, event Event, expected int,
+) (SteeringOutboxEvidence, error) {
 	// A wire final precedes the durable receipt. Observe native settlement,
 	// rather than sleeping or treating the broadcast as its own delivery proof.
 	settlement, cancel := context.WithTimeout(ctx, time.Second)
@@ -72,23 +82,22 @@ func (domain *finalDeliveryConversation) observe(ctx context.Context, event Even
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		rows, names, err := readSteeringOutbox(settlement, domain.target)
+		rows, names, err := readSteeringOutbox(settlement, target)
 		if errors.Is(err, ErrPrivateEvidence) {
-			return err
+			return SteeringOutboxEvidence{}, err
 		}
 		if err == nil && validFinalDeliveryCensus(
-			rows, names, trial, domain.target.preset.ExpectedWorkspace, len(domain.finals),
+			rows, names, trial, target.preset.ExpectedWorkspace, expected,
 		) {
 			for _, row := range rows {
-				if finalDeliveryReceipt(row, event, trial, domain.target.preset.ExpectedWorkspace) {
-					domain.settled = append(domain.settled, row)
-					return nil
+				if finalDeliveryReceipt(row, event, trial, target.preset.ExpectedWorkspace) {
+					return row, nil
 				}
 			}
 		}
 		select {
 		case <-settlement.Done():
-			return errNativeEvidence
+			return SteeringOutboxEvidence{}, errNativeEvidence
 		case <-ticker.C:
 		}
 	}

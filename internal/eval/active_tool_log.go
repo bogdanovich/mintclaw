@@ -72,6 +72,8 @@ func readOwnedToolLog(
 		) == nil
 	} else if hasSkillSelection(target.preset) && target.activeTool == nil {
 		profileMatches = validateSkillSelectionPolicy(target.config, target.preset) == nil
+	} else if hasCompaction(target.preset) && target.activeTool == nil {
+		profileMatches = validateCompactionPolicy(target.config, target.preset) == nil
 	}
 	if ctx == nil || ctx.Err() != nil || target.config == nil ||
 		!profileMatches || target.ownedLog == "" {
