@@ -77,12 +77,36 @@ before the owner does any manual work. After manual work, resume the same
 session, observe fresh state, fill privately, verify login and close as requested.
 Do not discard a human-cleared browser merely to navigate to a sign-in URL.
 
-For a confirmed failed public GET navigation, one repeat navigation to the
-same URL in the same session is allowed before asking for manual help. Honor
-an image-first request before retrying. Alternatively recover once through the
-public homepage and its observed sign-in link. Bound these attempts; never
-repeat a credential submission or an accepted/outcome-unknown external effect.
-If the block remains, send its image and use the assistance flow below.
+## Public-page error recovery
+
+For an observed failed public GET, including HTTP 403 or an Error Page, perform
+this recovery before asking for manual help unless the user explicitly requests
+immediate handoff or no retries. A successful `browser_act` invocation confirms
+dispatch, not a working website. A 403 response can install cookies needed by
+the next request; an address-bar Enter working later does not prove a bad URL.
+
+1. Keep the same session, profile, tab and URL. When capture is permitted, send
+   the obstacle first with `browser_capture` and `delivery=interaction`, and
+   confirm delivery. A screenshot-first request does not require immediate
+   handoff when one safe recovery can resolve the obstacle.
+2. Allow a brief settling interval, about three seconds. If the exact profile
+   advertises `privileged_execution`, a read-effect `browser_execute` may use
+   `async ({page}) => { await page.waitForTimeout(3000); }` with fresh document
+   authority. Otherwise take a fresh observation without inventing a wait API.
+   Observe again; if the page has recovered, continue without another request.
+3. If the public error remains, use `browser_act` to navigate to the exact same
+   public URL once, using fresh observation authority. Preserve cookies and the
+   browser: do not clear state, reopen a session, switch a profile/proxy, or
+   emulate browser-chrome keystrokes for this repeat.
+4. Observe the actual result. Continue when the requested page is available;
+   HTTP 200 alone is not proof. If a CAPTCHA or block remains, show its current
+   image and use the assistance flow below, retaining this same visible session.
+
+One recovery is the total automatic budget for this failed navigation, not one
+per new snapshot. Do not combine it with another homepage-recovery attempt.
+For a failed protected deep link, use Authentication recovery instead. Never
+repeat a credential submission, POST, checkout or accepted/outcome-unknown
+external effect. Do not run this public recovery after private login starts.
 
 ## Authentication recovery
 
@@ -119,6 +143,8 @@ First show the obstacle with `browser_capture` and `delivery=interaction`
 when capture is allowed. Confirm successful delivery before asking a question;
 normal delegated captures are retained for the final report. Do not assume a Security Measure
 page contains a text CAPTCHA. Do not solve it through an external solver.
+For a plain public navigation error, complete Public-page error recovery before
+asking for a manual step; screenshot delivery alone is not a handoff decision.
 
 For an observed text answer field, use `browser_input` to ask the human for
 the answer. This retains the exact live session and binds the protected answer
