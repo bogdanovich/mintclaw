@@ -186,7 +186,7 @@ def main():
                 with owned_server(args.xvfb, work / name) as environment:
                     host_case(args, name, environment, work / name)
             print(f"original Go host fixture round {attempt}: eleven cases PASS", flush=True)
-        print(f"native-keyboard fixture round {attempt}: thirty-three cases PASS", flush=True)
+        print(f"native-keyboard fixture round {attempt}: all required cases PASS", flush=True)
     print("Mechanism fixture only; full driver/host/model qualification remains required.", flush=True)
 
 
