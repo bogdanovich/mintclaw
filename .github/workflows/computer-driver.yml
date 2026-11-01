@@ -89,6 +89,9 @@ jobs:
             sha256sum go.mod go.sum pkg/computer/desktop/private_keyboard_linux.go \
               pkg/computer/desktop/private_keyboard_channel_linux.go \
               pkg/computer/desktop/private_keyboard_linux_test.go \
+              pkg/computer/desktop/private_keyboard_application_linux_test.go \
+              scripts/internal/computer-driver/gnome_keyboard_fixture.py \
+              scripts/internal/computer-driver/gnome_session_fixture.py \
               "$RUNNER_TEMP/mintclaw-window-keys/native-host.test" \
               "$RUNNER_TEMP/mintclaw-window-keys/build-receipt.txt"
           } > "$RUNNER_TEMP/mintclaw-window-keys/native-host-receipt.txt"

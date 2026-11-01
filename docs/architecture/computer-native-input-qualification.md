@@ -122,9 +122,53 @@ This repeat is separate from the earlier 3.22/4.57-second candidate runs; it is
 not a replacement for their recorded provenance or failures. All 15 CI checks
 and automated review passed before #1788's authorized merge.
 
+## Private Linux original-Go application fixture
+
+The separately opt-in private keyboard build includes
+`TestPrivateNativeApplicationHostQualification`. Its controller is
+`scripts/internal/computer-driver/gnome_keyboard_fixture.py`; it is not a public
+input tool or host. It requires a preinstalled selected GNOME/IBus/Text Editor
+tuple, a pinned virtual-server binary, private native worker and the matching Go
+test executable. The script installs nothing and never attaches to a user's
+desktop. Select hashes from the approved build and measured application tuple.
+
+```sh
+python3 scripts/internal/computer-driver/gnome_keyboard_fixture.py \
+  --xvfb /absolute/private/Xvfb --xvfb-sha256 "PINNED_XVFB_SHA256" \
+  --worker /absolute/private/native-keyboard-worker --worker-sha256 "PINNED_WORKER_SHA256" \
+  --host-probe /absolute/private/native-host.test --host-probe-sha256 "PINNED_GO_PROBE_SHA256" \
+  --application /usr/bin/gnome-text-editor --application-sha256 "SELECTED_APP_SHA256" \
+  --output /absolute/new/private-gnome-fixture --repetitions 20
+```
+
+Each round owns separate input/control X servers, private empty system/session
+buses, an IBus US engine, GNOME shell, HOME/cache/runtime and disabled audio
+endpoints. Native WM/bus/engine readiness must be observed before admission.
+Fixture activation occurs before input; the backend never receives a focus
+restore. The real application loads synthetic prefix/suffix text. The actual Go
+guard and input lease then authorize every native phase of a middle-of-text
+Unicode composition/save; only an independently read exact saved-artifact hash
+permits Finish. Cyrillic, CJK, Arabic, accents, combining text and a ZWJ emoji are
+included, without clipboard use or accessibility-root geometry matching.
+
+The Go test verifies that closing its action/resource worker preserves the
+caller's original guard/lease. Independent native queries check verified key
+cleanup, retained devices, original core focus and app/window lifetime. The
+no-input control must retain exact original bytes and create no private devices.
+Owned original process handles and a private marker scope teardown; residuals
+are checked before reporting cleanup complete. Retained devices are not removed
+from a live GTK session: the fixture deliberately ends its own virtual server.
+
+Reports keep full-driver, attached-host and model-task qualification false. This
+fixture supports one explicitly selected IME/app/hosting tuple; it neither
+establishes generic AT-SPI window identity nor qualifies public input admission,
+all native actions, full business tasks or twenty distinct model tasks. Failures
+stop the run and remain in its output; no uncertain input is replayed. Existing
+native fault/race, hosting and full-roadmap gates remain independent.
+
 ## Limits and remaining gates
 
-This harness is macOS-only because the Linux direct fixture run already uses
+The actual-companion launcher is macOS-only because the Linux direct fixture run already uses
 the explicitly selected GUI session, whereas macOS needs the actual app's TCC
 responsibility context. The actual-app harness does not itself qualify Linux
 input, a rebuilt companion identity, arbitrary native applications, pixel actions,
