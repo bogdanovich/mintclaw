@@ -46,6 +46,10 @@ func (*BrowserLoginTool) Description() string {
 		"and use discover, then authorize before any manual CAPTCHA or human handoff. Authorize needs only " +
 		"current page refs, reads no secret values and does not fill a form. Use operation discover " +
 		"to find matching names and credential_ids in the dedicated vault. No per-site setup is needed. " +
+		"For discover, not_found means a completed lookup with no matches. An unavailable lookup failed or timed out; " +
+		"it does not mean the Login is missing. Observe fresh state and retry discover once; " +
+		"if it remains unavailable, report lookup failure rather than absence. " +
+		"This is not permission to repeat a submission. " +
 		"Use credentials for a combined form, username/password for separate steps, and totp for a stored " +
 		"authenticator code. Supply only current observed field/submit refs and the selected credential_id; " +
 		"one website match is selected automatically. Omit account_alias for discovery. " +

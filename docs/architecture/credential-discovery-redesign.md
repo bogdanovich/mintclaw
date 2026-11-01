@@ -48,6 +48,25 @@ vault access to that item and its matched website domain for that browser
 session. Metadata discovery grants no value access. The service account remains
 read-only and restricted to the dedicated vault.
 
+### Metadata latency and failed lookup
+
+Overview listing has a 45-second budget including its shared-client queue;
+caller cancellation and shorter deadlines still win. This budget is separate
+from the unchanged 10-second full-item retrieval limit. No value retrieval,
+cached inventory or new permission is introduced by a longer metadata lookup.
+
+`not_found` from discovery means a completed search with no matches. `unavailable` means the
+search failed or timed out and must not be reported as a missing Login. The
+agent can repeat `discover` once with fresh browser authority, then reports an
+unavailable lookup if it still fails. Private submissions are not replayed.
+
+The 2026-11-01 eBay pilot returned `unavailable` after 11.251 seconds under the
+old 10-second metadata limit. A separate metadata-only operator search found
+one matching Login in 37.658 seconds including SDK initialization. That cold
+check does not measure listing alone; a timeout is the likely incident cause,
+while the Login's presence is confirmed. A virtual-time regression exercises a
+successful 11-second overview response without extending private retrieval.
+
 ## Generic login and second factor
 
 Use current observed element references rather than operator-authored selectors
