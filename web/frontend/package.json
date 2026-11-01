@@ -7,6 +7,14 @@
   "engines": {
     "node": "^20.19.0 || ^22.13.0 || >=24"
   },
+  "pnpm": {
+    "overrides": {
+      "minimatch@<11.0.1": "11.0.1",
+      "postcss-selector-parser@<6.1.5": "6.1.5",
+      "seroval@<1.6.11": "1.6.11",
+      "systeminformation@<5.33.16": "5.33.16"
+    }
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
