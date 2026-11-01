@@ -3,6 +3,7 @@ package bus
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -43,6 +44,10 @@ func TestInboundDocumentIntakeGuardSurvivesRestartAndCannotBeCleared(t *testing.
 	}
 	for _, guard := range []InboundDocumentIntakeGuard{
 		{},
+		{
+			JobID: message.Context.DocumentIntake.JobID, ModeID: message.Context.DocumentIntake.ModeID,
+			Reference: message.Context.DocumentIntake.Reference, ConversationHistory: true,
+		},
 		{JobID: "incomplete"},
 		documentIntakeTestGuard(),
 		{
@@ -108,5 +113,60 @@ func TestInboundDocumentIntakeGuardRefusesInconsistentFormat(t *testing.T) {
 		if err = spool.writeRecord(path, record); !errors.Is(err, errInboundDocumentIntakeGuard) {
 			t.Fatal("inconsistent guard was durably written")
 		}
+	}
+}
+
+func TestInboundDocumentIntakeUnavailableSurvivesRestartWithoutRegainingAuthority(t *testing.T) {
+	for _, bound := range []bool{false, true} {
+		t.Run(fmt.Sprint(bound), func(t *testing.T) {
+			dir := t.TempDir()
+			spool, err := NewInboundSpool(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			message, err := spool.Prepare(t.Context(), InboundMessage{
+				Context: InboundContext{Channel: "telegram", MessageID: "unavailable-one"},
+				Content: "Borrower Casey Mint. Also, what is seven squared?",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bound {
+				message.Context.DocumentIntake = documentIntakeTestGuard()
+				message.Context.DocumentIntake.ConversationHistory = true
+				if err = spool.PersistContext(message); err != nil {
+					t.Fatal(err)
+				}
+			}
+			message.Context.DocumentIntake.ConversationHistory = true
+			message.Context.DocumentIntake.Unavailable = true
+			if err = spool.PersistContext(message); err != nil {
+				t.Fatal(err)
+			}
+			if err = spool.Release(message.SpoolID, errors.New("synthetic restart")); err != nil {
+				t.Fatal(err)
+			}
+			spool, err = NewInboundSpool(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending, err := spool.Pending(t.Context(), 1)
+			if err != nil || len(pending) != 1 || pending[0].Content != message.Content ||
+				pending[0].Context.DocumentIntake != message.Context.DocumentIntake {
+				t.Fatal("restart lost ordinary text or the no-execution disposition")
+			}
+			for _, guard := range []InboundDocumentIntakeGuard{{}, documentIntakeTestGuard()} {
+				changed := pending[0]
+				changed.Context.DocumentIntake = guard
+				if err = spool.PersistContext(changed); !errors.Is(err, errInboundDocumentIntakeGuard) {
+					t.Fatal("unavailable replay became an unrestricted or newly bound operation")
+				}
+			}
+			changed := pending[0]
+			changed.Context.DocumentIntake.ConversationHistory = false
+			if err = spool.PersistContext(changed); !errors.Is(err, errInboundDocumentIntakeGuard) {
+				t.Fatal("replay changed prospective history policy")
+			}
+		})
 	}
 }

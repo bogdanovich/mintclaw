@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
@@ -28,12 +29,26 @@ type taskScopeInboundProvider struct {
 	inputAfterDiscovery    atomic.Bool
 	sideText               string
 	sawSideText            atomic.Bool
+	invalidPairing         atomic.Bool
+	duplicateSideInput     atomic.Bool
 }
 
 func (provider *taskScopeInboundProvider) Chat(
 	ctx context.Context, messages []providers.Message, definitions []providers.ToolDefinition,
 	model string, options map[string]any,
 ) (*providers.LLMResponse, error) {
+	if !conversationRequestHasCompletePairing(messages) {
+		provider.invalidPairing.Store(true)
+	}
+	sideInputs := 0
+	for _, message := range messages {
+		if message.Role == "user" && provider.sideText != "" && strings.Contains(message.Content, provider.sideText) {
+			sideInputs++
+		}
+	}
+	if sideInputs > 1 {
+		provider.duplicateSideInput.Store(true)
+	}
 	for index := len(messages) - 1; index >= 0; index-- {
 		text := messages[index].Content
 		if provider.sideText != "" && strings.Contains(text, provider.sideText) {
@@ -127,7 +142,9 @@ func (f taskScopeInboundFixture) wait(t *testing.T, completions ...int) {
 	if len(completions) != 0 {
 		want = completions[0]
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	// The real Seahorse fixture performs durable journal/derived-state writes;
+	// leave bounded headroom for race-instrumented and contended filesystems.
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		acked, released := f.bus.counts()
 		_, resuming := f.loop.loadInteractionResumeFlight(f.agent.Workspace, f.record.ID)
@@ -136,7 +153,12 @@ func (f taskScopeInboundFixture) wait(t *testing.T, completions ...int) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("task-scope ingress worker did not finish")
+			t.Fatalf(
+				"task-scope ingress worker did not finish: acked=%d released=%d resuming=%t",
+				acked,
+				released,
+				resuming,
+			)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -144,8 +166,19 @@ func (f taskScopeInboundFixture) wait(t *testing.T, completions ...int) {
 
 func newTaskScopeInboundFixture(t *testing.T, waiting ...bool) taskScopeInboundFixture {
 	t.Helper()
+	return newTaskScopeInboundFixtureConfigured(t, nil, waiting...)
+}
+
+func newTaskScopeInboundFixtureConfigured(
+	t *testing.T, configure func(*config.Config), waiting ...bool,
+) taskScopeInboundFixture {
+	t.Helper()
 	model := &taskScopeInboundProvider{}
-	fixture := newAgentLoopTestFixture(t, model)
+	var fixtureOptions []func(*config.Config)
+	if configure != nil {
+		fixtureOptions = append(fixtureOptions, configure)
+	}
+	fixture := newAgentLoopTestFixture(t, model, fixtureOptions...)
 	loop, agent := fixture.Loop, fixture.Agent
 	installInteractionChannelManager(t, loop, newInteractionChannelManager())
 	tracking := &interactionOwnershipBus{MessageBus: fixture.Bus}
@@ -307,11 +340,20 @@ func TestDocumentTaskScopeUnrelatedBareMessageRunsOnlyTheReplyAndPreservesDraft(
 			); active {
 				t.Fatal("ordinary side conversation reopened the scope question")
 			}
+			seen := 0
 			for _, message := range f.agent.Sessions.GetHistory(f.target.SessionKey) {
-				if message.Role != "assistant" && (strings.Contains(message.Content, text) ||
-					strings.Contains(message.Content, "synthetic-second.pdf")) {
-					t.Fatal("live-only request escaped canonical input/tool history")
+				if message.Role == "user" && message.Content == text {
+					seen++
+					if documentConversationID(message) == "" {
+						t.Fatal("ordinary reply lost its durable conversation identity")
+					}
 				}
+				if message.Role != "assistant" && strings.Contains(message.Content, "synthetic-second.pdf") {
+					t.Fatal("the pending native request was backfilled into history")
+				}
+			}
+			if seen != 1 {
+				t.Fatal("ordinary side reply was not retained exactly once")
 			}
 		})
 	}
@@ -476,11 +518,19 @@ func TestDocumentTaskScopeAuthorizedPurposeSurvivesIntermediateDiscovery(t *test
 	if !f.model.discoveryRequested.Load() || !f.model.inputAfterDiscovery.Load() {
 		t.Fatal("the native task grant lost its purpose between model/tool iterations")
 	}
+	seen := 0
 	for _, key := range f.agent.Sessions.ListSessions() {
 		for _, message := range f.agent.Sessions.GetHistory(key) {
 			if strings.Contains(message.Content, f.msg.Content) {
-				t.Fatal("live-only protected selection was persisted as ordinary history")
+				if key != f.target.SessionKey || message.Role != "user" ||
+					message.Content != f.msg.Content || documentConversationID(message) == "" {
+					t.Fatal("ordinary selection escaped its exact owned conversation frame")
+				}
+				seen++
 			}
 		}
+	}
+	if seen != 1 {
+		t.Fatal("ordinary selection was omitted or duplicated in canonical history")
 	}
 }

@@ -20,6 +20,15 @@ import (
 func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution, error) {
 	maxMediaSize := p.maxMediaSize()
 	p.prepareDocumentTurn(ts)
+	conversationID, conversationErr := documentConversationIdentityForTurn(ts)
+	if conversationErr != nil {
+		return nil, conversationErr
+	}
+	if envelope, err := ts.documentConversationEnvelope(conversationID); err != nil {
+		return nil, err
+	} else if envelope != nil {
+		ts.turnEnvelope = envelope
+	}
 
 	contextualSkills := ts.activeSkills
 	if ts.agent.ContextBuilder != nil {
@@ -34,7 +43,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		ts.selectedSkills = selected
 		contextualSkills = selectedSkillNames(selected)
 	}
-	if strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0 {
+	if ts.turnEnvelope == nil && (strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0) {
 		req := p.promptRequestForTurn(ts, nil, nil, ts.userMessage, ts.media)
 		req.ActiveSkills = append([]string(nil), contextualSkills...)
 		req.SelectedSkills = append([]skills.SelectedSkill(nil), ts.selectedSkills...)
@@ -48,6 +57,12 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 				})
 			}
 		}
+	}
+	if conversationID != "" {
+		if ts.turnEnvelope == nil {
+			ts.turnEnvelope = &providers.TurnEnvelope{Version: providers.TurnEnvelopeVersion1}
+		}
+		ts.turnEnvelope.DocumentConversationID = conversationID
 	}
 	toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
 	reserveTokens := p.estimateNonHistoryPromptReserve(ts, contextualSkills, toolDefs, maxMediaSize)
@@ -67,7 +82,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			return nil, fmt.Errorf("assemble context: %w", err)
 		}
 		if resp != nil {
-			history = resp.History
+			history = omitRepeatedConversationInput(resp.History, conversationID)
 			checkpoint = resp.Checkpoint
 			budgetReport = resp.Budget
 		}
@@ -220,10 +235,12 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			rootMsg.CreatedAt = &receivedAt
 		}
 		durableRootMsg := rootMsg
-		durableRootMsg.Content = projectDocumentLocalPathsForDurableMessage(
-			durableRootMsg.Content,
-			ts.documentLocalPaths,
-		)
+		if conversationID == "" {
+			durableRootMsg.Content = projectDocumentLocalPathsForDurableMessage(
+				durableRootMsg.Content,
+				ts.documentLocalPaths,
+			)
+		}
 		assignCanonicalPairTimestamps(&rootMsg, &durableRootMsg, time.Now())
 		if writeErr := persistFullSessionMessage(
 			ctx,

@@ -32,7 +32,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/state"
-	"github.com/bogdanovich/mintclaw/pkg/utils"
 	workspaceutil "github.com/bogdanovich/mintclaw/pkg/workspace"
 )
 
@@ -570,7 +569,7 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 	)
 
 	if result.finalContent != "" {
-		responsePreview := utils.Truncate(result.finalContent, 120)
+		responsePreview := diagnosticResponseLogPreview(result.finalContent, ts.finalContentProtectedSnapshot())
 		logger.InfoCF("agent", fmt.Sprintf("Response: %s", responsePreview),
 			map[string]any{
 				"agent_id":     agent.ID,

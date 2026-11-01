@@ -62,6 +62,7 @@ func (store *FormJobStore) GrantFormTaskIndependentReply(
 			record.Revision == math.MaxInt64 || hasStagedFormIntake(mode) {
 			return false, ErrFormJobConflict
 		}
+		result.Inputs = []FormTaskHandoffInput{{ConversationInputID: answer.ConversationInputID, Text: answer.Text}}
 		result.Text, answer.Text = answer.Text, ""
 		record.Revision++
 		invalidateFormIntakeReview(record)

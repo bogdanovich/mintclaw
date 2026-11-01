@@ -15,7 +15,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
-	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
 func (al *AgentLoop) ProcessDirect(
@@ -434,13 +433,7 @@ func (al *AgentLoop) processInboundMessageTurn(
 	msg := turn.Message
 	msg.SessionKey = turn.SessionKey
 
-	// Add message preview to log (show full content for error messages)
-	var logContent string
-	if strings.Contains(msg.Content, "Error:") || strings.Contains(msg.Content, "error") {
-		logContent = msg.Content // Full content for errors
-	} else {
-		logContent = utils.Truncate(msg.Content, 80)
-	}
+	logContent := diagnosticInboundLogPreview(msg)
 	logger.InfoCF(
 		"agent",
 		fmt.Sprintf(

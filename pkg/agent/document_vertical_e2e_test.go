@@ -843,6 +843,7 @@ type documentFormReviewE2EProvider struct {
 	sourceDigest           string
 	sourcePath             string
 	privateValues          []string
+	ordinaryIntakeText     string // Only the ordinary-transport fixture opts into retaining this authored paragraph.
 	initialCalls           int
 	receipts               map[string]struct{}
 	navigationReceipts     map[string]struct{}
@@ -956,9 +957,15 @@ func (provider *documentFormReviewE2EProvider) Chat(
 		}
 		return llmscenario.TextResponse(`{"decision":"pass"}`), nil
 	}
-	for _, value := range provider.privateValues {
-		if strings.Contains(joined, value) {
-			return nil, fmt.Errorf("ordinary model context retained protected value %q", value)
+	for _, message := range messages {
+		if message.Role == "user" && provider.ordinaryIntakeText != "" &&
+			strings.Contains(message.Content, provider.ordinaryIntakeText) {
+			continue
+		}
+		for _, value := range provider.privateValues {
+			if strings.Contains(message.Content, value) {
+				return nil, fmt.Errorf("ordinary model context retained protected value %q", value)
+			}
 		}
 	}
 	toolOnlyFollowup := documentLatestToolOnlyFollowupInstruction(messages)

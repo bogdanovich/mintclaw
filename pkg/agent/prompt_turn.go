@@ -376,7 +376,15 @@ func providerPromptMessageForTurn(msg providers.Message) providers.Message {
 		return msg
 	}
 	if msg.TurnEnvelope != nil {
-		return providers.ProjectTurnEnvelope(msg)
+		projected := providers.ProjectTurnEnvelope(msg)
+		if identity := documentConversationID(msg); identity != "" {
+			// The steering contract is rendered once, but its canonical-only
+			// provenance must survive until final provider/diagnostic projection.
+			projected.TurnEnvelope = &providers.TurnEnvelope{
+				Version: providers.TurnEnvelopeVersion1, DocumentConversationID: identity,
+			}
+		}
+		return projected
 	}
 	// Legacy callers without a frozen canonical envelope retain their contract.
 	msg.Content = formatSteeringPromptContent(msg.Content, len(msg.Media) > 0)

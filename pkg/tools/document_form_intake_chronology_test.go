@@ -214,7 +214,10 @@ func TestDocumentFormIntakeCollectDoesNotRequestRepeatingDeliveredIntroduction(t
 	followup, err := NewDocumentTool().ToolResultFollowup(documentFormToolResult(projection))
 	if err != nil || followup == nil || !followup.ResponseOnly ||
 		!strings.Contains(followup.Instruction, "already delivered") ||
-		!strings.Contains(followup.Instruction, "accepted_fields") {
+		!strings.Contains(followup.Instruction, "accepted_fields") ||
+		!strings.Contains(followup.Instruction, "harmless conversational question") ||
+		!strings.Contains(followup.Instruction, "without invoking tools") ||
+		!strings.Contains(followup.Instruction, "History is not a new task grant") {
 		t.Fatal("collect rendering can duplicate its introduction or infer accepted fields from an aggregate count")
 	}
 }

@@ -239,7 +239,7 @@ func (tool *DocumentTool) routeFormTaskWorkflow(
 			}
 			result.ContextMedia = handoff.Media
 			result.ContextMediaRequiresVision = requiresVision
-			result.ContextInput = &toolshared.ToolContextInput{Text: handoff.Text, Media: handoff.Media}
+			result.ContextInput = formTaskContextInput(handoff)
 		}
 		return result
 	}

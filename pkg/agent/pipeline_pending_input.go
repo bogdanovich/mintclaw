@@ -31,6 +31,11 @@ func (p *Pipeline) injectPendingTurnInputs(
 		return outcome, nil
 	}
 	messages := exec.pendingInputs.Snapshot()
+	for index := range messages {
+		if messages[index].DocumentIntakeReference != "" || messages[index].DocumentIntakeUnavailable {
+			messages[index].Media = nil
+		}
+	}
 	resolved := resolveMediaRefs(
 		messages,
 		mediaResolver,
@@ -44,24 +49,33 @@ func (p *Pipeline) injectPendingTurnInputs(
 		codingSteerID := message.CodingSteerID
 		message.CodingSteerID = ""
 		providerMessage := providerPromptMessageForTurn(resolved[index])
+		alreadyProjected := containsConversationInput(exec.messages, documentConversationID(message))
 		var writeErr error
 		if !ts.opts.NoHistory {
 			durableMessage := message
-			durableMessage.Content = projectDocumentLocalPathsForDurableMessage(
-				durableMessage.Content,
-				localPDFPathCandidates(durableMessage.Content),
-			)
+			if documentConversationID(durableMessage) == "" {
+				durableMessage.Content = projectDocumentLocalPathsForDurableMessage(
+					durableMessage.Content,
+					localPDFPathCandidates(durableMessage.Content),
+				)
+			}
 			assignCanonicalPairTimestamps(&message, &durableMessage, time.Now())
 			writeErr = persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, &durableMessage)
 			if !canonicalMessageAppendCommitted(writeErr) {
 				return outcome, fmt.Errorf("persist pending turn input: %w", writeErr)
 			}
-			ts.recordPersistedMessagePair(message, durableMessage)
-			p.ingestMessage(turnCtx, ts, durableMessage, writeErr)
+			if !alreadyProjected {
+				ts.recordPersistedMessagePair(message, durableMessage)
+				p.ingestMessage(turnCtx, ts, durableMessage, writeErr)
+			}
 		}
 
-		exec.messages = append(exec.messages, providerMessage)
-		if message.DocumentIntakeReference != "" {
+		if !alreadyProjected {
+			exec.messages = append(exec.messages, providerMessage)
+		}
+		if message.DocumentIntakeUnavailable {
+			exec.protectedAnswerContinuation = unavailableDocumentContinuation()
+		} else if message.DocumentIntakeReference != "" {
 			exec.protectedAnswerContinuation = newDocumentIntakeContinuationState(
 				message.DocumentIntakeReference, message.InboundSpoolID, ts.agent.Tools,
 			)

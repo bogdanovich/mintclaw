@@ -122,8 +122,16 @@ type DocumentFieldsObservation struct {
 }
 
 type ToolContextInput struct {
-	Text  string
-	Media []string
+	Text    string
+	Media   []string
+	Sources []ToolContextInputSource
+}
+
+// A trusted native grant can refer to ordinary messages already in the model
+// transcript. Stable identities prevent projecting them as new inputs twice.
+type ToolContextInputSource struct {
+	ConversationInputID string
+	Text                string
 }
 
 // ToolControl carries runtime execution directives. It is not produced output
