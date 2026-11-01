@@ -120,6 +120,7 @@ install -m 600 "$source_dir/libs/cua-driver/rust/THIRD_PARTY_NOTICES.md" "$outpu
     sha256sum "$helper_dir/native_keyboard_worker.rs" "$helper_dir/native_keyboard_process_fixture.py" \
       "$helper_dir/gnome_keyboard_fixture.py" "$helper_dir/gnome_session_fixture.py" \
       "$helper_dir/atspi_text_observer.py" \
+      "$helper_dir/native_text_plan.py" "$helper_dir/test_native_text_plan.py" \
       "$output_dir/native-keyboard-worker"
   fi
 ) > "$output_dir/build-receipt.txt"

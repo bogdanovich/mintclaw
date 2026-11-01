@@ -25,16 +25,16 @@ func TestPrivateNativeTextObservationQualification(t *testing.T) {
 		t.Skip("explicit disposable application fixture required")
 	}
 	var fixture struct {
-		Window          WindowRequest   `json:"window"`
-		ServerPID       int32           `json:"server_pid"`
-		Chords          [][]byte        `json:"chords"`
-		Artifact        string          `json:"artifact"`
-		ExpectedHash    string          `json:"expected_hash"`
-		Observer        string          `json:"observer"`
-		ObserverSHA     string          `json:"observer_sha"`
-		ObserverBinding json.RawMessage `json:"observer_binding"`
-		ExpectedText    string          `json:"expected_text"`
-		OriginalText    string          `json:"original_text"`
+		Window          WindowRequest            `json:"window"`
+		ServerPID       int32                    `json:"server_pid"`
+		Batches         []privateNativeTextBatch `json:"batches"`
+		Artifact        string                   `json:"artifact"`
+		ExpectedHash    string                   `json:"expected_hash"`
+		Observer        string                   `json:"observer"`
+		ObserverSHA     string                   `json:"observer_sha"`
+		ObserverBinding json.RawMessage          `json:"observer_binding"`
+		ExpectedText    string                   `json:"expected_text"`
+		OriginalText    string                   `json:"original_text"`
 	}
 	file, err := os.Open(os.Getenv("MINTCLAW_PRIVATE_NATIVE_APP_CONFIG"))
 	if err != nil {
@@ -154,94 +154,111 @@ func TestPrivateNativeTextObservationQualification(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer host.Release(context.Background(), session.Binding)
-	original, err := host.ObserveUntil(ctx, session, func(_ context.Context, o computer.Observation) (bool, error) {
-		var state struct {
-			Text      string
-			Editable  bool
-			Sensitive bool
+	textCondition := func(want string) func(context.Context, computer.Observation) (bool, error) {
+		return func(_ context.Context, o computer.Observation) (bool, error) {
+			var state struct {
+				Text      string
+				Editable  bool
+				Sensitive bool
+			}
+			if json.Unmarshal([]byte(o.AccessibilityText), &state) != nil {
+				return false, computer.ErrInvalid
+			}
+			return state.Text == want && state.Editable && state.Sensitive, nil
 		}
-		if json.Unmarshal([]byte(o.AccessibilityText), &state) != nil {
-			return false, computer.ErrInvalid
-		}
-		ready := state.Editable && state.Sensitive
-		if !ready {
-			t.Logf("valid capture not yet ready: editable=%v sensitive=%v", state.Editable, state.Sensitive)
-		}
-		return state.Text == fixture.OriginalText && ready, nil
-	})
+	}
+	original, err := host.ObserveUntil(ctx, session, textCondition(fixture.OriginalText))
 	if err != nil {
 		t.Fatal("original fixture text unverified", err)
 	}
 	if fixture.OriginalText == fixture.ExpectedText || original.Validate(session, time.Now()) != nil {
 		t.Fatal("fixture would not distinguish a no-input control")
 	}
-	actionCtx, actionCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer actionCancel()
-	owner, err := preparePrivateKeyboard(actionCtx, channel, lease, privateKeyboardConfig{
-		Window: fixture.Window, Identity: identity, Chords: fixture.Chords, BudgetMS: 10000,
-	})
-	if err != nil {
-		t.Fatal("actual Go preparation failed", err)
+	if len(fixture.Batches) == 0 || len(fixture.Batches) > 16 ||
+		fixture.Batches[len(fixture.Batches)-1].ExpectedText != fixture.ExpectedText {
+		t.Fatal("invalid preplanned fixture actions")
 	}
-	defer owner.close()
-	for owner.receipt == nil {
-		if owner.pending == "dispatched" {
-			observed, observeErr := host.ObserveUntil(actionCtx, session,
-				func(_ context.Context, o computer.Observation) (bool, error) {
-					var state struct {
-						Text      string
-						Editable  bool
-						Sensitive bool
-					}
-					if json.Unmarshal([]byte(o.AccessibilityText), &state) != nil {
-						return false, computer.ErrInvalid
-					}
-					ready := state.Editable && state.Sensitive
-					if !ready {
-						t.Logf("valid post capture not yet ready: editable=%v sensitive=%v text_matches=%v",
-							state.Editable, state.Sensitive, state.Text == fixture.ExpectedText)
-					}
-					return state.Text == fixture.ExpectedText && ready, nil
-				})
-			if observeErr != nil || observed.ID == original.ID || observed.Validate(session, time.Now()) != nil ||
-				!privateApplicationArtifactMatches(fixture.Artifact, fixture.ExpectedHash) {
-				_ = owner.stop()
-				_, _ = owner.receive()
-				t.Fatalf(
-					"independent text effect unverified; Finish withheld: observe_error=%v fresh_id=%v valid=%v artifact=%v",
-					observeErr,
-					observed.ID != original.ID,
-					observed.Validate(session, time.Now()) == nil,
-					privateApplicationArtifactMatches(fixture.Artifact, fixture.ExpectedHash),
-				)
+	total := 0
+	previousText := fixture.OriginalText
+	for _, batch := range fixture.Batches {
+		total += len(batch.Chords)
+		if len(batch.Chords) == 0 || len(batch.Chords) > 32 || total > 256 ||
+			len(batch.ExpectedText) > computer.MaxAccessibilityBytes || batch.ExpectedText == previousText {
+			t.Fatal("invalid bounded fixture action")
+		}
+		previousText = batch.ExpectedText
+	}
+	previousText = fixture.OriginalText
+	qualificationStarted := time.Now()
+	for index, batch := range fixture.Batches {
+		if index > 0 {
+			original, err = host.ObserveUntil(ctx, session, textCondition(previousText))
+			if err != nil {
+				t.Fatal("previous exact effect no longer observable", err)
 			}
 		}
-		if err = owner.allow(actionCtx); err != nil {
-			t.Fatal("original Go lease/generation refused a native phase", err)
+		if original.Validate(session, time.Now()) != nil {
+			t.Fatal("original observation expired before action")
 		}
-		if _, err = owner.receive(); err != nil {
-			t.Fatal("actual Go native phase failed", err)
-		}
+		func() {
+			actionCtx, actionCancel := context.WithTimeout(ctx, 10*time.Second)
+			defer actionCancel()
+			owner, err := preparePrivateKeyboard(actionCtx, channel, lease, privateKeyboardConfig{
+				Window: fixture.Window, Identity: identity, Chords: batch.Chords, BudgetMS: 10000,
+			})
+			if err != nil {
+				t.Fatal("actual Go preparation failed", err)
+			}
+			defer owner.close()
+			for owner.receipt == nil {
+				if owner.pending == "dispatched" {
+					observed, observeErr := host.ObserveUntil(actionCtx, session, textCondition(batch.ExpectedText))
+					if observeErr != nil || observed.ID == original.ID ||
+						observed.Validate(session, time.Now()) != nil ||
+						!privateApplicationArtifactMatches(fixture.Artifact, fixture.ExpectedHash) {
+						_ = owner.stop()
+						_, _ = owner.receive()
+						t.Fatalf(
+							"preplanned effect unverified; Finish withheld: segment=%d observe_error=%v",
+							index,
+							observeErr,
+						)
+					}
+					original = observed
+				}
+				if err = owner.allow(actionCtx); err != nil {
+					t.Fatal("original Go lease/generation refused a native phase", err)
+				}
+				if _, err = owner.receive(); err != nil {
+					t.Fatal("actual Go native phase failed", err)
+				}
+			}
+			if !owner.receipt.Acknowledged || !owner.receipt.InputQuiescent ||
+				owner.receipt.Resources != privateKeyboardRetained || !guard.Alive(ctx) || lease.Check(ctx) != nil {
+				t.Fatalf("native diagnostic: ack=%v canceled=%v quiescent=%v resources=%v",
+					owner.receipt.Acknowledged, owner.receipt.Canceled,
+					owner.receipt.InputQuiescent, owner.receipt.Resources)
+			}
+			if owner.close() != nil || !guard.Alive(ctx) || lease.Check(ctx) != nil {
+				t.Fatal("action close released the original guard or lease")
+			}
+		}()
+		previousText = batch.ExpectedText
+		t.Logf("preplanned segment %d/%d verified; elapsed=%s", index+1, len(fixture.Batches),
+			time.Since(qualificationStarted))
 	}
-	if !owner.receipt.Acknowledged || !owner.receipt.InputQuiescent ||
-		owner.receipt.Resources != privateKeyboardRetained || !guard.Alive(ctx) || lease.Check(ctx) != nil {
-		t.Fatalf(
-			"native diagnostic: ack=%v canceled=%v cancelDelivered=%v quiescent=%v resources=%v guard=%v leaseOK=%v",
-			owner.receipt.Acknowledged,
-			owner.receipt.Canceled,
-			owner.receipt.CancellationDelivered,
-			owner.receipt.InputQuiescent,
-			owner.receipt.Resources,
-			guard.Alive(ctx),
-			lease.Check(ctx) == nil,
-		)
+	if channel.close() != nil || !guard.Alive(ctx) || lease.Check(ctx) != nil {
+		t.Fatal("channel close released the original guard or lease")
 	}
-	if owner.close() != nil || channel.close() != nil || !guard.Alive(ctx) || lease.Check(ctx) != nil {
-		t.Fatal("worker/action close released the caller's original guard or lease")
-	}
+
 	t.Log(
 		"actual Go Unicode text effect independently observed; original file/guard/lease preserved; quiescent retained resources",
 	)
+}
+
+type privateNativeTextBatch struct {
+	Chords       [][]byte `json:"chords"`
+	ExpectedText string   `json:"expected_text"`
 }
 
 type privateNativeTextCaptureFunc func(context.Context, computer.Target) (computer.Capture, error)

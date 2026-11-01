@@ -79,6 +79,7 @@ jobs:
           CGO_ENABLED: '1'
           GOMAXPROCS: '2'
         run: |
+          python3 -m unittest discover -s scripts/internal/computer-driver -p 'test_native_text_plan.py' -v
           go test -race -tags=mintclaw_private_native_keyboard ./pkg/computer/desktop \
             -run '^TestPrivateKeyboard' -count=1 -timeout=30s
           go test -race -tags=mintclaw_private_native_keyboard -c ./pkg/computer/desktop \
@@ -94,6 +95,8 @@ jobs:
               scripts/internal/computer-driver/gnome_keyboard_fixture.py \
               scripts/internal/computer-driver/gnome_session_fixture.py \
               scripts/internal/computer-driver/atspi_text_observer.py \
+              scripts/internal/computer-driver/native_text_plan.py \
+              scripts/internal/computer-driver/test_native_text_plan.py \
               "$RUNNER_TEMP/mintclaw-window-keys/native-host.test" \
               "$RUNNER_TEMP/mintclaw-window-keys/build-receipt.txt"
           } > "$RUNNER_TEMP/mintclaw-window-keys/native-host-receipt.txt"

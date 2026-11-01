@@ -191,6 +191,16 @@ available and is a separate application-effect gate: observed text is not proof
 that Save is ready or that a document was saved. Both modes retain the original
 native budgets and all hosting, application, model-task and admission limits.
 
+Observed-text mode freezes a complete-unit plan before input. Each segment has
+at most 32 chords, with at most 16 segments and 256 total chords. Each Unicode
+composition stays within one segment. The same channel and original guard/lease
+authorize a fresh action generation; fresh exact partial text and unchanged file
+are required before Finish and before the next action. Failure stops the plan
+without replay. Per-action ten-second, one-second observation and 25-second
+whole-workflow limits stay unchanged. This is qualification orchestration, not a
+public text planner or native application rule. Historical one-action macro and
+Save-readiness failures remain separate recorded failures.
+
 The private process fixture's `deadline_io` fault holds only its attested owned
 server across action expiry after a real key press. Resource validation uses
 the existing channel lifetime with its unchanged 250ms I/O cap; permits, worker

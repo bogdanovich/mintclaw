@@ -15,6 +15,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from native_state_oracle import FixtureOracle, bind, window_viewable
 from gnome_session_fixture import private_gnome
+from native_text_plan import plan_complete_units
 
 spec = importlib.util.spec_from_file_location("owned_server_fixture", HERE / "native-keyboard-fixture.py")
 fixture = importlib.util.module_from_spec(spec)
@@ -226,10 +227,18 @@ def run_case(work, args, control):
                         report["expected_observed_text"] = expected_observed
                     keycode = bind(x, "XKeysymToKeycode", C.c_ubyte, ptr, win)
                     symbols = [(0xffe3, 0xff50)] + [(0xff53,)] * len("PREFIX|")
+                    units = []
+                    typed = ""
                     for character in inserted:
-                        symbols.append((0xffe3, 0xffe1, ord("u")))
-                        symbols.extend((ord(digit),) for digit in format(ord(character), "x"))
-                        symbols.append((0xff0d,))
+                        composition = [(0xffe3, 0xffe1, ord("u"))]
+                        composition.extend((ord(digit),) for digit in format(ord(character), "x"))
+                        composition.append((0xff0d,))
+                        unit = (symbols[:] if not units else []) + composition
+                        symbols.extend(composition)
+                        typed += character
+                        if text_effect:
+                            units.append(([[keycode(d, value) for value in chord] for chord in unit],
+                                          initial["text"].replace("PREFIX||SUFFIX", "PREFIX|" + typed + "|SUFFIX", 1)))
                     if not text_effect:
                         symbols.append((0xffe3, ord("s")))
                     assert len(symbols) <= 256
@@ -267,6 +276,13 @@ def run_case(work, args, control):
                             ).hexdigest(),
                         }
                         if text_effect:
+                            plan = plan_complete_units(units)
+                            del configuration["chords"]
+                            configuration["batches"] = [
+                                {"chords": chords, "expected_text": state} for chords, state in plan
+                            ]
+                            report["planned_action_count"] = len(plan)
+                            report["planned_max_action_chords"] = max(len(chords) for chords, _ in plan)
                             configuration.update(
                                 observer=str(observer), observer_sha=args.text_observer_sha256,
                                 observer_binding=bound["binding"], expected_text=expected_observed,
