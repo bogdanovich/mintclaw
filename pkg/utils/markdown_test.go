@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -13,6 +14,11 @@ func TestHtmlToMarkdown(t *testing.T) {
 		input    string
 		expected string
 	}{
+		{
+			name:     "Coalesces text separated by ignored end tags",
+			input:    strings.Repeat("a</x>", 4096),
+			expected: strings.Repeat("a", 4096),
+		},
 		{
 			name:     "Removes scripts and styles",
 			input:    `<script>alert("hello");</script><style>body { color: red; }</style><p>Clean text</p>`,

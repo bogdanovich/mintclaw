@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+
 import { describe, expect, it } from "vitest"
 
 import { evaluateAudit } from "./check-advisories.mjs"
@@ -31,6 +33,42 @@ function report() {
 const reviewedAt = new Date("2026-10-17T12:00:00Z")
 
 describe("frontend advisory policy", () => {
+  it("pins the unpatched CLI exception and refuses expiry or new paths", () => {
+    const exceptions = JSON.parse(
+      readFileSync(
+        new URL("./advisory-exceptions.json", import.meta.url),
+        "utf8",
+      ),
+    )
+    const reviewed = exceptions.find(
+      (entry) => entry.id === "GHSA-gcqx-w48m-w2h4",
+    )
+    expect(reviewed).toMatchObject({
+      module: "deepmerge",
+      version: "4.3.1",
+      severity: "low",
+      paths: [".>shadcn>deepmerge"],
+      expiresOn: "2026-11-17",
+    })
+    const evidence = report()
+    evidence.metadata.vulnerabilities.high = 0
+    evidence.metadata.vulnerabilities.low = 1
+    Object.assign(evidence.advisories["123"], {
+      github_advisory_id: reviewed.id,
+      module_name: reviewed.module,
+      severity: reviewed.severity,
+      findings: [{ version: reviewed.version, paths: [...reviewed.paths] }],
+    })
+    const at = new Date("2026-11-01T00:00:00Z")
+    expect(evaluateAudit(evidence, exceptions, at).accepted).toHaveLength(1)
+    expect(
+      evaluateAudit(evidence, exceptions, new Date("2026-11-17T00:00:00Z"))
+        .actionable,
+    ).toHaveLength(1)
+    evidence.advisories["123"].findings[0].paths.push(".>runtime>deepmerge")
+    expect(evaluateAudit(evidence, exceptions, at).actionable).toHaveLength(1)
+  })
+
   it("accepts only the reviewed exception before its expiry", () => {
     const result = evaluateAudit(report(), [exception], reviewedAt)
     expect(result.actionable).toEqual([])
