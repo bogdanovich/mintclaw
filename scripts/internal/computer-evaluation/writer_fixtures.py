@@ -34,12 +34,23 @@ MAX_XML_BYTES = 256 * 1024
 MAX_ENTRIES = 64
 MAX_NODES = 4096
 MAX_DEPTH = 64
+MAX_DIRECTORY_ENTRIES = 16
+
+# The earlier marker is a deliberate navigation distractor. Exact paragraph
+# order, text and the final insertion are checked in the saved ODT.
+LONG_PARAGRAPHS = tuple(
+    f"Paragraph {index:03d}: {shared.U} — preserve this seeded paragraph exactly."
+    + (" END-MARKER is not the final marker." if index == 64 else "")
+    for index in range(1, 129)
+) + ("END-MARKER",)
 
 @dataclass(frozen=True)
 class Task:
     seed: Optional[str]
     instruction: str
     expected: tuple
+    candidate: str = CANDIDATE
+    exact_directory: bool = False
 
 
 TASKS = MappingProxyType({
@@ -63,13 +74,31 @@ TASKS = MappingProxyType({
                        "Save the same file without adding other text.",
         (("table", tuple(tuple(f"r{row}c{column}" for column in range(1, 4)) for row in range(1, 4))),),
     ),
+    "CU-T09": Task(
+        "".join("<text:p>" + escape(value) + "</text:p>" for value in LONG_PARAGRAPHS),
+        "Open the owned document.odt. Navigate the long document to the final END-MARKER. "
+        "In that same paragraph append one space followed by exactly " + shared.R
+        + ". Preserve all preceding paragraphs, including the earlier marker, exactly. Save the same file.",
+        tuple(("paragraph", value, False) for value in LONG_PARAGRAPHS[:-1])
+        + (("paragraph", "END-MARKER " + shared.R, False),),
+    ),
+    "CU-T10": Task(
+        None,
+        "Create a Writer document containing exactly " + shared.U
+        + ". Use the application's Save As UI to save as Крем-世界.odt in the admitted task directory. "
+        "Do not create another document there. Close the saved document to release its temporary lock file.",
+        (("paragraph", shared.U, False),),
+        candidate="Крем-世界.odt",
+        exact_directory=True,
+    ),
 })
 
 # This is a subset/input revision, not a native-runner revision or task score.
 FIXTURE_REVISION = shared.digest(json.dumps({
-    "subset": "writer-v1", "tasks": {key: asdict(task) for key, task in TASKS.items()}, "candidate": CANDIDATE,
+    "subset": "writer-v2", "tasks": {key: asdict(task) for key, task in TASKS.items()}, "candidate": CANDIDATE,
     "maximum_bytes": MAX_ARTIFACT_BYTES, "maximum_xml_bytes": MAX_XML_BYTES,
     "maximum_entries": MAX_ENTRIES, "maximum_nodes": MAX_NODES, "maximum_depth": MAX_DEPTH,
+    "maximum_directory_entries": MAX_DIRECTORY_ENTRIES,
     "semantic_rules": "heading; all nonempty paragraph runs bold; numbered list level 1; exact unmerged table; "
                       "ignore empty paragraphs; no Unicode normalization; unsupported structures unverifiable",
 }, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
@@ -320,11 +349,25 @@ def prepare(task_id, path):
         shared.write_new(directory, MARKER, json.dumps(record, sort_keys=True).encode("utf-8"))
         seed = TASKS[task_id].seed
         if seed is not None:
-            shared.write_new(directory, CANDIDATE, seed_odt(seed))
-        return {**record, "candidate": CANDIDATE, "seeded": seed is not None,
+            shared.write_new(directory, TASKS[task_id].candidate, seed_odt(seed))
+        return {**record, "candidate": TASKS[task_id].candidate, "seeded": seed is not None,
                 "instruction": TASKS[task_id].instruction, "native_task_qualified": False}
     finally:
         os.close(directory)
+
+
+def directory_names(directory):
+    # Iterate the already-open original directory; never traverse extra files
+    # or allocate an unbounded list before enforcing the census limit.
+    names = set()
+    with os.scandir(directory) as entries:
+        for index, entry in enumerate(entries):
+            if index >= MAX_DIRECTORY_ENTRIES:
+                raise shared.Unverifiable("directory_bounds")
+            if entry.name in names:
+                raise shared.Unverifiable("directory_changed")
+            names.add(entry.name)
+    return names
 
 
 def check_artifact(task_id, path):
@@ -341,11 +384,20 @@ def check_artifact(task_id, path):
                     not isinstance(record["run_id"], str) or len(record["run_id"]) != 32 or \
                     any(char not in "0123456789abcdef" for char in record["run_id"]):
                 raise shared.Unverifiable("invalid_fixture_record")
-            data = shared.read_owned_file(directory, CANDIDATE, MAX_ARTIFACT_BYTES)
+            task = TASKS[task_id]
+            names = directory_names(directory) if task.exact_directory else None
+            data = shared.read_owned_file(directory, task.candidate, MAX_ARTIFACT_BYTES)
             content, styles = read_package(data)
             projection = Document(content, styles).projection()
             matches = (json.dumps(projection, ensure_ascii=False)
-                       == json.dumps(TASKS[task_id].expected, ensure_ascii=False))
+                       == json.dumps(task.expected, ensure_ascii=False))
+            if task.exact_directory:
+                if names != directory_names(directory) or shared.file_identity(root) != \
+                        shared.file_identity(os.fstat(directory)):
+                    raise shared.Unverifiable("directory_changed")
+                directory_matches = names == {MARKER, task.candidate}
+                result["directory_matches"] = directory_matches
+                matches = matches and directory_matches
             named = os.stat(path, follow_symlinks=False)
             if (root.st_dev, root.st_ino, root.st_uid, root.st_mode) != (
                 named.st_dev, named.st_ino, named.st_uid, named.st_mode,
