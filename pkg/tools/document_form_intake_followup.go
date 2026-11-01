@@ -70,6 +70,19 @@ func documentFormIntakeFollowup(
 				"Do not claim completion, approve output or invoke another tool. Wait for the user's next message.",
 		}, nil
 	}
+	if intake := projection.Intake; intake != nil && projection.Mapping != nil &&
+		projection.Mapping.ReadyForReview && intake.Progress.PendingInputs == 0 && intake.Progress.PendingTasks > 0 {
+		return &toolshared.ToolOnlyFollowup{
+			ResponseOnly: true,
+			Instruction: documentIntakeAcceptanceInstruction + documentIntakeConversationInstruction +
+				"Describe the trusted form progress and answer the current conversational request in the user's language. " +
+				"The mapped fields are settled, but pending_tasks still block native review and output. " +
+				"Do not claim a ready review checkpoint, complete filling or an output PDF. " +
+				"Do not reopen unrelated task-scope questions, grant their original requests or invoke tools. " +
+				"Do not request accepted facts or the attachment again, restart intake or offer /retry_form. " +
+				"The saved draft remains available; wait for the user's next message.",
+		}, nil
+	}
 	if intake := projection.Intake; intake != nil &&
 		(projection.FormAction == "collect" || projection.FormAction == "pause" || projection.FormAction == "resume" ||
 			intake.Progress.PendingInputs > 0) {
