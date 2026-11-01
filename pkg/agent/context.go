@@ -40,9 +40,10 @@ type ContextBuilder struct {
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
 	// The cache auto-invalidates when workspace source files change (mtime check).
-	systemPromptMutex  sync.RWMutex
-	cachedSystemPrompt string
-	cachedAt           time.Time // max observed mtime across tracked paths at cache build time
+	systemPromptMutex          sync.RWMutex
+	cachedSystemPrompt         string
+	cachedSystemPromptSections []providers.PromptSection
+	cachedAt                   time.Time // max observed mtime across tracked paths at cache build time
 
 	// existedAtCache tracks which source file paths existed the last time the
 	// cache was built. This lets sourceFilesChanged detect files that are newly
@@ -529,11 +530,16 @@ Each part separated by the marker will be sent as an independent message.`,
 // and source files haven't changed, otherwise builds and caches it.
 // Source file changes are detected via mtime checks (cheap stat calls).
 func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
+	prompt, _ := cb.buildSystemPromptWithCacheSections()
+	return prompt
+}
+
+func (cb *ContextBuilder) buildSystemPromptWithCacheSections() (string, []providers.PromptSection) {
 	// Coding instructions have their own path-identity cache and can change in
 	// directories that are intentionally outside the personal prompt cache's
 	// tracked bootstrap paths.
 	if cb.codingPrompt {
-		return cb.BuildSystemPrompt()
+		return renderPromptPartsWithSections(cb.BuildSystemPromptParts())
 	}
 	// Try read lock first — fast path when both source files and the runtime
 	// admission generation are unchanged. The second revision read makes the
@@ -543,9 +549,10 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 	if revision%2 == 0 && cb.cachedSystemPrompt != "" &&
 		cb.compatibilityRevisionAtCache == revision && !cb.sourceFilesChangedLocked() {
 		result := cb.cachedSystemPrompt
+		sections := append([]providers.PromptSection(nil), cb.cachedSystemPromptSections...)
 		if cb.skillsLoader.CompatibilityRevision() == revision {
 			cb.systemPromptMutex.RUnlock()
-			return result
+			return result, sections
 		}
 	}
 	cb.systemPromptMutex.RUnlock()
@@ -564,7 +571,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 		// Double-check: another goroutine may have rebuilt while we waited.
 		if cb.cachedSystemPrompt != "" && cb.compatibilityRevisionAtCache == revision &&
 			!cb.sourceFilesChangedLocked() && cb.skillsLoader.CompatibilityRevision() == revision {
-			return cb.cachedSystemPrompt
+			return cb.cachedSystemPrompt, append([]providers.PromptSection(nil), cb.cachedSystemPromptSections...)
 		}
 
 		// Snapshot the baseline (existence + max mtime) BEFORE building the prompt.
@@ -574,11 +581,12 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 		// rebuild. The alternative (baseline after build) risks caching stale
 		// content with a too-new baseline, making the staleness invisible.
 		baseline := cb.buildCacheBaseline()
-		prompt := cb.BuildSystemPrompt()
+		prompt, sections := renderPromptPartsWithSections(cb.BuildSystemPromptParts())
 		if current := cb.skillsLoader.CompatibilityRevision(); current != revision || current%2 != 0 {
 			continue
 		}
 		cb.cachedSystemPrompt = prompt
+		cb.cachedSystemPromptSections = sections
 		cb.cachedAt = baseline.maxMtime
 		cb.existedAtCache = baseline.existed
 		cb.skillFilesAtCache = baseline.skillFiles
@@ -586,7 +594,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 		cb.compatibilityRevisionAtCache = revision
 
 		logger.DebugCF("agent", "System prompt cached", map[string]any{"length": len(prompt)})
-		return prompt
+		return prompt, append([]providers.PromptSection(nil), sections...)
 	}
 }
 
@@ -601,14 +609,16 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 			IncludeSkillCatalog: !req.SuppressSkillContext,
 			AllowedSkills:       req.AllowedSkills,
 		})
-		staticPrompt := renderPromptParts(parts)
-		return staticPrompt, []providers.ContentBlock{promptContentBlock(PromptPart{
+		staticPrompt, sections := renderPromptPartsWithSections(parts)
+		block := promptContentBlock(PromptPart{
 			ID:      "kernel.coding_static",
 			Layer:   PromptLayerKernel,
 			Slot:    PromptSlotIdentity,
 			Source:  PromptSource{ID: PromptSourceKernel, Name: "coding_static"},
 			Content: staticPrompt,
-		}, &providers.CacheControl{Type: "ephemeral"})}
+		}, &providers.CacheControl{Type: "ephemeral"})
+		block.PromptSections = sections
+		return staticPrompt, []providers.ContentBlock{block}
 	}
 
 	useDefaultCache := !req.SuppressSkillContext &&
@@ -616,16 +626,16 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 		len(req.AllowedSkills) == 0 &&
 		len(req.AllowedTools) == 0
 	if useDefaultCache {
-		staticPrompt := cb.BuildSystemPromptWithCache()
-		return staticPrompt, []providers.ContentBlock{
-			promptContentBlock(PromptPart{
-				ID:      "kernel.static",
-				Layer:   PromptLayerKernel,
-				Slot:    PromptSlotIdentity,
-				Source:  PromptSource{ID: PromptSourceKernel, Name: "static"},
-				Content: staticPrompt,
-			}, &providers.CacheControl{Type: "ephemeral"}),
-		}
+		staticPrompt, sections := cb.buildSystemPromptWithCacheSections()
+		block := promptContentBlock(PromptPart{
+			ID:      "kernel.static",
+			Layer:   PromptLayerKernel,
+			Slot:    PromptSlotIdentity,
+			Source:  PromptSource{ID: PromptSourceKernel, Name: "static"},
+			Content: staticPrompt,
+		}, &providers.CacheControl{Type: "ephemeral"})
+		block.PromptSections = sections
+		return staticPrompt, []providers.ContentBlock{block}
 	}
 
 	parts := cb.buildSystemPromptPartsForProfile(systemPromptBuildOptions{
@@ -815,6 +825,7 @@ func (cb *ContextBuilder) InvalidateCache() {
 	defer cb.systemPromptMutex.Unlock()
 
 	cb.cachedSystemPrompt = ""
+	cb.cachedSystemPromptSections = nil
 	cb.cachedAt = time.Time{}
 	cb.existedAtCache = nil
 	cb.skillFilesAtCache = nil

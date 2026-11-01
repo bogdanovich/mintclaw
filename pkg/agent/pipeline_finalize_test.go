@@ -99,9 +99,9 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 	}
 }
 
-func TestFinalizationContextAlreadyHandledSkipsHistoryButChecksCompactionPressure(t *testing.T) {
+func TestFinalizationContextAlreadyHandledWithoutHistoryChecksCompactionPressure(t *testing.T) {
 	ts := &turnState{
-		opts: freezeTurnInput(turnSpec{EnableSummary: true}),
+		opts: freezeTurnInput(turnSpec{EnableSummary: true, NoHistory: true}),
 	}
 	exec := &turnExecution{
 		model: turnExecutionModel{

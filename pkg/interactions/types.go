@@ -67,13 +67,17 @@ const (
 )
 
 const (
-	SnapshotSchemaVersion = "interaction_snapshot.v1"
-	EventSchemaVersion    = "interaction_event.v1"
-	DefaultRetention      = 7 * 24 * time.Hour
-	DefaultMaxRecords     = 1000
-	DefaultMaxEvents      = 5000
-	DefaultMaxBytes       = 2 * 1024 * 1024
-	MaxFinalDeliveries    = 16
+	SnapshotSchemaVersion             = "interaction_snapshot.v1"
+	EventSchemaVersion                = "interaction_event.v1"
+	DefaultObserverShutdownTimeout    = time.Second
+	DefaultStoreLockTimeout           = time.Second
+	DefaultMaxPendingObservations     = 256
+	DefaultMaxPendingObservationBytes = 4 * 1024 * 1024
+	DefaultRetention                  = 7 * 24 * time.Hour
+	DefaultMaxRecords                 = 1000
+	DefaultMaxEvents                  = 5000
+	DefaultMaxBytes                   = 2 * 1024 * 1024
+	MaxFinalDeliveries                = 16
 
 	MaxQuestions            = 3
 	MaxOptions              = 3
@@ -104,18 +108,24 @@ var (
 )
 
 var (
-	ErrStoreUnavailable   = errors.New("interaction store unavailable")
-	ErrNotFound           = errors.New("interaction not found")
-	ErrConflict           = errors.New("interaction revision conflict")
-	ErrInvalidTransition  = errors.New("invalid interaction transition")
-	ErrSessionHasActive   = errors.New("session already has an active interaction")
-	ErrTaskHasActive      = errors.New("task already has an active interaction")
-	ErrDuplicateAnswer    = errors.New("answer message already claimed")
-	ErrAnswerTooLate      = errors.New("interaction is no longer waiting")
-	ErrApprovalExpired    = errors.New("approval expired before consumption")
-	ErrSnapshotOverBudget = errors.New("interaction snapshot exceeds size budget")
-	ErrInvalidInteraction = errors.New("invalid interaction")
-	ErrCapacityExceeded   = errors.New("interaction registry capacity exceeded")
+	ErrStoreClosed               = errors.New("interaction store closed")
+	ErrObserverPending           = errors.New("interaction observer work still pending")
+	ErrObserverResyncRequired    = errors.New("interaction observer resynchronization required")
+	ErrObserverPayloadOverBudget = errors.New("interaction observation payload over budget")
+	ErrObserverBacklog           = errors.New("interaction observer backlog full")
+	ErrStoreBusy                 = errors.New("interaction store busy")
+	ErrStoreUnavailable          = errors.New("interaction store unavailable")
+	ErrNotFound                  = errors.New("interaction not found")
+	ErrConflict                  = errors.New("interaction revision conflict")
+	ErrInvalidTransition         = errors.New("invalid interaction transition")
+	ErrSessionHasActive          = errors.New("session already has an active interaction")
+	ErrTaskHasActive             = errors.New("task already has an active interaction")
+	ErrDuplicateAnswer           = errors.New("answer message already claimed")
+	ErrAnswerTooLate             = errors.New("interaction is no longer waiting")
+	ErrApprovalExpired           = errors.New("approval expired before consumption")
+	ErrSnapshotOverBudget        = errors.New("interaction snapshot exceeds size budget")
+	ErrInvalidInteraction        = errors.New("invalid interaction")
+	ErrCapacityExceeded          = errors.New("interaction registry capacity exceeded")
 )
 
 // Option separates user-facing text from an optional canonical answer value.
@@ -207,10 +217,20 @@ const (
 	ProtectedAnswerNotApplicableLabel = "Not applicable"
 )
 
+// ProtectedAnswerOrigin is scalar identity copied from the coordinator's
+// authoritative interaction record, never model-supplied continuation data.
+type ProtectedAnswerOrigin struct {
+	ToolName    string
+	ToolCallID  string
+	ExecutionID string
+	ActorID     string
+}
+
 // ProtectedAnswerSinkRequest is an ephemeral authority-bearing request. Text
 // is never serialized by the interaction package.
 type ProtectedAnswerSinkRequest struct {
 	Binding        ProtectedAnswerBinding
+	Origin         ProtectedAnswerOrigin
 	Workspace      string
 	Route          Route
 	InteractionID  string
@@ -224,6 +244,7 @@ type ProtectedAnswerSinkRequest struct {
 
 type ProtectedAnswerCancelRequest struct {
 	Binding        ProtectedAnswerBinding
+	Origin         ProtectedAnswerOrigin
 	Workspace      string
 	Route          Route
 	InteractionID  string
@@ -232,6 +253,7 @@ type ProtectedAnswerCancelRequest struct {
 
 type ProtectedAnswerCommitRequest struct {
 	Binding       ProtectedAnswerBinding
+	Origin        ProtectedAnswerOrigin
 	Workspace     string
 	Route         Route
 	InteractionID string
@@ -240,6 +262,7 @@ type ProtectedAnswerCommitRequest struct {
 
 type ProtectedAnswerDiscardRequest struct {
 	Binding       ProtectedAnswerBinding
+	Origin        ProtectedAnswerOrigin
 	Workspace     string
 	Route         Route
 	InteractionID string
@@ -384,15 +407,19 @@ type CreateRequest struct {
 }
 
 type Stats struct {
-	RecordCount      int
-	EventCount       int
-	NonterminalCount int
-	SnapshotBytes    int
-	Retention        time.Duration
-	MaxRecords       int
-	MaxEvents        int
-	MaxSnapshotBytes int
-	OverBudget       bool
+	PendingObservations        int
+	PendingObservationBytes    int
+	MaxPendingObservations     int
+	MaxPendingObservationBytes int
+	RecordCount                int
+	EventCount                 int
+	NonterminalCount           int
+	SnapshotBytes              int
+	Retention                  time.Duration
+	MaxRecords                 int
+	MaxEvents                  int
+	MaxSnapshotBytes           int
+	OverBudget                 bool
 }
 
 // Store is the durable boundary consumed by tools, routing, and recovery.

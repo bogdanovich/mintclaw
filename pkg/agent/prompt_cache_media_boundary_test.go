@@ -113,7 +113,7 @@ func TestLiveToolContextReusedIDKeepsCacheIntentAndHistoricalResults(t *testing.
 			runner := &toolLoopRunner{exec: exec, messages: []providers.Message{old, live}}
 			ts.recordPersistedMessagePair(old, old)
 			ts.recordPersistedMessagePair(live, durable)
-			runner.registerLiveToolContext("reused", durable, true, true, false)
+			runner.registerLiveToolContext("reused", durable, true, true, false, false)
 			exec.messages = append([]providers.Message{{Role: "system", Content: "rebuilt prefix"}}, runner.messages...)
 			key := func() string {
 				return buildPromptCacheLineageKey(promptCacheScopeForTurn(ts, exec, promptCachePurposeTurn),
@@ -141,7 +141,7 @@ func TestLiveToolContextMissingOccurrenceDoesNotBorrowHistoricalID(t *testing.T)
 	live := buildToolResultJournalMessage("reused", result, result.ContentForModel())
 	durable := durableToolResultJournalMessage(live, result, result.ContentForLLM())
 	runner := &toolLoopRunner{exec: exec, messages: []providers.Message{live}}
-	runner.registerLiveToolContext("reused", durable, true, false, false)
+	runner.registerLiveToolContext("reused", durable, true, false, false, false)
 	exec.messages = []providers.Message{{Role: "tool", ToolCallID: "reused", Content: "older result"}}
 	key := buildPromptCacheLineageKey(promptCacheScopeForTurn(ts, exec, promptCachePurposeTurn),
 		"openai", "test", buildPromptCachePrefixSnapshot(nil, nil))

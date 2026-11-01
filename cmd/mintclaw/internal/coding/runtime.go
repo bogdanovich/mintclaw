@@ -91,6 +91,7 @@ type codingInteractionRuntime interface {
 
 type nativeCodingTurnRunner struct {
 	loadConfig            func() (*config.Config, error)
+	updateConfig          func(func(*config.Config) error) (config.Snapshot, error)
 	createProvider        func(*config.Config) (providers.LLMProvider, string, error)
 	readTurnHistory       func(context.Context, session.SessionStore, string) ([]providers.Message, error)
 	newCodingRemoteClient codingRemoteClientFactory
@@ -103,6 +104,7 @@ func newNativeCodingTurnRunner() codingTurnRunner {
 func newNativeCodingRuntimeDependencies() nativeCodingTurnRunner {
 	return nativeCodingTurnRunner{
 		loadConfig:            internal.LoadConfig,
+		updateConfig:          internal.UpdateConfig,
 		createProvider:        providers.CreateProvider,
 		newCodingRemoteClient: newCodingRemoteClient,
 		readTurnHistory: func(
@@ -115,13 +117,50 @@ func newNativeCodingRuntimeDependencies() nativeCodingTurnRunner {
 	}
 }
 
-func resolveNativeCodingModel(model string) (string, string, error) {
+func resolveNativeCodingModel(model string) (frontend.ModelSelection, error) {
 	cfg, err := internal.LoadConfig()
 	if err != nil {
-		return "", "", fmt.Errorf("coding runtime: load config: %w", err)
+		return frontend.ModelSelection{}, fmt.Errorf("coding runtime: load config: %w", err)
 	}
-	_, modelName, providerName, err := codingRuntimeConfig(cfg, thread.Metadata{Model: strings.TrimSpace(model)})
-	return modelName, providerName, err
+	requestedModel := strings.TrimSpace(model)
+	metadata := codingSelectionMetadata(cfg, thread.Metadata{Model: requestedModel})
+	_, modelName, providerName, err := codingRuntimeConfig(cfg, metadata)
+	if err != nil {
+		return frontend.ModelSelection{}, err
+	}
+	return frontend.ModelSelection{
+		Model: modelName, Provider: providerName, ReasoningEffort: metadata.ReasoningEffort,
+	}, nil
+}
+
+func persistCodingModelDefault(
+	updateConfig func(func(*config.Config) error) (config.Snapshot, error),
+	selection frontend.ModelSelection,
+) error {
+	if updateConfig == nil {
+		return fmt.Errorf("configuration updater is unavailable")
+	}
+	model := strings.TrimSpace(selection.Model)
+	provider := providers.NormalizeProvider(selection.Provider)
+	reasoningEffort := strings.ToLower(strings.TrimSpace(selection.ReasoningEffort))
+	_, err := updateConfig(func(cfg *config.Config) error {
+		if _, selectErr := selectCodingModelConfig(cfg, model, provider); selectErr != nil {
+			return fmt.Errorf("select model %q: %w", model, selectErr)
+		}
+		if validationErr := validateCodingModelReasoningSelection(
+			cfg,
+			model,
+			provider,
+			reasoningEffort,
+		); validationErr != nil {
+			return validationErr
+		}
+		cfg.Coding.Defaults = config.CodingDefaultsConfig{
+			Model: model, Provider: provider, ReasoningEffort: reasoningEffort,
+		}
+		return nil
+	})
+	return err
 }
 
 func (r nativeCodingTurnRunner) Run(
@@ -1473,10 +1512,11 @@ func (s *codingMetadataState) checkpointState() (*thread.Store, thread.Metadata,
 
 type nativeControllerRuntime struct {
 	*nativeCodingRuntime
-	lease          *thread.Lease
-	projector      *frontend.Projector
-	metadataState  *codingMetadataState
-	checkpointOnce sync.Once
+	lease               *thread.Lease
+	projector           *frontend.Projector
+	metadataState       *codingMetadataState
+	persistModelDefault func(frontend.ModelSelection) error
+	checkpointOnce      sync.Once
 }
 
 // nativeWorkerController keeps worker-only capabilities at the native process
@@ -1528,11 +1568,10 @@ func (r *nativeControllerRuntime) SelectModel(ctx context.Context, selection fro
 	if err != nil {
 		return err
 	}
-	if !changed {
-		return nil
+	if changed {
+		r.metadata = candidate
 	}
-	r.metadata = candidate
-	if r.modelRecents != nil {
+	if changed && r.modelRecents != nil {
 		recentRoutes, recentErr := r.modelRecents.Record(codingmodelpicker.Route{
 			Provider: candidate.Provider,
 			Model:    candidate.Model,
@@ -1547,18 +1586,27 @@ func (r *nativeControllerRuntime) SelectModel(ctx context.Context, selection fro
 			))
 		}
 	}
-	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(r.loop)
-
-	r.projector.ThreadMetadataAndRuntimeUpdated(frontend.ThreadMetadata{
-		Title:       candidate.Title,
-		Preview:     candidate.Preview,
-		ProjectRoot: candidate.Project.ProjectRoot,
-		CWD:         candidate.Project.InvocationCWD,
-		Model:       candidate.Model,
-		Provider:    candidate.Provider,
-		Archived:    candidate.Status == thread.StatusArchived,
-		UpdatedAt:   candidate.UpdatedAt,
-	}, status)
+	if changed {
+		status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(r.loop)
+		r.projector.ThreadMetadataAndRuntimeUpdated(frontend.ThreadMetadata{
+			Title:       candidate.Title,
+			Preview:     candidate.Preview,
+			ProjectRoot: candidate.Project.ProjectRoot,
+			CWD:         candidate.Project.InvocationCWD,
+			Model:       candidate.Model,
+			Provider:    candidate.Provider,
+			Archived:    candidate.Status == thread.StatusArchived,
+			UpdatedAt:   candidate.UpdatedAt,
+		}, status)
+	}
+	if selection.SaveAsDefault {
+		if r.persistModelDefault == nil {
+			return fmt.Errorf("coding model is active for this session, but default persistence is unavailable")
+		}
+		if err = r.persistModelDefault(selection); err != nil {
+			return fmt.Errorf("coding model is active for this session, but save default: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -2088,6 +2136,9 @@ func newNativeCodingControllerWithDependencies(
 		lease:               request.Lease,
 		projector:           projector,
 		metadataState:       metadataState,
+		persistModelDefault: func(selection frontend.ModelSelection) error {
+			return persistCodingModelDefault(dependencies.updateConfig, selection)
+		},
 	}
 	result, err := controller.New(projector, runtime)
 	if err != nil {
@@ -2128,25 +2179,27 @@ func codingRuntimeConfig(
 	// personal-agent context mode and custom database paths are not inherited.
 	runtimeCfg.Agents.Defaults.ContextManager = "seahorse"
 	runtimeCfg.Agents.Defaults.ContextManagerConfig = nil
+	metadata = codingSelectionMetadata(cfg, metadata)
 	modelName := strings.TrimSpace(metadata.Model)
+	persistedProvider := providers.NormalizeProvider(strings.TrimSpace(metadata.Provider))
+	reasoningEffort := strings.TrimSpace(metadata.ReasoningEffort)
 	if modelName == "" {
 		modelName = strings.TrimSpace(runtimeCfg.Agents.Defaults.GetModelName())
 	}
 	if modelName == "" {
 		return nil, "", "", fmt.Errorf("coding runtime: model is required")
 	}
-	persistedProvider := providers.NormalizeProvider(strings.TrimSpace(metadata.Provider))
 	modelCfg, err := selectCodingModelConfig(cfg, modelName, persistedProvider)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("coding runtime: select model %q: %w", modelName, err)
 	}
 	selected := cloneModelConfig(modelCfg)
-	if rawReasoning := strings.TrimSpace(metadata.ReasoningEffort); rawReasoning != "" {
-		reasoningEffort, configured := reasoning.Parse(rawReasoning)
-		if !configured || !providers.ReasoningProfile(modelCfg).Supports(reasoningEffort) {
-			return nil, "", "", fmt.Errorf("coding runtime: unsupported reasoning effort %q", rawReasoning)
+	if reasoningEffort != "" {
+		parsedReasoning, configured := reasoning.Parse(reasoningEffort)
+		if !configured || !providers.ReasoningProfile(modelCfg).Supports(parsedReasoning) {
+			return nil, "", "", fmt.Errorf("coding runtime: unsupported reasoning effort %q", reasoningEffort)
 		}
-		selected.ThinkingLevel = string(reasoningEffort)
+		selected.ThinkingLevel = string(parsedReasoning)
 	}
 	if persistedProvider != "" {
 		_, canonicalModelID := providers.ExtractProtocol(selected)
@@ -2168,6 +2221,17 @@ func codingRuntimeConfig(
 	}
 	runtimeCfg.Agents.Defaults.Provider = providerName
 	return &runtimeCfg, modelName, providerName, nil
+}
+
+func codingSelectionMetadata(cfg *config.Config, metadata thread.Metadata) thread.Metadata {
+	if cfg == nil || strings.TrimSpace(metadata.Model) != "" ||
+		strings.TrimSpace(cfg.Coding.Defaults.Model) == "" {
+		return metadata
+	}
+	metadata.Model = cfg.Coding.Defaults.Model
+	metadata.Provider = cfg.Coding.Defaults.Provider
+	metadata.ReasoningEffort = cfg.Coding.Defaults.ReasoningEffort
+	return metadata
 }
 
 func canonicalCodingReasoningEffort(value string) (string, bool) {

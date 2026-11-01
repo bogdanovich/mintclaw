@@ -7,41 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
-
-func (r *Registry) availableLocked() error {
-	if r.loadErr != nil {
-		return fmt.Errorf("%w: %w", ErrStoreUnavailable, r.loadErr)
-	}
-	return nil
-}
-
-func (r *Registry) lockAndReloadLocked() (func(), error) {
-	if r.storePath == "" {
-		return func() {}, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(r.storePath), 0o700); err != nil {
-		return nil, fmt.Errorf("create interaction store directory: %w", err)
-	}
-	release, err := acquireStoreFileLock(r.storePath + ".lock")
-	if err != nil {
-		return nil, err
-	}
-	before := r.snapshotLocked()
-	r.records = make(map[string]Record)
-	r.events = nil
-	r.commitSequence = 0
-	if err := r.load(); err != nil {
-		r.restoreSnapshotLocked(before)
-		release()
-		return nil, fmt.Errorf("%w: reload under lock: %w", ErrStoreUnavailable, err)
-	}
-	return release, nil
-}
 
 func (r *Registry) load() error {
 	data, err := os.ReadFile(r.storePath)

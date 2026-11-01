@@ -29,6 +29,7 @@ func runAdmissionFixture(t *testing.T, fixture *admissionFixture, cases ...Loade
 	t.Helper()
 	return Run(t.Context(), fixture.preset, cases, RunOptions{
 		Home: fixture.home, OutputParent: fixture.output, SuiteTimeout: 10 * time.Second,
+		IncludePending: true, // Model-free admission controls deliberately exercise deferred fixtures too.
 	})
 }
 

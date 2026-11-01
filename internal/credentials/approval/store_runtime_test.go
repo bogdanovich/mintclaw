@@ -23,7 +23,7 @@ func runtimeStoreConfig(t *testing.T) Config {
 	return config
 }
 
-func TestRuntimeOwnerStorePersistsPasskeyButNotGrants(t *testing.T) {
+func TestRuntimeOwnerStorePersistsPasskeyAndOriginalGrantDeadline(t *testing.T) {
 	config := runtimeStoreConfig(t)
 	controller, setup, err := New(config)
 	if err != nil || setup == nil {
@@ -53,8 +53,21 @@ func TestRuntimeOwnerStorePersistsPasskeyButNotGrants(t *testing.T) {
 	if restarted.owner.Credentials[0].Authenticator.SignCount != 1 {
 		t.Fatal("authenticator update was not durable")
 	}
-	if restarted.Check(context.Background(), grant.ID, checkedRequest(grant.PolicyRevision)) == nil {
-		t.Fatal("restart restored a credential grant")
+	request := checkedRequest(grant.PolicyRevision)
+	if restarted.Check(context.Background(), grant.ID, request) != nil {
+		t.Fatal("restart lost the verified credential grant")
+	}
+	restored := restarted.grants[grant.ID]
+	if !restored.IssuedAt.Equal(grant.IssuedAt) || !restored.ExpiresAt.Equal(grant.ExpiresAt) {
+		t.Fatal("restart renewed the original approval window")
+	}
+	lease, err := restarted.ActiveLogin(t.Context(), request)
+	if err != nil || lease.Check(t.Context(), request) != nil {
+		t.Fatal("restored grant could not supply a scoped private lease")
+	}
+	request.Principal.ActorID = "other"
+	if restarted.Check(t.Context(), grant.ID, request) == nil {
+		t.Fatal("restored approval admitted a different principal")
 	}
 	stat, err := os.Stat(filepath.Join(config.StateDirectory, ownerFile))
 	if err != nil || stat.Mode().Perm() != 0o600 {

@@ -121,6 +121,17 @@ func newAgentLoopWithRegistry(
 	al.traceCapture = newTraceCaptureManager(cfg, al.runtimeEvents)
 	al.refreshRuntimeEventLogger(cfg)
 	al.providerFactory = providers.CreateProviderFromConfig
+	if al.runtimeInitErr != nil {
+		return al
+	}
+	if al.providerBudget != nil {
+		var err error
+		provider, err = al.applyProviderCallBudget(provider)
+		if err != nil {
+			al.runtimeInitErr = errors.Join(al.runtimeInitErr, err)
+			return al
+		}
+	}
 	al.modelExecution = &modelExecutionManager{
 		configProvider: al.GetConfig,
 		state:          al.state,

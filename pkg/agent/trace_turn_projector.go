@@ -648,6 +648,7 @@ func runtimeEventRecord(
 			Provider:                      value.Provider,
 			Model:                         value.Model,
 			PromptHash:                    value.PromptHash,
+			SystemSources:                 diagnosticSystemSources(settings, value.SystemSources),
 			PromptCacheMode:               value.PromptCacheMode,
 			StablePrefixVersion:           value.PromptCache.StablePrefixVersion,
 			StablePrefixHash:              value.PromptCache.StablePrefixHash,
@@ -774,12 +775,14 @@ func runtimeEventRecord(
 			)
 		}
 		payload = diagnostictrace.ToolPayload{
-			Tool:          value.Tool,
-			ResultHash:    value.ResultHash,
-			Status:        "completed",
-			Executed:      true,
-			IsError:       value.IsError,
-			ResultPreview: resultPreview,
+			Tool:               value.Tool,
+			ResultHash:         value.ResultHash,
+			Status:             "completed",
+			Executed:           true,
+			IsError:            value.IsError,
+			ResultPreview:      resultPreview,
+			DocumentFields:     diagnosticDocumentFields(value),
+			BrowserInputTarget: diagnosticBrowserInputTarget(value),
 		}
 		toolCallID = firstNonEmptyString(toolCallID, value.ToolCallID)
 		toolCallGeneration = firstNonEmptyString(toolCallGeneration, value.ToolCallGeneration)
@@ -1115,7 +1118,7 @@ func diagnosticToolPreviewAllowed(tool string) bool {
 	switch tool {
 	case "nodes", "nodes_invoke", "nodes_file_info", "nodes_upload", "nodes_download", "nodes_status", "nodes_cancel",
 		"request_user_input", "workspace_exec", "browser_observe", "browser_capture", "browser_diagnostics",
-		"browser_act", "browser_contexts", "browser_execute", "coding_task":
+		"browser_act", "browser_input", "browser_contexts", "browser_execute", "coding_task":
 		return false
 	default:
 		return true
@@ -1214,14 +1217,7 @@ func safeRepositoryCommit(value string) string {
 }
 
 func safeHash(settings traceCaptureSettings, value string) string {
-	if value == "" {
-		return ""
-	}
-	if settings.filter != nil {
-		value = settings.filter(value)
-	}
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
+	return diagnostictrace.FilteredHash(value, settings.filter)
 }
 
 func diagnosticSafeHash(cfg *config.Config, value string) string {

@@ -11,12 +11,14 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   outbox, MCP, frontend, measured storage and dependency work, with explicit remaining limits.
 - [October 18 Code Health Second Sweep](reliability-code-health-20261018-sweep.md): merged computer cleanup
   and fixed-alias login fixes, merged regression evidence, and conditional follow-up priorities.
-- [Architecture Soundness and Robustness Review](architecture-robustness-review-20261019.md): admitted terminal outcome consistency, task registry readiness, and bounded contention qualification.
+- [Architecture Soundness and Robustness Review](architecture-robustness-review-20261019.md): merged terminal consistency, task registry readiness, interaction admission bounds, and observer shutdown settlement.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Manual Agent Evals Design](agent-evals-design.md): proposed on-demand multi-turn task evaluation, isolated targets,
   independent artifact/state checks, LLM user simulation, and separate rubric judging; approved for implementation.
 - [Manual Agent Evals Roadmap](agent-evals-roadmap.md): admitted bounded runner, model roles, PDF/browser suites,
   workspace presets, and baseline comparisons without live evals in CI.
+- [Core Regression Evals Follow-Up](agent-evals-core-roadmap.md): active general defaults, pending PDF/browser,
+  prioritized core scenarios and the native-evidence prerequisites for steering, stop and session isolation.
 - [Eval Runtime Admission Probe](agent-evals-runtime-probe.md): authenticated read-only active-config identity for
   isolated-target preflight; not an isolation certificate or tool authority.
 - [Manual Agent Evals First-Release Goal](agent-evals-goal.md): frozen packets, minimum cases, safety/evidence contracts,

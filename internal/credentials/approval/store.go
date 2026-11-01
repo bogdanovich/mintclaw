@@ -6,9 +6,12 @@ import (
 	"io"
 
 	"github.com/go-webauthn/webauthn/webauthn"
+
+	"github.com/bogdanovich/mintclaw/pkg/credentialbroker"
 )
 
-const maxOwnerRecordBytes = 65536
+// Bounded passkey state plus at most 64 grants with bounded account aliases.
+const maxOwnerRecordBytes = 1 << 20
 
 // ownerStore is private. Only the protected filesystem implementation is wired
 // by New. Tests use an in-memory double; there is no production dependency
@@ -29,6 +32,10 @@ type ownerRecord struct {
 	// first assertion after an accepted registration persists activation. A
 	// restart before that assertion requires fresh protected owner setup.
 	EnrollmentPending bool `json:"enrollment_pending,omitempty"`
+	// Approval metadata shares the private, atomic owner transaction. No vault
+	// values, browser cookies, pending links or WebAuthn challenges are stored.
+	GrantPolicyRevision string                   `json:"grant_policy_revision,omitempty"`
+	Grants              []credentialbroker.Grant `json:"grants,omitempty"`
 }
 
 func (owner ownerRecord) WebAuthnID() []byte                         { return owner.UserID }

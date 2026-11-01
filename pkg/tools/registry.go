@@ -78,6 +78,16 @@ type TurnCleanupResult struct {
 	Receipts []taskresult.Receipt
 }
 
+// TurnCleanupError identifies the owner of an unconfirmed resource disposition.
+// Callers may inspect Err locally; public terminal answers must not expose it.
+type TurnCleanupError struct {
+	Tool string
+	Err  error
+}
+
+func (e *TurnCleanupError) Error() string { return "turn resource cleanup failed" }
+func (e *TurnCleanupError) Unwrap() error { return e.Err }
+
 // TurnCleanupReceiptTool is an opt-in extension for resource tools whose
 // terminal cleanup produces durable, privacy-safe evidence.
 type TurnCleanupReceiptTool interface {
@@ -1276,7 +1286,9 @@ func (r *ToolRegistry) CleanupTurnWithResult(ctx context.Context) (TurnCleanupRe
 	for _, tool := range r.registeredToolsSnapshot() {
 		if cleanup, ok := tool.(TurnCleanupReceiptTool); ok {
 			cleaned, err := cleanup.CleanupTurnWithResult(ctx)
-			cleanupErr = errors.Join(cleanupErr, err)
+			if err != nil {
+				cleanupErr = errors.Join(cleanupErr, &TurnCleanupError{Tool: tool.Name(), Err: err})
+			}
 			for _, receipt := range cleaned.Receipts {
 				if len(result.Receipts) >= maxTurnCleanupReceipts {
 					cleanupErr = errors.Join(cleanupErr, errors.New("turn cleanup receipt limit exceeded"))
@@ -1297,7 +1309,9 @@ func (r *ToolRegistry) CleanupTurnWithResult(ctx context.Context) (TurnCleanupRe
 		if !ok {
 			continue
 		}
-		cleanupErr = errors.Join(cleanupErr, cleanup.CleanupTurn(ctx))
+		if err := cleanup.CleanupTurn(ctx); err != nil {
+			cleanupErr = errors.Join(cleanupErr, &TurnCleanupError{Tool: tool.Name(), Err: err})
+		}
 	}
 	return result, cleanupErr
 }

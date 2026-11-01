@@ -1,19 +1,14 @@
 package eval
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 )
-
-const generatePrivateFact = "MC_EVAL_GENERATE_PRIVATE_V1"
 
 var ErrPDFTrial = errors.New("eval: PDF trial evidence unavailable or invalid")
 
@@ -73,17 +68,10 @@ func preparePDFTrial(item LoadedCase, home, workspace, sessionID, agent string) 
 		item: item, home: home, workspace: workspace, sessionID: sessionID, agent: agent,
 		started: time.Now().UTC(), source: source,
 	}
-	trial.item.Case.Driver.Facts = maps.Clone(item.Case.Driver.Facts)
-	for handle, value := range trial.item.Case.Driver.Facts {
-		if value != generatePrivateFact {
-			continue
-		}
-		var random [8]byte
-		if _, err = rand.Read(random[:]); err != nil {
-			clear(source)
-			return nil, ErrPDFTrial
-		}
-		trial.item.Case.Driver.Facts[handle] = "MC_EVAL_" + hex.EncodeToString(random[:])
+	trial.item.Case.Driver.Facts, err = materializePrivateFacts(item.Case.Driver.Facts)
+	if err != nil {
+		clear(source)
+		return nil, ErrPDFTrial
 	}
 	root, err := os.OpenRoot(workspace)
 	if err != nil {

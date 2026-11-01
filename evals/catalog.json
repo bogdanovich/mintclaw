@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "suites": [
+    {"id": "general", "status": "active", "default": true},
+    {
+      "id": "pdf",
+      "status": "pending",
+      "default": false,
+      "reason": "Deferred by operator: focus on core/general coverage. The recorded full baseline remains nonpassing."
+    },
+    {
+      "id": "browser",
+      "status": "pending",
+      "default": false,
+      "reason": "Deferred by operator: focus on core/general coverage. The recorded full baseline remains nonpassing."
+    }
+  ],
+  "cases": [
+    {
+      "id": "general.context.compaction",
+      "status": "pending",
+      "default": false,
+      "reason": "C3f native compaction/corrected-recall contract awaits bounded live qualification."
+    },
+    {
+      "id": "general.skills.selection",
+      "status": "pending",
+      "default": false,
+      "reason": "C3g native selection/revision and no-selection controls are implemented; separate bounded live qualification and immutable fixed batch have not run."
+    },
+    {
+      "id": "general.history.restart",
+      "status": "pending",
+      "default": false,
+      "reason": "C3e owned restart and retained generation evidence await bounded live qualification."
+    },
+    {
+      "id": "general.approval.denied",
+      "status": "pending",
+      "default": false,
+      "reason": "C3c exact native denial/no-effect contract awaits implementation validation and fixed qualification."
+    },
+    {
+      "id": "general.delivery.final-once",
+      "status": "pending",
+      "default": false,
+      "reason": "C3d requires native streaming plus durable final delivery. The gateway intentionally disables configured streaming inside durable outbound transactions; no streaming qualification is claimed."
+    },
+    {
+      "id": "general.control.stop",
+      "status": "pending",
+      "default": false,
+      "reason": "C3b native stop/reuse contract awaits implementation validation and fixed qualification."
+    },
+    {
+      "id": "general.context.correction",
+      "status": "active",
+      "default": true
+    },
+    {
+      "id": "general.interaction.answer",
+      "status": "active",
+      "default": true
+    },
+    {
+      "id": "general.steering.boundary",
+      "status": "active",
+      "default": true
+    },
+    {
+      "id": "general.steering.order",
+      "status": "active",
+      "default": true
+    },
+    {
+      "id": "general.session.isolation",
+      "status": "pending",
+      "default": false,
+      "reason": "C2 fixed batch inconclusive: Gemini HTTP 429 caused unknown usage in the shared native budget. Not qualified; no retry-until-green."
+    },
+    {
+      "id": "general.tools.recovery",
+      "status": "pending",
+      "default": false,
+      "reason": "C3a fixed batch not qualified: 1 pass and 2 judge provider_unavailable errors; all three native recovery executions and hard checks passed. Pending/non-default; no reruns."
+    }
+  ]
+}

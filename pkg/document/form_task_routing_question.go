@@ -23,6 +23,16 @@ const (
 	MaxFormTaskAnswerBytes   = 8 * 1024
 )
 
+// IsFormTaskRouteQuestionBinding is a routing hint, not an authorization check.
+// The protected sink still validates the sealed binding and current native state.
+func IsFormTaskRouteQuestionBinding(binding *interactions.ProtectedAnswerBinding) bool {
+	if binding == nil || binding.Namespace != FormProtectedAnswerNamespace {
+		return false
+	}
+	envelope, err := decodeFormProtectedBindingEnvelope(binding.Token)
+	return err == nil && envelope.Kind == formTaskQuestionBindingKind
+}
+
 type formTaskRouteQuestion struct {
 	Round    int                                 `json:"round"`
 	Revision int64                               `json:"revision"`
@@ -95,6 +105,7 @@ func (store *FormJobStore) ReadFormTaskRouteAnswer(
 				FieldReference: answer.FieldReference, Choice: answer.Choice,
 				Passes: answer.Passes,
 			}
+			result.PreviousUnrelated = formTaskPreviousUnrelated(mode, answer.AdmissionOrder)
 			return false, nil
 		}
 		return false, ErrFormJobNotFound
@@ -146,7 +157,8 @@ func (store *FormJobStore) ApplyFormTaskRouteChoice(
 			record.Revision++
 			invalidateFormIntakeReview(record)
 			for index := range route.Answers {
-				if route.Answers[index].ID != answer.ID && route.Answers[index].Text != "" {
+				if route.Answers[index].ID != answer.ID && route.Answers[index].Text != "" &&
+					route.Answers[index].Choice != FormTaskIndependent {
 					route.Answers[index].ForForm = true
 				}
 			}
@@ -466,7 +478,11 @@ func validateStoredFormTaskQuestion(record FormJobRecord, mode *formIntakeStored
 		}
 		seen[answer.ID] = true
 		if answer.Choice != "" && (answer.State != "handled" ||
-			(answer.Choice != FormTaskSwitch && answer.Choice != FormTaskContinue)) {
+			(answer.Choice != FormTaskSwitch && answer.Choice != FormTaskContinue && answer.Choice != FormTaskIndependent)) {
+			return ErrFormJobRecordCorrupt
+		}
+		if answer.Choice == FormTaskIndependent && (answer.ForForm || answer.FieldReference != "" ||
+			answer.ChoiceKind != "private" || route.ConsentAnswerID == answer.ID) {
 			return ErrFormJobRecordCorrupt
 		}
 		if err := validateFormTaskAnswerDecision(record, answer); err != nil {

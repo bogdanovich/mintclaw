@@ -124,6 +124,31 @@ func TestRuntimeEventLogFieldsSummarizeAgentPayload(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventLogFieldsRetainSteeringHashWithoutContent(t *testing.T) {
+	fields := runtimeEventLogFields(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentInterruptReceived,
+		Payload: InterruptReceivedPayload{
+			Kind: InterruptKindSteering, Role: "user", ContentLen: 7, QueueDepth: 1,
+			MessageHash: "filtered-hash", DiagnosticContent: "private diagnostic preview",
+			CodingSteerID: "private coding id", CodingSteerText: "private coding text",
+		},
+	})
+	if fields["message_hash"] != "filtered-hash" || fields["queue_depth"] != 1 {
+		t.Fatal("steering admission correlation was lost", fields)
+	}
+	data, err := json.Marshal(fields)
+	if err != nil || strings.Contains(string(data), "private") {
+		t.Fatal("default event summary exposed steering content", err)
+	}
+	fields = runtimeEventLogFields(runtimeevents.Event{
+		Kind:    runtimeevents.KindAgentInterruptReceived,
+		Payload: InterruptReceivedPayload{Kind: InterruptKindHard},
+	})
+	if _, present := fields["message_hash"]; present {
+		t.Fatal("empty hash was invented for an uncorrelated control")
+	}
+}
+
 func TestRuntimeEventLogFieldsRetainAsyncCompletionCorrelation(t *testing.T) {
 	fields := runtimeEventLogFields(runtimeevents.Event{
 		Kind: runtimeevents.KindAgentAsyncCompletion,

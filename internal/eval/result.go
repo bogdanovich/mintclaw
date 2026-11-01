@@ -17,9 +17,11 @@ const (
 )
 
 type Event struct {
+	Generation         int                 `json:"generation,omitempty"`
 	ID                 string              `json:"id"`
 	Turn               int                 `json:"turn"`
 	Kind               string              `json:"kind"`
+	WireType           string              `json:"wire_type,omitempty"`
 	RequestID          string              `json:"request_id"`
 	MessageID          string              `json:"message_id,omitempty"`
 	Content            string              `json:"content,omitempty"`
@@ -42,30 +44,59 @@ type CheckResult struct {
 }
 
 type Trial struct {
-	Version          int                           `json:"version"`
-	ID               string                        `json:"id"`
-	CaseID           string                        `json:"case_id"`
-	CaseSHA256       string                        `json:"case_sha256"`
-	Repetition       int                           `json:"repetition,omitempty"`
-	SessionID        string                        `json:"session_id"`
-	AgentID          string                        `json:"agent_id"`
-	SessionKey       string                        `json:"session_key,omitempty"`
-	Verdict          Verdict                       `json:"verdict"`
-	Code             string                        `json:"code"`
-	ExecutionVerdict Verdict                       `json:"execution_verdict,omitempty"`
-	ExecutionCode    string                        `json:"execution_code,omitempty"`
-	StartedAt        time.Time                     `json:"started_at"`
-	DurationMS       int64                         `json:"duration_ms"`
-	Events           []Event                       `json:"events"`
-	Checks           []CheckResult                 `json:"checks"`
-	DriverCalls      []RoleCall                    `json:"driver_calls,omitempty"`
-	Judge            *Judgement                    `json:"judge,omitempty"`
-	EvidenceEligible bool                          `json:"evidence_eligible"`
-	TransportClosed  bool                          `json:"transport_closed"`
-	RemoteState      string                        `json:"remote_state"`
-	PDF              *PDFTrialEvidence             `json:"pdf,omitempty"`
-	Browser          *BrowserTrialEvidence         `json:"browser,omitempty"`
-	Cancellation     *QuestionCancellationEvidence `json:"question_cancellation,omitempty"`
+	Version              int                           `json:"version"`
+	ID                   string                        `json:"id"`
+	CaseID               string                        `json:"case_id"`
+	CaseSHA256           string                        `json:"case_sha256"`
+	TargetBudgetRequired bool                          `json:"target_budget_required,omitempty"`
+	ActiveToolRequired   bool                          `json:"active_tool_required,omitempty"`
+	Repetition           int                           `json:"repetition,omitempty"`
+	SessionID            string                        `json:"session_id"`
+	AgentID              string                        `json:"agent_id"`
+	SessionKey           string                        `json:"session_key,omitempty"`
+	Verdict              Verdict                       `json:"verdict"`
+	Code                 string                        `json:"code"`
+	ExecutionVerdict     Verdict                       `json:"execution_verdict,omitempty"`
+	ExecutionCode        string                        `json:"execution_code,omitempty"`
+	StartedAt            time.Time                     `json:"started_at"`
+	DurationMS           int64                         `json:"duration_ms"`
+	Events               []Event                       `json:"events"`
+	Checks               []CheckResult                 `json:"checks"`
+	DriverCalls          []RoleCall                    `json:"driver_calls,omitempty"`
+	Judge                *Judgement                    `json:"judge,omitempty"`
+	EvidenceEligible     bool                          `json:"evidence_eligible"`
+	TransportClosed      bool                          `json:"transport_closed"`
+	RemoteState          string                        `json:"remote_state"`
+	PDF                  *PDFTrialEvidence             `json:"pdf,omitempty"`
+	Browser              *BrowserTrialEvidence         `json:"browser,omitempty"`
+	Cancellation         *QuestionCancellationEvidence `json:"question_cancellation,omitempty"`
+	Answer               *QuestionAnswerEvidence       `json:"question_answer,omitempty"`
+	Steering             *SteeringEvidence             `json:"steering,omitempty"`
+	Isolation            *IsolationEvidence            `json:"isolation,omitempty"`
+	ReadRecovery         *ReadRecoveryEvidence         `json:"read_recovery,omitempty"`
+	NativeStop           *NativeStopEvidence           `json:"native_stop,omitempty"`
+	ApprovalDenied       *ApprovalDeniedEvidence       `json:"approval_denied,omitempty"`
+	FinalDelivery        *FinalDeliveryEvidence        `json:"final_delivery,omitempty"`
+	SkillSelection       *SkillSelectionEvidence       `json:"skill_selection,omitempty"`
+	Restart              *RestartEvidence              `json:"restart,omitempty"`
+	Compaction           *CompactionEvidence           `json:"compaction,omitempty"`
+}
+
+// Private, bounded native observations. They are not model input, authorization,
+// a hostile-filesystem attestation or proof of whole-runtime quiescence.
+type QuestionAnswerEvidence struct {
+	Version            int      `json:"version"`
+	Workspace          string   `json:"workspace"`
+	AnswerRequestID    string   `json:"answer_request_id"`
+	AnswerAt           int64    `json:"answer_at"`
+	ObservedAt         int64    `json:"observed_at"`
+	ResumeFinalEventID string   `json:"resume_final_event_id"`
+	Waiting            string   `json:"waiting"`
+	Resolved           string   `json:"resolved"`
+	Metadata           string   `json:"metadata"`
+	History            []string `json:"history"`
+	HistorySHA256      string   `json:"history_sha256"`
+	MetadataSHA256     string   `json:"metadata_sha256"`
 }
 
 // This records one native interaction's terminal state, not runtime quiescence
@@ -103,6 +134,7 @@ type PDFTrialEvidence struct {
 	Cancellation *PDFCancellationEvidence `json:"cancellation,omitempty"`
 	Wire         *MediaWireEvidence       `json:"wire,omitempty"`
 	PostStop     *PDFPostStopEvidence     `json:"post_stop,omitempty"`
+	SourceFields *PDFSourceFieldsEvidence `json:"source_fields,omitempty"`
 }
 
 // Post-stop evidence is scoped to the admitted owned runtime and native stores,

@@ -40,6 +40,10 @@ func (domain *browserConversation) matchesApprovalAction(action browser.Prepared
 			action.PolicyEffect == browser.EffectUnknown
 	case "denied":
 		return fixtureRemovalAction(action)
+	case "ambiguous":
+		return isBrowserAmbiguity(domain.item) && fixtureSouthRemovalAction(action)
+	case "submit", "followup":
+		return fixtureSubmitAction(action)
 	default:
 		return false
 	}
@@ -165,7 +169,14 @@ func finalizeBrowserDenial(
 			return nil
 		}
 	}
-	proof.Native = inspectBrowserTask(*trial, target, pending.fixture, observed, empty, nil, proof)
+	proof.Native = inspectBrowserTask(
+		*trial,
+		target,
+		pending.fixture,
+		observed,
+		empty,
+		browserTaskEffects{denial: proof},
+	)
 	if proof.Native.Code == "native_post_stop_observed" && trial.Browser.Fixture != nil &&
 		trial.Browser.Fixture.Effects == Pass {
 		proof.Code = "denial_observed"

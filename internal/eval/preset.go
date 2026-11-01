@@ -4,21 +4,28 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"github.com/bogdanovich/mintclaw/internal/evalfixture"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 type Preset struct {
-	Version              int             `json:"version"`
-	ID                   string          `json:"id"`
-	ConfigPath           string          `json:"config_path"`
-	ExpectedAgent        string          `json:"expected_agent"`
-	ExpectedWorkspace    string          `json:"expected_workspace"`
-	IsolationRoot        string          `json:"isolation_root"`
-	Capabilities         []string        `json:"capabilities"`
-	UserModel            string          `json:"user_model,omitempty"`
-	JudgeModel           string          `json:"judge_model,omitempty"`
-	WorkspaceFiles       []WorkspaceFile `json:"workspace_files,omitempty"`
-	CaptureModelMetadata bool            `json:"capture_model_metadata,omitempty"`
+	Version              int                         `json:"version"`
+	ID                   string                      `json:"id"`
+	ConfigPath           string                      `json:"config_path"`
+	ExpectedAgent        string                      `json:"expected_agent"`
+	ExpectedWorkspace    string                      `json:"expected_workspace"`
+	IsolationRoot        string                      `json:"isolation_root"`
+	Capabilities         []string                    `json:"capabilities"`
+	UserModel            string                      `json:"user_model,omitempty"`
+	JudgeModel           string                      `json:"judge_model,omitempty"`
+	WorkspaceFiles       []WorkspaceFile             `json:"workspace_files,omitempty"`
+	CaptureModelMetadata bool                        `json:"capture_model_metadata,omitempty"`
+	TargetCallBudget     *providers.CallBudgetLimits `json:"target_call_budget,omitempty"`
+	ActiveTool           *ActiveToolProfile          `json:"active_tool,omitempty"`
+	Compaction           *CompactionProfile          `json:"compaction,omitempty"`
 }
 
 // WorkspaceFile admits one reviewed input, not a directory or runtime state.
@@ -68,13 +75,32 @@ func (preset Preset) Validate() error {
 		preset.JudgeModel != "" && !validID(preset.JudgeModel) {
 		return ErrInvalidPreset
 	}
-	if len(preset.WorkspaceFiles) > 64 {
+	if preset.TargetCallBudget != nil {
+		if _, err := providers.NewCallBudget(*preset.TargetCallBudget); err != nil {
+			return ErrInvalidPreset
+		}
+	}
+	if (preset.TargetCallBudget != nil) != slices.Contains(preset.Capabilities, boundedCallsCapability) {
+		return ErrInvalidPreset
+	}
+	if (preset.ActiveTool != nil) != slices.Contains(preset.Capabilities, activeToolCapability) ||
+		preset.ActiveTool != nil && (preset.ActiveTool.validate() != nil || preset.TargetCallBudget == nil ||
+			!preset.CaptureModelMetadata || preset.UserModel != "" ||
+			slices.Contains(preset.Capabilities, "pdf") || slices.Contains(preset.Capabilities, "browser")) {
+		return ErrInvalidPreset
+	}
+	if len(preset.WorkspaceFiles) > 64 || validateReadToolPreset(preset) != nil ||
+		validateApprovalToolPreset(preset) != nil || validateFinalDeliveryPreset(preset) != nil ||
+		validateSkillSelectionPreset(preset) != nil || validateRestartPreset(preset) != nil ||
+		validateCompactionPreset(preset) != nil {
 		return ErrInvalidPreset
 	}
 	paths := make(map[string]bool, len(preset.WorkspaceFiles))
 	for _, file := range preset.WorkspaceFiles {
 		key := strings.ToLower(file.Path)
-		if !preparableWorkspacePath(file.Path) || !validDigest(file.SHA256) || paths[key] {
+		allowed := preparableWorkspacePath(file.Path) || hasReadTool(preset) && file.Path == readFixturePath
+		allowed = allowed || hasApprovalTool(preset) && file.Path == evalfixture.ApprovalPath
+		if !allowed || !validDigest(file.SHA256) || paths[key] {
 			return ErrInvalidPreset
 		}
 		paths[key] = true

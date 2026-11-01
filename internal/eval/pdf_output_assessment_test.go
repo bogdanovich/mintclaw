@@ -190,10 +190,10 @@ func TestFinalizedPDFOutputRequiresAllIndependentWitnessesBeforeJudging(t *testi
 			judge := &ModelRole{provider: provider, identity: RoleIdentity{Role: "judge"}}
 			assessFinalizedPDF(t.Context(), judge, item, &trial, workspace, lifecycle, surfaces, report)
 			if mode == "complete" {
-				if provider.calls != 1 || trial.Verdict != Pass || trial.EvidenceEligible ||
+				if provider.calls != 1 || trial.Verdict != Pass || !trial.EvidenceEligible ||
 					trial.PDF.PostStop.AssessmentScope != pdfOutputAssessmentScope || !consistentComparisonVerdict(trial) {
 					t.Fatal(
-						"all independent controls did not reach the judge, or granted offline eligibility",
+						"all independent controls did not reach the judge and retain evidence eligibility",
 						trial.Code,
 					)
 				}
@@ -202,16 +202,18 @@ func TestFinalizedPDFOutputRequiresAllIndependentWitnessesBeforeJudging(t *testi
 						t.Fatal("independent PDF check stayed unknown", check.ID)
 					}
 				}
-				loaded := LoadedCase{Case: item, Digest: trial.CaseSHA256}
+				loaded := loadPDFTestCase(t, item.ID)
 				summary := TrialSummary{
 					ID: trial.ID, CaseSHA256: trial.CaseSHA256, Verdict: trial.Verdict, Code: trial.Code,
 				}
 				preset := Preset{ExpectedAgent: trial.AgentID}
-				trial.EvidenceEligible = true // Even a forged legacy flag cannot admit private/output regrade.
-				if gradeEligible(trial, loaded, summary, preset, workspace) {
-					t.Fatal("live output scope bypassed independent offline-regrade admission")
+				if !gradeEligible(trial, loaded, summary, preset, workspace) {
+					t.Fatal("complete generated output scope could not retain offline eligibility")
 				}
 				trial.EvidenceEligible = false
+				if gradeEligible(trial, loaded, summary, preset, workspace) {
+					t.Fatal("legacy ineligible output was upgraded")
+				}
 			} else if provider.calls != 0 || trial.Verdict == Pass || trial.PDF.PostStop.AssessmentScope != "" {
 				t.Fatal("incomplete or unsafe PDF witnesses reached the judge", mode, trial.Code)
 			}
@@ -257,7 +259,8 @@ func TestFinalizedPDFOutputRetainsJudgePrivacyAndHardFailures(t *testing.T) {
 			judge := &ModelRole{provider: provider, identity: RoleIdentity{Role: "judge"}}
 			assessFinalizedPDF(t.Context(), judge, current, &trial, workspace, cleanPDFLifecycle(),
 				&PrivateSurfaceObservation{Scope: "owned_profile_files_v1", Code: "observed"}, retention)
-			if trial.Verdict == Pass || trial.EvidenceEligible || !consistentComparisonVerdict(trial) ||
+			if trial.Verdict == Pass || trial.EvidenceEligible != (mode == "hard-check") ||
+				!consistentComparisonVerdict(trial) ||
 				mode == "private-reasoning" && trial.Verdict != Fail || mode == "hard-check" && trial.Verdict != Fail ||
 				mode == "changed-file" && trial.Verdict != Fail ||
 				(mode == "missing-file" || mode == "changed-file" || mode == "no-report") && provider.calls != 0 {

@@ -36,8 +36,11 @@ The existing Android passkey approves access to website-matching Logins in the
 configured vault for at most 20 hours. The phone must state this vault-wide
 scope explicitly. This deliberately replaces approval of an individually
 preconfigured account. Adding or renaming items does not silently renew a grant.
-Revocation, expiry, policy changes and restart invalidate grants and retire
-authenticated browser sessions through the existing lifetime mechanism.
+Revocation, expiry and policy changes invalidate grants and retire authenticated
+browser sessions through the existing lifetime mechanism. Restart retains only
+the original unexpired approval metadata in the private owner store, as defined
+by [durable approval](credential-durable-approval.md); browser sessions and old
+process leases are retired.
 
 The trusted runtime resolves the chosen exact item again against the live
 browser origin before retrieving values. A consumer lease narrows the approved
@@ -156,5 +159,9 @@ stored TOTP submission, fresh authentication and browser closure. Its formal
 task report remained partial because the model could not see the confirmed
 login's runtime receipt ID. The tool projection now returns that opaque ID
 alongside `logged_in`, matching the trusted audit; unconfirmed outcomes carry
-no receipt. See the [rollout evidence](credential-website-login-rollout.md)
-for the remaining release and complete-task qualification gates.
+no receipt. The correction is reviewed, deployed and qualified through the tool,
+actual provider requests and objective validation tests. D0-D4 are delivered:
+the real authentication evidence is from the owner pilot, while the later
+receipt projection has synthetic qualification. See the
+[rollout evidence](credential-website-login-rollout.md) for the exact sources,
+release checks and evidence limits.

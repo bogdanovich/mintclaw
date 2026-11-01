@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -82,7 +83,14 @@ func newFinalizationContext(
 	}
 
 	var historyMessage *providers.Message
-	if disposition == finalResponsePending && !ts.opts.NoHistory {
+	if disposition == finalResponseAlreadyHandled && !ts.opts.NoHistory {
+		historyMessage = &providers.Message{
+			Role:        "assistant",
+			Content:     handledToolResponseSummary,
+			Attachments: append([]providers.Attachment(nil), llm.handledAttachments...),
+			Deliverable: taskresult.CloneDeliverable(exec.deliverable),
+		}
+	} else if !ts.opts.NoHistory {
 		message := providers.Message{
 			Role:             "assistant",
 			Content:          terminal.content,
@@ -142,6 +150,10 @@ func (p *Pipeline) finalizeTurn(
 	status TurnEndStatus,
 	terminal terminalContent,
 ) (turnResult, error) {
+	terminal = prepareTerminalCleanup(turnCtx, ts, exec, terminal)
+	if ts.hardAbortRequested() {
+		return p.abortTurn(ts)
+	}
 	finalization := newFinalizationContext(ts, exec, llm, status, terminal)
 	return p.Finalize(turnCtx, ts, finalization)
 }
@@ -152,13 +164,23 @@ func (p *Pipeline) Finalize(
 	ts *turnState,
 	finalization FinalizationContext,
 ) (turnResult, error) {
-	// When the response was already handled, ExecuteTools already finalized
-	// (added handledToolResponseSummary, saved session, set phase to Completed).
-	// But still check for hard abort - if requested, abort the turn.
+	// Tool delivery is already durable. Its passive assistant summary is
+	// committed here, after cleanup, without replaying delivery on write failure.
 	if finalization.disposition == finalResponseAlreadyHandled {
 		if ts.hardAbortRequested() {
 			return p.abortTurn(ts)
 		}
+		if finalization.historyMessage != nil {
+			message := *finalization.historyMessage
+			writeErr := persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, &message)
+			if writeErr != nil {
+				logger.WarnCF("agent", "Failed to persist handled tool summary", map[string]any{"agent_id": ts.agentID})
+			} else {
+				ts.recordPersistedMessage(message)
+				p.ingestMessage(turnCtx, ts, message, nil)
+			}
+		}
+		ts.setFinalContent(finalization.content, finalization.contentProtected)
 		ts.setPhase(TurnPhaseCompleted)
 		return finalization.result(true), nil
 	}

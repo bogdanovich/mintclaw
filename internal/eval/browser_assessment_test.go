@@ -34,7 +34,7 @@ func browserReadHost(control *browserReadControl) *BrowserFixtureHostEvidence {
 func TestFinalizedBrowserReadAdmitsJudgeOnlyWithAllIndependentEvidence(t *testing.T) {
 	for _, mode := range []string{
 		"complete", "legacy", "scope", "state", "delivery", "resources", "privacy", "leak", "forced",
-		"truncated", "host", "host-origin", "host-empty", "route", "facts", "artifact", "context", "role", "no-wire-join", "execution",
+		"truncated", "host", "host-origin", "host-empty", "route", "facts", "artifact", "context", "role", "no-wire-join", "execution", "foreign-input-checkpoint",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			control := newBrowserReadControl(t)
@@ -89,6 +89,11 @@ func TestFinalizedBrowserReadAdmitsJudgeOnlyWithAllIndependentEvidence(t *testin
 				trial.TransportClosed = false
 			case "execution":
 				trial.ExecutionVerdict = Inconclusive
+			case "foreign-input-checkpoint":
+				trial.Browser.FormInputs = &BrowserFormInputsEvidence{
+					Scope: "native_browser_form_inputs_v1",
+					Code:  "native_inputs_observed",
+				}
 			}
 			assessFinalizedBrowser(t.Context(), judge, control.item.Case, &trial,
 				control.fixture.workspace, lifecycle, surfaces, host)

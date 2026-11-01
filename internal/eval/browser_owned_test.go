@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -160,11 +161,16 @@ func TestOwnedBrowserRunExecutesFreshFixturesButCannotPassFromHTTPOrProse(t *tes
 			item := browserCorpusCase(t, name)
 			result, err := Run(t.Context(), fixture.preset, []LoadedCase{item}, RunOptions{
 				Home: fixture.home, OutputParent: fixture.output, StartTarget: true, Repeat: 2,
+				IncludePending: true,
 			})
 			if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 2 || result.Verdict == Pass ||
 				result.BrowserFixtures == nil || result.BrowserFixtures.Code != "closed" || result.BrowserFixtures.Trials != 2 ||
 				result.TargetLifecycle == nil || result.TargetLifecycle.Code != "native_exit_zero" {
 				t.Fatal("owned fixture run lost coverage, closure, or native uncertainty", err)
+			}
+			if result.TrialScratch == nil || !result.TrialScratch.validFor(result) ||
+				result.TrialScratch.verdict() != Pass {
+				t.Fatal("browser trials did not retire their private staging")
 			}
 			for _, summary := range result.Trials {
 				data, err := os.ReadFile(filepath.Join(result.ReportDir, summary.File))
@@ -229,27 +235,46 @@ func TestOwnedBrowserRunExecutesFreshFixturesButCannotPassFromHTTPOrProse(t *tes
 	}
 }
 
-func TestOwnedBrowserRunKeepsPrivateAndActionCasesVisiblyGated(t *testing.T) {
+func TestOwnedBrowserAmbiguityAttemptsCaseWithoutInventingAuthority(t *testing.T) {
 	fixture := newOwnedGatewayFixture(t, "browser_read")
 	enableAdmissionBrowser(t, fixture)
-	cases := []LoadedCase{
-		browserCorpusCase(t, "submit"), browserCorpusCase(t, "followup"),
-		browserCorpusCase(t, "ambiguous"),
-	}
+	fixture.preset.CaptureModelMetadata = true
+	fixture.cfg.Diagnostics.TraceCapture = evalModelMetadataCapture()
+	fixture.writeConfig(t)
+	cases := []LoadedCase{browserCorpusCase(t, "ambiguous")}
 	result, err := Run(t.Context(), fixture.preset, cases, RunOptions{
-		Home: fixture.home, OutputParent: fixture.output, StartTarget: true,
+		Home: fixture.home, OutputParent: fixture.output, StartTarget: true, IncludePending: true,
 	})
-	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 3 || result.Coverage[Skipped] != 3 ||
-		result.BrowserFixtures == nil || result.BrowserFixtures.Trials != 0 {
-		t.Fatal("gated mandatory browser coverage was omitted or attempted", err)
+	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 1 || result.Coverage[Skipped] != 0 ||
+		result.BrowserFixtures == nil || result.BrowserFixtures.Trials != 1 {
+		t.Fatal("admitted ambiguity did not attempt exactly one case", err)
 	}
-	for index, trial := range result.Trials {
-		code := "browser_action_evidence_unavailable"
-		if index < 2 {
-			code = "browser_private_input_unavailable"
-		}
-		if trial.Code != code {
-			t.Fatal("missing native prerequisite was not recorded precisely")
+	trial := comparisonTrial(t, result, 0)
+	if trial.EvidenceEligible || trial.Browser != nil && trial.Browser.NativeAuthority == "observed" ||
+		trial.Verdict == Pass || trial.Judge != nil && trial.Judge.Call != nil ||
+		trial.Code == "browser_action_evidence_unavailable" {
+		t.Fatalf("HTTP/prose-only child unexpected outcome: eligible=%v verdict=%s code=%s judge=%v browser=%+v",
+			trial.EvidenceEligible, trial.Verdict, trial.Code, trial.Judge != nil, trial.Browser)
+	}
+}
+
+func TestBrowserMutationCasesRequireOwnedCaptureBeforeAnyProbe(t *testing.T) {
+	for _, scenario := range []string{"submit", "followup", "ambiguous"} {
+		for _, flags := range [][2]bool{{false, false}, {false, true}, {true, false}} {
+			t.Run(
+				scenario+"/owned-"+strconv.FormatBool(flags[0])+"/capture-"+strconv.FormatBool(flags[1]),
+				func(t *testing.T) {
+					fixture := newAdmissionFixture(t)
+					enableAdmissionBrowser(t, fixture)
+					fixture.preset.CaptureModelMetadata = flags[1]
+					_, err := Run(t.Context(), fixture.preset, []LoadedCase{browserCorpusCase(t, scenario)}, RunOptions{
+						Home: fixture.home, OutputParent: fixture.output, StartTarget: flags[0], IncludePending: true,
+					})
+					if !errors.Is(err, ErrUnsafeTarget) || fixture.probes.Load() != 0 || fixture.tasks.Load() != 0 {
+						t.Fatal("mutating browser case started without owned metadata evidence", err)
+					}
+				},
+			)
 		}
 	}
 }
@@ -258,7 +283,7 @@ func TestOwnedBrowserDenialAttemptsTheScenarioWithoutInventingApprovalEvidence(t
 	fixture := newOwnedGatewayFixture(t, "browser_read")
 	enableAdmissionBrowser(t, fixture)
 	result, err := Run(t.Context(), fixture.preset, []LoadedCase{browserCorpusCase(t, "denied")}, RunOptions{
-		Home: fixture.home, OutputParent: fixture.output, StartTarget: true,
+		Home: fixture.home, OutputParent: fixture.output, StartTarget: true, IncludePending: true,
 	})
 	if !errors.Is(err, ErrNotPassed) || !result.Complete || len(result.Trials) != 1 ||
 		result.Trials[0].Verdict == Pass || result.Trials[0].Verdict == Skipped ||
@@ -320,7 +345,7 @@ func TestBrowserRunRefusesUnownedAttachmentAndClosesOnPreTaskReportFailure(t *te
 		t.Run(mode, func(t *testing.T) {
 			fixture := newOwnedGatewayFixture(t, "browser_read")
 			enableAdmissionBrowser(t, fixture)
-			options := RunOptions{Home: fixture.home, OutputParent: fixture.output}
+			options := RunOptions{Home: fixture.home, OutputParent: fixture.output, IncludePending: true}
 			want := ErrUnsafeTarget
 			if mode == "report" {
 				options.StartTarget, options.OutputParent, want = true, fixture.workspace, ErrReport

@@ -36,6 +36,16 @@ func TestInteractionContinuationDecisionRequiresAnsweredLiveHandoff(t *testing.T
 			want: true,
 		},
 		{
+			name: "protected input retains a resource without manual handoff preflight",
+			spec: turnSpec{
+				InteractionContinuation: interactionContinuationPromptContext{
+					Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
+					OriginToolName: "browser_input", ProtectedAnswer: "browser_fill.prepared_native",
+				},
+				InitialReceipts: []taskresult.Receipt{{Kind: taskresult.ObjectiveKindLiveHandoff}},
+			},
+		},
+		{
 			name: "ordinary answered question",
 			spec: turnSpec{
 				InteractionContinuation: interactionContinuationPromptContext{

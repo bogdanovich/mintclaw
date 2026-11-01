@@ -1,11 +1,27 @@
 # Manual Browser Evals: Fixture Witness
 
-This guide describes a partial E4 execution path, not a qualified browser suite. Six case definitions are visible in
-`eval list` and `validate`. With an admitted owned profile, `eval run --start-target` now sends read/artifact/denied tasks
-through the normal gateway and retains independent fixture witnesses after shutdown. Read now has a bounded native
-post-stop assessment contract and one qualified Linux read run/regrade. Artifact now has a complete bounded
-approval/byte/delivery assessment path, but no live qualification yet; private-input and other action-bound
-qualification remains unfinished. Offline controls use no model or installed browser and are not live qualification.
+All six browser cases are currently **pending/non-default** by operator decision.
+Offline inspection is unchanged; explicit execution requires selecting them and adding `--include-pending`.
+The [latest full baseline](manual-agent-evals-baseline-20261024.md) remains red; historical scoped passes below
+do not supersede it. See the [core follow-up](../architecture/agent-evals-core-roadmap.md).
+
+The runner implements all six E4 scenario workflows, not a fully qualified browser suite. All are visible in
+`eval list` and `validate`. Admitted owned runs use the normal gateway and retain independent fixture witnesses
+after shutdown. Read and ambiguity have one qualified Linux run/regrade each. Artifact has a bounded approval,
+byte and delivery path, but its actual attempt was inconclusive. Submit/followup have native private-input,
+confirmation, approval and post-stop assessment, but their actual attempts failed without submissions. Those two
+cases and ambiguity additionally require explicit metadata capture. Offline controls are not live qualification.
+
+The [ambiguity v3 pilot](manual-agent-evals-browser-ambiguity-v3-pilot-20261020.md) on merged #1855 passed exact
+clarification, consumed native approval, independent South-only removal, delivery, privacy and scoped cleanup,
+then separate judge-only grade and comparison. Its v1 fail and v2 inconclusive remain unchanged; neither used
+profile was replayed. This qualifies one local-owned path, not the other scenarios or companion/cloud placement.
+
+The [private form v1 pilot](manual-agent-evals-browser-private-v1-pilot-20261019.md) after #1847 attempted both
+private cases once on separate fresh profiles. Both failed without a submission: the target asked ordinary
+questions, and followup additionally lost its LLM-user call to provider unavailability. Native privacy and physical
+shutdown were observed, not protected-input/context/approval qualification or logical question settlement. Neither
+used profile was retried and no judge or private regrade ran.
 
 The [first owned read pilot](manual-agent-evals-browser-read-v1-pilot-20261018.md) retained an inconclusive result
 with zero fixture visits and a native driver startup failure. Separate model-free controls identified Chrome's
@@ -103,6 +119,8 @@ Use [the browser seed template](../../evals/profiles/browser.template.json) with
 paths, an isolated private home/workspace, admitted HTTP model credentials and a separate MintClaw channel token.
 Credential references use the existing [profile procedure](manual-agent-evals.md); no keys belong in the template.
 Add `browser` to the preset's capabilities. A production profile is not a valid seed.
+For submit/followup/ambiguity, set `capture_model_metadata: true` in the preset before preparation. The runner refuses
+missing opt-in or unowned startup before probes/model work; it never silently enables capture on an existing profile.
 
 `eval prepare` provisions new empty `.eval-browser/ephemeral` and `.eval-browser/locks` directories, rebases their
 paths and all rules naming the seed fixture origin, and records `browser_prepared`. It never copies old browser
@@ -114,7 +132,7 @@ MINTCLAW_HOME=/private/eval-seed MINTCLAW_CONFIG=/private/eval-seed/config.json 
   mintclaw eval prepare --preset /private/eval-seed/preset.json --out /private/eval-profiles
 MINTCLAW_HOME=/private/eval-profiles/GENERATED_HOME \
   MINTCLAW_CONFIG=/private/eval-profiles/GENERATED_HOME/config.json \
-  mintclaw eval run --root ./evals --suite browser --start-target \
+  mintclaw eval run --root ./evals --suite browser --include-pending --start-target \
   --preset /private/eval-profiles/GENERATED_HOME/reports/preset.json \
   --out /private/eval-profiles/GENERATED_HOME/reports
 ```
@@ -129,18 +147,19 @@ destination origin; the harness does not relabel a click or unknown effect as na
 has only read-only GET routes; submissions/removals require nonce-bound POST requests. This grant does not apply to
 arbitrary loopback services, public sites or an unowned running gateway.
 
-The first execution stage attempts `read`, `artifact` and `denied`. An artifact download can receive one native prompt-bound
+The runner attempts all six scenarios. An artifact download can receive one native prompt-bound
 `allow_once` only after exact fixture/action/HMAC verification. Missing or different approval evidence interrupts
 the prompt without sending a grant. Denial sends only a prompt-bound cancel: actual approvals retain that exact
 native binding, while ordinary questions use the separate cancellation contract below. Neither grants approval.
-Submit/followup report `browser_private_input_unavailable`; ambiguity reports
-`browser_action_evidence_unavailable`. No private canary is substituted into ordinary chat. All six cases
-remain mandatory first-release work. A full-suite run still cannot pass while these qualifications are missing;
-an independently qualified read-only selection can pass.
+Submit/followup use protected native field questions, separate confirmation and exact subsequent submit approval.
+Ambiguity uses the fixed clarification/allow-once script with unchanged owned-page and exact South-action joins;
+complete native post-stop/delivery/cleanup and independent effects are required before judging. No private canary
+is substituted into ordinary chat. A full-suite pass needs complete current-trial evidence for every required case;
+historical failures are not automatically upgraded. Read and ambiguity each have scoped Linux qualification.
 
 `browser_fixtures` describes only the owned HTTP host. Trial `browser.fixture` describes only independent local
 state; matching state or a download cannot establish browser provenance or delivered artifact bytes. Finalization
-retains unknown native hard checks unless the full read contract is observed, preserves fixture mismatches as
+retains unknown native hard checks unless the corresponding complete domain contract is observed, preserves mismatches as
 failures, and checks the raw private profile before canonical reports. Fixture failure interrupts the suite and
 stops only its owned gateway process; it does not authorize replay or imply that a disconnected task was canceled.
 
@@ -338,7 +357,7 @@ After native shutdown, the assessment binds those actual bytes and the joined wi
 native download, transfer and settled outbox receipt. It also requires the read path's exact final reply binding,
 terminal native work, closed sessions, empty owned temporary roots and complete scoped profile/role privacy.
 Duplicate/conflicting wire delivery or fixture mutation cannot become a pass. The separate tools-disabled judge
-can run only after all these witnesses. Other four browser scenarios remain gated.
+can run only after all these witnesses. Other scenarios require their own independent contracts.
 
 Offline `grade` admits all selected receipts and actual retained CSV files before any judge call; altered/missing,
 aliased or non-private files are refused. Verified bytes are retained in the new private grade report. No gateway,
@@ -393,7 +412,29 @@ The owned runner now connects the host to isolated profile preparation and gatew
 needs native action/session/approval/context and delivery correlation, protected browser answers and proven browser
 quiescence. A network grant is not listener
 ownership or browser cleanup evidence. Do not silently widen SSRF/network policy, enable privileged execute,
-copy a live browser profile, or treat this fixture's nonce as native approval. The four remaining cases stay gated.
+copy a live browser profile, or treat this fixture's nonce as native approval. Ambiguity remains gated; incomplete
+evidence in any admitted scenario remains inconclusive or failed, not a qualified result.
+
+### Private Form Assessment
+
+The [native protected-input contract](../architecture/agent-evals-browser-private-input.md#private-form-workflow)
+describes the complete bounded submit/followup path. Fresh canaries remain in the runner's existing per-run private
+cohort through final raw scans and judging. Actual accepted fills and public color selection, a fresh reviewed
+snapshot in the same browser context, native confirmation and exact Submit-form `allow_once` are separate witnesses.
+The fixture must independently record exactly the expected final values and no removal; native resolved interactions,
+successful invocations, delivered final reply, owned exit, privacy and empty temporary roots must also agree.
+
+There is no automatic grant, new vault or runner-owned browser executor. A readiness final that closes the browser,
+an ordinary private answer, a changed reviewed page, a stale/foreign approval or an uncertain send is not repaired
+by retargeting/replay. Offline private regrade admits only already eligible submit/followup reports with exclusively
+v1 generated facts. All regrades guard complete `MC_EVAL_` plus sixteen lowercase-hex tokens, including other trials'
+values, before raw report decoding and at both typed judge boundaries. The `generated_canary_format_v1` receipt is
+not an original-value or provider-wire privacy claim; bounds/uncertainty still refuse evidence. A public complete
+token is conservatively rejected, but a bare prefix or `MC_EVAL_CONTEXT_7C9` is allowed. No value store or runtime
+access is needed. Arbitrary literal facts remain unavailable; generated PDF output has a separate
+[native/artifact admission contract](manual-agent-evals-pdf.md#finalized-output-assessment). Failed/incomplete native
+evidence remains ineligible. Actual private-form attempts did not qualify those paths; broader domain qualification
+remains pending and earlier negative reports stay unchanged. Ambiguity has the separate scoped qualification above.
 
 Real qualification must record the actual platform, browser driver and gateway/companion placement, plus retained
 independent state/artifact checks and cleanup results. These offline controls make none of those runtime claims.

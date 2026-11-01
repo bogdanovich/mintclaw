@@ -66,7 +66,7 @@ func (store *FormJobStore) DecideFormTaskAnswer(
 ) (FormTaskRouteSnapshot, error) {
 	if request.Pass < 1 || request.Pass > MaxFormTaskAnswerPasses || request.ExpectedRevision <= 0 ||
 		(request.Action != FormTaskContinue && request.Action != FormTaskAsk && request.Action != FormTaskSwitch &&
-			request.Action != FormTaskKeep) {
+			request.Action != FormTaskKeep && request.Action != FormTaskIndependent) {
 		return FormTaskRouteSnapshot{}, ErrFormJobAnswerConflict
 	}
 	digest, err := formJobJSONKeyedDigest(store.profileKey, struct {
@@ -95,7 +95,7 @@ func (store *FormJobStore) DecideFormTaskAnswer(
 			record.Revision != request.ExpectedRevision || hasStagedFormIntake(mode) {
 			return false, ErrFormJobConflict
 		}
-		if request.Action == FormTaskSwitch || request.Action == FormTaskKeep {
+		if request.Action == FormTaskSwitch || request.Action == FormTaskKeep || request.Action == FormTaskIndependent {
 			if request.Evidence.Text == "" || request.Evidence.Text != strings.TrimSpace(answer.Text) ||
 				request.Evidence.Occurrence != 1 {
 				return false, ErrFormJobAnswerConflict
@@ -110,7 +110,7 @@ func (store *FormJobStore) DecideFormTaskAnswer(
 		if request.Action == FormTaskContinue {
 			answer.ForForm = true
 		}
-		if request.Action == FormTaskSwitch || request.Action == FormTaskKeep {
+		if request.Action == FormTaskSwitch || request.Action == FormTaskKeep || request.Action == FormTaskIndependent {
 			if len(answer.Decisions) == 1 && answer.Passes < MaxFormTaskAnswerPasses {
 				return true, nil
 			}
@@ -119,10 +119,15 @@ func (store *FormJobStore) DecideFormTaskAnswer(
 				if request.Action == FormTaskKeep && record.Revision == math.MaxInt64 {
 					return false, ErrFormJobConflict
 				}
-				answer.ChoiceKind, route.ConsentAnswerID = "private", answer.ID
-				if request.Action == FormTaskSwitch {
+				answer.ChoiceKind = "private"
+				switch request.Action {
+				case FormTaskIndependent:
+					answer.Choice = FormTaskIndependent
+				case FormTaskSwitch:
+					route.ConsentAnswerID = answer.ID
 					answer.Choice, route.State = FormTaskSwitch, FormTaskReady
-				} else {
+				case FormTaskKeep:
+					route.ConsentAnswerID = answer.ID
 					answer.Choice, route.State, mode.State = FormTaskContinue, FormTaskCurrent, FormIntakeActive
 					if strings.TrimSpace(route.Text) == "" {
 						route.State, route.MediaRefs = FormTaskKept, nil
@@ -130,7 +135,7 @@ func (store *FormJobStore) DecideFormTaskAnswer(
 					record.Revision++
 					invalidateFormIntakeReview(record)
 					for index := range route.Answers {
-						if route.Answers[index].Text != "" {
+						if route.Answers[index].Text != "" && route.Answers[index].Choice != FormTaskIndependent {
 							route.Answers[index].ForForm = true
 						}
 					}
@@ -157,7 +162,7 @@ func validateFormTaskAnswerDecision(record FormJobRecord, answer formTaskRouteAn
 		if decision.Pass <= lastPass || decision.Pass > answer.Passes || decision.Revision < answer.Revision ||
 			decision.Revision > record.Revision || !validDocumentDigest(decision.Digest) ||
 			(decision.Action != FormTaskContinue && decision.Action != FormTaskAsk && decision.Action != FormTaskSwitch &&
-				decision.Action != FormTaskKeep) {
+				decision.Action != FormTaskKeep && decision.Action != FormTaskIndependent) {
 			return ErrFormJobRecordCorrupt
 		}
 		lastPass = decision.Pass
@@ -173,8 +178,11 @@ func validateFormTaskAnswerDecision(record FormJobRecord, answer formTaskRouteAn
 		}
 	case "private":
 		want := FormTaskSwitch
-		if answer.Choice == FormTaskContinue {
+		switch answer.Choice {
+		case FormTaskContinue:
 			want = FormTaskKeep
+		case FormTaskIndependent:
+			want = FormTaskIndependent
 		}
 		if answer.Choice == "" || len(answer.Decisions) != 2 || answer.Decisions[0].Action != want ||
 			answer.Decisions[1].Action != want || answer.Decisions[0].Revision != answer.Decisions[1].Revision {

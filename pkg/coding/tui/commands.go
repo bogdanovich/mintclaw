@@ -150,6 +150,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		m.modelSetupRequired = false
 		m.pendingModel = ""
 		m.pendingProvider = ""
+		m.pendingModelSession = false
 		m.modelSearching = false
 		m.modelSearch.SetValue("")
 		m.modelSearch.Blur()
@@ -411,7 +412,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"MintClaw coding commands",
 			"/help              show commands and keyboard bindings",
 			"/status            show live thread and workspace status",
-			"/model [provider/name [effort]] select a model route and reasoning effort",
+			"/model [provider/name [effort]] select a model; picker Enter saves the coding default",
 			"/skills [name]     list skills or insert an exact $skill mention",
 			"/transcript        search and copy the retained transcript",
 			"/diff [target]     show bounded hunks for current, base, or commit",
@@ -775,7 +776,7 @@ func (m *Model) handleModelSearchKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		m.moveModelPickerSelection(1)
 		return true, nil
 	case "enter":
-		return true, m.selectHighlightedModelOrReasoning()
+		return true, m.selectHighlightedModelOrReasoning(true)
 	}
 	previous := m.modelSearch.Value()
 	var command tea.Cmd
@@ -854,7 +855,7 @@ func (m *Model) keepModelPickerLineVisible(line int) {
 	}
 }
 
-func (m *Model) selectHighlightedModelOrReasoning() tea.Cmd {
+func (m *Model) selectHighlightedModelOrReasoning(saveAsDefault bool) tea.Cmd {
 	if m.pendingModel != "" {
 		options := availableReasoningOptions(m.snapshot, m.pendingModel, m.pendingProvider)
 		m.modelReasoning = min(max(0, m.modelReasoning), len(options))
@@ -864,7 +865,7 @@ func (m *Model) selectHighlightedModelOrReasoning() tea.Cmd {
 		}
 		return m.selectModel(frontend.ModelSelection{
 			Model: m.pendingModel, Provider: m.pendingProvider,
-			ReasoningEffort: effort,
+			ReasoningEffort: effort, SaveAsDefault: saveAsDefault && !m.pendingModelSession,
 		})
 	}
 	items := m.activeModelPickerItems()
@@ -887,7 +888,7 @@ func (m *Model) selectHighlightedModelOrReasoning() tea.Cmd {
 	}
 	m.modelSearching = false
 	m.modelSearch.Blur()
-	m.openReasoningPicker(item.model)
+	m.openReasoningPicker(item.model, false)
 	return nil
 }
 
@@ -927,7 +928,7 @@ func (m *Model) beginDirectModelSelection(args string) tea.Cmd {
 	}
 	m.commandPanel = commandPanelModel
 	m.commandPanelOffset = 0
-	m.openReasoningPicker(option)
+	m.openReasoningPicker(option, true)
 	m.clearCommandDraft()
 	m.err = nil
 	return nil
@@ -1044,9 +1045,10 @@ func availableReasoningOptions(snapshot frontend.ThreadSnapshot, model, provider
 	return nil
 }
 
-func (m *Model) openReasoningPicker(option frontend.ModelOption) {
+func (m *Model) openReasoningPicker(option frontend.ModelOption, sessionOnly bool) {
 	m.pendingModel = option.Name
 	m.pendingProvider = option.Provider
+	m.pendingModelSession = sessionOnly
 	m.commandPanelOffset = 0
 	m.modelReasoning = reasoningEffortIndex(m.snapshot, option.Name, option.Provider)
 }
@@ -1100,7 +1102,7 @@ func (m *Model) reasoningPanelLines() []string {
 		}
 		lines = append(lines, clipLine(cursor+selected+label, m.width))
 	}
-	return append(lines, "", "↑/↓ navigate · Enter select · Esc back")
+	return append(lines, "", "↑/↓ navigate · Enter default · s session · Esc back")
 }
 
 func resolveRuntimeSkillName(runtimeStatus *frontend.RuntimeStatus, requested string) (string, bool) {

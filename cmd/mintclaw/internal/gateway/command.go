@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
+	"github.com/bogdanovich/mintclaw/internal/evaltarget"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/gateway"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -30,6 +31,7 @@ func NewGatewayCommand() *cobra.Command {
 	var noTruncate bool
 	var allowEmpty bool
 	var host string
+	var ownedBudget string
 
 	cmd := &cobra.Command{
 		Use:     "gateway",
@@ -67,6 +69,12 @@ func NewGatewayCommand() *cobra.Command {
 				}()
 			}
 
+			if cmd.Flags().Changed(evaltarget.FlagName) {
+				if debug || allowEmpty || noTruncate {
+					return evaltarget.ErrBudgetProtocol
+				}
+				return runOwnedBudgetGateway(internal.GetMintClawHome(), internal.GetConfigPath(), ownedBudget)
+			}
 			return gateway.Run(debug, internal.GetMintClawHome(), internal.GetConfigPath(), allowEmpty)
 		},
 	}
@@ -87,6 +95,8 @@ func NewGatewayCommand() *cobra.Command {
 		"Host address for gateway binding (overrides gateway.host for this run)",
 	)
 	cmd.AddCommand(newDeployWorkerCommand())
+	cmd.Flags().StringVar(&ownedBudget, evaltarget.FlagName, "", "Owned manual-evaluation call budget")
+	_ = cmd.Flags().MarkHidden(evaltarget.FlagName)
 
 	return cmd
 }

@@ -78,6 +78,8 @@ type privateFactRetention struct {
 	values    map[string]string
 	documents map[string]bool
 	bytes     int
+	// Offline grading retains only a public canary-family guard, not values.
+	generated bool
 }
 
 func (retained *privateFactRetention) add(facts map[string]string) bool {
@@ -230,6 +232,8 @@ func observePrivateSurfaces(
 				var matched bool
 				if privateJSONLinesFile(fileName) {
 					matched = scan.jsonLines(data)
+				} else if path.Ext(fileName) == ".json" {
+					matched = scan.jsonDocument(data)
 				} else {
 					matched = scan.text(string(data), 0)
 				}

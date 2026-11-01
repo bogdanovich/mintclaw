@@ -603,55 +603,57 @@ func cloneSession(session Session) Session {
 // deliberately omits the driver-local element target; that target remains in
 // the live worker slot and is usable only while the bound snapshot is fresh.
 type PreparedAction struct {
-	ID                         string `json:"id"`
-	RequestID                  string `json:"request_id"`
-	SessionID                  string `json:"session_id"`
-	Owner                      Owner  `json:"owner"`
-	Target                     string `json:"target"`
-	Profile                    string `json:"profile"`
-	ControllerGeneration       uint64 `json:"controller_generation"`
-	TabID                      string `json:"tab_id"`
-	FrameID                    string `json:"frame_id,omitempty"`
-	ContextCatalogID           string `json:"context_catalog_id,omitempty"`
-	ContextGeneration          uint64 `json:"context_generation,omitempty"`
-	SnapshotID                 string `json:"snapshot_id"`
-	SnapshotGeneration         uint64 `json:"snapshot_generation"`
-	CurrentOrigin              string `json:"current_origin"`
-	DestinationOrigin          string `json:"destination_origin,omitempty"`
-	Action                     Action `json:"action"`
-	InputDigest                string `json:"input_digest,omitempty"`
-	InputBytes                 int    `json:"input_bytes,omitempty"`
-	ArtifactSHA256             string `json:"artifact_sha256,omitempty"`
-	ArtifactBytes              int64  `json:"artifact_bytes,omitempty"`
-	ArtifactFilename           string `json:"artifact_filename,omitempty"`
-	ArtifactContentType        string `json:"artifact_content_type,omitempty"`
-	ElementRole                string `json:"element_role,omitempty"`
-	ElementName                string `json:"element_name,omitempty"`
-	ElementPosition            uint32 `json:"element_position,omitempty"`
-	DestinationElementRole     string `json:"destination_element_role,omitempty"`
-	DestinationElementName     string `json:"destination_element_name,omitempty"`
-	DestinationElementPosition uint32 `json:"destination_element_position,omitempty"`
-	DialogType                 string `json:"dialog_type,omitempty"`
-	DialogMessageDigest        string `json:"dialog_message_digest,omitempty"`
-	DialogMessageBytes         int    `json:"dialog_message_bytes,omitempty"`
-	Effect                     Effect `json:"effect"`
-	CapabilityMode             string `json:"capability_mode,omitempty"`
-	ApprovalMode               string `json:"approval_mode,omitempty"`
-	Confirmation               string `json:"confirmation,omitempty"`
-	PolicyEffect               Effect `json:"policy_effect,omitempty"`
-	RestrictedDecision         string `json:"restricted_decision,omitempty"`
-	RestrictedPolicyRevision   string `json:"restricted_policy_revision,omitempty"`
-	LocalRestrictedDecision    string `json:"local_restricted_decision,omitempty"`
-	WorkerRestrictedDecision   string `json:"worker_restricted_decision,omitempty"`
-	WorkerRestrictedRevision   string `json:"worker_restricted_revision,omitempty"`
-	DryRun                     bool   `json:"dry_run"`
-	ProfileRevision            string `json:"profile_revision,omitempty"`
-	PolicyRevision             string `json:"policy_revision"`
-	CatalogRevision            string `json:"catalog_revision"`
-	ActionHash                 string `json:"action_hash"`
-	ProgressSignature          string `json:"progress_signature,omitempty"`
-	CreatedAt                  int64  `json:"created_at"`
-	ExpiresAt                  int64  `json:"expires_at"`
+	ID                           string `json:"id"`
+	RequestID                    string `json:"request_id"`
+	SessionID                    string `json:"session_id"`
+	Owner                        Owner  `json:"owner"`
+	Target                       string `json:"target"`
+	Profile                      string `json:"profile"`
+	ControllerGeneration         uint64 `json:"controller_generation"`
+	TabID                        string `json:"tab_id"`
+	FrameID                      string `json:"frame_id,omitempty"`
+	ContextCatalogID             string `json:"context_catalog_id,omitempty"`
+	ContextGeneration            uint64 `json:"context_generation,omitempty"`
+	SnapshotID                   string `json:"snapshot_id"`
+	SnapshotGeneration           uint64 `json:"snapshot_generation"`
+	CurrentOrigin                string `json:"current_origin"`
+	DestinationOrigin            string `json:"destination_origin,omitempty"`
+	Action                       Action `json:"action"`
+	InputDigest                  string `json:"input_digest,omitempty"`
+	InputBytes                   int    `json:"input_bytes,omitempty"`
+	ArtifactSHA256               string `json:"artifact_sha256,omitempty"`
+	ArtifactBytes                int64  `json:"artifact_bytes,omitempty"`
+	ArtifactFilename             string `json:"artifact_filename,omitempty"`
+	ArtifactContentType          string `json:"artifact_content_type,omitempty"`
+	ElementRole                  string `json:"element_role,omitempty"`
+	ElementName                  string `json:"element_name,omitempty"`
+	ElementRegionName            string `json:"element_region_name,omitempty"`
+	ElementPosition              uint32 `json:"element_position,omitempty"`
+	DestinationElementRole       string `json:"destination_element_role,omitempty"`
+	DestinationElementName       string `json:"destination_element_name,omitempty"`
+	DestinationElementRegionName string `json:"destination_element_region_name,omitempty"`
+	DestinationElementPosition   uint32 `json:"destination_element_position,omitempty"`
+	DialogType                   string `json:"dialog_type,omitempty"`
+	DialogMessageDigest          string `json:"dialog_message_digest,omitempty"`
+	DialogMessageBytes           int    `json:"dialog_message_bytes,omitempty"`
+	Effect                       Effect `json:"effect"`
+	CapabilityMode               string `json:"capability_mode,omitempty"`
+	ApprovalMode                 string `json:"approval_mode,omitempty"`
+	Confirmation                 string `json:"confirmation,omitempty"`
+	PolicyEffect                 Effect `json:"policy_effect,omitempty"`
+	RestrictedDecision           string `json:"restricted_decision,omitempty"`
+	RestrictedPolicyRevision     string `json:"restricted_policy_revision,omitempty"`
+	LocalRestrictedDecision      string `json:"local_restricted_decision,omitempty"`
+	WorkerRestrictedDecision     string `json:"worker_restricted_decision,omitempty"`
+	WorkerRestrictedRevision     string `json:"worker_restricted_revision,omitempty"`
+	DryRun                       bool   `json:"dry_run"`
+	ProfileRevision              string `json:"profile_revision,omitempty"`
+	PolicyRevision               string `json:"policy_revision"`
+	CatalogRevision              string `json:"catalog_revision"`
+	ActionHash                   string `json:"action_hash"`
+	ProgressSignature            string `json:"progress_signature,omitempty"`
+	CreatedAt                    int64  `json:"created_at"`
+	ExpiresAt                    int64  `json:"expires_at"`
 }
 
 func (prepared PreparedAction) Validate(maxTextBytes int) error {
@@ -675,6 +677,12 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		prepared.CreatedAt <= 0 || prepared.ExpiresAt <= prepared.CreatedAt ||
 		prepared.Action.Validate(maxTextBytes) != nil {
 		return fmt.Errorf("%w: malformed prepared action", ErrInvalid)
+	}
+	if len(prepared.ElementRegionName) > MaxElementNameBytes ||
+		len(prepared.DestinationElementRegionName) > MaxElementNameBytes ||
+		prepared.ElementRegionName != "" && prepared.ElementRole == "" ||
+		prepared.DestinationElementRegionName != "" && prepared.DestinationElementRole == "" {
+		return fmt.Errorf("%w: malformed prepared reference region", ErrInvalid)
 	}
 	restricted := prepared.CapabilityMode == browserpolicy.CapabilityRestricted
 	if restricted {
@@ -713,7 +721,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 	}
 	if prepared.Action.Kind != ActionDrag &&
 		(prepared.DestinationElementRole != "" || prepared.DestinationElementName != "" ||
-			prepared.DestinationElementPosition != 0) {
+			prepared.DestinationElementRegionName != "" || prepared.DestinationElementPosition != 0) {
 		return fmt.Errorf("%w: unexpected prepared drag destination binding", ErrInvalid)
 	}
 	if !validContextBinding(

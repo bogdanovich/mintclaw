@@ -97,7 +97,7 @@ func taskWorkflowFixture(t *testing.T, action document.FormTaskRouteAction) (
 	model := &taskWorkflowInterpreter{intakeWorkflowTestInterpreter: base}
 	model.route = func(view document.FormTaskRouteSnapshot) (document.FormTaskRouteInterpretation, error) {
 		result := document.FormTaskRouteInterpretation{Action: action}
-		if action == document.FormTaskSwitch {
+		if action == document.FormTaskSwitch || action == document.FormTaskIndependent {
 			result.Evidence = document.FormIntakeLiteral{Text: strings.TrimSpace(view.Text), Occurrence: 1}
 		}
 		return result, nil

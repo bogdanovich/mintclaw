@@ -67,6 +67,14 @@ func Compare(baselineDirectory, currentDirectory string) (Comparison, error) {
 	compareWorkspaceInputs(&result, baseline.report.WorkspaceInputs, current.report.WorkspaceInputs)
 	for _, source := range []struct {
 		name        string
+		observation *TrialScratchObservation
+	}{{"baseline", baseline.report.TrialScratch}, {"current", current.report.TrialScratch}} {
+		if source.observation == nil || source.observation.verdict() != Pass {
+			result.EnvironmentUnknowns = append(result.EnvironmentUnknowns, source.name+"_trial_scratch")
+		}
+	}
+	for _, source := range []struct {
+		name        string
 		observation *PrivateSurfaceObservation
 	}{{"baseline", baseline.report.PrivateSurfaces}, {"current", current.report.PrivateSurfaces}} {
 		if (baseline.report.PrivateSurfaces != nil || current.report.PrivateSurfaces != nil) &&
@@ -101,11 +109,14 @@ func Compare(baselineDirectory, currentDirectory string) (Comparison, error) {
 		{"repetitions", effectiveRepeat(baseline.report) != effectiveRepeat(current.report)},
 		{"target_lifecycle_mode", targetLifecycleMode(baseline.report.TargetLifecycle) !=
 			targetLifecycleMode(current.report.TargetLifecycle)},
+		{"trial_scratch_scope", (baseline.report.TrialScratch == nil) != (current.report.TrialScratch == nil)},
+		{"target_call_budget", targetBudgetLimitsDiffer(initialTargetBudget(baseline.report), initialTargetBudget(current.report))},
 	} {
 		if difference.changed {
 			result.EnvironmentChanges = append(result.EnvironmentChanges, difference.name)
 		}
 	}
+	compareNativeModels(&result, baseline.report, current.report)
 	ids := make([]string, 0, len(baseline.cases)+len(current.cases))
 	for id := range baseline.cases {
 		ids = append(ids, id)
@@ -173,10 +184,14 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		report.Repeat < 0 || report.Repeat > MaxRepeat || len(report.Trials) == 0 ||
 		len(report.Trials) > MaxCorpusCases || report.DurationMS < 0 || report.StartedAt.IsZero() ||
 		report.Runtime.Version != 1 || !validDigest(report.Runtime.ConfigSHA256) || !report.TargetLifecycle.valid() ||
-		!report.WorkspaceInputs.valid() || !report.PrivateSurfaces.valid() || !report.BrowserFixtures.valid() {
+		!report.WorkspaceInputs.valid() || !report.PrivateSurfaces.valid() || !report.BrowserFixtures.valid() ||
+		!report.TrialScratch.validFor(
+			report,
+		) || !report.TargetBudget.valid(report) || !report.ActiveTool.valid(report) || !validTargetGenerations(report) {
 		return result, ErrCompare
 	}
 	seen, sessions, roles := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	modelBindings := []nativeModelBinding{}
 	targetUsage := newTargetUsage()
 	coverage := map[Verdict]int{}
 	verdicts := make([]Verdict, 0, len(report.Trials))
@@ -200,7 +215,14 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 			trial.CaseSHA256 != summary.CaseSHA256 || trial.Repetition != summary.Repetition ||
 			trial.Code != summary.Code || trial.Verdict != summary.Verdict || trial.DurationMS != summary.DurationMS ||
 			!validID(trial.SessionID) || sessions[trial.SessionID] || !validID(trial.AgentID) ||
-			!consistentComparisonVerdict(trial) || !validTrialRoleBoundaries(trial) {
+			!consistentComparisonVerdict(trial) || !validTrialRoleBoundaries(trial) ||
+			!report.TrialScratch.matches(trial) {
+			return result, ErrCompare
+		}
+		if trial.TargetBudgetRequired && report.TargetBudget == nil {
+			return result, ErrCompare
+		}
+		if trial.ActiveToolRequired && report.ActiveTool == nil {
 			return result, ErrCompare
 		}
 		calls := trial.DriverCalls
@@ -210,6 +232,13 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 			}
 		}
 		targetUsage.addTrial(trial)
+		if report.NativeModels != nil {
+			bindings, valid := nativeModelBindings(trial, "")
+			if !valid {
+				return result, ErrCompare
+			}
+			modelBindings = append(modelBindings, bindings...)
+		}
 		if trial.Judge != nil && trial.Judge.Call != nil {
 			calls = append(slices.Clone(calls), *trial.Judge.Call)
 		}
@@ -241,6 +270,9 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 	if !report.TargetUsage.valid() || report.TargetUsage != nil && *report.TargetUsage != *targetUsage {
 		return result, ErrCompare
 	}
+	if _, valid := selectNativeModels(report.NativeModels, report.Runtime, modelBindings, seen); !valid {
+		return result, ErrCompare
+	}
 	for verdict, count := range report.Coverage {
 		if !validComparisonVerdict(verdict) || count < 0 || coverage[verdict] != count {
 			return result, ErrCompare
@@ -256,6 +288,11 @@ func readComparisonSource(directory string) (comparisonSource, error) {
 		report.TargetLifecycle.verdict(),
 		report.PrivateSurfaces.verdict(),
 		report.BrowserFixtures.verdict(),
+		report.NativeModels.verdict(),
+		report.TrialScratch.verdict(),
+		report.TargetBudget.verdict(),
+		report.ActiveTool.verdict(report.TargetLifecycle),
+		targetGenerationsVerdict(report),
 	)
 	if report.Verdict != combineVerdicts(verdicts...) {
 		return result, ErrCompare

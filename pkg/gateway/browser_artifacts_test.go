@@ -966,6 +966,30 @@ func TestGatewayOutboundRecoveryUsesGatewayWorkspaceBeforePublication(t *testing
 		ActorID: artifact.Recovery.ActorID, RouteID: artifact.Recovery.RouteID,
 		SessionID: artifact.Recovery.SessionID, ToolCallID: artifact.Recovery.ToolCallID,
 	}
+	second, err := source.retainScreenshot(ctx, browser.ScreenshotRequest{RequestID: "request_recovery_second"},
+		browser.ScreenshotCapture{
+			SessionID:          "session_recovery",
+			Target:             "gateway",
+			Profile:            "managed",
+			PolicyRevision:     "policy_1",
+			ProfileRevision:    "managed-v1",
+			TabID:              "tab_primary",
+			SnapshotID:         "snapshot_2",
+			SnapshotGeneration: 2,
+			Data: append(
+				[]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'},
+				[]byte("second recovery fixture")...),
+			ContentType: "image/png",
+		})
+	if err != nil || second.Recovery == nil {
+		t.Fatalf("retain second screenshot: %#v, %v", second, err)
+	}
+	additionalRecovery := []bus.OutboundRecovery{{
+		Kind: bus.OutboundRecoveryBrowserScreenshot, ArtifactRef: second.Ref, MediaRef: second.MediaRef,
+		WorkspaceID: second.Recovery.WorkspaceID, AgentID: second.Recovery.AgentID,
+		ActorID: second.Recovery.ActorID, RouteID: second.Recovery.RouteID,
+		SessionID: second.Recovery.SessionID, ToolCallID: second.Recovery.ToolCallID,
+	}}
 	first, err := outbox.OpenCoordinator(workspace)
 	if err != nil {
 		t.Fatal(err)
@@ -977,7 +1001,8 @@ func TestGatewayOutboundRecoveryUsesGatewayWorkspaceBeforePublication(t *testing
 	ownerWorkspace := filepath.Join(workspace, "agents", "browser")
 	admission, err := first.AdmitMedia(ownerWorkspace, identity, bus.OutboundMediaMessage{
 		Channel: "telegram", ChatID: "chat-1", SessionKey: "session-1",
-		Parts: []bus.MediaPart{{Type: "image", Ref: artifact.MediaRef}}, Recovery: recovery,
+		Parts:    []bus.MediaPart{{Type: "image", Ref: artifact.MediaRef}, {Type: "image", Ref: second.MediaRef}},
+		Recovery: recovery, AdditionalRecovery: additionalRecovery,
 	})
 	if err != nil || !admission.Dispatch {
 		t.Fatalf("AdmitMedia() = %+v, %v", admission, err)
@@ -1010,10 +1035,17 @@ func TestGatewayOutboundRecoveryUsesGatewayWorkspaceBeforePublication(t *testing
 	if err != nil || !found || replayed.DeliveryState != browser.ScreenshotDeliveryAlreadyClaimed {
 		t.Fatalf("claimed recovered screenshot = %+v, %t, %v", replayed, found, err)
 	}
+	secondReplay, found, err := source.LookupScreenshot(ctx, owner, "request_recovery_second", "session_recovery")
+	if err != nil || !found || secondReplay.DeliveryState != browser.ScreenshotDeliveryAlreadyClaimed {
+		t.Fatalf("second recovered claim = %#v, %t, %v", secondReplay, found, err)
+	}
+	if err = source.ClaimArtifactDelivery(ctx, additionalRecovery[0]); err != nil {
+		t.Fatalf("same retained claim was not idempotent: %v", err)
+	}
 	select {
 	case message := <-msgBus.OutboundMediaChan():
 		if message.DeliveryID != admission.Intent.ID || message.Recovery == nil ||
-			message.Recovery.ArtifactRef != artifact.Ref {
+			message.Recovery.ArtifactRef != artifact.Ref || len(message.AdditionalRecovery) != 1 {
 			t.Fatalf("recovered outbound media = %+v", message)
 		}
 	case <-time.After(time.Second):

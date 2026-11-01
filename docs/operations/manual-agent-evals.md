@@ -2,18 +2,42 @@
 
 ## Current Scope
 
+The latest [full fourteen-case baseline candidate](manual-agent-evals-baseline-20261024.md) is **not green**:
+2 pass, 7 fail, 2 error, 3 inconclusive on captured merged `1013693a9`. Historical scoped passes below are not a
+guarantee that every current scenario passes; the new record preserves target, driver and admission limits separately.
+
+PDF/browser are now **pending**, not fixed or passed. The [core follow-up](../architecture/agent-evals-core-roadmap.md)
+records the operator decision and proposed general regressions. `run` without suite/tag/case filters selects only
+the four active/default general cases. Explicit filters (including `--suite all`) that select pending cases refuse
+before profile/model work unless `--include-pending` is supplied. That flag alone does not broaden defaults or
+bypass isolation/authority admission. Offline `list`/`validate` show all cases with status, default
+membership and deferral reason. `grade`/`compare` remain available for historical evidence. A general-only pass
+does not replace the red full-suite baseline. See the [catalog contract](../../evals/README.md#active-and-pending-sets).
+
+The [core execution ledger](../architecture/agent-evals-core-execution.md) now tracks C1-C3 implementation.
+Correction and answer/resume passed their fixed
+[C1 qualification batches](manual-agent-evals-core-c1-20261025.md): the corpus has 16 cases and four General defaults.
+The expanded default set requires a fresh owned profile (`--start-target`) with `bounded_calls`,
+`target_call_budget` and a configured judge, as shown in the
+[template](../../evals/presets/local.template.json) and [budget contract](../reference/owned-eval-call-budget.md).
+Old attach presets can explicitly select `general.context.followup` and `general.interaction.navigation`.
+The combined four-default suite was not run in that campaign, and ten C2/C3 contracts remain unimplemented.
+
 `mintclaw eval list` and `validate` remain offline. `run` attaches to an already prepared isolated loopback gateway
 on Linux or macOS and executes bounded scripted or adaptive conversation/navigation cases. It does not create a profile,
 bootstrap skills, deploy a binary, restart a gateway, grant broad approval, or retry uncertain task admission.
 
-The [browser guide](manual-agent-evals-browser.md) adds owned-profile read/artifact task execution with local fixture
-witnesses, not native browser grading. Protected browser inputs, action/delivery/context binding, effective-input
-witnesses and complete domain qualification remain later packets.
+The [browser guide](manual-agent-evals-browser.md) describes owned-profile read/artifact/denied task execution,
+scoped native action/delivery/privacy/cleanup grading, and the protected submit/followup workflow. Scoped read and
+ambiguity paths are live-qualified; other positive domain qualification remains incomplete. The
+[private form v1 pilot](manual-agent-evals-browser-private-v1-pilot-20261019.md) preserves two failures, not a passing
+private browser suite.
 Offline `compare` reports all retained trial counts, case compatibility and observed environment changes; it does
 not execute tasks, regrade evidence, or establish causal quality drift.
 Missing capabilities/drivers/domain evidence produce explicit non-passing coverage. A text response never proves
 that a PDF was filled, a browser action happened, or Telegram delivery worked. See the
-[roadmap](../architecture/agent-evals-roadmap.md) for the remaining packets.
+[first-release exit](manual-agent-evals-first-release-exit-20261020.md) for the frozen acceptance audit and the
+complete fourteen-case ledger, including failures. Harness completion is not complete target qualification.
 
 PDF preparation, protected answers, frozen write/approval binding, native settlement and bounded independent
 artifact collection are described in the [PDF guide](manual-agent-evals-pdf.md). Required delivery uniqueness,
@@ -23,7 +47,7 @@ The E2 integration adds tools-disabled user/judge roles to `run`, a judge-only `
 strict typed actions/findings, and [six manually labelled calibration examples](../../evals/calibration/judge-v2.json).
 Model context excludes runtime authority, hidden hard-check expectations, simulator
 persona from judge input, and private fact values; fact handles alone are available to the user role. Protected
-answers require PDF-specific native admission, not arbitrary case facts. Private values observed in raw events, even an
+answers require domain-specific native admission, not arbitrary case facts. Private values observed in raw events, even an
 excluded streaming revision, refuse model projection. Known credentials from native configuration are checked before
 wire/model input and report retention; unsafe output is withheld, not sanitized into a passing assessment.
 JSON escaping is not treated as redaction. When private facts or a credential filter exist, escape-bearing content
@@ -48,7 +72,7 @@ cancellation. The bounded walk does not invoke custom marshaling methods; cycles
 limits remain unavailable. Limits are 4,096 visited nodes, depth 24, and 64 KiB total strings/bytes per boundary.
 This is not a claim about raw HTTP bytes, provider-internal attempts, arbitrary encodings, or whole-runtime privacy.
 
-During a serial run, both roles guard against private values retained from all prepared PDF trials, even after an
+During a serial run, both roles guard against private values retained from all prepared PDF/browser trials, even after an
 earlier trial releases its fixture. A direct role call guards only its supplied facts and configured credentials;
 the receipt distinguishes `run_retained_facts`, `call_facts`, and `credentials_only`. Fact values never enter the
 receipt or the user role's fact-handle catalog. Known leaks fail; unavailable boundary inspection cannot qualify
@@ -212,16 +236,18 @@ Fresh owned admission still refuses any existing workspace state, including an o
 After stopping/reaping the owned child, the existing bounded raw-profile privacy observation includes these files,
 even for general cases without private facts or when the launched child fails readiness/admission. Inspection uses
 the validated owned profile, not a successfully admitted runtime. Failed startup remains unpublished/incomplete;
-a known leak additionally returns the static private-evidence error, never the value. No trace is decoded, projected
-into judge context or exempted from
-privacy inspection by this opt-in. Known leaks fail; incomplete raw inspection remains inconclusive. Retain private
+a known leak additionally returns the static private-evidence error, never the value. Traces are never projected
+into judge context or exempted from privacy inspection by this opt-in. Known leaks fail; incomplete raw inspection
+remains inconclusive. Retain private
 files under the same evidence policy and never restart the used profile.
 
-This is a capture prerequisite, not an eval trace collector. Native capture can truncate/drop/prune records or fail
-to persist them. Returned-final usage remains separately scoped; all-call coverage and effective loaded-input
-identity remain unknown until a collector validates exact native turn/agent/session/source joins, completeness and
-provider-usage presence. Metadata hashes describe provider-neutral effective requests, not provider wire bytes or
-individually attested skill revisions. Capture presence alone cannot establish any of those stronger claims.
+The [routed native model observer](manual-agent-evals-native-models.md) can validate exact native source/turn/agent/
+filtered-session joins after stop/reap and raw privacy inspection. It retains scoped request hashes and every
+available native response's input/output usage, without treating capture presence as completeness. Native capture
+can truncate/drop/prune records or fail to persist them. Returned-final usage remains separately scoped; all-call
+coverage and individually attested loaded skill versions remain unknown. Provider-neutral request hashes are not
+provider wire bytes or a full loaded catalog certificate. Offline grade/compare preserve and validate the frozen
+projection without target work; old reports are not backfilled.
 
 The [admission validation record](manual-agent-evals-model-metadata-validation-20261019.md) retains actual
 review/merge evidence, positive Linux/macOS controls, the corrected startup-leak regression and earlier non-passes.
@@ -248,6 +274,16 @@ Replace its workspace/model placeholders, choose an unused loopback port, and co
 provider is a shape example, not a model recommendation. Every configured gateway listener must bind only to
 loopback; wildcard, unspecified, external, and mixed loopback/external listeners are refused before a runtime probe.
 A loopback probe address alone does not prove a private bind. This eval restriction does not change `agent live`.
+
+The effective native routing policy must also retain the `chat` session dimension (the default is
+`session.dimensions: ["chat"]`). Every trial has a fresh MintClaw chat/client ID, but the client ID alone is
+metadata, not a native history-key dimension. Sender-only, topic-only, space-only, empty or unsupported dimensions
+can otherwise collapse trials onto one shared history because they use the same synthetic sender. Eval admission
+uses the native route resolver's normalized policy and refuses that configuration before gateway probes/tasks;
+`eval prepare` refuses it before native repository access or profile allocation. Normalized `chat` and additional
+dimensions that retain it remain supported. This is conversation-scope admission, not proof of independent
+filesystem/browser resources, privacy or whole-runtime quiescence, and does not change ordinary runtime routing.
+
 Use native credential configuration; do not put keys in
 case manifests, presets, shell arguments, reports, or git. A native security overlay can provide file references:
 
@@ -314,7 +350,7 @@ profile and outside the workspace; it cannot be a workspace ancestor or descenda
 mintclaw eval validate --root ./evals --preset /absolute/preset.json --json
 MINTCLAW_HOME=/absolute/PRIVATE_HOME mintclaw eval run \
   --root ./evals --preset /absolute/preset.json \
-  --suite general --out /absolute/PRIVATE_HOME/reports --json
+  --out /absolute/PRIVATE_HOME/reports --json
 ```
 
 Suite, all requested tags, and case IDs intersect. Each selected case gets a fresh session; follow-ups use only
@@ -372,6 +408,36 @@ automatically rerunning a possibly mutating operation. This first profile runs n
 Stop only the gateway that the operator started for this profile. Evidence cleanup/retention is explicit operator
 work; the runner does not delete profile sessions or infer that remote work stopped. Never remove a production
 profile to clean up an eval run.
+
+### Per-Trial Evidence Staging
+
+Each admitted trial allocates a new `0700` `scratch-SESSION_ID` directory inside its private run report before
+the trial's runtime recheck, fixture preparation or task. It is outside the target workspace and is not sent to
+the agent. Its exclusive `0600` `checkpoint.json` retains pending evidence, including PDF/browser evidence that
+cannot become canonical until native post-stop observations finish. A skipped/unattempted case allocates nothing.
+Allocation failure refuses the trial before new probe/task/model work; it is not permission to adopt an existing
+directory. Repetitions use distinct session-bound directories without holding a descriptor for each trial.
+
+The runner writes canonical `trial-ID.json` before retiring that trial's checkpoint. It reopens only its anchored
+directory and verifies checkpoint identity, private permissions and content hash. It removes only that exact
+checkpoint and the empty owned directory, never recursively deletes unknown files. Changed/replaced resources,
+extra entries or failed removal leave cleanup uncertain. A failed final evidence write preserves the pending
+checkpoint and prevents a complete report. A crash can leave private staging for operator inspection.
+
+New `run.json` files include `trial_scratch` with scope `private_trial_staging_v1` and trial/session/case-bound
+receipts. `removed` records observed local retirement; `retained` or `unavailable` prevents a passing suite even
+when the task passed. `not_attempted` is valid only for a non-passing trial with no events or model-role calls.
+The receipt retains creation time and checkpoint digest when available, never transcript or credential values.
+This is private evidence staging, not a native PDF/browser lease, remote cancellation, whole-profile freshness
+between trials, resistance to a hostile same-UID writer, or a promise that all resources are empty. Existing
+native fixture/action/settlement/cleanup evidence remains separate and is not upgraded by this local receipt.
+
+Offline `grade` validates and copies the selected historical receipts; it neither allocates trial staging nor
+retries cleanup. A present but unsettled/invalid receipt refuses the source before any judge call. `compare`
+checks the receipts against every retained trial and includes their cleanup uncertainty in the run verdict.
+Legacy reports without receipts retain their original eligibility, but comparison explicitly reports missing
+`baseline_trial_scratch`/`current_trial_scratch` and a scope change when only one source has receipts. They do not
+acquire new E5 resource coverage from regrading or comparison.
 
 ## Adaptive Users And Judging
 

@@ -99,7 +99,7 @@ func TestCronToolLegacyGroupUsesSameTargetForScheduledAndLiteralDelivery(t *test
 			job := &cron.CronJob{ID: "legacy", Payload: cron.CronPayload{
 				Kind: kind, Channel: "telegram", To: "-10042/7", Message: "reminder",
 			}}
-			if got := tool.ExecuteJob(t.Context(), job); got != "ok" {
+			if got, err := tool.ExecuteJob(t.Context(), job); err != nil || got != "ok" {
 				t.Fatalf("ExecuteJob() = %q", got)
 			}
 			target := executor.target
@@ -1489,8 +1489,12 @@ func TestCronTool_ExecuteJobPublishesErrorWhenExecDisabled(t *testing.T) {
 	job.Payload.To = "direct"
 	job.Payload.Command = "df -h"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if got, err := tool.ExecuteJob(
+		context.Background(),
+		job,
+	); err == nil ||
+		!strings.Contains(got, "command execution is disabled") {
+		t.Fatalf("ExecuteJob() = %q, want disabled execution error", got)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -1520,7 +1524,7 @@ func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "send me a poem"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 
@@ -1592,7 +1596,7 @@ func TestCronTool_ExecuteJobPublishesDeliverTextWithoutAgent(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "Напоминание: позвонить в PG&E."
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 
@@ -1649,7 +1653,7 @@ func TestCronTool_ExecuteJobRoutesDeliverTextThroughProactivePublisher(t *testin
 		},
 	}
 
-	if got := tool.ExecuteJob(t.Context(), job); got != "ok" {
+	if got, err := tool.ExecuteJob(t.Context(), job); err != nil || got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 	if executor.proactiveContent != job.Payload.Message {
@@ -1677,7 +1681,7 @@ func TestCronTool_ExecuteJobSkipsEmptyAgentResponse(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "say nothing"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 
@@ -1696,7 +1700,7 @@ func TestCronTool_ExecuteJobSkipsNoReplySentinel(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "only reply if actionable"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 
@@ -1719,7 +1723,7 @@ func TestCronTool_ExecuteJobRecoversTerminalNoReplyControl(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "only reply if actionable"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 	if executor.publishedResp != "" {
@@ -1749,7 +1753,7 @@ func TestCronTool_ExecuteJobDeliversControlWordMentionedInProse(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "explain the workflow contract"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 	if executor.publishedResp != response {
@@ -1767,7 +1771,7 @@ func TestCronTool_ExecuteJobSkipsHeartbeatOKSentinel(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "heartbeat"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 
@@ -1786,7 +1790,7 @@ func TestCronTool_ExecuteJobSkipsWhenMessageToolAlreadySent(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "send weather"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 
@@ -1809,7 +1813,7 @@ func TestCronTool_ExecuteJobRunsCommand(t *testing.T) {
 	job.Payload.To = "direct"
 	job.Payload.Command = "echo cron-test-ok"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+	if got, err := tool.ExecuteJob(context.Background(), job); err != nil || got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
 	}
 
@@ -1842,8 +1846,8 @@ func TestCronTool_ExecuteJobReturnsErrorWithoutPublish(t *testing.T) {
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "do something"
 
-	got := tool.ExecuteJob(context.Background(), job)
-	if !strings.Contains(got, "agent failure") {
+	got, err := tool.ExecuteJob(context.Background(), job)
+	if err == nil || !strings.Contains(got, "agent failure") {
 		t.Fatalf("ExecuteJob() = %q, want error message", got)
 	}
 
@@ -1876,8 +1880,12 @@ func TestCronTool_ExecuteJobCommandRecordsTaskRegistry(t *testing.T) {
 	job.Payload.To = "direct"
 	job.Payload.Command = "df -h"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if got, err := tool.ExecuteJob(
+		context.Background(),
+		job,
+	); err == nil ||
+		!strings.Contains(got, "command execution is disabled") {
+		t.Fatalf("ExecuteJob() = %q, want disabled execution error", got)
 	}
 
 	rec := singleCronTaskRecord(t, registry)

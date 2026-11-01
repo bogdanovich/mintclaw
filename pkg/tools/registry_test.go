@@ -102,11 +102,12 @@ type receiptCleanupTool struct {
 	mockRegistryTool
 	cleanupCalls int
 	result       TurnCleanupResult
+	cleanupErr   error
 }
 
 func (tool *receiptCleanupTool) CleanupTurnWithResult(context.Context) (TurnCleanupResult, error) {
 	tool.cleanupCalls++
-	return tool.result, nil
+	return tool.result, tool.cleanupErr
 }
 
 func TestToolRegistryRejectsUnboundedTurnCleanupReceipt(t *testing.T) {
@@ -1201,5 +1202,20 @@ func TestToolRegistry_ExecuteWithContext_SanitizesInlineMediaWithoutStore(t *tes
 	}
 	if !strings.Contains(result.ForLLM, inlineMediaOmittedMessage) {
 		t.Fatalf("expected inline media omission note, got %q", result.ForLLM)
+	}
+}
+
+func TestToolRegistryCleanupAttributesOwnerAndPreservesError(t *testing.T) {
+	registry := NewToolRegistry()
+	cause := errors.New("private failure")
+	tool := &receiptCleanupTool{mockRegistryTool: mockRegistryTool{name: "browser_session"}, cleanupErr: cause}
+	registry.Register(tool)
+	_, err := registry.CleanupTurnWithResult(t.Context())
+	var failure *TurnCleanupError
+	if !errors.As(err, &failure) || failure.Tool != tool.Name() || !errors.Is(err, cause) {
+		t.Fatalf("cleanup owner or cause lost: %v", err)
+	}
+	if strings.Contains(err.Error(), cause.Error()) {
+		t.Fatal("cleanup error exposed private cause")
 	}
 }

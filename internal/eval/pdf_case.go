@@ -8,12 +8,22 @@ import (
 // PDFCase describes independent expectations, never native approval authority.
 // Field expectations stay with the oracle and are excluded from model context.
 type PDFCase struct {
-	Fixture    string     `json:"fixture"`
-	Output     string     `json:"output"`
-	Draft      bool       `json:"draft,omitempty"`
-	Pages      int        `json:"pages"`
-	FieldCount int        `json:"field_count"`
-	Fields     []PDFField `json:"fields"`
+	Fixture      string                      `json:"fixture"`
+	Output       string                      `json:"output"`
+	Draft        bool                        `json:"draft,omitempty"`
+	Pages        int                         `json:"pages"`
+	FieldCount   int                         `json:"field_count"`
+	Fields       []PDFField                  `json:"fields"`
+	SourceFields *PDFSourceFieldsExpectation `json:"source_fields,omitempty"`
+}
+
+// This first read contract covers the native turn that asked the canceled
+// question. Counts describe the fixture, never instructions sent to the model.
+type PDFSourceFieldsExpectation struct {
+	MinReturnedFields int `json:"min_returned_fields"`
+	RequiredFields    int `json:"required_fields"`
+	ValuesPresent     int `json:"values_present"`
+	DefaultsPresent   int `json:"defaults_present"`
 }
 
 type PDFField struct {
@@ -51,6 +61,20 @@ func (pdf PDFCase) validate(item Case) error {
 	checks := make(map[string]bool)
 	for _, check := range item.Checks {
 		checks[check.Kind] = true
+	}
+	if checks["pdf_source_fields"] != (pdf.SourceFields != nil) {
+		return ErrInvalidCase
+	}
+	if expected := pdf.SourceFields; expected != nil {
+		if pdf.Output != "forbidden" || len(item.Driver.Facts) != 0 || expected.MinReturnedFields < 1 ||
+			expected.MinReturnedFields > pdf.FieldCount {
+			return ErrInvalidCase
+		}
+		for _, count := range []int{expected.RequiredFields, expected.ValuesPresent, expected.DefaultsPresent} {
+			if count < 0 || count > pdf.FieldCount {
+				return ErrInvalidCase
+			}
+		}
 	}
 	if !checks["private_surfaces"] ||
 		pdf.Output == "required" && (!checks["pdf_fields"] || !checks["pdf_structure"] || !checks["pdf_delivery"]) ||

@@ -24,6 +24,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/constants"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
@@ -100,6 +101,7 @@ type AgentLoop struct {
 	reloadFunc func() error
 
 	providerFactory func(*config.ModelConfig) (providers.LLMProvider, string, error)
+	providerBudget  *providers.CallBudget
 }
 
 type continuationTarget struct {
@@ -247,12 +249,21 @@ func (al *AgentLoop) Close() {
 
 // CloseContext stops the active runtime and drains admitted workers before
 // releasing resources. Runtime drain, MCP operations, and process cleanup are
-// bounded by ctx.
+// bounded by ctx. Worker and interaction-observer drain share a one-second
+// budget, or the earlier caller deadline, and can be retried after timeout.
 func (al *AgentLoop) CloseContext(ctx context.Context) error {
-	if err := al.stopAndWaitRun(ctx); err != nil {
+	drainCtx, cancelDrain := context.WithTimeout(ctx, interactions.DefaultObserverShutdownTimeout)
+	defer cancelDrain()
+	if err := al.stopAndWaitRun(drainCtx); err != nil {
 		return fmt.Errorf("stop agent runtime: %w", err)
 	}
 	var closeErrors []error
+	if err := al.interactions.closeRegistries(drainCtx); err != nil {
+		if errors.Is(err, interactions.ErrObserverPending) {
+			return fmt.Errorf("drain interaction observers: %w", err)
+		}
+		closeErrors = append(closeErrors, fmt.Errorf("close interaction observers: %w", err))
+	}
 	al.interactions.closeProtectedAnswerSinks()
 	if err := al.closeOutboundOutbox(); err != nil {
 		logger.ErrorCF("agent", "Failed to close outbound outbox", map[string]any{"error": err.Error()})
@@ -318,6 +329,9 @@ type turnEventScope struct {
 
 // ValidateConfigReload reports restart-only changes without mutating live runtime state.
 func (al *AgentLoop) ValidateConfigReload(cfg *config.Config) error {
+	if al.providerBudget != nil {
+		return fmt.Errorf("%w: bounded runtime cannot reload", providers.ErrCallBudget)
+	}
 	if cfg == nil {
 		return fmt.Errorf("config cannot be nil")
 	}

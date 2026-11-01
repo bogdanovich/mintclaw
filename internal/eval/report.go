@@ -26,33 +26,40 @@ type TrialSummary struct {
 }
 
 type RunReport struct {
-	Version         int                         `json:"version"`
-	ID              string                      `json:"id"`
-	PresetID        string                      `json:"preset_id"`
-	Runtime         health.RuntimeProbe         `json:"runtime"`
-	Verdict         Verdict                     `json:"verdict"`
-	StartedAt       time.Time                   `json:"started_at"`
-	DurationMS      int64                       `json:"duration_ms"`
-	Trials          []TrialSummary              `json:"trials"`
-	Coverage        map[Verdict]int             `json:"coverage"`
-	Usage           string                      `json:"usage"`
-	RoleUsage       []RoleUsage                 `json:"role_usage,omitempty"`
-	TargetUsage     *TargetUsage                `json:"target_usage,omitempty"`
-	Mode            string                      `json:"mode,omitempty"`
-	Repeat          int                         `json:"repeat,omitempty"`
-	SourceRun       string                      `json:"source_run,omitempty"`
-	ReportDir       string                      `json:"-"`
-	Cleanup         string                      `json:"cleanup"`
-	Complete        bool                        `json:"complete"`
-	TargetLifecycle *TargetLifecycle            `json:"target_lifecycle,omitempty"`
-	WorkspaceInputs *WorkspaceInputs            `json:"workspace_inputs,omitempty"`
-	PrivateSurfaces *PrivateSurfaceObservation  `json:"private_surfaces,omitempty"`
-	BrowserFixtures *BrowserFixtureHostEvidence `json:"browser_fixtures,omitempty"`
+	Version           int                         `json:"version"`
+	ID                string                      `json:"id"`
+	PresetID          string                      `json:"preset_id"`
+	Runtime           health.RuntimeProbe         `json:"runtime"`
+	Verdict           Verdict                     `json:"verdict"`
+	StartedAt         time.Time                   `json:"started_at"`
+	DurationMS        int64                       `json:"duration_ms"`
+	Trials            []TrialSummary              `json:"trials"`
+	Coverage          map[Verdict]int             `json:"coverage"`
+	Usage             string                      `json:"usage"`
+	RoleUsage         []RoleUsage                 `json:"role_usage,omitempty"`
+	TargetUsage       *TargetUsage                `json:"target_usage,omitempty"`
+	NativeModels      *NativeModelObservation     `json:"native_models,omitempty"`
+	Mode              string                      `json:"mode,omitempty"`
+	Repeat            int                         `json:"repeat,omitempty"`
+	SourceRun         string                      `json:"source_run,omitempty"`
+	ReportDir         string                      `json:"-"`
+	Cleanup           string                      `json:"cleanup"`
+	Complete          bool                        `json:"complete"`
+	TargetLifecycle   *TargetLifecycle            `json:"target_lifecycle,omitempty"`
+	WorkspaceInputs   *WorkspaceInputs            `json:"workspace_inputs,omitempty"`
+	PrivateSurfaces   *PrivateSurfaceObservation  `json:"private_surfaces,omitempty"`
+	BrowserFixtures   *BrowserFixtureHostEvidence `json:"browser_fixtures,omitempty"`
+	TrialScratch      *TrialScratchObservation    `json:"trial_scratch,omitempty"`
+	TargetBudget      *TargetBudgetObservation    `json:"target_budget,omitempty"`
+	ActiveTool        *ActiveToolHostEvidence     `json:"active_tool,omitempty"`
+	TargetGenerations []ownedGatewayGeneration    `json:"target_generations,omitempty"`
 }
 
 type privateReport struct {
-	root *os.Root
-	dir  string
+	root        *os.Root
+	dir         string
+	staging     map[string]*trialStaging
+	stagingRoot os.FileInfo
 }
 
 func newPrivateReport(parent, home, workspace, id string) (*privateReport, error) {
@@ -163,6 +170,31 @@ func (report *privateReport) finish(result RunReport) error {
 			_, writeErr = fmt.Fprintf(file,
 				"\nTarget returned finals: %s (%s); %d/%d finals returned usage.\n",
 				counts, usage.Coverage, usage.ReturnedUsage, usage.Finals)
+		}
+	}
+	if writeErr == nil {
+		if observation := result.NativeModels; observation != nil {
+			usage, counts := observation.Totals, "unknown"
+			if usage.Coverage == "observed_native_responses" || usage.Coverage == "partial_native_responses" {
+				counts = CompactTokens(usage.InputTokens) + " in, " + CompactTokens(usage.OutputTokens) + " out"
+			}
+			_, writeErr = fmt.Fprintf(file,
+				"\nRouted native model records: %s (%s, %s); %d requests, %d responses, %d observed usage.\n",
+				counts, observation.Code, usage.Coverage, usage.Requests, usage.Responses, usage.UsageResponses)
+		}
+	}
+	if writeErr == nil {
+		if observation := result.TargetBudget; observation != nil {
+			_, writeErr = fmt.Fprintf(file,
+				"\nOwned target call budget: %s (%s); shared across all repetitions, not a billing total.\n",
+				observation.Code, observation.verdict())
+		}
+	}
+	if writeErr == nil {
+		if result.TrialScratch != nil {
+			_, writeErr = fmt.Fprintf(file,
+				"\nPrivate trial staging: %s; %d receipts; cleanup verdict: %s. Native resources are separate.\n",
+				result.TrialScratch.Scope, len(result.TrialScratch.Trials), result.TrialScratch.verdict())
 		}
 	}
 	if writeErr == nil {

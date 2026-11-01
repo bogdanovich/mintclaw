@@ -2,11 +2,31 @@
 
 ## Status
 
-Approved on 2026-10-10; implementation is active under the [first-release goal](agent-evals-goal.md).
+Approved on 2026-10-10. The first-release harness is delivered under the unchanged
+[first-release goal](agent-evals-goal.md); see the
+[requirement-by-requirement exit](../operations/manual-agent-evals-first-release-exit-20261020.md).
 The [design](agent-evals-design.md) records source findings, alternatives, and ownership. Agreement preceded
 implementation; an admission document alone is not a functioning eval engine.
 
 The roadmap builds a small manual quality harness, not a replacement runtime or an automatic self-improvement system.
+
+All fourteen minimum case definitions now have retained actual attempts across the pilot ledger, including the
+[three remaining PDF v1 pilots](../operations/manual-agent-evals-pdf-remaining-v1-pilots-20261020.md). Correction,
+conditional intent and large section each stayed inconclusive; no judge, regrade or used-profile retry ran.
+This is attempted coverage, not fourteen passes or complete domain qualification. E5's
+[per-trial staging packet](../operations/manual-agent-evals-trial-staging-v1-20261020.md) is merged and exercised:
+two general trials passed, a fresh PDF cancel stayed inconclusive, and all three local staging receipts were
+removed. The exit record closes implementation only when merged; every product negative/unknown remains.
+
+The pilot notes below are historical progress, not a new mandatory queue. The exit audit is the current closure
+map; future target repairs or broader qualification require their own bounded goals.
+
+The [private browser v1 pilot](../operations/manual-agent-evals-browser-private-v1-pilot-20261019.md) after merged
+#1847 attempted submit and followup once each on separate fresh Linux profiles. Both failed with expected submissions
+missing: the target used ordinary `request_user_input`, and followup also had an unavailable LLM-user provider.
+No protected value, grant, correction, submission or judge qualified. Scoped raw privacy and physical exit were
+observed, but unanswered logical questions remain waiting. Both failures and their offline self-comparisons are
+preserved; no task was retried. Protected-form live qualification and private regrade/E5 remain open.
 
 The [target usage v1 pilot](../operations/manual-agent-evals-target-usage-v1-pilot-20261018.md) on merged #1766 passed
 four new general trials. One regrade preserved one pass and three provider-unavailable judge errors; comparison
@@ -55,6 +75,49 @@ preserved one inconclusive `pdf.loan.fill` attempt. A native ordinary-question c
 a missing Gemini `thought_signature`; no filled artifact or final output assessment was reached. Scoped privacy
 also retained one opaque file. The target-defect triage and credential-copy cleanup are recorded separately from
 the remaining harness/domain qualification; no task was retried or prior result upgraded.
+
+The [empty-fields v1 experiment](../operations/manual-agent-evals-pdf-empty-v1-pilot-20261019.md) on merged #1830
+reported pass for cancellation/no-write, judge, offline regrade and comparison, but passive native inspection found
+three errored file-tool calls and no document invocation. Its frozen pass is preserved; actual empty-PDF recognition
+is **not qualified**. Repair the missing native discovery admission and source-bound inspection/field-use check,
+with no-document negative controls, before claiming the empty case or rerunning a changed contract. No task/prompt
+tuning or historical upgrade is authorized by that coverage gap.
+
+The focused discovery repair admits/requires only the native BM25 tool for PDF profiles. Native composition and
+actual search-promotion controls replace the previous unusable tool allowlist; broad tools remain refused before
+probes or preparation effects. This prerequisite does not qualify source inspection, change the empty case, or
+authorize replay of its retained used profile. Its source-use evidence repair remains mandatory.
+
+The native field-read producer adds only content-free, source-SHA-bound `fields`/`form.discover` observations to
+opt-in existing diagnostic traces. Complete schema counts remain distinct from bounded returned windows; hook
+responses and unsuccessful invocations cannot invent a read. This is a producer prerequisite, not a new eval
+verdict: a follow-up consumer must reuse native trace privacy/integrity/routed-scope checks, add a fixture-bound
+hard check and no-document negatives, then run a new versioned empty-fields experiment. Do not upgrade the old
+pass, replay its used profile, or substitute successful `capabilities`/inspect-only calls for field use.
+
+The consumer adds an explicit `pdf_source_fields` no-output/question-turn hard check and uses the same bounded,
+raw-first native-trace reader as model observations. It freezes exact fixture/route/build/call bindings and counts
+before judge work; offline regrade recomputes the check without runtime access. The empty-required case's task,
+driver and rubric stay unchanged, but its manifest hash now includes independently inspected fixture counts and
+requires opted-in metadata capture. Known no-document evidence fails regardless of a positive judge; unknown
+legacy/incomplete evidence cannot pass. Consumer merge/tests alone are not a v2 experiment or E3 qualification.
+
+The [empty-fields v2 pilot](../operations/manual-agent-evals-pdf-empty-v2-pilot-20261019.md) on merged #1838 preserved
+one **inconclusive** attempt. Native BM25 and one document call succeeded, but Gemini then returned missing
+`thought_signature` HTTP 400; the unqualified error-final had no route identity. There was no field-read/question/
+judge qualification or offline regrade. All credential copies were removed and production was unchanged; the
+used fixture remains retained under unknown logical settlement. A protected live-call signature projection is a
+concrete separate runtime triage candidate, not a reason to loosen eval gates or rerun the task. E3 and remaining
+PDF/browser/private/adaptive/repeat/exit work remain open; no historical result is upgraded.
+
+The [empty-fields v3 pilot](../operations/manual-agent-evals-pdf-empty-v3-pilot-20261019.md) on merged #1840 passed
+six native Gemini request/response exchanges and reached source-bound `form.discover` with all five expected fields.
+It still returned **inconclusive**: the model did not call the trusted `document` continuation tool, the runtime
+guard stopped the turn and the error-final had no routed identity. No question/cancel/judge/regrade qualified;
+passive native field-use and 53.2k input / 581 output token observations do not backfill frozen unavailable evidence.
+All credential copies were removed; logical settlement/source cleanup remained unknown. Preserve this checkpoint,
+do not weaken the protected guard or retry/tune until green, and keep target-continuation triage separate from the
+remaining mandatory harness/domain work. E3 and the full goal are not complete.
 
 Live model/tool scenarios never become a mandatory CI workload. Fast deterministic tests for the harness itself
 may run in normal CI without credentials, a live gateway, paid models, or installed browser/PDF executables.
@@ -110,10 +173,10 @@ this negative checkpoint result instead of accepting arbitrary finals or retryin
 | --- | --- | --- | --- |
 | E0 | Agree architecture and freeze first-goal acceptance | Operator review | Approved; admission recorded |
 | E1 | Run bounded scripted multi-turn cases and produce honest reports | E0 | Contracts/client/runtime admission merged; both required general scripted cases passed on Linux after #1598, with recorded platform/cleanup limits |
-| E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation/adaptive runner/grade merged (#1531, #1541); judge v2 live calibration passed 6/6; adaptive live qualification pending |
-| E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Fixtures/oracle, preparation, approval contracts, dialogue, write intent, native write observation, metadata settlement and artifact collection merged (#1544, #1546, #1547, #1550, #1552, #1553, #1557, #1558); uniqueness/privacy/cleanup and live qualification pending |
-| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | Read trial/regrade passed after #1754; artifact first attempt inconclusive; denial assessment merged in #1786, first attempt failed an ordinary-question/native-approval mismatch; adaptive private input, remaining scenarios and domain qualification pending |
-| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Repeats/all-trial regrade/comparison (#1588), owned gateway (#1639), file observations (#1648) and explicit allowlisted seed provisioning (#1665) merged; Linux general repeats/regrade/error comparison exercised; per-trial/effective-input witnesses and domain qualification pending |
+| E2 | Evaluate natural conversations with LLM user and independent judge | E1 | Role foundation/adaptive runner/grade merged; judge v2 live calibration passed 6/6; actual adaptive correction calls observed; unsuccessful target workflows remain unqualified |
+| E3 | Reusable PDF regression suite with independent artifact/privacy checks | E1, E2 for adaptive cases | Native workflows/oracles and generated-only grade merged; all six cases attempted; cancellation/no-write passed; the other five retain nonpassing results, not positive output/private/correction/large qualification |
+| E4 | Reusable browser regression suite backed by fixture state | E1, E2 for adaptive cases | All six native workflows attempted; scoped Linux read and ambiguity run/regrade passed; artifact, denial and private forms retain nonpassing results; full positive domain qualification is not established |
+| E5 | Workspace presets, profile provisioning, and comparable repeated runs | E3 and E4 | Allowlisted provisioning, repeats/all-trial grade/compare, scoped effective-input content witnesses and per-trial staging receipts merged and exercised; frozen exit audit recorded; broader provenance explicitly unknown |
 
 E5's explicit owned-profile metadata capture prerequisite merged in #1801, with
 [validation and preserved failures](../operations/manual-agent-evals-model-metadata-validation-20261019.md).
@@ -121,9 +184,35 @@ It is described in the
 [operator guide](../operations/manual-agent-evals.md#opt-in-model-metadata-capture): fixed native metadata-only
 limits, no attached targets/content previews/alternate roots, fresh preparation without old traces, and post-stop
 raw privacy inspection even without private facts. Capture alone does not provide an effective-input witness or
-all-call census. A later collector must join native identities, reject missing/truncated/ambiguous observations,
-retain provider-usage presence and preserve unknown internal attempts; per-trial isolation and domain cases remain
+all-call census. The [routed native observer](../operations/manual-agent-evals-native-models.md) adds explicit
+source/turn/agent/filtered-session joins, bounded raw-before-projection reads, native request fingerprints and
+available response usage across tool loops. It preserves missing/truncated/ambiguous observations, legacy usage
+presence and unknown internal attempts; per-trial isolation, loaded skill-version proof and domain cases remain
 mandatory. No historical run is backfilled or newly qualified by this prerequisite.
+
+The [native-model v1 experiment](../operations/manual-agent-evals-native-models-v1-20261019.md) on merged #1814
+passed one unchanged context task, independent judge, regrade and comparison, but retained a partial native
+observation with two invalid scopes. Actual traces omitted provider names and contained explicit failed-attempt
+retries before successful replacement requests, exposing overly strict consumer assumptions absent from its
+fixtures. Preserve the original partial report; a focused native-shape fix and regression controls were required, not
+invented provider identities, retroactive usage backfill or a promoted native-observer qualification.
+
+That focused fix merged in #1820, with [retained-source validation](../operations/manual-agent-evals-native-retry-validation-20261019.md).
+Both the reviewed head and exact merge source accepted the actual v1 metadata in a read-only control: four
+requests, two responses and two bound retries, available 4,707 input / 28 output tokens, provider/failed-attempt/
+all-call usage still unknown. No additional model task ran and original reports stayed partial and byte-identical.
+This validates the consumer contract, not a new canonical live run, loaded-skill proof or completion of E0-E5.
+
+The [native system-source producer](../operations/native-system-source-fingerprints.md) merged in #1826. Its
+eval consumer retains validated per-request workspace-definition/catalog/active-skill content witnesses and
+compares them with explicit legacy/unavailable coverage, using frozen reports rather than current files.
+These are filtered runtime-labeled content identities, not complete skill/helper-version provenance or provider
+wire attestation. Consumer #1830 then merged, and one
+[fresh merged-source experiment](../operations/manual-agent-evals-system-sources-v1-20261019.md) passed the
+unchanged context task, independent judge, offline regrade and comparison. Both actual routed requests retained
+observed workspace/catalog groups and an explicitly empty active-skill group; frozen projections remained equal.
+Per-trial resources and remaining domain cases/repeats/exit remain mandatory; broader version/provider/all-call
+unknowns and every historical negative result are preserved.
 
 E3 and E4 share the runner, not one another's domain logic. Keep implementation PRs focused; split a milestone into
 prerequisites when necessary. Do not reimplement protected intake, browser sessions, approval, or delivery in the harness.
@@ -137,11 +226,19 @@ The [browser fixture guide](../operations/manual-agent-evals-browser.md) records
 bounds and unresolved native admission. Fixture controls are not browser task qualification. Prepared eval
 admission rejects non-loopback native gateway listener plans (#1562), without changing ordinary gateway binding.
 
-## Next Mandatory Work
+## Pre-Exit Work Ledger
+
+This preserves the implementation/qualification sequence and its limits. The linked exit audit distinguishes
+completed harness work, retained target negatives and optional broader qualification; it does not turn missing
+native evidence into success or require retrying every product failure until green.
 
 1. E5: finish per-trial isolation and actual effective-input identity using the existing native boundaries and
    explicit fresh-profile preparation. The merged one-time conversation/PDF seed provisioner and file samples do
    not complete automatic per-trial/browser provisioning or effective loaded prompt/catalog proof.
+   Admission now requires the native normalized session policy to retain `chat`: fresh client IDs alone do not
+   prevent sender-only/empty scopes from sharing history. Native allocator controls reproduce that collision;
+   shared scopes are refused before probes/tasks and before preparation opens the native repository or allocates
+   a profile. This closes a configuration admission gap, not the remaining filesystem/browser resource evidence.
 2. E3: finish native post-settlement delivery/no-write/privacy/cleanup witnesses and qualify all six PDF cases,
    including adaptive conversation and deterministic denial/cancel. The owned post-stop raw file observation retains
    private facts until scanning and fails known leaks, but is not whole-runtime or per-trial privacy/idle proof.
@@ -162,14 +259,21 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    inspection includes earlier trials' retained facts. Neither grants future delivery uniqueness or full privacy.
    Owned PDF finalization now retains bounded native baselines through shutdown and raw scan, publishes canonical
    trial reports afterward, checks scoped no-write evidence and removes only verified settled source fixtures.
-   Full private-surface/temporary-resource coverage, positive delivery qualification and PDF judge/regrade eligibility
-   still require completion. A bounded cancellation/no-write contract can now admit post-stop judging
+   Full private-surface/temporary-resource and positive delivery qualification still require completion.
+   A bounded cancellation/no-write contract can now admit post-stop judging
    and offline regrade only with valid raw-profile/typed-role/joined-frame evidence, unchanged source, zero native
    effects and verified source removal. Protected questions additionally bind both canceled native records.
-   Private-fact/output cases remain gated; deterministic controls
+   Complete output assessments can now retain offline eligibility, but regrade separately requires exclusively v1
+   generated facts (or no private facts), all frozen native/oracle witnesses and unchanged bounded private PDF bytes.
+   The shared raw/typed format guard protects JSON and judge context without retaining values; the authorized binary
+   remains separate from model content. Literal and historical ineligible reports stay refused. Deterministic controls
    are not live PDF qualification. Native cleanup completes for the cohort before suite-budgeted judging begins.
    One ordinary cancellation/no-write live path and offline regrade now passed on merged #1731; the other five PDF
    cases and protected/private-value/worker/output behavior still require actual qualification.
+   Correction, conditional and large now each have a fresh recorded v1 attempt on merged #1853: all inconclusive,
+   with no eligible PDF owner/delivery evidence; correction made three returned LLM-user calls. Native shutdown and
+   scoped raw privacy were observed, not positive PDF field/output/cleanup qualification. These are preserved
+   results, not permission for an open-ended target-repair loop.
    Preserve earlier failures and unknowns.
 3. E4: finish native browser admission, fixture execution, approval/artifact/context correlation and owned
    cleanup; qualify the other five cases, including adaptive and denied-action evidence. Read/artifact/denied tasks can run on
@@ -188,8 +292,48 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    the changed case revision was actually run in v2 and failed before a permission checkpoint, so neither
    cancellation branch gained positive live qualification. This is a recorded negative result, not permission
    for an open-ended target-repair loop. The other three scenarios
-   remain gated. Submit/followup retain private-input gates; ambiguity retains its native-action evidence gate.
+   previously remained gated. Submit/followup now have the scoped workflow described below; ambiguity now has
+   the owned clarification/approval/post-stop workflow and the scoped Linux qualification described below.
+   A [native reference-region producer](browser-reference-regions.md) now binds
+   direct-library main-document button refs to bounded unique ARIA-region context,
+   including approval hashes and fresh revalidation. It grants no permission by itself.
+   [Ambiguity admission A](agent-evals-browser-ambiguity.md) adds the native
+   answered-question, unchanged owned-page and exact South-only approval join,
+   reusing existing HMAC/single-use authority. B now connects typed post-stop
+   receipts, complete native action/prompt/delivery/cleanup inspection and the
+   independent South-only fixture oracle before judging/offline regrade. It
+   activates the scripted question/approval case only on owned metadata-captured
+   profiles; it does not qualify a live attempt or upgrade older skipped reports.
+   The [ambiguity v1 pilot](../operations/manual-agent-evals-browser-ambiguity-v1-pilot-20261020.md) on merged #1853
+   then reached clarification and exact South approval but failed before consumption: the harness's descriptive
+   typed allow-once content violated the native channel's canonical-label contract. The sealed fixture retained
+   zero effects and a hard failure; no judge or used-profile retry ran. The bounded canonical-label producer fix
+   and real-channel regression merged in #1854 without changing channel validation or approval authority.
+   Its [fresh v2 experiment](../operations/manual-agent-evals-browser-ambiguity-v2-pilot-20261020.md) completed the
+   script, consumed native approval and independently removed exactly South, but stayed inconclusive: the
+   collector mistook the native control-removing final for another prompt. A bounded native-predicate/final-identity
+   correction merged in #1855 without filtering source records or promoting either old report. Its
+   [fresh v3 qualification](../operations/manual-agent-evals-browser-ambiguity-v3-pilot-20261020.md) passed all hard
+   checks, the separate judge, offline grade and comparison. Exactly South was removed after native consumption;
+   question/approval/final deliveries, raw privacy and scoped cleanup were observed. This qualifies one Linux
+   local-owned path, not the entire browser suite, whole-host resources or remaining E5/exit work.
    No local fixture pass qualifies native browser behavior.
+   The [private-input prerequisite](agent-evals-browser-private-input.md) separates the missing native ingress from
+   already protected model-produced fill. B1 adds only generation-bound, value-free broker target bindings and
+   transient staging through existing preparation; it adds no question, sink, dispatch bypass, eval admission or
+   live qualification. B2 connects native protected questions/claims/resource retention/resume; B3 must add the
+   eval private-fact consumer and independent mutation/context evidence before enabling either required case.
+   B3 now adds pre-answer native question/trace/current-session joins and explicit per-field initial/corrected
+   fact-handle mapping. The complete workflow now connects fresh per-trial cohort generation, actual accepted fills
+   and correction, native question confirmation followed by exact HMAC-bound submit allow-once, unchanged reviewed
+   page/context, independent submitted values and post-stop native/delivery/privacy/cleanup assessment before judging.
+   Trials require owned startup and explicit metadata capture before any probe/model work. Offline controls are not
+   live qualification: fresh identified private-form experiments remain mandatory. Private offline regrade now admits
+   only otherwise eligible browser forms with exclusively v1 generated facts, using a conservative public-format
+   guard on raw reports and typed judge boundaries rather than retaining values. Literal facts remain gated;
+   generated PDF output has its own native/artifact contract. These features do not make either failed private-form
+   pilot eligible or qualify a live regrade.
+   Ordinary chat substitution and a new value/vault/approval engine remain forbidden.
    Artifact finalization can now retain a bounded native download/transfer/media-outbox metadata join, using a
    read-only native transfer inspection API rather than constructing/reconciling a store. This receipt does not
    admit a judge, approve an action or validate actual wire/artifact bytes; the full artifact contract requires
@@ -199,7 +343,8 @@ admission rejects non-loopback native gateway listener plans (#1562), without ch
    turn unavailable
    usage, incomplete native evidence or a two-case smoke into complete-suite success.
 
-These are unfinished parts of the frozen first goal, not new milestones or permission to expand its scope.
+These notes are retained history, not permission to expand the frozen first goal after its exit. Consult the
+exit audit for current implementation closure and explicitly unqualified product behavior.
 
 ## E0: Agree And Admit
 
@@ -338,6 +483,12 @@ Add `--repeat` and `compare` for compatible case cohorts. Retain all trials; rep
 inconclusive/skip coverage, and case-level changes. Separate quality drift from environment/model/config changes.
 Keep raw token integers in JSON and compact `10.2k`-style display in summaries. Aggregate all available model calls,
 not the final response alone; report unknown private/delegated usage rather than inventing totals or costs.
+
+The per-trial resource packet adds [private evidence staging](../operations/manual-agent-evals.md#per-trial-evidence-staging):
+fresh session-bound directories before admitted trial work, pending checkpoints retired only after canonical
+evidence exists, and frozen cleanup receipts consumed without replay by grade/compare. Unknown files or resource
+replacement do not trigger recursive deletion or a passing suite. This scope does not replace native PDF/browser
+ownership, certify a whole-profile reset, upgrade historical reports, or complete live qualification/exit by itself.
 
 **Exit:** an operator can list/validate/run all cases, PDF only, browser only, tags, or one case, select a safe
 workspace preset, repeat trials, regrade evidence, and compare to a chosen baseline. A case with a missing judge,

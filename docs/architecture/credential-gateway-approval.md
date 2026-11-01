@@ -9,7 +9,7 @@ login, send notifications, or qualify a physical Android device.
 The gateway owns one runtime-internal WebAuthn controller and mounts its phone
 page at `/credentials/`. Reuse the existing reviewed passkey ceremonies,
 scope-bound approval/revocation, durable authenticator updates, maximum
-20-hour grant lifetime, and nonpersistent grants. The ordinary phone handler
+20-hour grant lifetime, and privately persisted approval metadata. The ordinary phone handler
 cannot issue initial-enrollment invitations or directly create a grant.
 
 ## Operator configuration
@@ -107,12 +107,14 @@ also require the expiring invitation token and verified WebAuthn registration.
 The existing invitation rules prevent refresh from extending its deadline.
 
 Full shutdown closes the controller, disables leases, removes the mounted
-route, and releases its store lock. A restart loads the passkey but restores
-no grants. Unrelated gateway hot reload retains the approval controller;
-changing credential configuration requires a gateway restart and fresh grants.
+route, and releases its store lock. A restart loads the passkey and restores
+only original unexpired grants matching the current policy. Unrelated gateway
+hot reload retains the approval controller; changing credential configuration
+requires a gateway restart and invalidates changed-policy grants. See
+[durable approval](credential-durable-approval.md).
 
 Synthetic tests cover actual HTTP mounting, private command output, durable
-passkey updates and restart denial, origin/port and loopback-proxy admission,
+passkey updates and scoped grant restoration, origin/port and loopback-proxy admission,
 and the phone UI's external-link navigation, enrollment, grant-free passkey
 verification and 20-hour approval/revocation on both root and
 gateway paths using a virtual authenticator. These tests do not substitute for

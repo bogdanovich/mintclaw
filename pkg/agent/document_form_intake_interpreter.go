@@ -50,7 +50,11 @@ func (auditor *documentFormAuditor) InterpretFormIntake(
 			document.ErrFormIntakeInvalidResponse,
 		)
 	}
-	return verifyDocumentIntakeBooleanAssertions(ctx, resolved, view, payload, result)
+	result, err = verifyDocumentIntakeBooleanAssertions(ctx, resolved, view, payload, result)
+	if err != nil {
+		return document.FormIntakeInterpretation{}, err
+	}
+	return verifyDocumentIntakeExclusions(ctx, resolved, view, payload, result)
 }
 
 func unavailableIntakeInterpretation(reason error) error {
@@ -96,6 +100,9 @@ const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance
 	`"correction_evidence":[{"text":"exact explicit correction instruction","occurrence":1}],` +
 	`"resolves":[{"reference":"offered earlier input reference",` +
 	`"literal":{"text":"exact earlier rejected value fragment","occurrence":1}}]}],` +
+	`"exclusions":[{"field_id":"supplied uncertain candidate id",` +
+	`"evidence_reference":"offered later related input reference",` +
+	`"evidence":{"text":"exact later explicit exclusion quote","occurrence":1}}],` +
 	`"non_data":[{"text":"exact prose fragment containing no supplied fact","occurrence":1}],` +
 	`"findings":[{"field_id":"supplied id","code":"field_ambiguous|field_conflicting|field_confirmation_required"}],` +
 	`"output":{"mode":"complete|editable_draft","literal":{"text":"exact output instruction","occurrence":1}}}. ` +
@@ -154,6 +161,13 @@ const documentIntakeSystemPrompt = `Interpret one protected PDF intake utterance
 	`repeating that value. Use that later clarification to interpret the earlier utterance's own literal. ` +
 	`An earlier statement that the owner was not yet specified does not contradict a later explicit role clarification. ` +
 	`Chronology alone never proves a role or authorizes a correction; ambiguous or conflicting roles require a finding. ` +
+	`For an earlier candidate_findings ambiguity, a later related message may explicitly rule out that field/person ` +
+	`as the owner of the earlier value. Propose an exclusion with that later reference and an exact quote proving ` +
+	`the exclusion, not an assignment or disposition. This leaves the excluded field unknown/missing. ` +
+	`Missing information alone is not exclusion evidence. Never invent blank/N/A/deferred values or suppress invalid ` +
+	`or conflicting facts. Do not emit a finding or value proposal for the same excluded field. ` +
+	`An unspecified field with no remaining supplied candidate is missing information, not a new ambiguity. ` +
+	`Exclusions are independently verified and settle only that earlier candidate, not future values or other people. ` +
 	`Exception: resolves can identify exact rejected fragments in an offered earlier input when this current ` +
 	`positive proposal explicitly clarifies or corrects that same field's earlier invalid/conflicting answer. ` +
 	`Each related_input_context entry corresponds to the related_inputs text at the same array position. ` +
@@ -185,11 +199,18 @@ type documentIntakePriorLiteralWire struct {
 }
 
 type documentIntakeResponseWire struct {
-	Intent    document.FormIntakeDialogIntent    `json:"intent"`
-	Proposals []documentIntakeProposalWire       `json:"proposals"`
-	NonData   []documentIntakeLiteralWire        `json:"non_data"`
-	Findings  []document.FormFieldMappingBlocker `json:"findings"`
-	Output    *documentIntakeOutputWire          `json:"output,omitempty"`
+	Intent     document.FormIntakeDialogIntent    `json:"intent"`
+	Proposals  []documentIntakeProposalWire       `json:"proposals"`
+	NonData    []documentIntakeLiteralWire        `json:"non_data"`
+	Findings   []document.FormFieldMappingBlocker `json:"findings"`
+	Output     *documentIntakeOutputWire          `json:"output,omitempty"`
+	Exclusions []documentIntakeExclusionWire      `json:"exclusions,omitempty"`
+}
+
+type documentIntakeExclusionWire struct {
+	FieldID           string                    `json:"field_id"`
+	EvidenceReference string                    `json:"evidence_reference"`
+	Evidence          documentIntakeLiteralWire `json:"evidence"`
 }
 
 type documentIntakeOutputWire struct {
@@ -334,20 +355,27 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 			ReclassifiableOutput: item.ReclassifiableOutput,
 		}
 	}
+	var candidateFindings []document.FormFieldMappingBlocker
+	for _, finding := range pass.Input.Findings {
+		if slices.Contains(pass.CandidateIDs, finding.FieldID) {
+			candidateFindings = append(candidateFindings, finding)
+		}
+	}
 	payload, err := json.Marshal(struct {
-		Version        string                    `json:"schema_version"`
-		Utterance      string                    `json:"utterance"`
-		AdmissionOrder int                       `json:"admission_order,omitempty"`
-		RoleContext    string                    `json:"role_context,omitempty"`
-		Question       string                    `json:"question_context,omitempty"`
-		Fields         []documentIntakeFieldWire `json:"fields"`
-		Accounted      []accountedWire           `json:"accounted,omitempty"`
-		Evidence       []evidenceWire            `json:"evidence,omitempty"`
-		Related        []string                  `json:"related_inputs,omitempty"`
-		RelatedContext []relatedContext          `json:"related_input_context,omitempty"`
-		RelatedPartial bool                      `json:"related_inputs_partial,omitempty"`
-		OutputMode     document.FormOutputMode   `json:"output_mode,omitempty"`
-		OutputScope    document.FormOutputScope  `json:"output_scope,omitempty"`
+		Version           string                             `json:"schema_version"`
+		Utterance         string                             `json:"utterance"`
+		AdmissionOrder    int                                `json:"admission_order,omitempty"`
+		RoleContext       string                             `json:"role_context,omitempty"`
+		Question          string                             `json:"question_context,omitempty"`
+		Fields            []documentIntakeFieldWire          `json:"fields"`
+		Accounted         []accountedWire                    `json:"accounted,omitempty"`
+		Evidence          []evidenceWire                     `json:"evidence,omitempty"`
+		Related           []string                           `json:"related_inputs,omitempty"`
+		RelatedContext    []relatedContext                   `json:"related_input_context,omitempty"`
+		RelatedPartial    bool                               `json:"related_inputs_partial,omitempty"`
+		OutputMode        document.FormOutputMode            `json:"output_mode,omitempty"`
+		OutputScope       document.FormOutputScope           `json:"output_scope,omitempty"`
+		CandidateFindings []document.FormFieldMappingBlocker `json:"candidate_findings,omitempty"`
 	}{
 		"mintclaw.document_intake_interpretation.v1",
 		pass.Input.Text,
@@ -362,6 +390,7 @@ func encodeDocumentIntakeView(view document.FormIntakeInterpretationView) ([]byt
 		view.RelatedInputsPartial,
 		view.OutputMode,
 		view.OutputScope,
+		candidateFindings,
 	})
 	if err != nil || len(payload) > maxDocumentIntakeWireBytes {
 		clear(payload)
@@ -391,7 +420,7 @@ func decodeDocumentIntakeInterpretation(
 		document.FormIntakeIntentFacts, document.FormIntakeIntentClarify, document.FormIntakeIntentBack,
 		document.FormIntakeIntentPause, document.FormIntakeIntentResume, document.FormIntakeIntentCancel,
 		document.FormIntakeIntentReview, document.FormIntakeIntentFinish, document.FormIntakeIntentDraft,
-	}, wire.Intent) || len(wire.Proposals)+len(wire.Findings) > document.MaxFormIntakeCandidates {
+	}, wire.Intent) || len(wire.Proposals)+len(wire.Findings)+len(wire.Exclusions) > document.MaxFormIntakeCandidates {
 		return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
 	}
 	result := document.FormIntakeInterpretation{Intent: wire.Intent, Findings: wire.Findings}
@@ -469,6 +498,26 @@ func decodeDocumentIntakeInterpretation(
 			return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
 		}
 		seen[finding.FieldID] = true
+	}
+	for _, item := range wire.Exclusions {
+		if !slices.Contains(candidateIDs, item.FieldID) || seen[item.FieldID] {
+			return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+		}
+		prior := slices.IndexFunc(related, func(input document.FormIntakeInput) bool {
+			return input.Reference == item.EvidenceReference && !input.Consumed && input.Passes >= 0 &&
+				input.Passes <= document.MaxFormIntakeExtractionPasses
+		})
+		literal, valid := convert([]documentIntakeLiteralWire{item.Evidence})
+		if prior < 0 || !valid {
+			return document.FormIntakeInterpretation{}, errDocumentIntakeInterpretationUnavailable
+		}
+		seen[item.FieldID] = true
+		result.Exclusions = append(result.Exclusions, document.FormIntakeCandidateExclusion{
+			FieldID:           item.FieldID,
+			EvidenceReference: item.EvidenceReference,
+			ExpectedPasses:    related[prior].Passes,
+			Evidence:          literal[0],
+		})
 	}
 	var ok bool
 	result.NonData, ok = convert(wire.NonData)

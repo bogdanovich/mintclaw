@@ -2,6 +2,8 @@ package interactions
 
 import (
 	"cmp"
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,6 +13,12 @@ import (
 )
 
 func (r *Registry) Create(req CreateRequest) (Record, error) {
+	return r.CreateContext(context.Background(), req)
+}
+
+// CreateContext observes caller cancellation while admitting a durable write.
+// Cancellation after admission does not roll back a committed mutation.
+func (r *Registry) CreateContext(ctx context.Context, req CreateRequest) (Record, error) {
 	if r == nil {
 		return Record{}, ErrStoreUnavailable
 	}
@@ -20,14 +28,8 @@ func (r *Registry) Create(req CreateRequest) (Record, error) {
 		return Record{}, err
 	}
 
-	r.mu.Lock()
-	if availableErr := r.availableLocked(); availableErr != nil {
-		r.mu.Unlock()
-		return Record{}, availableErr
-	}
-	releaseStore, err := r.lockAndReloadLocked()
+	releaseStore, err := r.lockAndReload(ctx)
 	if err != nil {
-		r.mu.Unlock()
 		return Record{}, err
 	}
 	if len(r.records) >= r.options.MaxRecords {
@@ -81,7 +83,8 @@ func (r *Registry) Create(req CreateRequest) (Record, error) {
 	r.records[rec.ID] = rec
 	events := append([]Event(nil), r.events[len(eventsBefore):]...)
 	r.trimEventsLocked()
-	if err := r.saveLocked(); err != nil {
+	drainNotifications, err := r.commitEventsLocked(events)
+	if err != nil {
 		delete(r.records, rec.ID)
 		if supersededID != "" {
 			r.records[supersededID] = supersededBefore
@@ -92,7 +95,6 @@ func (r *Registry) Create(req CreateRequest) (Record, error) {
 		r.mu.Unlock()
 		return Record{}, err
 	}
-	drainNotifications := r.queueNotificationsLocked(events)
 	releaseStore()
 	r.mu.Unlock()
 	if drainNotifications {
@@ -250,21 +252,16 @@ func (r *Registry) ClaimOverdue(now time.Time) ([]Record, error) {
 		nowMillis = r.nowMillis()
 	}
 
-	r.mu.Lock()
-	if err := r.availableLocked(); err != nil {
-		r.mu.Unlock()
-		return nil, err
-	}
-	releaseStore, err := r.lockAndReloadLocked()
+	releaseStore, err := r.lockAndReload(context.Background())
 	if err != nil {
-		r.mu.Unlock()
 		return nil, err
 	}
 	eventsBefore := append([]Event(nil), r.events...)
 	commitSequenceBefore := r.commitSequence
 	before := make(map[string]Record)
 	claimed := make([]Record, 0)
-	emitted := make([]Event, 0)
+	batch := r.newNotificationBatchLocked()
+	defer batch.releaseAdmissions()
 	for id, rec := range r.records {
 		if (rec.Status != StatusCreated && rec.Status != StatusWaiting) ||
 			rec.ExpiresAt <= 0 || rec.ExpiresAt > nowMillis {
@@ -277,8 +274,22 @@ func (r *Registry) ClaimOverdue(now time.Time) ([]Record, error) {
 		rec.Revision++
 		rec.UpdatedAt = nowMillis
 		r.appendEventLocked(&rec, EventAnswerClaimed, "timeout", nil)
+		if admissionErr := batch.append(r.events[len(r.events)-1], rec); admissionErr != nil {
+			r.events = r.events[:len(r.events)-1]
+			r.commitSequence--
+			if len(claimed) == 0 || !errors.Is(admissionErr, ErrObserverBacklog) {
+				for id, previous := range before {
+					r.records[id] = previous
+				}
+				r.events = eventsBefore
+				r.commitSequence = commitSequenceBefore
+				releaseStore()
+				r.mu.Unlock()
+				return nil, admissionErr
+			}
+			break
+		}
 		r.records[id] = rec
-		emitted = append(emitted, r.events[len(r.events)-1])
 		claimed = append(claimed, cloneRecord(rec))
 	}
 	if len(claimed) == 0 {
@@ -287,7 +298,8 @@ func (r *Registry) ClaimOverdue(now time.Time) ([]Record, error) {
 		return nil, nil
 	}
 	r.trimEventsLocked()
-	if err := r.saveLocked(); err != nil {
+	drainNotifications, err := r.commitNotificationBatchLocked(batch)
+	if err != nil {
 		for id, rec := range before {
 			r.records[id] = rec
 		}
@@ -297,7 +309,6 @@ func (r *Registry) ClaimOverdue(now time.Time) ([]Record, error) {
 		r.mu.Unlock()
 		return nil, err
 	}
-	drainNotifications := r.queueNotificationsLocked(emitted)
 	releaseStore()
 	r.mu.Unlock()
 	if drainNotifications {
@@ -681,14 +692,8 @@ func (r *Registry) update(
 		return Record{}, ErrStoreUnavailable
 	}
 	id = strings.TrimSpace(id)
-	r.mu.Lock()
-	if err := r.availableLocked(); err != nil {
-		r.mu.Unlock()
-		return Record{}, err
-	}
-	releaseStore, err := r.lockAndReloadLocked()
+	releaseStore, err := r.lockAndReload(context.Background())
 	if err != nil {
-		r.mu.Unlock()
 		return Record{}, err
 	}
 	rec, ok := r.records[id]
@@ -728,7 +733,8 @@ func (r *Registry) update(
 	r.records[id] = rec
 	event := r.events[len(r.events)-1]
 	r.trimEventsLocked()
-	if err := r.saveLocked(); err != nil {
+	drainNotifications, err := r.commitEventsLocked([]Event{event})
+	if err != nil {
 		r.records[id] = before
 		r.events = eventsBefore
 		r.commitSequence = commitSequenceBefore
@@ -736,7 +742,6 @@ func (r *Registry) update(
 		r.mu.Unlock()
 		return Record{}, err
 	}
-	drainNotifications := r.queueNotificationsLocked([]Event{event})
 	releaseStore()
 	r.mu.Unlock()
 	if drainNotifications {

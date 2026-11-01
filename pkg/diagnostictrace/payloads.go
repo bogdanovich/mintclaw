@@ -1,5 +1,7 @@
 package diagnostictrace
 
+import "github.com/bogdanovich/mintclaw/pkg/browseraction"
+
 // Payload structs intentionally contain only normalized evidence. Capture
 // adapters must project source-specific values into these fields instead of
 // storing arbitrary runtime payloads.
@@ -16,65 +18,105 @@ type TurnPayload struct {
 }
 
 type ModelPayload struct {
-	Provider                      string `json:"provider,omitempty"`
-	Model                         string `json:"model,omitempty"`
-	IdentityKey                   string `json:"identity_key,omitempty"`
-	Attempt                       int    `json:"attempt,omitempty"`
-	Status                        string `json:"status,omitempty"`
-	Reason                        string `json:"reason,omitempty"`
-	Messages                      int    `json:"messages,omitempty"`
-	Tools                         int    `json:"tools,omitempty"`
-	PromptHash                    string `json:"prompt_hash,omitempty"`
-	PromptCacheMode               string `json:"prompt_cache_mode,omitempty"`
-	StablePrefixVersion           string `json:"stable_prefix_version,omitempty"`
-	StablePrefixHash              string `json:"stable_prefix_hash,omitempty"`
-	StableSystemHash              string `json:"stable_system_hash,omitempty"`
-	DynamicSystemHash             string `json:"dynamic_system_hash,omitempty"`
-	ToolSchemaHash                string `json:"tool_schema_hash,omitempty"`
-	HistoryHash                   string `json:"history_hash,omitempty"`
-	DynamicTailHash               string `json:"dynamic_tail_hash,omitempty"`
-	StableSystemParts             int    `json:"stable_system_parts,omitempty"`
-	DynamicSystemParts            int    `json:"dynamic_system_parts,omitempty"`
-	HistoryMessages               int    `json:"history_messages,omitempty"`
-	DynamicTailMessages           int    `json:"dynamic_tail_messages,omitempty"`
-	TailBoundaryFound             bool   `json:"tail_boundary_found,omitempty"`
-	DynamicSystemBeforeTranscript bool   `json:"dynamic_system_before_transcript,omitempty"`
-	ResponseHash                  string `json:"response_hash,omitempty"`
-	PromptTokens                  int    `json:"prompt_tokens,omitempty"`
-	ResponseTokens                int    `json:"response_tokens,omitempty"`
-	HasProviderUsage              *bool  `json:"has_provider_usage,omitempty"`
-	CacheReadInputTokens          int    `json:"cache_read_input_tokens,omitempty"`
-	CacheReadKnown                bool   `json:"cache_read_known,omitempty"`
-	CacheWriteInputTokens         int    `json:"cache_write_input_tokens,omitempty"`
-	CacheWriteKnown               bool   `json:"cache_write_known,omitempty"`
-	CacheOutcome                  string `json:"cache_outcome,omitempty"`
-	Skipped                       bool   `json:"skipped,omitempty"`
-	ErrorCode                     string `json:"error_code,omitempty"`
-	ClassificationSource          string `json:"classification_source,omitempty"`
-	ProviderErrorKind             string `json:"provider_error_kind,omitempty"`
-	HTTPStatus                    int    `json:"http_status,omitempty"`
-	RetryAfterMS                  int64  `json:"retry_after_ms,omitempty"`
-	RequestID                     string `json:"request_id,omitempty"`
-	MessagesPreview               string `json:"messages_preview,omitempty"`
-	ResponsePreview               string `json:"response_preview,omitempty"`
-	ReasoningPreview              string `json:"reasoning_preview,omitempty"`
-	ToolCallsPreview              string `json:"tool_calls_preview,omitempty"`
-	ErrorPreview                  string `json:"error_preview,omitempty"`
+	Provider                      string                   `json:"provider,omitempty"`
+	Model                         string                   `json:"model,omitempty"`
+	IdentityKey                   string                   `json:"identity_key,omitempty"`
+	Attempt                       int                      `json:"attempt,omitempty"`
+	Status                        string                   `json:"status,omitempty"`
+	Reason                        string                   `json:"reason,omitempty"`
+	Messages                      int                      `json:"messages,omitempty"`
+	Tools                         int                      `json:"tools,omitempty"`
+	PromptHash                    string                   `json:"prompt_hash,omitempty"`
+	SystemSources                 *SystemSourceFingerprint `json:"system_sources,omitempty"`
+	PromptCacheMode               string                   `json:"prompt_cache_mode,omitempty"`
+	StablePrefixVersion           string                   `json:"stable_prefix_version,omitempty"`
+	StablePrefixHash              string                   `json:"stable_prefix_hash,omitempty"`
+	StableSystemHash              string                   `json:"stable_system_hash,omitempty"`
+	DynamicSystemHash             string                   `json:"dynamic_system_hash,omitempty"`
+	ToolSchemaHash                string                   `json:"tool_schema_hash,omitempty"`
+	HistoryHash                   string                   `json:"history_hash,omitempty"`
+	DynamicTailHash               string                   `json:"dynamic_tail_hash,omitempty"`
+	StableSystemParts             int                      `json:"stable_system_parts,omitempty"`
+	DynamicSystemParts            int                      `json:"dynamic_system_parts,omitempty"`
+	HistoryMessages               int                      `json:"history_messages,omitempty"`
+	DynamicTailMessages           int                      `json:"dynamic_tail_messages,omitempty"`
+	TailBoundaryFound             bool                     `json:"tail_boundary_found,omitempty"`
+	DynamicSystemBeforeTranscript bool                     `json:"dynamic_system_before_transcript,omitempty"`
+	ResponseHash                  string                   `json:"response_hash,omitempty"`
+	PromptTokens                  int                      `json:"prompt_tokens,omitempty"`
+	ResponseTokens                int                      `json:"response_tokens,omitempty"`
+	HasProviderUsage              *bool                    `json:"has_provider_usage,omitempty"`
+	CacheReadInputTokens          int                      `json:"cache_read_input_tokens,omitempty"`
+	CacheReadKnown                bool                     `json:"cache_read_known,omitempty"`
+	CacheWriteInputTokens         int                      `json:"cache_write_input_tokens,omitempty"`
+	CacheWriteKnown               bool                     `json:"cache_write_known,omitempty"`
+	CacheOutcome                  string                   `json:"cache_outcome,omitempty"`
+	Skipped                       bool                     `json:"skipped,omitempty"`
+	ErrorCode                     string                   `json:"error_code,omitempty"`
+	ClassificationSource          string                   `json:"classification_source,omitempty"`
+	ProviderErrorKind             string                   `json:"provider_error_kind,omitempty"`
+	HTTPStatus                    int                      `json:"http_status,omitempty"`
+	RetryAfterMS                  int64                    `json:"retry_after_ms,omitempty"`
+	RequestID                     string                   `json:"request_id,omitempty"`
+	MessagesPreview               string                   `json:"messages_preview,omitempty"`
+	ResponsePreview               string                   `json:"response_preview,omitempty"`
+	ReasoningPreview              string                   `json:"reasoning_preview,omitempty"`
+	ToolCallsPreview              string                   `json:"tool_calls_preview,omitempty"`
+	ErrorPreview                  string                   `json:"error_preview,omitempty"`
 }
 
 type ToolPayload struct {
-	Tool             string `json:"tool"`
-	ArgsHash         string `json:"args_hash,omitempty"`
-	ResultHash       string `json:"result_hash,omitempty"`
-	Status           string `json:"status,omitempty"`
-	Executed         bool   `json:"executed,omitempty"`
-	IsError          bool   `json:"is_error,omitempty"`
-	Action           string `json:"action,omitempty"`
-	DecisionCode     string `json:"decision_code,omitempty"`
-	Count            int    `json:"count,omitempty"`
-	Threshold        int    `json:"threshold,omitempty"`
-	ArgumentsPreview string `json:"arguments_preview,omitempty"`
-	ResultPreview    string `json:"result_preview,omitempty"`
+	Tool               string                     `json:"tool"`
+	ArgsHash           string                     `json:"args_hash,omitempty"`
+	ResultHash         string                     `json:"result_hash,omitempty"`
+	Status             string                     `json:"status,omitempty"`
+	Executed           bool                       `json:"executed,omitempty"`
+	IsError            bool                       `json:"is_error,omitempty"`
+	Action             string                     `json:"action,omitempty"`
+	DecisionCode       string                     `json:"decision_code,omitempty"`
+	Count              int                        `json:"count,omitempty"`
+	Threshold          int                        `json:"threshold,omitempty"`
+	ArgumentsPreview   string                     `json:"arguments_preview,omitempty"`
+	ResultPreview      string                     `json:"result_preview,omitempty"`
+	DocumentFields     *DocumentFieldsPayload     `json:"document_fields,omitempty"`
+	BrowserInputTarget *BrowserInputTargetPayload `json:"browser_input_target,omitempty"`
+}
+
+// BrowserInputTargetPayload is published only after a native protected question
+// is durably owned. It describes a target, never an accepted value or mutation.
+type BrowserInputTargetPayload struct {
+	InteractionID string                               `json:"interaction_id"`
+	Target        browseraction.InputTargetObservation `json:"target"`
+}
+
+func (payload BrowserInputTargetPayload) Valid() bool {
+	return safeIDPattern.MatchString(payload.InteractionID) && payload.Target.Valid()
+}
+
+// DocumentFieldsPayload is a native read observation, not approval authority or
+// a claim that the model received every schema field or understood its meaning.
+type DocumentFieldsPayload struct {
+	Operation       string `json:"operation"`
+	SourceSHA256    string `json:"source_sha256"`
+	SchemaFields    int    `json:"schema_fields"`
+	ReturnedFields  int    `json:"returned_fields"`
+	RequiredFields  int    `json:"required_fields"`
+	ValuesPresent   int    `json:"values_present"`
+	DefaultsPresent int    `json:"defaults_present"`
+}
+
+// Valid checks the bounded, content-free native field-read contract.
+func (p DocumentFieldsPayload) Valid() bool {
+	if p.Operation != "fields" && p.Operation != "form.discover" || !validHexRange(p.SourceSHA256, 64, 64) ||
+		p.SchemaFields < 1 || p.SchemaFields > 256 || p.ReturnedFields < 0 || p.ReturnedFields > p.SchemaFields {
+		return false
+	}
+	for _, count := range []int{p.RequiredFields, p.ValuesPresent, p.DefaultsPresent} {
+		if count < 0 || count > p.SchemaFields {
+			return false
+		}
+	}
+	return p.Operation != "fields" || p.ReturnedFields == p.SchemaFields
 }
 
 type SteeringPayload struct {

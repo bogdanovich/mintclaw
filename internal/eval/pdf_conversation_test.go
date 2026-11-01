@@ -9,6 +9,7 @@ import (
 
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 func TestPDFConversationSuppliesPrivateHandleWithoutReportingValueOrClaimingArtifact(t *testing.T) {
@@ -144,7 +145,7 @@ func TestRunPDFActuallySendsOwnedFixtureWithoutClaimingDomainQualification(t *te
 	}}
 	items[0].Case.Rubric = nil
 	result, err := Run(t.Context(), fixture.preset, items, RunOptions{
-		Home: fixture.home, OutputParent: fixture.output,
+		Home: fixture.home, OutputParent: fixture.output, IncludePending: true,
 	})
 	if !errors.Is(err, ErrNotPassed) || !result.Complete || result.Verdict != Inconclusive ||
 		fixture.tasks.Load() != 2 || len(result.Trials) != 1 || result.Trials[0].Code == "domain_evidence_unavailable" {
@@ -164,7 +165,9 @@ func enableAdmissionPDF(t *testing.T, fixture *admissionFixture) {
 	t.Helper()
 	fixture.preset.Capabilities = append(fixture.preset.Capabilities, "pdf")
 	fixture.cfg.Tools.Document.Enabled, fixture.cfg.Tools.Document.AuditModel = true, "eval-model"
-	fixture.cfg.Agents.List[0].ToolPolicy.Allow = append(fixture.cfg.Agents.List[0].ToolPolicy.Allow, "document")
+	fixture.cfg.Agents.List[0].ToolPolicy.Allow = append(
+		fixture.cfg.Agents.List[0].ToolPolicy.Allow, "document", tools.BM25SearchToolName,
+	)
 	fixture.writeConfig(t)
 	profile, err := readPreparedProfile(fixture.preset, fixture.home)
 	if err != nil {

@@ -36,7 +36,7 @@ func TestCredentialLoginAndOrdinaryActionsRegisterWithDistinctCapabilities(t *te
 		t.Fatal("enabled login capability collided with the ordinary browser catalog")
 	}
 	registry := loop.GetRegistry().GetDefaultAgent().Tools
-	for _, name := range []string{"browser_login", "browser_act", "browser_session", "browser_observe"} {
+	for _, name := range []string{"browser_login", "browser_act", "browser_input", "browser_session", "browser_observe"} {
 		if _, available := registry.Get(name); !available {
 			t.Fatal("an enabled browser capability disappeared during composition")
 		}

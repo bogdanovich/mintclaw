@@ -1,10 +1,8 @@
 package diagnostictrace
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -116,29 +114,8 @@ func (s Store) Load(traceID string) (Trace, error) {
 	if err != nil {
 		return Trace{}, err
 	}
-	if len(data) > HardMaxTraceBytes {
-		return Trace{}, &CorruptTraceError{
-			TraceID: traceID,
-			Err:     fmt.Errorf("trace exceeds hard byte limit"),
-		}
-	}
-	var trace Trace
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&trace); err != nil {
-		return Trace{}, &CorruptTraceError{
-			TraceID: traceID,
-			Err:     fmt.Errorf("decode trace: %w", err),
-		}
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return Trace{}, &CorruptTraceError{
-			TraceID: traceID,
-			Err:     fmt.Errorf("decode trace: trailing JSON data"),
-		}
-	}
-	if err := Validate(trace); err != nil {
+	trace, err := Decode(data)
+	if err != nil {
 		return Trace{}, &CorruptTraceError{TraceID: traceID, Err: err}
 	}
 	return trace, nil

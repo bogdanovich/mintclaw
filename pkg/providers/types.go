@@ -23,6 +23,7 @@ type (
 	ToolDefinition              = protocoltypes.ToolDefinition
 	ToolFunctionDefinition      = protocoltypes.ToolFunctionDefinition
 	ContentBlock                = protocoltypes.ContentBlock
+	PromptSection               = protocoltypes.PromptSection
 	CacheControl                = protocoltypes.CacheControl
 	PromptCachePlan             = protocoltypes.PromptCachePlan
 	PromptCacheWritePolicy      = protocoltypes.PromptCacheWritePolicy

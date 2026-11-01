@@ -5,7 +5,10 @@
 Admitted by the operator on 2026-10-10 after architecture review. Parent:
 [roadmap](agent-evals-roadmap.md); ownership/alternatives:
 [design](agent-evals-design.md). Baseline: `71ea07610f96a5ab0d1b78568d311f1b4a8044b3`.
-Status: active; no implementation or live qualification is claimed by merging this document.
+At admission: active; no implementation or live qualification was claimed by merging this document.
+Current status: first-release harness exit is recorded in the
+[unchanged-criteria audit](../operations/manual-agent-evals-first-release-exit-20261020.md); goal completion
+requires that record to merge. Product failures remain valid negative results, not complete domain qualification.
 
 Objective: provide a small, manual real-agent quality harness with versioned scenarios, same-session interaction,
 scripted and LLM-user drivers, independent hard checks and a separate LLM judge, private auditable reports,

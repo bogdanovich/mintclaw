@@ -1,6 +1,7 @@
 package interactions
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -9,11 +10,15 @@ import (
 )
 
 type Options struct {
-	TerminalRetention time.Duration
-	MaxRecords        int
-	MaxEvents         int
-	MaxSnapshotBytes  int
-	Now               func() time.Time
+	// StoreLockTimeout bounds admission, including local writer contention.
+	StoreLockTimeout           time.Duration
+	TerminalRetention          time.Duration
+	MaxRecords                 int
+	MaxEvents                  int
+	MaxSnapshotBytes           int
+	MaxPendingObservations     int
+	MaxPendingObservationBytes int
+	Now                        func() time.Time
 }
 
 type Snapshot struct {
@@ -25,29 +30,27 @@ type Snapshot struct {
 
 type Observer func(EventObservation)
 
-type observerEntry struct {
-	id       uint64
-	delivery *observerDelivery
-}
-
 type queuedObservation struct {
 	observation EventObservation
 	observers   []*observerDelivery
+	budget      *notificationBudget
+	bytes       int
+	remaining   atomic.Int64
 }
 
-var observerSequence atomic.Uint64
-
 type Registry struct {
-	mu             sync.RWMutex
-	storePath      string
-	options        Options
-	records        map[string]Record
-	events         []Event
-	observers      []observerEntry
-	notifications  []queuedObservation
-	notifying      bool
-	commitSequence uint64
-	loadErr        error
+	mu                 sync.RWMutex
+	storePath          string
+	options            Options
+	records            map[string]Record
+	events             []Event
+	observers          []*observerDelivery
+	closed             atomic.Bool
+	notifications      []*queuedObservation
+	notificationBudget notificationBudget
+	notifying          bool
+	commitSequence     uint64
+	loadErr            error
 }
 
 var _ Store = (*Registry)(nil)
@@ -57,6 +60,9 @@ func NewRegistry(storePath string) *Registry {
 }
 
 func NewRegistryWithOptions(storePath string, opts Options) *Registry {
+	if opts.StoreLockTimeout <= 0 {
+		opts.StoreLockTimeout = DefaultStoreLockTimeout
+	}
 	if opts.TerminalRetention <= 0 {
 		opts.TerminalRetention = DefaultRetention
 	}
@@ -69,6 +75,12 @@ func NewRegistryWithOptions(storePath string, opts Options) *Registry {
 	if opts.MaxSnapshotBytes <= 0 {
 		opts.MaxSnapshotBytes = DefaultMaxBytes
 	}
+	if opts.MaxPendingObservations <= 0 {
+		opts.MaxPendingObservations = DefaultMaxPendingObservations
+	}
+	if opts.MaxPendingObservationBytes <= 0 {
+		opts.MaxPendingObservationBytes = DefaultMaxPendingObservationBytes
+	}
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
@@ -78,8 +90,7 @@ func NewRegistryWithOptions(storePath string, opts Options) *Registry {
 		records:   make(map[string]Record),
 	}
 	if r.storePath != "" {
-		r.mu.Lock()
-		release, err := r.lockAndReloadLocked()
+		release, err := r.lockAndReload(context.Background())
 		if err != nil {
 			r.loadErr = err
 		} else {
@@ -87,8 +98,8 @@ func NewRegistryWithOptions(storePath string, opts Options) *Registry {
 				r.loadErr = r.saveLocked()
 			}
 			release()
+			r.mu.Unlock()
 		}
-		r.mu.Unlock()
 	}
 	return r
 }
@@ -137,52 +148,37 @@ func (r *Registry) LastLoadError() error {
 	return r.loadErr
 }
 
+// Subscribe returns a nonblocking unsubscribe function. It stops new delivery
+// admission; callbacks accepted before unsubscribe may still finish. Use
+// SubscribeWithHandle when the caller needs explicit settlement information.
 func (r *Registry) Subscribe(observer Observer) func() {
-	if r == nil || observer == nil {
+	subscription, err := r.SubscribeWithHandle(observer)
+	if err != nil {
 		return func() {}
 	}
-	entry := observerEntry{
-		id: observerSequence.Add(1), delivery: newObserverDelivery(observer, true),
-	}
-	r.mu.Lock()
-	r.observers = append(r.observers, entry)
-	r.mu.Unlock()
-	return r.unsubscribe(entry)
+	return subscription.Unsubscribe
 }
 
-// SubscribeSnapshot atomically installs a gated observer and captures retained
-// state. Events committed before the boundary appear only in the snapshot;
-// later commits are buffered in order until the caller applies the snapshot
-// and invokes the returned activate function.
-func (r *Registry) SubscribeSnapshot(
-	observer Observer,
-) (ObservationSnapshot, func(), func()) {
-	if r == nil || observer == nil {
+// SubscribeSnapshot installs a gated observer at an atomic snapshot boundary.
+// Explicit unsubscribe abandons the gated buffer. The handle variant reports
+// whether resynchronization is required and supports bounded settlement.
+func (r *Registry) SubscribeSnapshot(observer Observer) (ObservationSnapshot, func(), func()) {
+	snapshot, subscription, err := r.SubscribeSnapshotWithHandle(observer)
+	if err != nil {
 		return ObservationSnapshot{}, func() {}, func() {}
 	}
-	entry := observerEntry{
-		id: observerSequence.Add(1), delivery: newObserverDelivery(observer, false),
-	}
-	r.mu.Lock()
-	r.observers = append(r.observers, entry)
-	snapshot := r.observationSnapshotLocked()
-	r.mu.Unlock()
-	return snapshot, entry.delivery.activate, r.unsubscribe(entry)
+	return snapshot, subscription.Activate, subscription.Unsubscribe
 }
 
-func (r *Registry) unsubscribe(entry observerEntry) func() {
-	return func() {
-		r.mu.Lock()
-		for i := range r.observers {
-			if r.observers[i].id != entry.id {
-				continue
-			}
-			r.observers = append(r.observers[:i], r.observers[i+1:]...)
-			break
+func (r *Registry) compactObserversLocked() {
+	kept := r.observers[:0]
+	for _, delivery := range r.observers {
+		if delivery.subscribed() {
+			kept = append(kept, delivery)
 		}
-		r.mu.Unlock()
-		entry.delivery.unsubscribe()
 	}
+	clear(r.observers[len(kept):])
+	r.observers = kept
 }
 
 func (r *Registry) observationSnapshotLocked() ObservationSnapshot {

@@ -42,6 +42,38 @@ func TestDocumentFormTaskQuestionFreeReplyUsesPrivateReplyContract(t *testing.T)
 	}
 }
 
+func TestDocumentFormBackgroundRouteAndReplyRequireExactPrivateEvidence(t *testing.T) {
+	for _, reply := range []bool{false, true} {
+		view := taskRoutingPrivateTestView()
+		view.MediaRefs = nil
+		view.PreviousUnrelated = true
+		view.Text = "Why?"
+		if reply {
+			view.State = document.FormTaskQuestion
+			view.Answer = &document.FormTaskRouteAnswer{State: "committed", Passes: 1, Text: "Why?"}
+		}
+		wire := `{"action":"side_task","evidence":{"text":"Why?","occurrence":1}}`
+		provider := &documentAuditTestProvider{response: &providers.LLMResponse{Content: wire}}
+		auditor := &documentFormAuditor{models: map[string]documentFormAuditModel{
+			"configured": {provider: provider, model: "private-model"},
+		}}
+		result, err := auditor.InterpretFormTaskRoute(t.Context(), "configured", view)
+		if err != nil || result.Action != document.FormTaskIndependent || !provider.sensitive ||
+			!strings.Contains(provider.messages[1].Content, `"previous_request_was_unrelated":true`) {
+			t.Fatal("side conversation lost the bounded private routing contract")
+		}
+		for _, bad := range []string{
+			`{"action":"side_task"}`,
+			`{"action":"side_task","evidence":{"text":"Why","occurrence":1}}`,
+			`{"action":"side_task","evidence":{"text":"Why?","occurrence":2}}`,
+		} {
+			if _, err = decodeDocumentFormTaskRoute(bad, view.Text, reply); err == nil {
+				t.Fatal("missing/partial side-task evidence acquired authority")
+			}
+		}
+	}
+}
+
 func TestDocumentFormTaskRouteUsesOnlyBoundedPrivateCurrentTaskContext(t *testing.T) {
 	view := taskRoutingPrivateTestView()
 	wire := `{"action":"switch_task","evidence":{"text":"` + view.Text + `","occurrence":1}}`

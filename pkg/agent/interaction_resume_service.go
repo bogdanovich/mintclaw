@@ -385,6 +385,12 @@ func (service interactionService) resumeOwned(
 	continuationOpts.FinalDeliveryObservation = deliveryObservation
 	continuationOpts.InitialSteeringMessages = supersedingSteering
 	continuationExecutor.configure(&continuationOpts)
+	// A phone-ready event resumes without an inbound spool transaction. Give
+	// tool-time media its own stable durable source; final delivery retains its
+	// separate interaction transaction. Preserve an existing inbound transaction.
+	if !hasOutboundTransaction(ctx) {
+		ctx = withOutboundTransaction(ctx, interactionDeliveryKey(resuming.ID, "continuation"))
+	}
 	resumedTurn, runErr := runtime.runAgentLoopWithExecution(
 		ctx, agent, continuationOpts, continuationExecutor.execute,
 	)

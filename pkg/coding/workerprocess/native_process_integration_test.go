@@ -371,7 +371,9 @@ func TestNativeMintClawWorkerDisconnectAndHardCancelAreExplicit(t *testing.T) {
 			t.Fatal(err)
 		}
 		cancelErr := <-cancelDone
+		// Process loss can close the stream before the cancel write starts.
 		if cancelErr != nil && !errors.Is(cancelErr, worker.ErrControlStreamUncertain) &&
+			!errors.Is(cancelErr, worker.ErrWorkerDisconnected) &&
 			!errors.Is(cancelErr, ErrProcessNotRunning) && !errors.Is(cancelErr, syscall.EPIPE) {
 			t.Fatalf("hard cancel race error = %v", cancelErr)
 		}

@@ -2025,9 +2025,46 @@ func documentToolReportResult(report document.Report) *toolshared.ToolResult {
 		).WithError(err)
 	}
 	return &toolshared.ToolResult{
-		ForLLM:  string(encoded),
-		IsError: report.State != document.StateSucceeded,
+		ForLLM:         string(encoded),
+		IsError:        report.State != document.StateSucceeded,
+		DocumentFields: documentReportFieldsObservation(report),
 	}
+}
+
+func documentReportFieldsObservation(report document.Report) toolshared.DocumentFieldsObservation {
+	if report.Operation != "fields" || report.State != document.StateSucceeded ||
+		report.Failure != nil || report.Input == nil || report.Fields == nil ||
+		report.Input.SHA256 != report.Fields.SourceSHA256 {
+		return toolshared.DocumentFieldsObservation{}
+	}
+	return documentFieldsObservation("fields", *report.Fields, len(report.Fields.Fields))
+}
+
+func documentFieldsObservation(
+	operation string, schema document.FormFieldsFacts, returnedFields int,
+) toolshared.DocumentFieldsObservation {
+	if !validDocumentFormSchemaDigest(schema.SourceSHA256) || len(schema.Fields) == 0 ||
+		len(
+			schema.Fields,
+		) > document.DefaultMaxFormFields || returnedFields < 0 || returnedFields > len(schema.Fields) {
+		return toolshared.DocumentFieldsObservation{}
+	}
+	observation := toolshared.DocumentFieldsObservation{
+		Operation: operation, SourceSHA256: schema.SourceSHA256,
+		SchemaFields: len(schema.Fields), ReturnedFields: returnedFields,
+	}
+	for _, field := range schema.Fields {
+		if field.Required {
+			observation.RequiredFields++
+		}
+		if field.HasValue {
+			observation.ValuesPresent++
+		}
+		if field.HasDefault {
+			observation.DefaultsPresent++
+		}
+	}
+	return observation
 }
 
 func documentFormDiscoveryDigest(sourceDigest string, fields document.FormFieldsFacts) (string, error) {

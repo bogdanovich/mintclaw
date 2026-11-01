@@ -1,16 +1,33 @@
 package agent
 
 import (
+	"errors"
 	"strings"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 )
 
 // AgentLoopOption configures an AgentLoop at construction time.
 type AgentLoopOption func(*AgentLoop)
+
+// WithProviderCallBudget bounds registry and model-selection providers for one
+// immutable runtime generation. It does not grant tools or bound independent
+// provider-owning tools; the caller must admit a suitably restricted profile.
+// Config reload is unavailable in this opt-in mode. The caller owns settlement
+// and sealing of the budget after the loop and background work have stopped.
+func WithProviderCallBudget(budget *providers.CallBudget) AgentLoopOption {
+	return func(al *AgentLoop) {
+		if budget == nil {
+			al.runtimeInitErr = errors.Join(al.runtimeInitErr, providers.ErrCallBudget)
+			return
+		}
+		al.providerBudget = budget
+	}
+}
 
 // WithMediaStore injects the media store before context initialization. Call
 // SetMediaStore after construction when registered tools must also receive it.

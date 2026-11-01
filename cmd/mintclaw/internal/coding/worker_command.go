@@ -153,11 +153,11 @@ func validateNativeWorkerBinding(
 	if deps.resolveModel == nil {
 		return thread.ProjectIdentity{}, fmt.Errorf("coding worker: model resolver is unavailable")
 	}
-	model, provider, err := deps.resolveModel(binding.Model)
+	selection, err := deps.resolveModel(binding.Model)
 	if err != nil {
 		return thread.ProjectIdentity{}, err
 	}
-	if model != binding.Model || provider != binding.Provider {
+	if selection.Model != binding.Model || selection.Provider != binding.Provider {
 		return thread.ProjectIdentity{}, fmt.Errorf(
 			"coding worker: bound model selection no longer matches the provider profile",
 		)

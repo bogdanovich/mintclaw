@@ -245,6 +245,10 @@ func promptContentBlock(part PromptPart, cache *providers.CacheControl) provider
 		PromptLayer:  string(part.Layer),
 		PromptSlot:   string(part.Slot),
 		PromptSource: string(part.Source.ID),
+		PromptSections: []providers.PromptSection{{
+			Start: 0, End: len(part.Content), Layer: string(part.Layer), Slot: string(part.Slot),
+			Source: string(part.Source.ID),
+		}},
 	}
 }
 

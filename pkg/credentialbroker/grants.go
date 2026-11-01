@@ -35,7 +35,7 @@ type Grant struct {
 	ExpiresAt      time.Time
 }
 
-// Authority owns a bounded set of non-persistent grants. All control and check
+// Authority owns a bounded set of live grants. All control and check
 // operations share one lock. Its zero value denies access; use NewAuthority.
 type Authority struct {
 	mu     sync.Mutex
@@ -64,21 +64,9 @@ func (authority *Authority) Approve(approval Approval) (Grant, error) {
 	if authority.closed || authority.policy.Revision() == "" || authority.now == nil || authority.random == nil {
 		return Grant{}, ErrUnavailable
 	}
-	if !validPrincipal(approval.Principal) || approval.PolicyRevision != authority.policy.Revision() ||
-		approval.Lifetime <= 0 || approval.Lifetime > MaxGrantLifetime ||
-		len(approval.Accounts) == 0 || len(approval.Accounts) > MaxAccounts {
-		return Grant{}, ErrInvalidApproval
-	}
-	accounts := slices.Clone(approval.Accounts)
-	slices.Sort(accounts)
-	for index, alias := range accounts {
-		account, exists := authority.policy.accounts[alias]
-		if !validIdentifier(alias) || !exists || (index > 0 && alias == accounts[index-1]) {
-			return Grant{}, ErrInvalidApproval
-		}
-		if _, allowed := account.principals[approval.Principal]; !allowed {
-			return Grant{}, ErrDenied
-		}
+	accounts, err := authority.approvalAccounts(approval)
+	if err != nil {
+		return Grant{}, err
 	}
 	now := authority.now()
 	authority.prune(now)
@@ -93,6 +81,68 @@ func (authority *Authority) Approve(approval Approval) (Grant, error) {
 		ID: id, Principal: approval.Principal, Accounts: accounts,
 		PolicyRevision: approval.PolicyRevision, IssuedAt: now, ExpiresAt: now.Add(approval.Lifetime),
 	}
+	authority.install(grant)
+	grant.Accounts = slices.Clone(grant.Accounts)
+	return grant, nil
+}
+
+func (authority *Authority) approvalAccounts(approval Approval) ([]string, error) {
+	if !validPrincipal(approval.Principal) || approval.PolicyRevision != authority.policy.Revision() ||
+		approval.Lifetime <= 0 || approval.Lifetime > MaxGrantLifetime ||
+		len(approval.Accounts) == 0 || len(approval.Accounts) > MaxAccounts {
+		return nil, ErrInvalidApproval
+	}
+	accounts := slices.Clone(approval.Accounts)
+	slices.Sort(accounts)
+	for index, alias := range accounts {
+		account, exists := authority.policy.accounts[alias]
+		if !validIdentifier(alias) || !exists || (index > 0 && alias == accounts[index-1]) {
+			return nil, ErrInvalidApproval
+		}
+		if _, allowed := account.principals[approval.Principal]; !allowed {
+			return nil, ErrDenied
+		}
+	}
+	return accounts, nil
+}
+
+// Restore admits only previously verified approval metadata loaded by the
+// trusted control plane from its private durable store. It is not a model or
+// network API. A fresh authority is required, timestamps never renew, and all
+// records are validated before any live lease is installed.
+func (authority *Authority) Restore(grants []Grant) error {
+	authority.mu.Lock()
+	defer authority.mu.Unlock()
+	if authority.closed || authority.now == nil || len(authority.grants) != 0 || len(grants) > MaxActiveGrants {
+		return ErrUnavailable
+	}
+	validated := make([]Grant, 0, len(grants))
+	seen := make(map[string]bool, len(grants))
+	now := authority.now()
+	for _, grant := range grants {
+		accounts, err := authority.approvalAccounts(Approval{
+			Principal: grant.Principal, Accounts: grant.Accounts, PolicyRevision: grant.PolicyRevision,
+			Lifetime: grant.ExpiresAt.Sub(grant.IssuedAt),
+		})
+		if err != nil || !validGrantID(grant.ID) || seen[grant.ID] || grant.IssuedAt.IsZero() {
+			return ErrInvalidApproval
+		}
+		seen[grant.ID] = true
+		if now.Before(grant.IssuedAt) || !now.Before(grant.ExpiresAt) {
+			continue
+		}
+		grant.Accounts = accounts
+		validated = append(validated, grant)
+	}
+	for _, grant := range validated {
+		authority.install(grant)
+	}
+	return nil
+}
+
+// install requires the authority lock and an admitted, independently owned grant.
+func (authority *Authority) install(grant Grant) {
+	id := grant.ID
 	lifetime := &grantLifetime{grant: grant, done: make(chan struct{})}
 	authority.grants[id] = lifetime
 	current := authority.now()
@@ -104,8 +154,6 @@ func (authority *Authority) Approve(approval Approval) (Grant, error) {
 	// The callback retains the generation, so it cannot revoke a replacement
 	// even if a future grant happens to reuse the same random reference.
 	lifetime.timer = time.AfterFunc(delay, func() { authority.expire(id, lifetime) })
-	grant.Accounts = slices.Clone(grant.Accounts)
-	return grant, nil
 }
 
 // Authorize checks current policy and grant state. Consumers must authenticate

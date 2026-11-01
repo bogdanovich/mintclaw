@@ -20,7 +20,12 @@ archives the execution ledgers and records the deployed state.
   creation, resumption, cancellation, and recovery.
 - A turn enters through an immutable request, keeps mutation in one runtime
   owner, returns typed step outcomes, and reaches terminal state through one
-  finalization gateway. Phase-oriented files expose those boundaries.
+  finalization gateway. Phase-oriented files expose those boundaries. Resource
+  cleanup settles before the terminal snapshot; abnormal exits share that
+  cleanup owner.
+- The process-wide task coordinator serializes registry construction and
+  restoration per workspace, then publishes the ready registry. Explicit cache
+  reconstruction uses the same boundary.
 - Browser, node, tool, and provider policy are projected into immutable,
   generation-owned snapshots rather than read repeatedly from the root config.
 - Node protocol v2 is the sole admitted, persisted, and canonicalized node
@@ -43,6 +48,7 @@ archives the execution ledgers and records the deployed state.
 | Turn execution and tool outcomes | `pkg/agent`, generation-owned runtime and finalization | [Runtime host](agentloop-runtime.md); [reliability roadmap](reliability-code-health-20261017-roadmap.md) R5/R7 |
 | Inbound persistence and canonical history | `pkg/bus/inbound_spool.go`, `pkg/session`, Seahorse reconciliation | [Durable ingress](durable-ingress.md); [session system](session-system.md); [reconciliation](seahorse-reconciliation.md) |
 | Outbound delivery and domain settlement | `pkg/outbox`, `pkg/agent/outbound_transaction.go`, `outbound_recovery.go` | [Durable delivery](durable-outbound-delivery.md); [retention decision](outbox-retention-decision-20261017.md); [offline capacity/retirement](../operations/outbox-retention-20261018.md) |
+| Interaction admission and observer lifecycle | `pkg/interactions`, registry budget and subscription delivery; runtime close adapter in `pkg/agent` | [Admission and contention qualification](../operations/architecture-robustness-20261019-qualification.md); retain commit identity, pre-persistence rejection and explicit pending/resync outcomes |
 | Tool discovery and transport classification | `pkg/mcp`; tool adapters consume its outcomes | Reliability R2/R5; preserve uncertain-call no-replay behavior |
 | Web UI chat and credential requests | `web/frontend/src/features/chat/controller.ts`, `src/api`, shared model form | Reliability R3/R8/R12; asynchronous request/socket ownership and secret preservation |
 | Behavioral quality evidence | Existing manual eval runner and independent domain witnesses | [Agent evals roadmap](agent-evals-roadmap.md), especially its Next Mandatory Work; harness tests do not qualify live domains |
@@ -119,7 +125,11 @@ conditional, while qualification and measured follow-ups keep their existing
 owners. The completed first roadmap is not reopened.
 
 The [October 19 architecture review](architecture-robustness-review-20261019.md)
-admits two ownership corrections: settle terminal cleanup before committing the
-final answer, and finish task restoration before publishing its registry.
-Interaction contention and notification budgets enter bounded qualification;
-other architectural extraction remains conditional.
+records merged ownership corrections: cleanup settles before the final answer
+is committed, and task restoration finishes before the registry is published.
+Interaction store admission, committed observation backlog and subscription
+settlement are now bounded within their existing owners; runtime worker and
+observer drain share a one-second budget with explicit incomplete teardown.
+[Qualification evidence](../operations/architecture-robustness-20261019-qualification.md)
+records measured behavior and practical limits. Other architectural extraction
+remains conditional.

@@ -142,8 +142,33 @@ func TestFixtureContract(t *testing.T) {
 
 func TestRepositoryCorpus(t *testing.T) {
 	corpus, err := LoadCorpus("../../evals")
-	if err != nil || len(corpus) != 14 {
+	if err != nil || len(corpus) != 26 {
 		t.Fatal("repository cases invalid", err)
+	}
+	defaults, err := Select(corpus, Selection{DefaultOnly: true})
+	if err != nil || len(defaults) != 6 || defaults[0].Case.ID != "general.context.correction" ||
+		defaults[1].Case.ID != "general.context.followup" || defaults[2].Case.ID != "general.interaction.answer" ||
+		defaults[3].Case.ID != "general.interaction.navigation" || defaults[4].Case.ID != "general.steering.boundary" ||
+		defaults[5].Case.ID != "general.steering.order" || CheckRunAvailability(defaults, false) != nil {
+		t.Fatal("repository general baseline missing", err)
+	}
+	pending := 0
+	for _, item := range corpus {
+		policy := item.Availability()
+		if policy.Status == "pending" {
+			pending++
+			core := item.Case.ID == "general.session.isolation" || item.Case.ID == "general.tools.recovery" ||
+				item.Case.ID == "general.control.stop" || item.Case.ID == "general.approval.denied" ||
+				item.Case.ID == "general.delivery.final-once" || item.Case.ID == "general.skills.selection" ||
+				item.Case.ID == "general.history.restart" || item.Case.ID == "general.context.compaction"
+			if policy.Default || policy.Reason == "" ||
+				item.Case.Suite == "general" && !core {
+				t.Fatal("invalid deferred coverage")
+			}
+		}
+	}
+	if pending != 20 || !errors.Is(CheckRunAvailability(corpus, false), ErrPendingCases) {
+		t.Fatal("deferred domain cases were lost or implicitly enabled")
 	}
 	pdf, err := Select(corpus, Selection{Suite: "pdf"})
 	if err != nil || len(pdf) != 6 {

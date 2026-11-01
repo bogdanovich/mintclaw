@@ -38,7 +38,9 @@ Choose the candidate number in that private terminal. Even one result requires
 an explicit choice. The command saves its exact item UUID, preserves the
 configured vault, allowed origins and principals, and leaves browser login
 disabled. Restart the gateway through its normal service workflow. A changed
-binding changes the approval policy revision; grants do not survive restart.
+binding changes the approval policy revision and invalidates its grants.
+Unchanged policy retains original unexpired approval across restart; see
+[durable approval](credential-durable-approval.md).
 
 The alias's origins, principals and any site login flow must already be prepared
 in local configuration. This command selects the item; it does not invent a

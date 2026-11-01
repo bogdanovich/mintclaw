@@ -77,7 +77,7 @@ func verifyDocumentIntakeBooleanAssertions(
 			document.ErrFormIntakeInvalidResponse,
 		)
 	}
-	verified, findings, err := decodeDocumentIntakeBooleanVerification(response.Content, ids)
+	verified, findings, err := decodeDocumentIntakeFieldVerification(response.Content, ids)
 	if err != nil {
 		return document.FormIntakeInterpretation{}, unavailableIntakeInterpretation(
 			document.ErrFormIntakeInvalidResponse,
@@ -94,7 +94,7 @@ func verifyDocumentIntakeBooleanAssertions(
 	return result, nil
 }
 
-func decodeDocumentIntakeBooleanVerification(content string, ids []string) (
+func decodeDocumentIntakeFieldVerification(content string, ids []string) (
 	[]string, []document.FormFieldMappingBlocker, error,
 ) {
 	failure := errDocumentIntakeInterpretationUnavailable

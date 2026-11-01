@@ -21,6 +21,11 @@ func formIntakeReservationSuperseded(mode *formIntakeStoredMode, inputID string,
 			if pass.Outcome == nil {
 				continue
 			}
+			// Explicit exclusion changes this input's candidate interpretation,
+			// even when no field event advances the public revision.
+			if input.ID == inputID && passIndex < pass.Outcome.ExclusionThroughPasses {
+				return true
+			}
 			for _, prior := range pass.Outcome.PriorResolutions {
 				if prior.InputID == inputID && passIndex < prior.ThroughPasses {
 					return true

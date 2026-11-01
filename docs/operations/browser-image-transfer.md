@@ -160,8 +160,27 @@ The same bounded presentation phase covers validated partial and blocked results
 It preserves their incomplete status and the specific blocker verbatim, together
 with every retained output and receipt; formatting cannot certify missing work.
 
+When a child result is followed by incomplete work, a later blocked attachment
+or other follow-up does not replace the earlier task report. The shared merger
+retains both sets of completed facts, receipts, missing/not-needed items and
+blockers, with the more severe status. An old admitted summary must still cover
+the combined facts; otherwise only that summary is discarded, not its evidence.
+
 With `agent live --trace-evidence-agent browser`, canonical trace publication
 can follow the visible final response. The CLI waits up to 30 seconds for this
 passive evidence, also subject to its overall command context. Missing evidence
 does not prove that browser effects did not occur: inspect the exact owner state
 and independent fixture receipt before considering another action.
+
+Requested browser attachments survive suppressed child delivery as typed,
+runtime-owned media capabilities. They retain the exact spool owner and source
+claim across durable completion, even after the browser closes. The parent
+delivers them with the complete final report through the existing media outbox;
+it must not search for a local path or pass `transfer-artifact://` references as
+`message.media.path`. Recovery claims are restored before publication, including
+flat batches of up to 16 browser attachments on the same authenticated actor,
+workspace and channel route. Nested, duplicate, unattached and cross-owner claims
+are rejected. Model context contains no delivery authority or private media paths.
+If attachment preflight fails before publication, the existing definitely-not-sent
+fallback preserves the primary text report. Ambiguous publication never permits a
+blind resend.

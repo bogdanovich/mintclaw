@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "id": "general.delivery.final-once",
+  "suite": "general",
+  "tags": ["core", "delivery", "streaming", "multi-turn"],
+  "description": "Correlate stream revisions, one native terminal delivery per request and a grounded same-session follow-up.",
+  "task": "Remember the synthetic code mc-delivery-7d13a290 for this conversation. Write three short paragraphs about sorting synthetic colored blocks, approximately 100 words total. Do not use tools or split the response into separate messages.",
+  "requires": ["conversation", "bounded_calls", "final_delivery"],
+  "fixtures": [],
+  "driver": {
+    "mode": "scripted",
+    "steps": [
+      {"wait_for": {"kind": "final"}, "action": {"kind": "message", "text": "Reply only with the synthetic code I asked you to remember."}}
+    ]
+  },
+  "limits": {"max_user_turns": 2, "turn_timeout": "2m", "case_timeout": "5m", "max_driver_calls": 1},
+  "checks": [
+    {"id": "delivered-once", "kind": "final_delivery"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"}
+  ],
+  "rubric": [
+    {"id": "grounded-followup", "description": "The first response follows the synthetic task and the follow-up returns only the previously supplied code, without inventing facts.", "required": true}
+  ],
+  "final_delivery": {"streaming": true, "marker": "mc-delivery-7d13a290"}
+}

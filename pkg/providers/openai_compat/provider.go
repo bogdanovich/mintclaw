@@ -53,6 +53,19 @@ func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
 		Thinking:            p.supportsThinking(),
 		NativeSearch:        p.supportsNativeSearch(),
 		CallerMediatedTools: p.callerMediatedToolsSupported(),
+		OutputTokenLimit:    p.outputTokenLimitSupported(),
+	}
+}
+
+func (p *Provider) outputTokenLimitSupported() bool {
+	if len(p.extraBody) != 0 {
+		return false
+	}
+	switch p.maxTokensField {
+	case "", "max_tokens", "max_completion_tokens":
+		return true
+	default:
+		return false
 	}
 }
 

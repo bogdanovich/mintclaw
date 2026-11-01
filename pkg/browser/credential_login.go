@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"time"
 
@@ -211,6 +212,12 @@ func (broker *Broker) LoginCredential(
 	}
 	id, err := driver.prepareCredential(ctx, fields)
 	if err != nil {
+		// No values have been retrieved or submitted. A native form may have
+		// replaced its controls since observation; require fresh refs rather
+		// than treating this as a policy denial or retargeting privately.
+		if errors.Is(err, errCredentialObserveRequired) && ctx.Err() == nil && lease.Check(ctx, scope) == nil {
+			result.Outcome = "observe_required"
+		}
 		return result
 	}
 	slot.credentials = bound

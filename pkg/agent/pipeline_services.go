@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -26,6 +27,33 @@ func persistFullSessionMessage(
 	msg *providers.Message,
 ) error {
 	assignCanonicalTimestamp(msg, time.Now())
+	if inputID := documentConversationID(*msg); inputID != "" {
+		if msg.Role != "user" {
+			return fmt.Errorf("document conversation identity must belong to user input")
+		}
+		_, err := store.MutateTurnHistory(
+			ctx,
+			sessionKey,
+			func(history []providers.Message) ([]providers.Message, bool, error) {
+				for _, existing := range history {
+					if documentConversationID(existing) != inputID {
+						continue
+					}
+					if existing.Role != msg.Role || existing.Content != msg.Content ||
+						!slices.Equal(
+							existing.Media,
+							msg.Media,
+						) || !slices.Equal(existing.Attachments, msg.Attachments) {
+						return nil, false, fmt.Errorf("document conversation identity has conflicting input")
+					}
+					*msg = existing
+					return history, false, nil
+				}
+				return append(history, *msg), true, nil
+			},
+		)
+		return err
+	}
 	return store.AppendTurnMessage(ctx, sessionKey, *msg)
 }
 

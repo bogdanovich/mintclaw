@@ -638,6 +638,7 @@ func buildAgentRoutingConfig(
 		fallbackCandidates,
 		routingCfg.candidateProviders,
 		providerOwnership,
+		providers.CreateProviderFromConfig,
 	)
 
 	rc := defaults.Routing
@@ -710,6 +711,7 @@ func populateCandidateProvidersFromCandidatesTracked(
 	candidates []providers.FallbackCandidate,
 	out map[string]providers.LLMProvider,
 	providerOwnership *providerOwnership,
+	factory modelProviderFactory,
 ) {
 	if cfg == nil || len(candidates) == 0 {
 		return
@@ -726,7 +728,7 @@ func populateCandidateProvidersFromCandidatesTracked(
 		if _, exists := out[key]; exists {
 			continue
 		}
-		p, _, err := providers.CreateProviderFromConfig(mc)
+		p, _, err := factory(mc)
 		if err != nil {
 			logger.WarnCF("agent", "fallback provider: failed to create provider",
 				map[string]any{"model": mc.Model, "error": err.Error()})

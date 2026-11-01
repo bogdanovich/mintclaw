@@ -42,6 +42,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 	exec *turnExecution,
 ) (turnResult, TurnEndStatus, error) {
 	turnStatus := TurnEndStatusCompleted
+	defer exec.releaseLiveToolContexts(ts)
 	maxMediaSize := p.maxMediaSize()
 	mediaResolver := p.Context.MediaResolver
 	llm := newLLMIterationState(0)

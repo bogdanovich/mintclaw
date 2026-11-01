@@ -36,6 +36,9 @@ type Config struct {
 	Origin         string
 	StateDirectory string
 	Accounts       []credentialbroker.AccountRule
+	// Automatic is explicit trusted operator policy, never a model argument.
+	// It admits policy-scoped runtime leases without a phone ceremony.
+	Automatic bool
 	// PagePath is "/" for the legacy standalone handler, or "/credentials/"
 	// when mounted in the existing application.
 	PagePath              string
@@ -115,6 +118,7 @@ type Controller struct {
 	origin     string
 	pagePath   string
 	tlsProxy   bool
+	automatic  bool
 	policy     *credentialbroker.Policy
 	bindings   map[string]binding
 	authority  *credentialbroker.Authority
@@ -190,9 +194,14 @@ func newController(config Config, store ownerStore) (*Controller, *OwnerSetup, e
 	controller := &Controller{
 		ownerID: config.OwnerID, origin: config.Origin, policy: policy, bindings: bindings,
 		pagePath: config.PagePath, tlsProxy: config.TrustLoopbackTLSProxy,
+		automatic: config.Automatic,
 		authority: authority, owner: owner, store: store, verifier: verifier,
 		requests: make(map[string]*pendingRequest), ceremonies: make(map[string]pendingCeremony),
 		grants: make(map[string]credentialbroker.Grant), now: time.Now, random: rand.Reader,
+	}
+	if err = controller.restoreGrants(); err != nil {
+		authority.Close()
+		return nil, nil, ErrUnavailable
 	}
 	var setup *OwnerSetup
 	if controller.enrollmentAllowed() {
@@ -230,7 +239,8 @@ func (controller *Controller) usable(ctx context.Context) bool {
 }
 
 func (controller *Controller) ready(ctx context.Context) bool {
-	return controller.usable(ctx) && len(controller.owner.Credentials) == 1 && !controller.owner.EnrollmentPending
+	return controller.usable(ctx) && (controller.automatic ||
+		(len(controller.owner.Credentials) == 1 && !controller.owner.EnrollmentPending))
 }
 
 func (controller *Controller) enrollmentAllowed() bool {
@@ -264,6 +274,9 @@ func (controller *Controller) Request(ctx context.Context, principal credentialb
 	}
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
+	if controller.automatic {
+		return "", ErrDenied
+	}
 	if !controller.ready(ctx) {
 		return "", ErrUnavailable
 	}
@@ -348,6 +361,9 @@ func (controller *Controller) FinishApproval(ctx context.Context, id string, res
 		return credentialbroker.Grant{}, ErrUnavailable
 	}
 	controller.grants[grant.ID] = cloneGrant(grant)
+	if controller.persistGrants() != nil {
+		return credentialbroker.Grant{}, ErrUnavailable
+	}
 	controller.requests[ceremony.request].grant = grant.ID
 	return grant, nil
 }
@@ -375,7 +391,7 @@ func (controller *Controller) BeginRevocation(ctx context.Context, grantID strin
 	}
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
-	if !controller.ready(ctx) {
+	if !controller.ready(ctx) || controller.automatic {
 		return Ceremony{}, ErrUnavailable
 	}
 	controller.prune()
@@ -409,10 +425,17 @@ func (controller *Controller) FinishRevocation(ctx context.Context, id string, r
 	if err = controller.verifyAssertion(ctx, ceremony, response); err != nil {
 		return err
 	}
-	if controller.authority.Revoke(controller.ownerID, ceremony.scope.GrantID) != nil {
+	if !controller.grantActive(ceremony.scope.GrantID) {
 		return ErrDenied
 	}
 	delete(controller.grants, ceremony.scope.GrantID)
+	if controller.persistGrants() != nil {
+		return ErrUnavailable
+	}
+	if controller.authority.Revoke(controller.ownerID, ceremony.scope.GrantID) != nil {
+		controller.fail()
+		return ErrUnavailable
+	}
 	return nil
 }
 
@@ -471,6 +494,13 @@ func (controller *Controller) ReplacePolicy(ctx context.Context, rules []credent
 		return ErrDenied
 	}
 	if controller.policy.Revision() != policy.Revision() {
+		owner := controller.owner
+		owner.Grants, owner.GrantPolicyRevision = nil, policy.Revision()
+		if len(owner.Credentials) > 0 && controller.store.commit(owner) != nil {
+			controller.fail()
+			return ErrUnavailable
+		}
+		controller.owner = owner
 		if controller.authority.ReplacePolicy(policy) != nil {
 			return ErrUnavailable
 		}

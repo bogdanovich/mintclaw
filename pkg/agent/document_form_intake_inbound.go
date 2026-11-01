@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/commands"
+	"github.com/bogdanovich/mintclaw/pkg/document"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -84,6 +88,9 @@ func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 			target,
 			"The protected form binding does not match. The message was not applied or sent to ordinary chat.",
 		)
+		return true
+	}
+	if c.routeDocumentTaskScopeAnswer(ctx, msg, target) {
 		return true
 	}
 	if !guarded {
@@ -170,6 +177,42 @@ func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 	}
 	c.startWorker(ctx, msg, activeTarget, claim)
 	return true
+}
+
+// An unanswered task-scope question owns the next bare reply, not a new root
+// task. Freeze its exact interaction identity in the existing durable ingress
+// before the ordinary answer handler can claim it. Replays cannot bind to a
+// later question or release the answer as a standalone task.
+func (c *inboundTurnCoordinator) routeDocumentTaskScopeAnswer(
+	ctx context.Context, msg bus.InboundMessage, target *inboundDispatchTarget,
+) bool {
+	if msg.Context.DocumentIntake.Reference != "" || len(msg.Media) != 0 ||
+		!msg.Context.Interaction.IsZero() || strings.TrimSpace(msg.Content) == "" ||
+		commands.HasCommandPrefix(msg.Content) {
+		return false
+	}
+	registry := c.al.interactionRegistryForWorkspace(target.Agent.Workspace)
+	if registry == nil {
+		return false
+	}
+	if err := registry.LastLoadError(); err != nil {
+		c.al.turns.inbound.release(ctx, msg, errors.New("protected task question state is unavailable"))
+		return true
+	}
+	record, ok := activeInteractionForSession(registry, target.SessionKey)
+	if !ok || record.Kind != interactions.KindQuestion ||
+		(record.Status != interactions.StatusWaiting && record.Status != interactions.StatusCreated) ||
+		!interactionRouteAuthorizes(record.Route, target, msg.Context) ||
+		!document.IsFormTaskRouteQuestionBinding(record.ProtectedAnswer) {
+		return false
+	}
+	msg.Context.DocumentIntake = bus.InboundDocumentIntakeGuard{}
+	msg.Context.Interaction = bus.InboundInteractionProjection{ShortID: record.ShortID, Response: msg.Content}
+	if err := c.al.turns.inbound.persistContext(ctx, msg); err != nil {
+		c.al.turns.inbound.release(ctx, msg, err)
+		return true
+	}
+	return c.routeProjectedInteractionAnswer(ctx, msg, target)
 }
 
 func (c *inboundTurnCoordinator) rejectDocumentIntakeInbound(

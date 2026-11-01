@@ -30,6 +30,9 @@ func (scan *privateContentScan) rawEscapes(ctx context.Context, data []byte) boo
 		if scan.filter != nil && scan.filter.Replace(string(current)) != string(current) {
 			return true
 		}
+		if scan.generated && generatedPrivateFactPattern.Match(current) {
+			return true
+		}
 		for _, value := range scan.facts {
 			if ctx.Err() != nil {
 				scan.uncertain = true

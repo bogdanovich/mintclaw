@@ -40,7 +40,7 @@ func decideTaskRouteFixture(
 		Reference: route.Reference, Owner: request.Owner, ExpectedRevision: pass.Revision,
 		Pass: pass.Passes, Action: action,
 	}
-	if action == FormTaskSwitch {
+	if action == FormTaskSwitch || action == FormTaskIndependent {
 		decision.Evidence = FormIntakeLiteral{Text: strings.TrimSpace(pass.Text), Occurrence: 1}
 	}
 	result, err := store.DecideFormTaskRoute(t.Context(), decision)

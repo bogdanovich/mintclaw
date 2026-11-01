@@ -21,8 +21,10 @@ present merely because this skill was selected.
 2. If the current task has a live broker-issued `browser_session_id` and the
    user explicitly requests continuity, inspect or resume that session.
    Otherwise open a new broker session and omit `profile` so the target's
-   `default_profile` is selected. Choose a non-default profile only when the
-   current user request explicitly names that browser identity source.
+   `default_profile` is selected. Choose a non-default profile for an explicit
+   identity selection, or a same-target local headed ephemeral profile when a
+   visual challenge requires human interaction. That rendering choice does not
+   authorize a persistent, attached personal, or cloud identity.
 3. Observe before acting. Copy the session, tab, snapshot, and context authority
    exactly from the fresh observation.
 4. Act through `browser_act`, then observe again after each major page change.
@@ -48,6 +50,64 @@ visible tab exists at the start and does not select an `attached_user` profile.
 Do not choose an attached profile merely because a site may require login or an
 earlier assistant said that a browser was open.
 
+## Saved-account login
+
+Use a configured local ephemeral profile admitted for private `browser_login`;
+choose a headed ephemeral profile when manual control is likely. A persistent,
+attached personal or cloud profile is not a substitute for private login.
+
+For a requested login, start at the site's public HTTPS homepage and use its
+observed Sign in link. A working homepage does not prove the sign-in page is
+available. Observe the actual page: HTTP 200 can still contain a CAPTCHA or
+Security Measure page. Do not hard-code site-specific login paths.
+If the page is still transitioning or titled Loading, allow it to settle and
+observe again before classifying it as a manual challenge.
+
+On the current official site, call `browser_login` with `operation=discover`,
+select a matching Login when needed, then call `operation=authorize` using the
+current session/tab/snapshot identity. Authorize needs no form field refs and
+reads no password or TOTP. It confirms access under the operator's configured
+mode: automatic scoped access, or a phone approval when required. Metadata
+discovery alone does not establish authorization or prove login.
+
+Complete authorization before asking the owner to solve a challenge or handing
+off through RustDesk. If phone approval suspends the task, the idle browser is
+closed; after approval open a fresh session in the selected rendering profile
+before the owner does any manual work. After manual work, resume the same
+session, observe fresh state, fill privately, verify login and close as requested.
+Do not discard a human-cleared browser merely to navigate to a sign-in URL.
+
+## Public-page error recovery
+
+For an observed failed public GET, including HTTP 403 or an Error Page, perform
+this recovery before asking for manual help unless the user explicitly requests
+immediate handoff or no retries. A successful `browser_act` invocation confirms
+dispatch, not a working website. A 403 response can install cookies needed by
+the next request; an address-bar Enter working later does not prove a bad URL.
+
+1. Keep the same session, profile, tab and URL. When capture is permitted, send
+   the obstacle first with `browser_capture` and `delivery=interaction`, and
+   confirm delivery. A screenshot-first request does not require immediate
+   handoff when one safe recovery can resolve the obstacle.
+2. Allow a brief settling interval, about three seconds. If the exact profile
+   advertises `privileged_execution`, a read-effect `browser_execute` may use
+   `async ({page}) => { await page.waitForTimeout(3000); }` with fresh document
+   authority. Otherwise take a fresh observation without inventing a wait API.
+   Observe again; if the page has recovered, continue without another request.
+3. If the public error remains, use `browser_act` to navigate to the exact same
+   public URL once, using fresh observation authority. Preserve cookies and the
+   browser: do not clear state, reopen a session, switch a profile/proxy, or
+   emulate browser-chrome keystrokes for this repeat.
+4. Observe the actual result. Continue when the requested page is available;
+   HTTP 200 alone is not proof. If a CAPTCHA or block remains, show its current
+   image and use the assistance flow below, retaining this same visible session.
+
+One recovery is the total automatic budget for this failed navigation, not one
+per new snapshot. Do not combine it with another homepage-recovery attempt.
+For a failed protected deep link, use Authentication recovery instead. Never
+repeat a credential submission, POST, checkout or accepted/outcome-unknown
+external effect. Do not run this public recovery after private login starts.
+
 ## Authentication recovery
 
 A `navigation_failed` result keeps the browser session alive. It is not proof
@@ -62,19 +122,50 @@ For a failed read-only navigation to a protected deep link:
 3. If the fresh observation shows sign-in, sign-up, an authentication challenge,
    or another clear logged-out state, report `authentication_required` rather
    than a generic navigation error.
-4. When `browser_targets` advertises both `headed_view` and `handoff`, call
-   `browser_session` with `operation=handoff`. Tell the user to complete sign-in,
-   2FA, CAPTCHA, or the required manual step in the visible local window. Do not
-   close the session while waiting.
-5. After the user replies, call `browser_session` with `operation=resume` on the
+4. For CAPTCHA/security challenges, follow the image-first assistance flow
+   below. When `browser_targets` advertises both `headed_view` and `handoff`
+   for the selected profile, call `browser_session` with `operation=handoff`
+   for a manual step. Tell the user where that window is visible and what to
+   do. Keep the session open while waiting.
+5. After a handoff reply, call `browser_session` with `operation=resume` on the
    same session. Observe fresh state, verify that authentication succeeded, and
    retry the original read-only navigation once with fresh authority.
-6. If handoff is unavailable, clearly say that authentication is required and
-   name the target/profile that must be logged in. Then close the session before
-   returning unless the user asked to preserve it.
+6. If neither a protected text question nor a visible temporary profile is
+   available, report the exact missing capability and target/profile. Close
+   the session before returning unless the user asked to preserve it.
 
 Do not invent an authentication requirement without observing evidence. Do not
 use origin recovery to retry an accepted or outcome-unknown external commit.
+
+## CAPTCHA and security challenges
+
+First show the obstacle with `browser_capture` and `delivery=interaction`
+when capture is allowed. Confirm successful delivery before asking a question;
+normal delegated captures are retained for the final report. Do not assume a Security Measure
+page contains a text CAPTCHA. Do not solve it through an external solver.
+For a plain public navigation error, complete Public-page error recovery before
+asking for a manual step; screenshot delivery alone is not a handoff decision.
+
+For an observed text answer field, use `browser_input` to ask the human for
+the answer. This retains the exact live session and binds the protected answer
+to that field. Ask only after the image delivery succeeds. An ordinary `request_user_input` question does not retain
+this browser. Submit separately after the protected answer is filled. If the
+challenge or binding expires, observe and ask again; never reuse an old answer.
+
+For a puzzle requiring mouse interaction in a headless session, first send the
+available image, close that session, and reopen the same site once in a
+configured same-target local ephemeral profile whose `headed_view` and
+`handoff` are true. Then hand off the new visible browser. Cookies, login
+progress and solved challenges do not transfer. Do not silently select a
+persistent, attached personal, node or cloud profile instead. If no visible
+temporary profile exists, say so rather than claiming a window opened.
+
+After private `browser_login` starts, screenshots and ordinary protected field
+input remain denied. Do not bypass these protections with another capture or
+fill tool. Use visible handoff, or a fresh visible session for a new challenge
+capture before private login. Do not retry an unknown private submission. If
+phone approval retires an idle browser, reopen the selected rendering profile
+and observe fresh state rather than assuming the previous challenge survived.
 
 ## Stale snapshots
 

@@ -245,11 +245,16 @@ func (tool *DocumentTool) discoverFormWorkflow(
 		return documentFormToolFailure("form_job_stale", "the form field schema is unavailable")
 	}
 	summary := documentFormDiscoverySummary(schema)
-	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
+	mapping := documentFormMappingWindow(summary, schema, "", documentFormWindowArgs(args))
+	result := documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "discover",
 		SourceRef: ref, FieldSchemaDigest: discoveryDigest,
-		Mapping: documentFormMappingWindow(summary, schema, "", documentFormWindowArgs(args)),
-	}))
+		Mapping: mapping,
+	})
+	if !result.IsError {
+		result.DocumentFields = documentFieldsObservation("form.discover", schema, len(mapping.CandidateFields))
+	}
+	return preserveDocumentToolVisibility(result)
 }
 
 // ApprovalArguments binds the form commit to trusted current job state. All

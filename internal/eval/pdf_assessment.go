@@ -42,6 +42,9 @@ func validPDFNoWriteEvidence(trial Trial, item Case, workspace string) bool {
 		lastOutcome(trial.Events).Kind != "canceled" {
 		return false
 	}
+	if item.PDF.SourceFields != nil && !pdf.SourceFields.valid(trial, workspace) {
+		return false
+	}
 	conversation := trial
 	if pdf.JobID != "" {
 		cancellation := pdf.Cancellation
@@ -83,6 +86,8 @@ func gradeFinalizedPDFChecks(item Case, trial Trial) []CheckResult {
 	}
 	for index, check := range item.Checks {
 		switch check.Kind {
+		case "pdf_source_fields":
+			checks[index] = gradePDFSourceFields(check.ID, item, trial)
 		case "pdf_no_write":
 			if trial.PDF.PostStop.AssessmentScope == pdfNoWriteAssessmentScope {
 				checks[index] = booleanCheck(check.ID, true, []string{"pdf.post_stop"})
@@ -128,9 +133,9 @@ func assessFinalizedPDF(
 	defer func() { trial.DurationMS += time.Since(started).Milliseconds() }()
 	trial.PDF.PostStop.AssessmentScope = scope
 	trial.Checks = gradeFinalizedPDFChecks(item, *trial)
-	// Output judging uses the still-retained private fact guard. Offline regrade
-	// has no such guard yet and must not inherit eligibility from a live pass.
-	trial.EvidenceEligible = scope == pdfNoWriteAssessmentScope
+	// Offline grading separately requires an admitted fact format, the complete
+	// frozen native/oracle witnesses and the unchanged retained artifact.
+	trial.EvidenceEligible = true
 	trial.Verdict, trial.Code = trial.ExecutionVerdict, trial.ExecutionCode
 	for _, check := range trial.Checks {
 		if combined := combineVerdicts(trial.Verdict, check.Verdict); combined != trial.Verdict {

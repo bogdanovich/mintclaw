@@ -139,8 +139,8 @@ func TestRejectedEnrollmentStaysInactiveAndRecoversPrivately(t *testing.T) {
 				t.Fatal("accepted owner could not complete first assertion")
 			}
 			active, setup, err := newController(testConfig(), fixture.store)
-			if err != nil || setup != nil || !active.ready(context.Background()) || len(active.grants) != 0 {
-				t.Fatal("accepted activation/counter was lost or a grant survived reload")
+			if err != nil || setup != nil || !active.ready(context.Background()) || len(active.grants) != 1 {
+				t.Fatal("accepted activation, counter or verified approval was lost")
 			}
 			_ = active.Close()
 		})

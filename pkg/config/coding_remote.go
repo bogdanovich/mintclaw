@@ -24,8 +24,18 @@ const (
 // absent and disabled by default.
 type CodingConfig struct {
 	Capabilities CodingCapabilityConfig `json:"capabilities,omitempty"`
+	Defaults     CodingDefaultsConfig   `json:"defaults,omitempty"`
 	Remote       CodingRemoteClient     `json:"remote,omitempty"`
 	State        CodingStateConfig      `json:"state,omitempty"`
+}
+
+// CodingDefaultsConfig selects the provider/model route used for new coding
+// threads. Existing thread metadata remains authoritative when a thread is
+// resumed, and agent defaults continue to configure the always-on gateway.
+type CodingDefaultsConfig struct {
+	Model           string `json:"model,omitempty"`
+	Provider        string `json:"provider,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // CodingCapabilityConfig selects optional first-party surfaces before the

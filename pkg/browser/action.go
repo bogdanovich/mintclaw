@@ -318,6 +318,10 @@ func redactCredentialObservation(observation DriverObservation) DriverObservatio
 	observation.Elements = append([]DriverElement(nil), observation.Elements...)
 	for index := range observation.Elements {
 		observation.Elements[index].Name = secretvalues.Redact(observation.Elements[index].Name)
+		observation.Elements[index].RegionName = secretvalues.Redact(observation.Elements[index].RegionName)
+		if observation.Truncated {
+			observation.Elements[index].RegionName = ""
+		}
 	}
 	if observation.PendingDialog != nil {
 		observation.PendingDialog = cloneDialogObservation(observation.PendingDialog)
@@ -327,8 +331,22 @@ func redactCredentialObservation(observation DriverObservation) DriverObservatio
 }
 
 func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRequest) (Preparation, error) {
-	if err := request.Owner.Validate(); err != nil {
+	if err := broker.validateActionPreparation(request); err != nil {
 		return Preparation{}, err
+	}
+	request = normalizeTopLevelNavigationAuthority(request)
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	session, slot, worker, err := broker.actionPreparationContextLocked(ctx, request)
+	if err != nil {
+		return Preparation{}, err
+	}
+	return broker.prepareActionInContextLocked(ctx, request, session, slot, worker)
+}
+
+func (broker *Broker) validateActionPreparation(request PrepareActionRequest) error {
+	if err := request.Owner.Validate(); err != nil {
+		return err
 	}
 	if !validIdentifier(request.RequestID) || !validIdentifier(request.SessionID) ||
 		!validIdentifier(request.TabID) || !validIdentifier(request.SnapshotID) ||
@@ -341,23 +359,26 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 		(artifactInputAction(request.Action.Kind) &&
 			(request.Upload == nil || request.Upload.Ref != request.Action.ArtifactRef)) ||
 		(!artifactInputAction(request.Action.Kind) && request.Upload != nil) {
-		return Preparation{}, fmt.Errorf("%w: malformed action preparation", ErrInvalid)
+		return fmt.Errorf("%w: malformed action preparation", ErrInvalid)
 	}
-	request = normalizeTopLevelNavigationAuthority(request)
-	broker.mu.Lock()
-	defer broker.mu.Unlock()
+	return nil
+}
+
+func (broker *Broker) actionPreparationContextLocked(
+	ctx context.Context, request PrepareActionRequest,
+) (Session, *workerSlot, ActionWorker, error) {
 	session, slot, worker, err := broker.actionSessionLocked(
 		ctx, request.Owner, request.SessionID, request.TabID,
 	)
 	if err != nil {
-		return Preparation{}, err
+		return session, slot, worker, err
 	}
 	if slot.credentials != nil && request.Action.Kind == ActionDownload {
-		return Preparation{}, ErrDenied
+		return session, slot, worker, ErrDenied
 	}
 	if session.SnapshotID != request.SnapshotID ||
 		session.SnapshotGeneration != request.SnapshotGeneration {
-		return Preparation{}, ErrStale
+		return session, slot, worker, ErrStale
 	}
 	if !sessionMatchesActionContextBinding(
 		session,
@@ -366,12 +387,12 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 		request.ContextGeneration,
 		request.Action.Kind,
 	) {
-		return Preparation{}, errors.Join(ErrStale, ErrActionContextMismatch)
+		return session, slot, worker, errors.Join(ErrStale, ErrActionContextMismatch)
 	}
 	if session.ContextAuthority != nil {
 		contextWorker, ok := worker.(ContextWorker)
 		if !ok && session.FrameID != "" {
-			return Preparation{}, ErrDriverIncompatible
+			return session, slot, worker, ErrDriverIncompatible
 		}
 		if ok {
 			if usesTopLevelDocumentContext(request.FrameID) {
@@ -381,12 +402,18 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 			}
 		}
 		if err != nil {
-			return Preparation{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
+			return session, slot, worker, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
 		}
 	}
 	if session.FrameID != "" {
-		return Preparation{}, ErrDriverIncompatible
+		return session, slot, worker, ErrDriverIncompatible
 	}
+	return session, slot, worker, nil
+}
+
+func (broker *Broker) prepareActionInContextLocked(
+	ctx context.Context, request PrepareActionRequest, session Session, slot *workerSlot, worker ActionWorker,
+) (Preparation, error) {
 	boundAction, inputDigest, inputBytes, err := broker.bindActionInput(request.Action)
 	if err != nil {
 		return Preparation{}, err
@@ -817,6 +844,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		element = resolved
 		prepared.ElementRole = element.Role
 		prepared.ElementName = element.Name
+		prepared.ElementRegionName = element.RegionName
 		prepared.ElementPosition = position
 		switch request.Action.Kind {
 		case ActionCheck, ActionUncheck:
@@ -888,9 +916,11 @@ func (broker *Broker) resolvePreparedActionLocked(
 		}
 		prepared.ElementRole = resolvedSource.Role
 		prepared.ElementName = resolvedSource.Name
+		prepared.ElementRegionName = resolvedSource.RegionName
 		prepared.ElementPosition = sourcePosition
 		prepared.DestinationElementRole = resolvedDestination.Role
 		prepared.DestinationElementName = resolvedDestination.Name
+		prepared.DestinationElementRegionName = resolvedDestination.RegionName
 		prepared.DestinationElementPosition = destinationPosition
 		prepared.Effect = EffectUnknown
 	case ActionPress, ActionScroll:
@@ -1166,8 +1196,10 @@ func (broker *Broker) revalidatePreparedLocked(
 			resolvedSource != source || resolvedDestination != destination ||
 			resolvedSource.Target == resolvedDestination.Target ||
 			resolvedSource.Role != prepared.ElementRole || resolvedSource.Name != prepared.ElementName ||
+			resolvedSource.RegionName != prepared.ElementRegionName ||
 			resolvedDestination.Role != prepared.DestinationElementRole ||
-			resolvedDestination.Name != prepared.DestinationElementName {
+			resolvedDestination.Name != prepared.DestinationElementName ||
+			resolvedDestination.RegionName != prepared.DestinationElementRegionName {
 			return ErrStale
 		}
 		return nil
@@ -1181,7 +1213,8 @@ func (broker *Broker) revalidatePreparedLocked(
 		return err
 	}
 	if origin != prepared.CurrentOrigin || resolved != element ||
-		resolved.Role != prepared.ElementRole || resolved.Name != prepared.ElementName {
+		resolved.Role != prepared.ElementRole || resolved.Name != prepared.ElementName ||
+		resolved.RegionName != prepared.ElementRegionName {
 		return ErrStale
 	}
 	if prepared.Action.Kind == ActionFill {
@@ -2107,26 +2140,30 @@ func browserActionProgressSignature(pageStateHash string, prepared PreparedActio
 	action.DialogID = ""
 	action.ArtifactRef = ""
 	payload := struct {
-		PageStateHash       string
-		Action              Action
-		Effect              Effect
-		InputDigest         string
-		ArtifactSHA256      string
-		ElementRole         string
-		ElementName         string
-		ElementPosition     uint32
-		DestinationRole     string
-		DestinationName     string
-		DestinationPosition uint32
-		DialogMessageDigest string
+		PageStateHash         string
+		Action                Action
+		Effect                Effect
+		InputDigest           string
+		ArtifactSHA256        string
+		ElementRole           string
+		ElementName           string
+		ElementPosition       uint32
+		DestinationRole       string
+		DestinationName       string
+		DestinationPosition   uint32
+		DialogMessageDigest   string
+		ElementRegionName     string `json:"ElementRegionName,omitempty"`
+		DestinationRegionName string `json:"DestinationRegionName,omitempty"`
 	}{
 		PageStateHash: pageStateHash, Action: action, Effect: prepared.Effect, InputDigest: prepared.InputDigest,
 		ArtifactSHA256: prepared.ArtifactSHA256, ElementRole: prepared.ElementRole,
 		ElementName: prepared.ElementName, ElementPosition: prepared.ElementPosition,
-		DestinationRole:     prepared.DestinationElementRole,
-		DestinationName:     prepared.DestinationElementName,
-		DestinationPosition: prepared.DestinationElementPosition,
-		DialogMessageDigest: prepared.DialogMessageDigest,
+		DestinationRole:       prepared.DestinationElementRole,
+		DestinationName:       prepared.DestinationElementName,
+		DestinationPosition:   prepared.DestinationElementPosition,
+		DialogMessageDigest:   prepared.DialogMessageDigest,
+		ElementRegionName:     prepared.ElementRegionName,
+		DestinationRegionName: prepared.DestinationElementRegionName,
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {

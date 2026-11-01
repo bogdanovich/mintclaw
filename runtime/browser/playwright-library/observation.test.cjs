@@ -28,6 +28,11 @@ async function fixture(t) {
       response.end(`<title>Map only</title><main><h1>Listing</h1>${map}</main>`);
     } else if (request.url === '/gallery') {
       response.end(`<title>Gallery</title><main>${map}${gallery}</main>`);
+    } else if (request.url === '/regions') {
+      response.end(`<title>Account regions</title><main>
+        <section id="north" aria-label="North account"><button>Remove account</button></section>
+        <section id="south" aria-label="South account"><button id="moving">Remove account</button></section>
+      </main>`);
     } else if (request.url === '/frames') {
       response.end('<title>Frames</title><iframe src="/frame-one"></iframe><iframe src="/frame-two"></iframe>');
     } else if (request.url === '/bounded') {
@@ -91,6 +96,46 @@ function ref(snapshot, expression) {
   assert.ok(match, snapshot);
   return match[1];
 }
+
+function regions(snapshot) {
+  const prefix = '- Reference regions: ';
+  const line = snapshot.split('\n').find(line => line.startsWith(prefix));
+  assert.ok(line, snapshot);
+  return JSON.parse(line.slice(prefix.length));
+}
+
+test('native region context follows exact refs and refuses stale or duplicate labels', { timeout: 30000 }, async t => {
+  const { call, base } = await fixture(t);
+  const snapshot = await call('browser_navigate', { url: base + '/regions' });
+  const metadata = regions(snapshot);
+  assert.equal(metadata.complete, true);
+  assert.equal(metadata.entries.length, 2);
+  const north = metadata.entries.find(entry => entry.name === 'North account');
+  const south = metadata.entries.find(entry => entry.name === 'South account');
+  assert.ok(north);
+  assert.ok(south);
+  assert.notEqual(north.ref, south.ref);
+  assert.equal([...snapshot.matchAll(/button "Remove account" \[ref=e\d+\]/g)].length, 2);
+  const targeted = await call('browser_snapshot', { target: south.ref, region_context: true });
+  assert.deepEqual(regions(targeted).entries, [south]);
+
+  await call('browser_run_code_unsafe', { code: `async page => {
+    await page.locator('#moving').evaluate(element => document.querySelector('#north').append(element));
+    return true;
+  }` });
+  const moved = regions(await call('browser_snapshot'));
+  assert.equal(moved.complete, true);
+  assert.equal(moved.entries.length, 2);
+  assert.ok(moved.entries.every(entry => entry.name === 'North account'));
+  assert.ok(!moved.entries.some(entry => entry.ref === south.ref && entry.name === 'South account'));
+
+  await call('browser_run_code_unsafe', { code: `async page => {
+    await page.locator('#south').evaluate(element => element.setAttribute('aria-label', 'North account'));
+    return true;
+  }` });
+  assert.deepEqual(regions(await call('browser_snapshot')).entries, []);
+  await call('shutdown');
+});
 
 test('native semantics distinguish a map from an independent real gallery', { timeout: 30000 }, async t => {
   const { call, base } = await fixture(t);

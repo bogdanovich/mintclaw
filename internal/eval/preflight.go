@@ -17,10 +17,13 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/internal/gatewayclient"
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/health"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/pid"
+	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 var ErrUnsafeTarget = errors.New("eval: prepared isolated target not admitted")
@@ -30,6 +33,9 @@ type admittedTarget struct {
 	config       *config.Config
 	probe        health.RuntimeProbe
 	serviceToken string
+	activeTool   *activeToolFixture
+	ownedLog     string
+	priorTraces  map[string]string
 }
 
 func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admittedTarget, error) {
@@ -42,6 +48,12 @@ func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admit
 func admitPreparedTargetWithBrowser(
 	ctx context.Context, preset Preset, home string, fixture *browserFixtureHost,
 ) (admittedTarget, error) {
+	return admitPreparedTargetWithFixtures(ctx, preset, home, fixture, nil)
+}
+
+func admitPreparedTargetWithFixtures(
+	ctx context.Context, preset Preset, home string, fixture *browserFixtureHost, active *activeToolFixture,
+) (admittedTarget, error) {
 	var target admittedTarget
 	if preset.Validate() != nil || runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return target, ErrUnsafeTarget
@@ -52,7 +64,8 @@ func admitPreparedTargetWithBrowser(
 	}
 	cfg, physicalHome := profile.config, profile.home
 	if validateConversationProfile(cfg, preset, profile.workspace) != nil ||
-		cfg.Diagnostics.TraceCapture.Enabled != preset.CaptureModelMetadata || !browserFixtureMatches(cfg, fixture) {
+		cfg.Diagnostics.TraceCapture.Enabled != preset.CaptureModelMetadata || !browserFixtureMatches(cfg, fixture) ||
+		!activeToolMatches(preset, active) {
 		return target, ErrUnsafeTarget
 	}
 	root, err := os.OpenRoot(physicalHome)
@@ -79,7 +92,7 @@ func admitPreparedTargetWithBrowser(
 	if err != nil || pathErr != nil || probe.Version != 1 || probe.PID != process.PID ||
 		probe.ConfigSHA256 != fingerprint || probe.HomeSHA256 != admissionHash(physicalHome) ||
 		probe.ConfigPathSHA256 != admissionHash(configPath) || probe.InstanceSHA256 != admissionHash(process.Token) ||
-		!slices.Contains([]string{"warn", "error", "fatal"}, probe.LogLevel) ||
+		!admittedEvalLogLevel(preset, probe.LogLevel) ||
 		probe.GOOS != runtime.GOOS || probe.GOARCH != runtime.GOARCH {
 		return target, ErrUnsafeTarget
 	}
@@ -102,13 +115,17 @@ func validateConversationProfile(cfg *config.Config, preset Preset, workspace st
 func validateConversationPolicy(cfg *config.Config, preset Preset, workspace string) error {
 	pdfEnabled := slices.Contains(preset.Capabilities, "pdf")
 	browserEnabled := slices.Contains(preset.Capabilities, "browser")
+	if preset.TargetCallBudget != nil && (pdfEnabled || browserEnabled) {
+		return ErrUnsafeTarget
+	}
 	if cfg == nil || cfg.ValidateModelList() != nil || cfg.ValidateAgents() != nil || len(cfg.Agents.List) != 1 ||
 		!cfg.Agents.Defaults.RestrictToWorkspace || cfg.Agents.Defaults.AllowReadOutsideWorkspace ||
 		cfg.WorkspacePath() != workspace || preset.ExpectedWorkspace != workspace ||
 		cfg.Gateway.HotReload || cfg.Gateway.Deploy.Enabled || cfg.Gateway.SafeRestart.Enabled ||
 		cfg.Gateway.CodingRemote.Enabled || cfg.Coding.Remote.Enabled || cfg.Nodes.Enabled ||
-		cfg.Nodes.TerminalEnabled || cfg.Heartbeat.Enabled || cfg.Devices.Enabled || cfg.Hooks.Enabled ||
-		cfg.Tools.Cron.Enabled || cfg.Tools.Exec.Enabled || cfg.Tools.MCP.Enabled ||
+		cfg.Nodes.TerminalEnabled || cfg.Heartbeat.Enabled || cfg.Devices.Enabled ||
+		cfg.Hooks.Enabled != hasApprovalTool(preset) ||
+		cfg.Tools.Cron.Enabled || cfg.Tools.Exec.Enabled || cfg.Tools.MCP.Enabled != (preset.ActiveTool != nil) ||
 		cfg.Tools.Browser.Enabled != browserEnabled || cfg.Tools.Document.Enabled != pdfEnabled ||
 		!admittedModelMetadataPolicy(cfg.Diagnostics.TraceCapture, preset) ||
 		cfg.Tools.Approval.EffectiveMode() != config.ToolApprovalModeRequired ||
@@ -117,7 +134,10 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		cfg.Agents.Defaults.TargetPolicy != nil || cfg.Agents.Defaults.Subagents != nil ||
 		cfg.Agents.Defaults.Routing != nil && cfg.Agents.Defaults.Routing.Enabled ||
 		cfg.Agents.Dispatch != nil && len(cfg.Agents.Dispatch.Rules) != 0 ||
-		len(cfg.Agents.Defaults.ContextManagerConfig) != 0 {
+		!validEvalContextPolicy(cfg, preset) || validateActiveToolPolicy(cfg, preset) != nil ||
+		validateReadToolPolicy(cfg, preset) != nil || validateApprovalToolPolicy(cfg, preset, workspace) != nil ||
+		validateFinalDeliveryPolicy(cfg, preset) != nil || validateSkillSelectionPolicy(cfg, preset) != nil ||
+		validateRestartPolicy(cfg, preset) != nil || validateCompactionPolicy(cfg, preset) != nil {
 		return ErrUnsafeTarget
 	}
 	channels, nativeChannels := 0, 0
@@ -148,19 +168,34 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 	if agent.ID != preset.ExpectedAgent || agent.Workspace != "" && !samePhysicalPath(agent.Workspace, workspace) ||
 		agent.TargetPolicy != nil || agent.Subagents != nil || agent.ToolPolicy == nil ||
 		agent.ToolPolicy.Default != config.AgentCapabilityDefaultDeny ||
-		agent.MCPServerPolicy == nil || agent.MCPServerPolicy.Default != config.AgentCapabilityDefaultDeny ||
-		len(agent.MCPServerPolicy.Allow) != 0 {
+		agent.MCPServerPolicy == nil || agent.MCPServerPolicy.Default != config.AgentCapabilityDefaultDeny {
+		return ErrUnsafeTarget
+	}
+	if preset.ActiveTool == nil && len(agent.MCPServerPolicy.Allow) != 0 || preset.ActiveTool != nil &&
+		(!slices.Equal(agent.MCPServerPolicy.Allow, []string{activeToolServer}) || len(agent.MCPServerPolicy.Deny) != 0) {
+		return ErrUnsafeTarget
+	}
+	// ClientSessionID is metadata, not a native history-key dimension. The
+	// fresh MintClaw chat identity must survive effective routing policy.
+	route := routing.NewRouteResolver(cfg).ResolveRoute(bus.InboundContext{Channel: "mintclaw"})
+	if route.AgentID != preset.ExpectedAgent || !slices.Contains(route.SessionPolicy.Dimensions, "chat") {
 		return ErrUnsafeTarget
 	}
 	for _, tool := range agent.ToolPolicy.Allow {
 		if tool != "request_user_input" && (tool != "document" || !pdfEnabled) &&
-			(!browserEnabled || !slices.Contains(browserEvalTools, tool)) {
+			(tool != tools.BM25SearchToolName || !pdfEnabled) &&
+			(!browserEnabled || !slices.Contains(browserEvalTools, tool)) &&
+			(preset.ActiveTool == nil || tool != activeToolNativeName) &&
+			(!hasReadTool(preset) || tool != "read_file") && (!hasApprovalTool(preset) || tool != "write_file") {
 			return ErrUnsafeTarget
 		}
 	}
 	for _, capability := range preset.Capabilities {
 		if capability != "conversation" && capability != "interactions" && capability != "pdf" &&
-			capability != "browser" ||
+			capability != "browser" && capability != boundedCallsCapability && capability != activeToolCapability &&
+			capability != readToolCapability && capability != approvalToolCapability &&
+			capability != finalDeliveryCapability && capability != skillSelectionCapability && capability != ownedRestartCapability &&
+			capability != compactionCapability ||
 			capability == "interactions" && (!cfg.Tools.RequestUserInput.Enabled ||
 				!slices.Contains(agent.ToolPolicy.Allow, "request_user_input") || len(agent.ToolPolicy.Deny) != 0) {
 			return ErrUnsafeTarget
@@ -186,7 +221,8 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 		return ErrUnsafeTarget
 	}
 	if pdfEnabled && (!slices.Contains(preset.Capabilities, "interactions") ||
-		!slices.Contains(agent.ToolPolicy.Allow, "document") || !names[cfg.Tools.Document.AuditModel] ||
+		!slices.Contains(agent.ToolPolicy.Allow, "document") ||
+		!slices.Contains(agent.ToolPolicy.Allow, tools.BM25SearchToolName) || !names[cfg.Tools.Document.AuditModel] ||
 		len(cfg.Tools.Document.AuditEquivalentFallbacks) != 0) {
 		return ErrUnsafeTarget
 	}

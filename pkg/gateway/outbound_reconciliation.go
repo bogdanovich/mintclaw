@@ -285,16 +285,39 @@ func restoreRecoveredOutboundPrerequisite(
 	if intent.Media == nil || intent.Media.Recovery == nil {
 		return nil
 	}
-	switch intent.Media.Recovery.Kind {
+	for _, recovery := range append([]bus.OutboundRecovery{*intent.Media.Recovery}, intent.Media.AdditionalRecovery...) {
+		if err := restoreMediaPrerequisite(nodeRuntime, artifactWorkspace, recovery); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func restoreMediaPrerequisite(
+	nodeRuntime *nodeAdmissionRuntime,
+	workspace string,
+	recovery bus.OutboundRecovery,
+) error {
+	switch recovery.Kind {
 	case bus.OutboundRecoveryBrowserScreenshot:
-		return recoverBrowserScreenshotDelivery(nodeRuntime, artifactWorkspace, *intent.Media.Recovery)
+		return recoverBrowserScreenshotDelivery(nodeRuntime, workspace, recovery)
 	case bus.OutboundRecoveryBrowserDownload:
-		return recoverBrowserDownloadDelivery(nodeRuntime, artifactWorkspace, *intent.Media.Recovery)
+		return recoverBrowserDownloadDelivery(nodeRuntime, workspace, recovery)
 	case bus.OutboundRecoveryDocumentFill:
 		return nil
 	default:
 		return errors.New("unsupported outbound recovery prerequisite")
 	}
+}
+
+// ClaimArtifactDelivery restores a retained browser attachment without needing
+// its now-closed browser session or a live tool callback.
+func (source *gatewayBrowserToolSource) ClaimArtifactDelivery(_ context.Context, recovery bus.OutboundRecovery) error {
+	if source == nil || source.services == nil || source.workspace == "" ||
+		(recovery.Kind != bus.OutboundRecoveryBrowserScreenshot && recovery.Kind != bus.OutboundRecoveryBrowserDownload) {
+		return errors.New("retained browser attachment delivery is unavailable")
+	}
+	return restoreMediaPrerequisite(source.services.NodeAdmission, source.workspace, recovery)
 }
 
 func releaseRecoveredAdmissions(coordinator *outbox.Coordinator, admissions []outbox.Admission) {

@@ -42,7 +42,7 @@ func TestLegacyCronGroupReminderSurvivesRestartInRecipientPrompt(t *testing.T) {
 			job := &cron.CronJob{ID: "legacy-reminder", Payload: cron.CronPayload{
 				Kind: cron.PayloadDeliverText, Channel: target.Channel, To: target.ChatID, Message: reminder,
 			}}
-			if got := tool.ExecuteJob(t.Context(), job); got != "ok" {
+			if got, err := tool.ExecuteJob(t.Context(), job); err != nil || got != "ok" {
 				t.Fatalf("ExecuteJob() = %q", got)
 			}
 			deadline := time.Now().Add(2 * time.Second)

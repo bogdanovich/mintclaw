@@ -354,8 +354,7 @@ func TestBrowserDenialRejectsUnsettledOrAcceptedNativeInvocation(t *testing.T) {
 		control.page,
 		observed,
 		true,
-		nil,
-		proof,
+		browserTaskEffects{denial: proof},
 	); native.Code != "native_post_stop_observed" {
 		t.Fatal("native denial baseline unavailable", native.Code)
 	}
@@ -395,7 +394,14 @@ func TestBrowserDenialRejectsUnsettledOrAcceptedNativeInvocation(t *testing.T) {
 			if !found {
 				t.Fatal("native denial invocation unavailable")
 			}
-			native := inspectBrowserTask(trial, control.target(), control.page, copy, true, nil, proof)
+			native := inspectBrowserTask(
+				trial,
+				control.target(),
+				control.page,
+				copy,
+				true,
+				browserTaskEffects{denial: proof},
+			)
 			if native.Code == "native_post_stop_observed" || mode == "accepted" && !native.ForbiddenActionAccepted {
 				t.Fatal("unsettled or accepted denial became positive native evidence", mode)
 			}
@@ -451,7 +457,14 @@ func testBrowserCancellationControlBinding(t *testing.T, control *browserArtifac
 					metadata.InteractionControls = bus.OutboundInteractionControlsPrompt
 				}
 			}
-			native := inspectBrowserTask(trial, control.target(), control.page, copy, true, nil, proof)
+			native := inspectBrowserTask(
+				trial,
+				control.target(),
+				control.page,
+				copy,
+				true,
+				browserTaskEffects{denial: proof},
+			)
 			if !found || native.Code == "native_post_stop_observed" || native.FinalDeliveries != 0 {
 				t.Fatal("native cancellation without matching interaction/remove metadata was accepted", mode)
 			}

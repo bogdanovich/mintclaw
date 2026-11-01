@@ -1,18 +1,23 @@
 # Architecture Soundness and Robustness Review
 
-Status: owner admitted A1/A2 correctness fixes and A3 bounded qualification.
-A4 remains conditional; A5 retains its existing owners. Snapshot: `77c79cd50e61ce50d75b8fe0e4b60a63f56b5fda`, October 19, 2026 UTC.
-The prior [second-sweep fixes](reliability-code-health-20261018-sweep.md) remain
-complete. This pass covers the current runtime architecture and 16 subsequent
-merged PRs affecting 92 files.
+Status: A1/A2 fixes, A3 production admission bounds and lifecycle settlement
+are merged. A4's terminal ownership simplification shipped with A1. The
+admitted architecture follow-up is complete; A5 retains its existing owners.
 
-MintClaw has a sound modular-monolith foundation. The domain brokers, typed
-protocols and explicit lifecycle owners should be retained. Its main weakness
-is the enforcement of ownership at initialization and terminal commit. Three
-reproductions expose two underlying problems: final answers can be committed
-before resource disposition is settled, and task registries can admit new work
-before restoration finishes. These justify focused changes within existing
-owners, rather than a service split or a new orchestration framework.
+Assessment snapshot: `77c79cd50e61ce50d75b8fe0e4b60a63f56b5fda`, October 19,
+2026 UTC. The assessment covered that runtime and 16 merged PRs affecting 92
+files since the [completed second sweep](reliability-code-health-20261018-sweep.md).
+The assessment sections below describe the frozen snapshot; the implementation
+record tracks merged outcomes and remaining work.
+
+MintClaw has a sound modular-monolith foundation. Retain its domain brokers,
+typed protocols and explicit lifecycle owners. Three reproductions exposed two
+gaps: final answers could commit before resource disposition settled, and task
+registries could admit new work before restoration finished. Both are now fixed
+within their existing owners. Interaction store admission now has a one-second
+default budget; committed observation work is bounded by count and accounted
+payload, with explicit cancellation and shutdown settlement. The implementation
+record below separates these merged limits from the frozen assessment.
 
 ## Architecture assessment
 
@@ -149,6 +154,9 @@ there is no demonstrated need for a new registry service.
 
 ## A3 Contention and notification budgets
 
+The bounded qualification harness and next admission contract are documented in
+[Interaction Contention Qualification](../operations/architecture-robustness-20261019-qualification.md).
+
 [Interaction store locking](https://github.com/bogdanovich/mintclaw/blob/77c79cd50e61ce50d75b8fe0e4b60a63f56b5fda/pkg/interactions/filelock_unix.go#L11) uses
 blocking `Flock(LOCK_EX)` without a deadline. Persistence acquires that lock
 while holding the registry mutex. A slow or hung live peer can therefore stall
@@ -169,7 +177,7 @@ backpressure or explicit snapshot resynchronization while preserving committed
 lifecycle notifications. Do not silently drop authoritative events or reuse a
 lossy diagnostic-event policy for state ownership.
 
-## Validation and limits
+## Assessment validation and limits
 
 The [reproduction record](../operations/architecture-robustness-20261019-reproductions.md)
 retains exact temporary probes and commands against the frozen snapshot. They
@@ -189,7 +197,49 @@ platform qualification and full frontend/whole-repo matrices were outside this p
 Documentation lint, local-link checks and the reproduction extraction script
 syntax check passed.
 
-The owner admitted this follow-up on October 19, 2026 UTC. This assessment
-publication changes no runtime implementation and does not reopen the completed
-first goal or claim deployed robustness. A1/A2 will be separate code PRs; A3
-first establishes contention budgets and an explicit disposition.
+The owner admitted this follow-up on October 19, 2026 UTC. The original
+assessment publication changed no runtime implementation and did not reopen
+the completed first goal. The record below separates that assessment from
+merged fixes, qualification and separately owned follow-ups.
+
+## Implementation and remaining roadmap
+
+The finite admitted follow-up is complete through merged correctness fixes,
+production admission enforcement and bounded qualification. This retains the
+modular-monolith architecture and its existing domain, durability and authority
+owners.
+
+| Item | Result | Evidence |
+| --- | --- | --- |
+| A1 | Cleanup settles before the immutable terminal snapshot; canonical history, returned result, coding events and final streaming agree. Suspension, already-delivered output and abnormal exits retain their contracts. | [PR #1810](https://github.com/bogdanovich/mintclaw/pull/1810), merge `fc9cee37fb71cb1b0150a8e406c7d73ee586faff` |
+| A2 | Per-workspace locking serializes construction and restoration before publication. Explicit reconstruction uses the same boundary; existing external-wait reload tests remain intact. | [PR #1812](https://github.com/bogdanovich/mintclaw/pull/1812), merge `6d05cf74ebb69ed641d0ddbd8493b45e7f007691` |
+| A3 qualification | Three bounded normal/race repetitions qualify live lock contention, stalled observation delivery, retained state and unsubscribe. Historical baseline before production enforcement. | [PR #1815](https://github.com/bogdanovich/mintclaw/pull/1815), merge `c9ff07a4917d842a92d222ce27dd9cbb449bdcdd` |
+| A3 store admission | Nonblocking file locks precede the registry mutex. Writers have independent one-second default budgets; transient startup contention is retryable. | [PR #1821](https://github.com/bogdanovich/mintclaw/pull/1821), merge `cd6f355ae258e81dc2a05561b3414ebb68aea9b2` |
+| A3 observation admission | Producer admission precedes persistence. One ledger bounds queued, gated and in-flight observations to 256 events or 4 MiB of accounted payload; expiry recovery makes bounded progress. | [PR #1823](https://github.com/bogdanovich/mintclaw/pull/1823), merge `a2469826d753cc67589177772ef46a4764f3a47e` |
+| A3 lifecycle | Immediate unsubscribe stops new admission; tracked producer work and accepted callbacks settle explicitly. Registry and runtime worker/observer drain have bounded deadlines and retryable incomplete teardown. | [PR #1825](https://github.com/bogdanovich/mintclaw/pull/1825), merge `2f285871b7aabcf05f1979a9f3538761c6a56cd2` |
+
+A4 was implemented within A1: one cleanup owner prepares the existing final
+snapshot, and the passive tool-delivery summary now belongs to finalization.
+No generic workflow engine, service split or new storage framework was added.
+
+A3's admitted production contract is implemented. The store and subscription
+owners expose explicit busy, timeout, oversized-payload and resynchronization
+outcomes while preserving committed identity. The
+[Interaction Contention Qualification](../operations/architecture-robustness-20261019-qualification.md)
+records defaults, context-aware entry points, final-head CI evidence and scope:
+accounted payload is bounded, callbacks can remain executing after timeout, and
+other runtime teardown phases retain their caller context. Windows runtime lock
+contention remains an optional qualification opportunity; cross-compilation and
+standard portability CI passed. Other extractions remain conditional on a
+concrete ownership problem or measured need.
+
+Each merged code head passed full current-head CI and substantive review,
+with no actionable unresolved feedback. The owner supplied a PR-level rocket
+approval before each code merge. Local validation of production admission
+includes full interaction normal/race tests, the full agent suite, selected
+runtime/recovery race cases, formatting, lint and Windows cross-compilation.
+Earlier qualification startup stalls remain historical inconclusive attempts;
+the linked qualification preserves both the baseline and final-head CI evidence.
+No deployment, service restart, real-account workflow or paid evaluation was
+part of this follow-up. A5's eval, credential, storage and dependency owners
+retain their separate scope and release evidence.

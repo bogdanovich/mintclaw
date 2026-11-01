@@ -2,6 +2,7 @@ package approval
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -76,9 +77,9 @@ func (lease LoginLease) Check(ctx context.Context, request credentialbroker.Requ
 	return lease.grant.Check(ctx, request)
 }
 
-// ActiveLogin reuses a current signed grant without exposing grant identifiers
-// to a model tool or maintaining a second grant cache in the gateway. Request
-// identity and origin come from the trusted runtime's authenticated caller.
+// ActiveLogin reuses a scoped grant, or creates a bounded runtime-only lease
+// when the operator explicitly enabled automatic access. It exposes no grant
+// identifier to model tools. Identity and origin come from trusted live state.
 func (controller *Controller) ActiveLogin(ctx context.Context, request credentialbroker.Request) (LoginLease, error) {
 	if controller == nil {
 		return LoginLease{}, ErrUnavailable
@@ -100,6 +101,24 @@ func (controller *Controller) ActiveLogin(ctx context.Context, request credentia
 		expires = approved.ExpiresAt
 	}
 	if expires.IsZero() {
+		if controller.automatic && errors.Is(
+			controller.authority.Authorize("", request), credentialbroker.ErrApprovalRequired,
+		) {
+			approved, err := controller.authority.Approve(credentialbroker.Approval{
+				Principal: request.Principal, Accounts: []string{request.Account},
+				PolicyRevision: request.PolicyRevision, Lifetime: credentialbroker.MaxGrantLifetime,
+			})
+			if err != nil {
+				return LoginLease{}, ErrUnavailable
+			}
+			grant, err := controller.authority.Lease(ctx, approved.ID, request)
+			if err != nil {
+				_ = controller.authority.Revoke(controller.ownerID, approved.ID)
+				return LoginLease{}, ErrDenied
+			}
+			controller.grants[approved.ID] = cloneGrant(approved)
+			return controller.loginLease(grant, request), nil
+		}
 		return LoginLease{}, ErrDenied
 	}
 	return active, nil

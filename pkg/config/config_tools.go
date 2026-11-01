@@ -312,9 +312,17 @@ func (c ReadFileToolConfig) EffectiveMode() string {
 	}
 }
 
+// LiveDataGuardConfig stops a turn when a required source read fails, before
+// cached data can be substituted into a generated or delivered report.
+type LiveDataGuardConfig struct {
+	Tools          []string `json:"tools"           yaml:"-"`
+	FailureMessage string   `json:"failure_message" yaml:"-"`
+}
+
 type ToolsConfig struct {
-	AllowReadPaths  []string `json:"allow_read_paths"  yaml:"-" env:"MINTCLAW_TOOLS_ALLOW_READ_PATHS"`
-	AllowWritePaths []string `json:"allow_write_paths" yaml:"-" env:"MINTCLAW_TOOLS_ALLOW_WRITE_PATHS"`
+	LiveDataGuards  []LiveDataGuardConfig `json:"live_data_guards,omitempty" yaml:"-"`
+	AllowReadPaths  []string              `json:"allow_read_paths"           yaml:"-" env:"MINTCLAW_TOOLS_ALLOW_READ_PATHS"`
+	AllowWritePaths []string              `json:"allow_write_paths"          yaml:"-" env:"MINTCLAW_TOOLS_ALLOW_WRITE_PATHS"`
 	// FilterSensitiveData controls whether to filter sensitive values (API keys,
 	// tokens, secrets) from tool results before sending to the LLM.
 	// Default: true (enabled)

@@ -512,6 +512,7 @@ func (service interactionService) acceptProtectedAnswer(
 	}
 	receipt, err := sink.Accept(ctx, interactions.ProtectedAnswerSinkRequest{
 		Binding:         *record.ProtectedAnswer,
+		Origin:          protectedAnswerOrigin(record),
 		Workspace:       command.Workspace,
 		Route:           record.Route,
 		InteractionID:   record.ID,
@@ -608,6 +609,7 @@ func protectedAnswerDiscardRequest(
 ) interactions.ProtectedAnswerDiscardRequest {
 	request := interactions.ProtectedAnswerDiscardRequest{
 		Workspace: workspace, Route: record.Route, InteractionID: record.ID, Force: force,
+		Origin: protectedAnswerOrigin(record),
 	}
 	if record.ProtectedAnswer != nil {
 		request.Binding = *record.ProtectedAnswer
@@ -643,6 +645,7 @@ func protectedAnswerCommitRequest(
 ) interactions.ProtectedAnswerCommitRequest {
 	request := interactions.ProtectedAnswerCommitRequest{
 		Workspace: workspace, Route: record.Route, InteractionID: record.ID,
+		Origin: protectedAnswerOrigin(record),
 	}
 	if record.ProtectedAnswer != nil {
 		request.Binding = *record.ProtectedAnswer
@@ -959,11 +962,23 @@ func protectedAnswerCancelRequest(
 	request := interactions.ProtectedAnswerCancelRequest{
 		Workspace: workspace, Route: record.Route, InteractionID: record.ID,
 		IdempotencyKey: strings.TrimSpace(idempotencyKey),
+		Origin:         protectedAnswerOrigin(record),
 	}
 	if record.ProtectedAnswer != nil {
 		request.Binding = *record.ProtectedAnswer
 	}
 	return request
+}
+
+func protectedAnswerOrigin(record interactions.Record) interactions.ProtectedAnswerOrigin {
+	actor := strings.TrimSpace(record.Origin.RuntimeActorID)
+	if actor == "" && record.Origin.ExecutionContext != nil {
+		actor = gatewayRuntimeActorIDForInbound(record.Origin.ExecutionContext)
+	}
+	return interactions.ProtectedAnswerOrigin{
+		ToolName: record.Origin.ToolName, ToolCallID: record.Origin.ToolCallID,
+		ExecutionID: record.Origin.ExecutionID, ActorID: actor,
+	}
 }
 
 func (service interactionService) beginCancellationFence(

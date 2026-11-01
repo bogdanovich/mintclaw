@@ -20,7 +20,7 @@ func projectBrowserLoginStep(args map[string]any) (map[string]any, error) {
 		step = "credentials"
 	}
 	refs := map[string][]string{
-		"discover": {}, "credentials": {"username_ref", "password_ref", "submit_ref"},
+		"discover": {}, "authorize": {}, "credentials": {"username_ref", "password_ref", "submit_ref"},
 		"username": {"username_ref", "submit_ref"}, "password": {"password_ref", "submit_ref"},
 		"totp": {"otp_ref", "submit_ref"}, "verify": {"authenticated_ref"},
 	}

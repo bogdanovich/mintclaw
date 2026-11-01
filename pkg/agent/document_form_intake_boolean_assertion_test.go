@@ -110,7 +110,7 @@ func TestDocumentIntakeBooleanVerificationRejectsMalformedPartitions(t *testing.
 		`{"verified":["field_checkbox"],"generated_value":true}`,
 		` {"verified":["field_checkbox"]}`, `{"verified":["field_checkbox"]}{}`,
 	} {
-		if _, _, err := decodeDocumentIntakeBooleanVerification(body, []string{"field_checkbox"}); err == nil {
+		if _, _, err := decodeDocumentIntakeFieldVerification(body, []string{"field_checkbox"}); err == nil {
 			t.Fatal("incomplete, foreign or malformed assertion verification was accepted")
 		}
 	}
@@ -118,7 +118,7 @@ func TestDocumentIntakeBooleanVerificationRejectsMalformedPartitions(t *testing.
 
 func TestDocumentIntakeBooleanVerificationPartitionsEachOfferedAssertionExactlyOnce(t *testing.T) {
 	const mixed = `{"verified":["borrower"],"findings":[{"field_id":"contact","code":"field_ambiguous"}]}`
-	verified, findings, err := decodeDocumentIntakeBooleanVerification(mixed, []string{"borrower", "contact"})
+	verified, findings, err := decodeDocumentIntakeFieldVerification(mixed, []string{"borrower", "contact"})
 	if err != nil || len(verified) != 1 || verified[0] != "borrower" || len(findings) != 1 ||
 		findings[0].FieldID != "contact" {
 		t.Fatal("partial verification did not preserve the distinction between two people")
@@ -128,7 +128,7 @@ func TestDocumentIntakeBooleanVerificationPartitionsEachOfferedAssertionExactlyO
 		`{"verified":["borrower","foreign"]}`,
 		`{"verified":["borrower"],"findings":[{"field_id":"borrower","code":"field_ambiguous"}]}`,
 	} {
-		if _, _, err = decodeDocumentIntakeBooleanVerification(body, []string{"borrower", "contact"}); err == nil {
+		if _, _, err = decodeDocumentIntakeFieldVerification(body, []string{"borrower", "contact"}); err == nil {
 			t.Fatal("verification accepted a duplicate/foreign ID while another person's answer was unverified")
 		}
 	}

@@ -562,15 +562,31 @@ func (s *PromptStack) Parts() []PromptPart {
 	return append([]PromptPart(nil), s.parts...)
 }
 
+const promptPartSeparator = "\n\n---\n\n"
+
 func renderPromptParts(parts []PromptPart) string {
-	textParts := make([]string, 0, len(parts))
+	text, _ := renderPromptPartsWithSections(parts)
+	return text
+}
+
+func renderPromptPartsWithSections(parts []PromptPart) (string, []providers.PromptSection) {
+	var text strings.Builder
+	sections := make([]providers.PromptSection, 0, len(parts))
 	for _, part := range sortPromptParts(parts) {
 		if strings.TrimSpace(part.Content) == "" {
 			continue
 		}
-		textParts = append(textParts, part.Content)
+		if text.Len() > 0 {
+			text.WriteString(promptPartSeparator)
+		}
+		start := text.Len()
+		text.WriteString(part.Content)
+		sections = append(sections, providers.PromptSection{
+			Start: start, End: text.Len(), Layer: string(part.Layer), Slot: string(part.Slot),
+			Source: string(part.Source.ID),
+		})
 	}
-	return strings.Join(textParts, "\n\n---\n\n")
+	return text.String(), sections
 }
 
 func sortPromptParts(parts []PromptPart) []PromptPart {

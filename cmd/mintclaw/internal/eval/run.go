@@ -14,12 +14,13 @@ import (
 )
 
 func newRunCommand() *cobra.Command {
-	options := corpusOptions{root: "evals", selection: manualeval.Selection{Suite: "all"}}
+	options := corpusOptions{root: "evals"}
 	var outputParent string
 	python := os.Getenv("MINTCLAW_EVAL_PDF_ORACLE_PYTHON")
 	suiteTimeout := time.Hour
 	repeat := 1
 	startTarget := false
+	includePending := false
 	command := &cobra.Command{
 		Use: "run", Short: "Run selected scenarios against a prepared isolated gateway", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -30,8 +31,14 @@ func newRunCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			selected, err := manualeval.Select(corpus, options.selection)
+			selection := options.selection
+			selection.DefaultOnly = !cmd.Flags().Changed("suite") && !cmd.Flags().Changed("tag") &&
+				!cmd.Flags().Changed("case")
+			selected, err := manualeval.Select(corpus, selection)
 			if err != nil {
+				return err
+			}
+			if err = manualeval.CheckRunAvailability(selected, includePending); err != nil {
 				return err
 			}
 			preset, err := manualeval.LoadPreset(options.preset)
@@ -49,6 +56,7 @@ func newRunCommand() *cobra.Command {
 				PDFOraclePython: python,
 				Repeat:          repeat,
 				StartTarget:     startTarget,
+				IncludePending:  includePending,
 			})
 			if result.ID == "" {
 				return runErr
@@ -77,6 +85,8 @@ func newRunCommand() *cobra.Command {
 	command.Flags().IntVar(&repeat, "repeat", repeat, "Independent serial trials per case (1-64; at most 256 total)")
 	command.Flags().
 		BoolVar(&startTarget, "start-target", false, "Own a new gateway using a fresh prepared private profile")
+	command.Flags().BoolVar(&includePending, "include-pending", false,
+		"Explicitly permit selected pending cases; does not widen the default set or bypass capability/approval gates")
 	command.Flags().
 		StringVar(&python, "pdf-oracle-python", python, "Absolute executable of the pinned independent PDF oracle")
 	_ = command.MarkFlagRequired("preset")

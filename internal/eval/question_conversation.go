@@ -9,8 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
+	"github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 )
@@ -25,6 +28,11 @@ type questionConversation struct {
 	prompt                                  Event
 	waiting                                 interactions.Record
 	cancellation                            *QuestionCancellationEvidence
+	answerRequest                           protocol.MintClawMessage
+	answerAt                                time.Time
+	resumeFinal                             Event
+	answer                                  *QuestionAnswerEvidence
+	answerCheckID                           string
 }
 
 func (domain *questionConversation) initialTask() string { return domain.task }
@@ -44,10 +52,30 @@ func (domain *questionConversation) request(
 	if action.Kind == "cancel" {
 		domain.cancelAt = time.Now()
 	}
+	if action.Kind == "answer" {
+		if domain.answerCheckID == "" || domain.answerRequest.ID != "" ||
+			!paperQuestion(domain.waiting) || action.Text != "paper" {
+			return protocol.MintClawMessage{}, false, errQuestionEvidence
+		}
+		domain.answerAt = time.Now()
+		domain.answerRequest = protocol.MintClawMessage{
+			Type: protocol.TypeMessageSend, ID: uuid.NewString(), SessionID: domain.sessionID,
+			Timestamp: domain.answerAt.UnixMilli(), Payload: map[string]any{
+				protocol.PayloadKeyContent:            "paper",
+				protocol.PayloadKeyInteractionChoice:  protocol.InteractionChoiceAnswer,
+				protocol.PayloadKeyInteractionShortID: prompt.InteractionShortID,
+				protocol.PayloadKeyInteractionPrompt:  prompt.MessageID,
+			},
+		}
+		return domain.answerRequest, true, nil
+	}
 	return protocol.MintClawMessage{}, false, nil
 }
 
 func (domain *questionConversation) observe(ctx context.Context, prompt Event) error {
+	if prompt.Kind == "final" && domain.answerRequest.ID != "" {
+		return domain.observeAnswer(ctx, prompt)
+	}
 	if prompt.Kind != "question" {
 		return nil
 	}
@@ -85,11 +113,22 @@ func (domain *questionConversation) matchesPrompt(record interactions.Record, pr
 func (domain *questionConversation) matchesPromptKind(
 	record interactions.Record, prompt Event, kind interactions.Kind, tool string,
 ) (bool, error) {
+	if record.ProtectedAnswer != nil {
+		return false, nil
+	}
+	return domain.matchesPromptIdentity(record, prompt, kind, tool)
+}
+
+// Protected consumers add their own namespace/target checks; ordinary questions
+// and approvals continue to reject every protected binding above.
+func (domain *questionConversation) matchesPromptIdentity(
+	record interactions.Record, prompt Event, kind interactions.Kind, tool string,
+) (bool, error) {
 	route := record.Route
 	now := time.Now().UnixMilli()
 	if record.ID != prompt.InteractionID || record.ShortID != prompt.InteractionShortID ||
 		record.Kind != kind || record.Status != interactions.StatusWaiting ||
-		record.ProtectedAnswer != nil || record.Origin.ToolName != tool ||
+		record.Origin.ToolName != tool ||
 		record.CreatedAt < domain.started.UnixMilli() || record.CreatedAt > now || record.ExpiresAt <= now ||
 		record.UpdatedAt > now || record.Origin.ExecutionContext == nil ||
 		record.Origin.ExecutionContext.MessageID != prompt.RequestID ||
@@ -126,6 +165,7 @@ func (domain *questionConversation) matchesPromptKind(
 		intent.Message.Metadata.InteractionID == record.ID && intent.Message.Metadata.InteractionShortID == record.ShortID &&
 		intent.Message.Metadata.InteractionKind == string(kind) &&
 		intent.Message.Metadata.InteractionControls == bus.OutboundInteractionControlsPrompt &&
+		slices.Contains(intent.Message.TraceScopes, events.NewTraceScope(domain.workspace, record.Origin.TurnID)) &&
 		slices.Contains(intent.PlatformMessageIDs, prompt.MessageID) && !intent.CreatedAt.Before(domain.started), nil
 }
 
@@ -180,26 +220,43 @@ func (domain *questionConversation) cancelledRecord(kind interactions.Kind) (int
 
 func (domain *questionConversation) conclude(_ context.Context, trial *Trial) {
 	trial.Cancellation = domain.cancellation
+	trial.Answer = domain.answer
+	for index := range trial.Checks {
+		if trial.Checks[index].Code == "missing_evidence" && trial.Checks[index].ID == domain.answerCheckID &&
+			validQuestionAnswer(*trial, domain.workspace) {
+			trial.Checks[index] = booleanCheck(domain.answerCheckID, true,
+				[]string{domain.prompt.ID, domain.resumeFinal.ID, "question_answer"})
+		}
+	}
 }
 
 func (domain *questionConversation) record(id string) (interactions.Record, error) {
 	if !validID(id) {
 		return interactions.Record{}, errQuestionEvidence
 	}
-	data, err := domain.read(domain.workspace, "state/interaction_registry.json", interactions.DefaultMaxBytes)
+	records, _, err := domain.records()
 	if err != nil {
 		return interactions.Record{}, err
 	}
-	defer clear(data)
-	snapshot, err := interactions.InspectSnapshot(data)
-	if err == nil {
-		for _, record := range snapshot.Records {
-			if record.ID == id {
-				return record, nil
-			}
+	for _, record := range records {
+		if record.ID == id {
+			return record, nil
 		}
 	}
 	return interactions.Record{}, errQuestionEvidence
+}
+
+func (domain *questionConversation) records() ([]interactions.Record, string, error) {
+	data, err := domain.read(domain.workspace, "state/interaction_registry.json", interactions.DefaultMaxBytes)
+	if err != nil {
+		return nil, "", err
+	}
+	defer clear(data)
+	snapshot, err := interactions.InspectSnapshot(data)
+	if err != nil {
+		return nil, "", errQuestionEvidence
+	}
+	return snapshot.Records, digest(data), nil
 }
 
 func (domain *questionConversation) read(path, name string, maximum int64) ([]byte, error) {

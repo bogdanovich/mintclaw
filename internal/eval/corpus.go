@@ -19,12 +19,14 @@ type LoadedCase struct {
 	Path   string
 	Digest string
 	Root   string
+	Policy *SuitePolicy
 }
 
 type Selection struct {
-	Suite string
-	Tags  []string
-	IDs   []string
+	Suite       string
+	Tags        []string
+	IDs         []string
+	DefaultOnly bool
 }
 
 const (
@@ -73,6 +75,9 @@ func LoadCorpus(directory string) ([]LoadedCase, error) {
 		return nil
 	})
 	if err != nil || len(items) == 0 {
+		return nil, ErrInvalidCorpus
+	}
+	if loadCatalogPolicy(root, items) != nil {
 		return nil, ErrInvalidCorpus
 	}
 	slices.SortFunc(items, func(a, b LoadedCase) int { return strings.Compare(a.Case.ID, b.Case.ID) })
@@ -148,6 +153,13 @@ func Select(corpus []LoadedCase, selection Selection) ([]LoadedCase, error) {
 	matchedIDs := make(map[string]bool)
 	items := make([]LoadedCase, 0)
 	for _, item := range corpus {
+		policy := item.Availability()
+		if !policy.valid() || policy.ID != item.Case.Suite {
+			return nil, ErrInvalidFilter
+		}
+		if selection.DefaultOnly && !policy.Default {
+			continue
+		}
 		if selection.Suite != "" && selection.Suite != "all" && item.Case.Suite != selection.Suite {
 			continue
 		}

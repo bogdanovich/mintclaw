@@ -239,7 +239,8 @@ func TestStoreRoundTripsTurnEnvelopeWithoutIndexingIt(t *testing.T) {
 	}
 
 	envelope := &providers.TurnEnvelope{
-		Version: providers.TurnEnvelopeVersion1,
+		Version:                providers.TurnEnvelopeVersion1,
+		DocumentConversationID: "docmsg_persisted-provenance",
 		Parts: []providers.TurnEnvelopePart{
 			{ID: "current-time", Content: "HIDDEN_SEAHORSE_MARKER_91827"},
 			{ID: "sender", Content: "sender: telegram:42"},
@@ -272,7 +273,8 @@ func TestStoreRoundTripsTurnEnvelopeWithoutIndexingIt(t *testing.T) {
 		t.Fatalf("messages = %d, want 1", len(messages))
 	}
 	wantEnvelope := &providers.TurnEnvelope{
-		Version: providers.TurnEnvelopeVersion1,
+		Version:                providers.TurnEnvelopeVersion1,
+		DocumentConversationID: "docmsg_persisted-provenance",
 		Parts: []providers.TurnEnvelopePart{
 			{ID: "current-time", Content: "HIDDEN_SEAHORSE_MARKER_91827"},
 			{ID: "sender", Content: "sender: telegram:42"},
@@ -302,7 +304,8 @@ func TestStoreRoundTripsTurnEnvelopeWithoutIndexingIt(t *testing.T) {
 	if storedContent != "visible request" {
 		t.Fatalf("stored content = %q, want visible request", storedContent)
 	}
-	wantStoredEnvelope := `{"version":1,"parts":[{"id":"current-time","content":"HIDDEN_SEAHORSE_MARKER_91827"},{"id":"sender","content":"sender: telegram:42"}]}`
+	wantStoredEnvelope := `{"version":1,"parts":[{"id":"current-time","content":"HIDDEN_SEAHORSE_MARKER_91827"},` +
+		`{"id":"sender","content":"sender: telegram:42"}],"document_conversation_id":"docmsg_persisted-provenance"}`
 	if storedEnvelope != wantStoredEnvelope {
 		t.Fatalf("stored turn_envelope = %q, want %q", storedEnvelope, wantStoredEnvelope)
 	}

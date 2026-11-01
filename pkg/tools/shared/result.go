@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
@@ -34,8 +35,11 @@ type DeliveryIntent string
 const (
 	DeliveryDefault           DeliveryIntent = ""
 	DeliveryImmediateContinue DeliveryIntent = "immediate_continue"
-	DeliveryFinalHandled      DeliveryIntent = "final_handled"
-	DeliverySilent            DeliveryIntent = "silent"
+	// DeliveryInteractionMedia sends a tool-owned image before a human question,
+	// including inside a delegated turn whose ordinary output is suppressed.
+	DeliveryInteractionMedia DeliveryIntent = "interaction_media"
+	DeliveryFinalHandled     DeliveryIntent = "final_handled"
+	DeliverySilent           DeliveryIntent = "silent"
 )
 
 // ToolResult is the stable output produced by a tool. Runtime control and
@@ -93,8 +97,28 @@ type ToolResult struct {
 	// model-visible nor persisted in canonical tool-result history.
 	Observation *ToolObservation `json:"-"`
 
+	// DocumentFields is transient, content-free evidence from native field discovery.
+	// It grants no write/approval authority and is not canonical or model context.
+	DocumentFields DocumentFieldsObservation `json:"-"`
+	// BrowserInputTarget is native, value-free target evidence. The runtime
+	// publishes it only after owning the corresponding protected suspension.
+	BrowserInputTarget browseraction.InputTargetObservation `json:"-"`
+
 	Control  ToolControl  `json:"control,omitzero"`
 	Delivery ToolDelivery `json:"delivery,omitzero"`
+}
+
+// DocumentFieldsObservation counts the schema read by the tool, independently
+// of a potentially smaller result window. It does not prove model understanding.
+// Scalar fields keep the originating observation independent of hook copies.
+type DocumentFieldsObservation struct {
+	Operation       string
+	SourceSHA256    string
+	SchemaFields    int
+	ReturnedFields  int
+	RequiredFields  int
+	ValuesPresent   int
+	DefaultsPresent int
 }
 
 type ToolContextInput struct {
@@ -138,14 +162,14 @@ type ToolControl struct {
 	// interaction is answered, times out, is canceled, or fails.
 	ResolveSuspension func(context.Context, interactions.Outcome) error `json:"-"`
 
-	// LiveHandoff proves that the tool transferred one live resource to human
-	// control before requesting a durable suspension. The runtime, not the
-	// model, turns this proof into an objective receipt after it durably owns
-	// the suspension.
+	// LiveHandoff identifies a resource transferred to human control or retained
+	// under a native interaction's ownership. The tool's durable resolver owns
+	// its exact resume/abandon semantics. The runtime, not the model, creates
+	// the objective receipt after it durably owns the suspension.
 	LiveHandoff *LiveResourceHandoff `json:"-"`
 }
 
-// LiveResourceHandoff identifies a successfully transferred live resource.
+// LiveResourceHandoff identifies a transferred or interaction-retained resource.
 // ResourceKind is an extensible tool-defined namespace (for example,
 // "browser_session"); ResourceID is the opaque identity already returned by
 // that tool. A handoff is valid only together with a durable suspension.
@@ -232,7 +256,7 @@ func (delivery ToolDelivery) IsFinalHandled() bool {
 }
 
 func (delivery ToolDelivery) IsImmediate() bool {
-	return delivery.Intent == DeliveryImmediateContinue
+	return delivery.Intent == DeliveryImmediateContinue || delivery.Intent == DeliveryInteractionMedia
 }
 
 func (delivery ToolDelivery) IsSilent() bool {
@@ -362,12 +386,13 @@ type PlanStepObservation = codingplan.Step
 type PlanObservation = codingplan.State
 
 type OutboundDelivery struct {
-	Channel          string                `json:"channel,omitempty"`
-	ChatID           string                `json:"chat_id,omitempty"`
-	ReplyToMessageID string                `json:"reply_to_message_id,omitempty"`
-	Text             string                `json:"text,omitempty"`
-	Media            []bus.MediaPart       `json:"media,omitempty"`
-	Recovery         *bus.OutboundRecovery `json:"recovery,omitempty"`
+	Channel            string                 `json:"channel,omitempty"`
+	ChatID             string                 `json:"chat_id,omitempty"`
+	ReplyToMessageID   string                 `json:"reply_to_message_id,omitempty"`
+	Text               string                 `json:"text,omitempty"`
+	Media              []bus.MediaPart        `json:"media,omitempty"`
+	Recovery           *bus.OutboundRecovery  `json:"recovery,omitempty"`
+	AdditionalRecovery []bus.OutboundRecovery `json:"additional_recovery,omitempty"`
 }
 
 type WriteAuditEntry struct {
@@ -417,6 +442,16 @@ func (tr *ToolResult) ContentForLLM() string {
 		}
 	}
 	content = appendUniqueLLMNote(content, tr.deliverableNoteForLLM())
+	if !tr.Delivery.IsFinalHandled() && tr.Deliverable != nil {
+		for _, artifact := range tr.Deliverable.Artifacts {
+			if !artifact.Delivered && artifact.Recovery != nil {
+				content = appendUniqueLLMNote(content,
+					"The runtime retained an attachment for final-result delivery. Return the complete task report; "+
+						"do not search for a local path, treat opaque artifact references as paths, or resend this attachment.")
+				break
+			}
+		}
+	}
 	if content != "" {
 		return content
 	}
@@ -444,6 +479,9 @@ func deliverableArtifactTags(deliverable *taskresult.Deliverable) []string {
 	seen := make(map[string]struct{}, len(deliverable.Artifacts))
 	tags := make([]string, 0, len(deliverable.Artifacts))
 	for _, artifact := range deliverable.Artifacts {
+		if artifact.Recovery != nil {
+			continue
+		}
 		path := strings.TrimSpace(artifact.LocalPath)
 		if path == "" && strings.HasPrefix(artifact.Ref, "file:") {
 			path = strings.TrimSpace(strings.TrimPrefix(artifact.Ref, "file:"))
@@ -484,7 +522,11 @@ func (tr *ToolResult) deliverableNoteForLLM() string {
 	if tr == nil || tr.Deliverable == nil {
 		return ""
 	}
-	payload := tr.Deliverable
+	payload := taskresult.CloneDeliverable(tr.Deliverable)
+	for index := range payload.Artifacts {
+		// Runtime delivery proofs survive task persistence, not model context.
+		payload.Artifacts[index].Recovery = nil
+	}
 	if strings.TrimSpace(payload.Text) == "" &&
 		len(payload.Artifacts) == 0 &&
 		len(payload.Metadata) == 0 &&

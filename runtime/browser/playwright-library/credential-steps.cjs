@@ -40,13 +40,19 @@ async function prepareWebsiteStep(page, request) {
   let capsule;
   try {
     for (const key of keys) {
-      const handle = await page.locator(`aria-ref=${request[key]}`).elementHandle({timeout: 500});
-      if (!handle) return null;
-      handles.push(handle);
+      const resolved = await page.locator(`aria-ref=${request[key]}`).elementHandles();
+      handles.push(...resolved);
+      if (resolved.length !== 1) return resolved.length === 0 ? 'observe_required' : null;
     }
     capsule = await page.evaluateHandle(({origin, step, keys, handles}) => {
+      if (location.origin !== origin) return null;
       const elements = Object.fromEntries(keys.map((key, index) => [key, handles[index]]));
       const originalDocument = document;
+      // Only positively identified stale controls invite a new observation.
+      // Destination, method, element type and other policy failures stay denied.
+      if (Object.values(elements).some(element => !element.isConnected || element.ownerDocument !== document)) {
+        return 'observe_required';
+      }
       const visible = element => element instanceof HTMLElement && element.ownerDocument === originalDocument &&
         element.isConnected && element.getClientRects().length > 0 &&
         element.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
@@ -87,9 +93,11 @@ async function prepareWebsiteStep(page, request) {
       // again after filling without changing the site's disabled state.
       return ready(false) ? {elements, step, form, submit, ready} : null;
     }, {origin: request.origin, step: request.step, keys, handles});
-    if (!(await capsule.evaluate(value => value !== null))) {
+    const outcome = await capsule.evaluate(value => value === 'observe_required' ? value :
+      value === null ? 'denied' : 'ready');
+    if (outcome !== 'ready') {
       await capsule.dispose();
-      return null;
+      return outcome === 'observe_required' ? outcome : null;
     }
     return capsule;
   } catch (_) {

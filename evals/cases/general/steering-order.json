@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "general.steering.order",
+  "suite": "general",
+  "tags": ["steering", "order", "core"],
+  "description": "Preserve FIFO and atomic same-sender guidance in separate explicit native steering-mode variants.",
+  "task": "Remember the synthetic current label mc-c2-start-j62. Call mcp_corefixture_eval_barrier exactly once using the provided Eval tool arguments. Wait for that read to finish, then reply with only the current label. Honor mid-turn corrections without canceling the admitted read. Do not ask questions or call other tools.",
+  "requires": ["conversation", "bounded_calls", "active_tool"],
+  "fixtures": [],
+  "steering": {
+    "scenario": "order",
+    "modes": ["one-at-a-time", "all"],
+    "initial_marker": "mc-c2-start-j62",
+    "updates": ["mc-c2-middle-p41", "mc-c2-final-v95"]
+  },
+  "driver": {
+    "mode": "scripted",
+    "steps": [
+      {
+        "wait_for": {"kind": "final"},
+        "action": {"kind": "message", "text": "What is the latest synthetic label? Reply with the label only. Do not call tools."}
+      }
+    ]
+  },
+  "limits": {"max_user_turns": 4, "turn_timeout": "2m", "case_timeout": "5m", "max_driver_calls": 1},
+  "checks": [
+    {"id": "native-boundary", "kind": "steering_boundary"},
+    {"id": "latest-label", "kind": "response_contains", "expected": "mc-c2-final-v95"},
+    {"id": "old-label-absent", "kind": "final_response_absent", "expected": "mc-c2-start-j62"},
+    {"id": "middle-label-absent", "kind": "final_response_absent", "expected": "mc-c2-middle-p41"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"}
+  ],
+  "rubric": [
+    {
+      "id": "grounded-steering",
+      "description": "The response and follow-up honor the last correction, not the initial or intermediate label, without claiming the held read was canceled. Native hard checks independently establish same-sender FIFO/coalescence and final delivery in the recorded mode.",
+      "required": true
+    }
+  ]
+}

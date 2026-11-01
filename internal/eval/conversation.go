@@ -24,16 +24,18 @@ type conversationTransport interface {
 }
 
 type conversation struct {
-	transport conversationTransport
-	trial     *Trial
-	agent     string
-	workspace string
-	frames    int
-	bytes     int
-	last      Event
-	filter    *strings.Replacer
-	domain    conversationDomain
-	facts     map[string]string
+	transport  conversationTransport
+	trial      *Trial
+	agent      string
+	workspace  string
+	frames     int
+	bytes      int
+	inputs     int
+	last       Event
+	filter     *strings.Replacer
+	domain     conversationDomain
+	facts      map[string]string
+	nativeStop bool
 }
 
 // Domain adapters bind inputs to native evidence and add independent checks.
@@ -45,10 +47,31 @@ type conversationDomain interface {
 	conclude(context.Context, *Trial)
 }
 
+// The flow supplies its actual transcript before the next input. Native
+// lifecycle authority remains with the admitted run owner, not this engine.
+type betweenTurnConversationDomain interface {
+	beforeTurn(context.Context, Trial, int) error
+}
+
 // A control reply is not an LLM turn. Only native terminal evidence can
 // establish its outcome without inventing a missing LLM trace scope.
 type cancellationObserver interface {
 	observeCancellation(context.Context, Event, Event) error
+}
+
+// Called after the initial send, before receiving its terminal response. The
+// native target runs independently; a domain must observe a real active barrier
+// before sending guidance. The flow-owned sender enforces bounds and records
+// each actual send; domains cannot inject synthetic transcript events.
+type inFlightConversationDomain interface {
+	afterSend(context.Context, protocol.MintClawMessage, int, func(string) (Event, error)) error
+}
+
+// Only an admitted native-stop case may select the actually sent /stop input
+// as its terminal request. The observer must prove abort before classification.
+type nativeStopObserver interface {
+	stopRequestID() string
+	observeStop(context.Context, Event) error
 }
 
 type conversationRoles struct {
@@ -91,6 +114,8 @@ func runDomainConversation(
 		SessionID: sessionID, AgentID: agent, Verdict: Inconclusive, Code: "not_completed",
 		StartedAt: time.Now().UTC(), Events: []Event{}, Checks: []CheckResult{}, RemoteState: "unknown",
 		ExecutionVerdict: Inconclusive, ExecutionCode: "not_completed",
+		TargetBudgetRequired: requiresTargetBudget(item.Case),
+		ActiveToolRequired:   requiresActiveTool(item.Case),
 	}
 	defer func() {
 		transport.Close()
@@ -133,12 +158,21 @@ func runDomainConversation(
 		trial.ExecutionVerdict, trial.ExecutionCode = trial.Verdict, trial.Code
 		return trial
 	}
+	if item.Case.NativeStop != nil {
+		_, observesStop := domain.(nativeStopObserver)
+		_, sendsInFlight := domain.(inFlightConversationDomain)
+		if !observesStop || !sendsInFlight {
+			trial.Verdict, trial.Code = Inconclusive, "native_stop_driver_unavailable"
+			trial.ExecutionVerdict, trial.ExecutionCode = trial.Verdict, trial.Code
+			return trial
+		}
+	}
 	caseTimeout, _ := time.ParseDuration(item.Case.Limits.CaseTimeout)
 	caseCtx, cancel := context.WithTimeout(ctx, caseTimeout)
 	defer cancel()
 	flow := conversation{
 		transport: transport, trial: &trial, agent: agent, workspace: workspace, filter: roles.filter, domain: domain,
-		facts: item.Case.Driver.Facts,
+		facts: item.Case.Driver.Facts, nativeStop: item.Case.NativeStop != nil,
 	}
 	task := item.Case.Task
 	if domain != nil {
@@ -154,6 +188,15 @@ func runDomainConversation(
 			if step.Action.Kind == "stop" {
 				verdict, code = Inconclusive, "driver_stopped"
 				break
+			}
+			if boundary, ok := domain.(betweenTurnConversationDomain); ok {
+				if err := boundary.beforeTurn(caseCtx, trial, index+2); err != nil {
+					verdict, code = Inconclusive, "native_boundary_unavailable"
+					if errors.Is(err, ErrPrivateEvidence) {
+						verdict, code = Fail, "private_native_boundary"
+					}
+					break
+				}
 			}
 			verdict, code = flow.turn(caseCtx, item.Case.Limits, step.Action, flow.last, index+2)
 			if verdict != Pass {
@@ -195,7 +238,10 @@ func runDomainConversation(
 		len(item.Case.Fixtures) == 0 {
 		trial.EvidenceEligible = true
 	}
-	if len(item.Case.Rubric) > 0 {
+	if deferredCoreEvidence(item.Case) && trial.Verdict != Pass {
+		trial.EvidenceEligible = false
+	}
+	if len(item.Case.Rubric) > 0 && !deferredCoreEvidence(item.Case) {
 		judgement := Judgement{
 			Version: Version, Verdict: Inconclusive, Code: "ineligible_judge_evidence",
 			Findings: JudgeFindings{Version: Version, Criteria: []JudgeFinding{}},
@@ -283,6 +329,9 @@ func (flow *conversation) turn(
 	prompt Event,
 	number int,
 ) (Verdict, string) {
+	if flow.inputs >= limits.MaxUserTurns {
+		return Inconclusive, "user_input_limit"
+	}
 	turnTimeout, _ := time.ParseDuration(limits.TurnTimeout)
 	turnCtx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
@@ -301,6 +350,7 @@ func (flow *conversation) turn(
 	if err := flow.transport.Send(turnCtx, request); err != nil {
 		return Inconclusive, transportCode(err)
 	}
+	flow.inputs++
 	content := payloadString(request.Payload, protocol.PayloadKeyContent)
 	if action.Kind == "protected_answer" {
 		content = "[protected answer supplied using an admitted fact handle]"
@@ -310,6 +360,65 @@ func (flow *conversation) turn(
 		Content: content,
 	}) {
 		return Inconclusive, "event_limit"
+	}
+	terminalRequestID := request.ID
+	var stop nativeStopObserver
+	if domain, ok := flow.domain.(inFlightConversationDomain); ok {
+		additional := 0
+		sent := []Event{}
+		var sendErr error
+		refuse := func(err error) (Event, error) {
+			sendErr = err
+			return Event{}, err
+		}
+		send := func(text string) (Event, error) {
+			if sendErr != nil {
+				return Event{}, sendErr
+			}
+			if additional >= 2 || flow.inputs >= limits.MaxUserTurns || len(flow.trial.Events) >= 256 ||
+				!boundedText(text, MaxInputBytes) {
+				return refuse(ErrRunOptions)
+			}
+			guidance := protocol.MintClawMessage{
+				Type: protocol.TypeMessageSend, ID: uuid.NewString(), SessionID: flow.trial.SessionID,
+				Timestamp: time.Now().UnixMilli(), Payload: map[string]any{protocol.PayloadKeyContent: text},
+			}
+			if credentialJSONValue(guidance, flow.filter) || privateJSONValue(guidance, flow.facts) {
+				return refuse(ErrPrivateEvidence)
+			}
+			additional++
+			flow.inputs++
+			if err := flow.transport.Send(turnCtx, guidance); err != nil {
+				return refuse(err)
+			}
+			flow.append(Event{Turn: number, Kind: "input", RequestID: guidance.ID, Content: text})
+			input := flow.trial.Events[len(flow.trial.Events)-1]
+			sent = append(sent, input)
+			return input, nil
+		}
+		err := domain.afterSend(turnCtx, request, number, send)
+		if sendErr != nil {
+			err = sendErr
+		}
+		if err != nil {
+			if errors.Is(err, ErrPrivateEvidence) {
+				return Fail, "private_in_flight_input"
+			}
+			return Inconclusive, "in_flight_evidence_unavailable"
+		}
+		if observer, ok := flow.domain.(nativeStopObserver); ok && number == 1 {
+			if !flow.nativeStop {
+				return Inconclusive, "native_stop_not_admitted"
+			}
+			for _, input := range sent {
+				if input.RequestID == observer.stopRequestID() && input.Content == "/stop" {
+					terminalRequestID, stop = input.RequestID, observer
+				}
+			}
+			if stop == nil {
+				return Inconclusive, "native_stop_input_not_observed"
+			}
+		}
 	}
 	for {
 		message, err := flow.transport.Receive(turnCtx)
@@ -329,13 +438,13 @@ func (flow *conversation) turn(
 			continue
 		}
 		requestID := payloadString(message.Payload, protocol.PayloadKeyRequestID)
-		if message.Type == protocol.TypeError && (requestID == "" || requestID == request.ID) {
+		if message.Type == protocol.TypeError && (requestID == "" || requestID == terminalRequestID) {
 			return Inconclusive, "protocol_rejected"
 		}
 		if message.SessionID == "" {
 			continue
 		}
-		if requestID != request.ID ||
+		if requestID != terminalRequestID ||
 			message.Type != protocol.TypeMessageCreate && message.Type != protocol.TypeMessageUpdate {
 			continue
 		}
@@ -372,13 +481,32 @@ func (flow *conversation) turn(
 				event.Usage = nil
 			}
 		}
+		if stop != nil {
+			if event.Kind == "stream" {
+				continue
+			}
+			if event.Kind != "final" || event.AgentID != flow.agent || event.SessionKey == "" ||
+				len(event.TraceScopes) != 0 {
+				flow.append(event)
+				return Inconclusive, "invalid_native_stop_reply"
+			}
+			if err := stop.observeStop(turnCtx, event); err != nil {
+				flow.append(event)
+				if errors.Is(err, ErrPrivateEvidence) {
+					return Fail, "private_native_evidence"
+				}
+				return Inconclusive, "native_stop_evidence_unavailable"
+			}
+			event.Kind, event.Usage = "stopped", nil
+		}
 		if !flow.append(event) {
 			return Inconclusive, "event_limit"
 		}
 		if event.Kind == "stream" {
 			continue
 		}
-		if event.AgentID == "" || event.SessionKey == "" || len(event.TraceScopes) == 0 && event.Kind != "canceled" {
+		if event.AgentID == "" || event.SessionKey == "" ||
+			len(event.TraceScopes) == 0 && event.Kind != "canceled" && event.Kind != "stopped" {
 			return Inconclusive, "missing_route_identity"
 		}
 		flow.trial.SessionKey = event.SessionKey
@@ -452,6 +580,9 @@ func (flow *conversation) append(event Event) bool {
 		return false
 	}
 	event.ID = fmt.Sprintf("event-%06d", len(flow.trial.Events)+1)
+	if transport, ok := flow.transport.(interface{ generation() int }); ok {
+		event.Generation = transport.generation()
+	}
 	flow.trial.Events = append(flow.trial.Events, event)
 	return true
 }
@@ -482,7 +613,8 @@ func responseEvent(message protocol.MintClawMessage, turn int) (Event, error) {
 		return Event{}, ErrInvalidJSON
 	}
 	event := Event{
-		Turn: turn, Kind: "stream", RequestID: payloadString(message.Payload, protocol.PayloadKeyRequestID),
+		WireType: message.Type,
+		Turn:     turn, Kind: "stream", RequestID: payloadString(message.Payload, protocol.PayloadKeyRequestID),
 		MessageID: payloadString(message.Payload, protocol.PayloadKeyMessageID), Content: content,
 		AgentID:            payloadString(message.Payload, protocol.PayloadKeyAgentID),
 		SessionKey:         payloadString(message.Payload, protocol.PayloadKeySessionKey),

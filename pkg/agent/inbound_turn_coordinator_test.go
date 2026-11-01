@@ -555,6 +555,10 @@ func TestBlockedRootClassifiesAndPersistsAdjacentFollowupForReplay(t *testing.T)
 	}
 	spooledRoot := <-msgBus.InboundChan()
 	coordinator := newInboundTurnCoordinator(al)
+	defer func() {
+		cancelRoot()
+		coordinator.wait()
+	}()
 	coordinator.handleInbound(rootCtx, spooledRoot)
 
 	followAt := rootAt.Add(time.Minute)

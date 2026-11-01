@@ -225,9 +225,10 @@ type DriverObservation struct {
 }
 
 type DriverElement struct {
-	Target string
-	Role   string
-	Name   string
+	Target     string
+	Role       string
+	Name       string
+	RegionName string
 }
 
 // playwrightDriverClient is the private transport used by the shared
@@ -349,7 +350,7 @@ type PlaywrightManagedHostConfig struct {
 // trusted execution host. The runtime mapping remains host-local.
 type PlaywrightHostConfig = PlaywrightManagedHostConfig
 
-// PlaywrightHandoffAvailable reports whether the managed driver owns a headed
+// PlaywrightHandoffAvailable reports whether the driver owns a headed
 // local browser window. Handoff does not expose a remote endpoint or admit a
 // headless/browser-extension configuration.
 func PlaywrightHandoffAvailable(root *config.Config) bool {
@@ -370,7 +371,8 @@ func PlaywrightHandoffAvailable(root *config.Config) bool {
 	if !ok {
 		return false
 	}
-	return profile.Mode == config.BrowserProfileManaged && profile.Runtime.Headed
+	return profile.Runtime.Headed &&
+		(profile.Mode == config.BrowserProfileManaged || profile.Mode == config.BrowserProfileEphemeral)
 }
 
 func onlyEnabledBrowserProfile(
@@ -1844,9 +1846,14 @@ func (worker *playwrightWorker) resolveElementLocked(
 		!playwrightTargetPattern.MatchString(target) {
 		return DriverElement{}, "", ErrWorkerUnavailable
 	}
-	text, err := worker.callAndConsume(
-		ctx, "browser_snapshot", map[string]any{"boxes": false, "target": target}, true,
-	)
+	arguments := map[string]any{"boxes": false, "target": target}
+	for _, previous := range worker.lastObservation.Elements {
+		if previous.Target == target && previous.RegionName != "" {
+			arguments["region_context"] = true
+			break
+		}
+	}
+	text, err := worker.callAndConsume(ctx, "browser_snapshot", arguments, true)
 	if err != nil {
 		return DriverElement{}, "", err
 	}
@@ -2599,6 +2606,14 @@ func parsePlaywrightObservation(
 		return DriverObservation{}, ErrDriverIncompatible
 	}
 	elements := parsePlaywrightElements(projected, encoding == "json-names-v1")
+	if regionErr := applyReferenceRegions(
+		text[:start-len(marker)],
+		targetReferences,
+		elements,
+		truncated,
+	); regionErr != nil {
+		return DriverObservation{}, regionErr
+	}
 	var evidence navigationEvidence
 	if raw := extractPlaywrightLine(text[:start-len(marker)], "- Navigation evidence: "); raw != "" {
 		if len(raw) > 256 || json.Unmarshal([]byte(raw), &evidence) != nil || !evidence.valid() {

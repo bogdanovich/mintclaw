@@ -22,7 +22,9 @@ func populateCandidateProvidersFromNames(
 	names []string,
 	out map[string]providers.LLMProvider,
 ) {
-	populateCandidateProvidersFromCandidatesTracked(cfg, workspace, resolveModelCandidates(cfg, "", names), out, nil)
+	populateCandidateProvidersFromCandidatesTracked(
+		cfg, workspace, resolveModelCandidates(cfg, "", names), out, nil, providers.CreateProviderFromConfig,
+	)
 }
 
 func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
@@ -534,6 +536,7 @@ func TestPopulateCandidateProviders_BindsDuplicateAliasToSelectedRow(t *testing.
 		candidates,
 		candidateProviders,
 		nil,
+		providers.CreateProviderFromConfig,
 	)
 	provider, err := providerForFallbackCandidate(candidateProviders, nil, candidates[0])
 	if err != nil {

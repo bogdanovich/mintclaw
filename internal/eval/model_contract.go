@@ -57,6 +57,24 @@ func parsePDFUserAction(data []byte, factHandles []string, pendingKind string) (
 	return action, nil
 }
 
+func parseBrowserFormUserAction(data []byte, factHandles []string, pendingKind string) (Action, error) {
+	if len(data) > MaxRoleOutputBytes || !validIDs(factHandles, 64) {
+		return Action{}, ErrModelContract
+	}
+	action, err := DecodeManifest[Action](data)
+	if err != nil {
+		return Action{}, ErrModelContract
+	}
+	if action.Kind != "confirm" && action.Kind != "allow_once" {
+		return ParseUserAction(data, factHandles, pendingKind)
+	}
+	if action.Text != "" || action.Fact != "" || action.Kind == "confirm" && pendingKind != "question" ||
+		action.Kind == "allow_once" && pendingKind != "approval" {
+		return Action{}, ErrModelContract
+	}
+	return action, nil
+}
+
 type JudgeFinding struct {
 	ID          string   `json:"id"`
 	Verdict     Verdict  `json:"verdict"`

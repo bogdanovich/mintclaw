@@ -27,6 +27,9 @@ const (
 	FormTaskAsk      FormTaskRouteAction = "ask"
 	FormTaskSwitch   FormTaskRouteAction = "switch_task"
 	FormTaskKeep     FormTaskRouteAction = "keep_form"
+	// Independent releases only this text detour, preserving automatic draft
+	// return. On a scope reply it never authorizes the original request.
+	FormTaskIndependent FormTaskRouteAction = "side_task"
 )
 
 type FormTaskRouteState string
@@ -56,21 +59,22 @@ type FormTaskRouteRequest struct {
 // FormTaskRouteSnapshot is a bounded private interpretation view. Its JSON
 // projection contains only native routing metadata, never the user request.
 type FormTaskRouteSnapshot struct {
-	HandoffTextBytes int                  `json:"-"`
-	Reference        string               `json:"reference"`
-	JobID            string               `json:"job_id"`
-	ModeID           string               `json:"mode_id"`
-	Revision         int64                `json:"revision"`
-	AdmittedRevision int64                `json:"-"`
-	GrantRevision    int64                `json:"-"`
-	State            FormTaskRouteState   `json:"state"`
-	Passes           int                  `json:"passes"`
-	FieldReference   string               `json:"field_reference,omitempty"`
-	Answer           *FormTaskRouteAnswer `json:"-"`
-	Reused           bool                 `json:"reused,omitempty"`
-	Text             string               `json:"-"`
-	MediaRefs        []string             `json:"-"`
-	Context          FormIntakeContext    `json:"-"`
+	PreviousUnrelated bool                 `json:"-"`
+	HandoffTextBytes  int                  `json:"-"`
+	Reference         string               `json:"reference"`
+	JobID             string               `json:"job_id"`
+	ModeID            string               `json:"mode_id"`
+	Revision          int64                `json:"revision"`
+	AdmittedRevision  int64                `json:"-"`
+	GrantRevision     int64                `json:"-"`
+	State             FormTaskRouteState   `json:"state"`
+	Passes            int                  `json:"passes"`
+	FieldReference    string               `json:"field_reference,omitempty"`
+	Answer            *FormTaskRouteAnswer `json:"-"`
+	Reused            bool                 `json:"reused,omitempty"`
+	Text              string               `json:"-"`
+	MediaRefs         []string             `json:"-"`
+	Context           FormIntakeContext    `json:"-"`
 }
 
 type FormTaskRouteDecision struct {
@@ -227,7 +231,7 @@ func (store *FormJobStore) DecideFormTaskRoute(
 	ctx context.Context, request FormTaskRouteDecision,
 ) (FormTaskRouteSnapshot, error) {
 	if request.ExpectedRevision <= 0 || request.Pass <= 0 || request.Pass > MaxFormTaskRoutingPasses ||
-		(request.Action != FormTaskContinue && request.Action != FormTaskAsk && request.Action != FormTaskSwitch) {
+		(request.Action != FormTaskContinue && request.Action != FormTaskAsk && !formTaskHandoffAction(request.Action)) {
 		return FormTaskRouteSnapshot{}, ErrFormJobAnswerConflict
 	}
 	digest, err := formJobJSONKeyedDigest(store.profileKey, struct {
@@ -257,7 +261,10 @@ func (store *FormJobStore) DecideFormTaskRoute(
 			(route.State != FormTaskPending && route.State != FormTaskVerify) {
 			return false, ErrFormJobConflict
 		}
-		if request.Action == FormTaskSwitch {
+		if formTaskHandoffAction(request.Action) {
+			if request.Action == FormTaskIndependent && len(route.MediaRefs) != 0 {
+				return false, ErrFormJobAnswerConflict
+			}
 			if request.Evidence.Occurrence != 1 || request.Evidence.Text == "" ||
 				request.Evidence.Text != strings.TrimSpace(route.Text) {
 				return false, ErrFormJobAnswerConflict
@@ -272,12 +279,12 @@ func (store *FormJobStore) DecideFormTaskRoute(
 			if len(route.MediaRefs) == 0 && route.State != FormTaskVerify && mode.State == FormIntakeActive {
 				state = FormTaskCurrent
 			}
-		case FormTaskSwitch:
+		case FormTaskSwitch, FormTaskIndependent:
 			state = FormTaskVerify
 			if len(route.Decisions) > 0 && route.State == FormTaskVerify {
 				state = FormTaskQuestion
 				previous := route.Decisions[len(route.Decisions)-1]
-				if previous.Action == FormTaskSwitch && previous.Revision == record.Revision {
+				if previous.Action == request.Action && previous.Revision == record.Revision {
 					state = FormTaskReady
 				}
 			}
@@ -323,7 +330,12 @@ func (store *FormJobStore) GrantFormTaskHandoff(
 			}
 		}
 		route.State, route.Text, route.MediaRefs = FormTaskGranted, "", nil
-		mode.State = FormIntakeSuspended
+		// Text-only side tasks keep protecting later form details. Explicit
+		// replacement tasks still yield exclusive form admission as before.
+		if len(route.Decisions) == 0 || route.Decisions[len(route.Decisions)-1].Action != FormTaskIndependent ||
+			route.ConsentAnswerID != "" {
+			mode.State = FormIntakeSuspended
+		}
 		record.Revision++
 		invalidateFormIntakeReview(record)
 		result.Progress = formIntakeProgress(*record, mode)
@@ -410,10 +422,11 @@ func formTaskRouteSnapshot(
 		}
 	}
 	return FormTaskRouteSnapshot{
-		HandoffTextBytes: handoffBytes,
-		GrantRevision:    formTaskGrantRevision(route),
-		Reference:        formTaskRoutePrefix + record.JobID + "." + route.ID,
-		JobID:            record.JobID, ModeID: mode.ID, Revision: record.Revision, AdmittedRevision: route.Revision,
+		PreviousUnrelated: formTaskPreviousUnrelated(mode, route.AdmissionOrder),
+		HandoffTextBytes:  handoffBytes,
+		GrantRevision:     formTaskGrantRevision(route),
+		Reference:         formTaskRoutePrefix + record.JobID + "." + route.ID,
+		JobID:             record.JobID, ModeID: mode.ID, Revision: record.Revision, AdmittedRevision: route.Revision,
 		State: route.State, Passes: route.Passes, FieldReference: route.FieldReference, Reused: reused,
 		Text: route.Text, MediaRefs: slices.Clone(route.MediaRefs), Context: cloneFormIntakeContext(route.Context),
 	}
@@ -491,7 +504,7 @@ func validateStoredFormTaskRoutes(record FormJobRecord, mode *formIntakeStoredMo
 		for _, decision := range route.Decisions {
 			if decision.Pass <= previous || decision.Pass > route.Passes || !validDocumentDigest(decision.Digest) ||
 				decision.Revision < route.Revision || decision.Revision > record.Revision ||
-				(decision.Action != FormTaskContinue && decision.Action != FormTaskAsk && decision.Action != FormTaskSwitch) {
+				(decision.Action != FormTaskContinue && decision.Action != FormTaskAsk && !formTaskHandoffAction(decision.Action)) {
 				return ErrFormJobRecordCorrupt
 			}
 			previous = decision.Pass
@@ -531,17 +544,23 @@ func validFormTaskRouteDecisionState(route formTaskRouteStored) bool {
 	}
 	switch route.State {
 	case FormTaskVerify:
-		return len(route.Decisions) == 1 && last.Action == FormTaskSwitch
+		return len(route.Decisions) == 1 && formTaskHandoffAction(last.Action) &&
+			(last.Action != FormTaskIndependent || len(route.MediaRefs) == 0)
 	case FormTaskCurrent:
 		return len(route.Decisions) == 1 && last.Action == FormTaskContinue && len(route.MediaRefs) == 0
 	case FormTaskReady, FormTaskGranted:
-		return len(route.Decisions) == 2 && last.Action == FormTaskSwitch &&
-			route.Decisions[0].Action == FormTaskSwitch && route.Decisions[0].Revision == last.Revision
+		return len(route.Decisions) == 2 && formTaskHandoffAction(last.Action) &&
+			route.Decisions[0].Action == last.Action && route.Decisions[0].Revision == last.Revision &&
+			(last.Action != FormTaskIndependent || len(route.MediaRefs) == 0)
 	case FormTaskQuestion, FormTaskKept:
 		return len(route.Decisions) <= 2
 	default:
 		return false
 	}
+}
+
+func formTaskHandoffAction(action FormTaskRouteAction) bool {
+	return action == FormTaskSwitch || action == FormTaskIndependent
 }
 
 func formTaskRouteConsent(route formTaskRouteStored) FormTaskRouteAction {

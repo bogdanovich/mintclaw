@@ -1,9 +1,9 @@
 # Website Login discovery: rollout evidence
 
-Status: implementation and deployment qualified; the latest correction was
-verified on 2026-10-19 UTC. The owner's
-confirmed Facebook login and stored-code use remain pending. The first
-owner-approved attempt ended unknown; the follow-up is recorded below. This
+Status: implementation and deployment qualified; the owner's Facebook login,
+stored TOTP and native cleanup were confirmed on 2026-10-25 UTC with a verified
+login receipt and successful task delivery. Earlier failed and unknown
+attempts remain recorded below with their original limits. This
 records D3 of the [replacement roadmap](credential-discovery-redesign.md);
 it does not turn synthetic tests or metadata lookup into evidence of an
 authenticated account.
@@ -387,6 +387,189 @@ unchanged. Tool regressions require exact public/audit ID equality, and the
 actual OpenAI-compatible/Codex website fixtures require a visible ID after
 fresh verification, including delayed phone continuation.
 
-At this stage the receipt correction still requires reviewed merge, deployment
-and a fresh normal-chat task that completes its formal report. The successful
-real authentication above does not by itself qualify that reporting fix.
+[PR #1808](https://github.com/bogdanovich/mintclaw/pull/1808), merge
+`1f5b2a9990758821260947807c678cfb4496c21b`, delivers the receipt projection.
+The red alias and generic verification regressions failed without the public
+ID. Full tools, objective outcome regressions, targeted race tests and native
+discovered/delayed provider fixtures passed, as did formatting, unchanged-rule
+full lint and documentation validation. The final head
+`1cdd43f4b4c344bb5545ba55c4060b7c837e478a` had ten successful CI checks,
+two intentional skips, clean exact-head review, no unresolved threads and
+owner PR-level rocket approval. All five private credential qualification
+steps passed in integration job `117880175400`.
+
+The merged correction was installed and verified on 2026-10-19 UTC. Core,
+node and launcher candidates had clean matching VCS provenance. The previous
+runtime `4439ac067b2edc9132c2b49e8a7f2f3efbb70729`, including another
+operator's updates, was preserved in the merged target and backup. All five
+configurations loaded with unchanged doctor findings; configuration hashes
+and protected token/owner-key identities were preserved. Registered owner
+tasks were idle immediately before stopping only main. The timestamped backup
+`mintclaw-credential-continuation-upgrade-20261019T040450Z` has 33 verified
+checksums and instructions for rollback of binaries only. No mutable task,
+conversation, browser, grant or credential state was restored.
+
+All ten services were active, with zero failed units, legacy processes and
+error-level journal entries in the checked ten-minute window. The public
+approval root returned HTML/HTTP 200, its script matched the exact deployed
+source, and external operator enrollment remained denied/HTTP 403. Stateless
+no-tool smoke trace `trace-turn-26997063f01ff2a704eb54e9` has schema
+`mintclaw.diagnostic_trace.v1`, matching source, `redacted_content` /
+`mintclaw.config_filter.v1`, completed status, six records, zero tools,
+no truncation and exact input/reply hashes.
+
+The physical discovery/password/TOTP/authentication/closure gate is satisfied
+by the owner pilot on `77c79cd5`. The small subsequent receipt projection is
+qualified by exact public/audit ID equality, actual provider output fixtures
+and existing trusted objective validation, including rejection of unconfirmed
+effects and preservation of honest partial reports. These composed checks do
+not claim a new real Facebook task on `1f5b2a99`. Repeating real submissions
+solely to test the non-secret evidence field is unnecessary; the next ordinary
+owner login can exercise the complete formal report. Restart invalidated
+earlier grants, so that next login may need fresh phone approval.
+
+## Form controls replaced after observation
+
+The next owner Facebook test on 2026-10-22 UTC, task
+`subagent-769c8526-f7d9-48b5-836b-cea8098c8b39`, generation
+`2ed173f1-3d67-46c5-ae64-332615d2b3b0`, approved successfully and resumed
+exactly once. Origin trace `trace-turn-43144340aa61f0956ee4ad74` suspended
+with 93 records. Continuation `trace-turn-799053b784bb6fc495b489ac`, 92
+records, opened a fresh browser, found the Login and returned `denied` at
+record 50 for its credentials step. Native closure returned closed at 71.
+Authentication and TOTP were not reached. Both traces use source `cf8bf5dc`,
+schema `mintclaw.diagnostic_trace.v1`, `redacted_content` /
+`mintclaw.config_filter.v1`, with no truncation. The current denial projection
+does not prove which internal pre-injection check rejected this exact attempt.
+
+A separate anonymous public-page probe, without retrieving or filling any
+credential values, reproduced a native readiness failure with the same selected
+native refs. Immediately after observation, preparation passed. After 11.5
+seconds, the username/password inputs remained connected, but the selected
+submit control `e65` was detached. Fresh observation selected its replacement
+`e215` and preparation passed again. This proves a real form replacement case
+and strongly suggests the cause of the similarly timed owner denial; it does
+not rewrite that historical trace into a more specific private error.
+
+The generic correction distinguishes positively identified missing or detached
+native controls before any value access as `observe_required`. Destination,
+method, target and other policy failures retain their existing denial. Its
+private wire response contains only that fixed code and the expected origin,
+never a capsule ID or page error.
+The broker requires a still-active grant and uncanceled operation before
+projecting it. The model is instructed to obtain new refs and retry preparation
+once; it cannot bypass readiness checks or reuse old refs. Other denials,
+unknown submission outcomes and cleanup retain their existing behavior. The
+correction requires independent review and merged deployment before release.
+
+### Review completed; deployment pending
+
+PR #1860 completed independent review on head
+`a000fec6a1b9224d0b9dfaae2c4729b1e3eb0750`, with ten successful CI checks,
+two intentionally skipped checks, no unresolved threads and owner PR-level
+rocket approval. Normal merge produced
+`86c0ce584defec8cf56c107becf5c15f89bf7442` on 2026-10-22 UTC. The review
+revision narrows refresh to positively missing/detached native refs; connected
+forms with a cross-origin action, GET method or separate-window target remain
+denied without admitting a private capsule.
+
+Local qualification under Go 1.26.10 included all 29 pinned Chromium tests
+(no failures or skips), the complete browser package after revision (67.768s),
+the complete tools package (97.964s), targeted refresh race cases (1.838s), and
+enabled discovered/delayed OpenAI-compatible and Codex fixtures plus Codex
+outcome cases (178.616s, seven subcases without skips). Canonical formatting,
+unchanged-rule lint, documentation lint and whitespace checks passed. No real
+vault values were retrieved by operator tooling.
+
+Security prerequisite PR #1861 separately raised the minimum to Go 1.26.10
+and passed all 15 CI checks, including vulnerability analysis. Its reviewed
+merge is `ba8a4858b1d6d57c930ae0cc9b38b95fbab035ca`. During qualification,
+PR #1859 also advanced main with the required-live-data guard. A temporary
+local merge of that main and the unchanged reviewed #1860 head passed the
+seven enabled provider fixtures again (178.522s), the upstream required-read
+guard tests (2.354s), canonical formatting and full lint (zero issues). The
+resulting tree `caa14c91a71dbfe4bbcb1f10e1a5306aa508fbb4` exactly matches
+the actual #1860 merge tree; no extra application change was introduced.
+
+This records code readiness, not a production release or a new Facebook
+success. The post-merge server check still found runtime `cf8bf5dc` / Go
+1.26.9 and source `3df8406f`, with uncommitted parallel source changes. The
+dirty-tree deployment guard stopped even preparatory cache warming before a
+build, installation or service action. All ten services remained active, with
+zero failed units and zero error-level entries in the ten-minute window.
+
+After the source checkout is available, deployment still needs its ordinary
+backup, reviewed-main build, configuration/key-identity checks, affected
+service verification, new stateless smoke trace and public approval-route
+check. A fresh owner-driven Facebook login with stored TOTP and browser
+closure must then qualify the real account path. The historical failed task,
+credential state, phone enrollment and running services were not rewritten.
+
+### Form-control recovery deployed
+
+On 2026-10-25 UTC, merged main
+`1013693a9eebce0604bda82083a3ba47e30a752f` was built and installed with
+Go 1.26.10. The nine pre-existing source edits were first preserved in a
+private archive and a retained local Git stash/ref, with matching file hashes;
+the production checkout is now clean main. No private workspace configuration
+was stashed or reset.
+
+Backup `/home/server/mintclaw-credential-continuation-upgrade-20261025T003602Z`
+retains the former binaries, systemd files and rollback manifest. All 34 backup
+checksums passed final verification. All three new binaries have the intended
+VCS revision and `vcs.modified=false`. Configuration hashes and the token/owner
+key file identities remained unchanged. All five profile configurations loaded
+without errors and with unchanged policy findings; nutrition was compared
+against its actual isolated `dc5b9355e` binary.
+
+Main was switched first. After its smoke/public-route checks, main-web, family,
+spouse and reviewer were rolled to the new binaries. The separate nutrition
+deployment was preserved: its PID, executable path and SHA-256 remained the
+same, and it already uses Go 1.26.10. All ten services are active, with no failed
+units, legacy processes or error-level entries in the inspected ten-minute
+window.
+
+New stateless trace `trace-turn-02410473bdbc8e4983e4788b` has the exact deployed
+source, schema `mintclaw.diagnostic_trace.v1`, six records, zero tool calls,
+completed status, exact input/reply hashes and no truncation. Its policy is
+`redacted_content` / `mintclaw.config_filter.v1`. The public approval root
+returned HTML/HTTP 200; its JavaScript matches the exact deployed source, and
+external operator enrollment remains HTTP 403.
+
+All 29 native credential tests also passed on the server using its configured
+`/usr/bin/google-chrome-stable` and Playwright 1.63.0: zero failures or skips,
+31.557 seconds. This includes stale-submit recovery, one fresh private submit,
+and denial for cross-origin actions, GET methods and separate-window targets.
+These tests use synthetic values; operator tooling did not retrieve account
+passwords, TOTP seeds/codes or authentication cookies.
+
+A fresh real Facebook/TOTP login still needs an owner-driven normal-chat pilot.
+The restart invalidates prior in-process grants, so fresh phone approval may be
+needed; the request window remains two hours and the granted access lasts up
+to twenty hours. The earlier failed task remains historical evidence, not a
+newly successful login.
+
+### Fresh post-release Facebook pilot
+
+The owner-driven pilot on 2026-10-25 UTC completed successfully on source
+`1013693a9eebce0604bda82083a3ba47e30a752f`. Authoritative task
+`subagent-0d6f7290-57e8-46eb-b3d9-397495335fa2`, generation
+`76a947ef-d370-4add-9948-9deb8188161f`, is `succeeded` and `delivered`.
+Its objective contains the same login receipt as the verified tool result;
+there is no missing-runtime-receipt warning.
+
+Origin trace `trace-turn-6b92c055bbfa76285aa7da90` suspended with 61 records.
+Continuation `trace-turn-1e29be54e6a244a2506b3c2d` completed with 204 records.
+It found the Login at record 62, submitted credentials at 69 and TOTP at 119,
+verified `logged_in` with a receipt at 183, and confirmed `close_state=closed`
+at 190. Both traces share the same browser session-owner hash and use the
+expected diagnostic schema and redaction policy without truncation. Task
+generation is authoritative registry metadata, not inferred from missing trace
+scope fields.
+
+This proves the fresh Website/password/stored-TOTP/verification/cleanup path
+and its formal successful completion. The live pilot did not emit
+`observe_required`; the replaced-control branch remains separately qualified
+by the synthetic/native tests. No operator replay or account-value retrieval
+was performed to verify this result. Human challenges are a separate follow-up
+described in [browser-human-challenges.md](browser-human-challenges.md).

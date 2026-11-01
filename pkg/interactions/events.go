@@ -131,51 +131,6 @@ func (r *Registry) appendEventFromLocked(
 	})
 }
 
-func (r *Registry) queueNotificationsLocked(events []Event) bool {
-	if len(events) == 0 {
-		return false
-	}
-	observers := make([]*observerDelivery, 0, len(r.observers))
-	for _, entry := range r.observers {
-		observers = append(observers, entry.delivery)
-	}
-	for _, event := range events {
-		r.notifications = append(r.notifications, queuedObservation{
-			observation: EventObservation{
-				Event:  cloneEvent(event),
-				Record: cloneRecord(r.records[event.InteractionID]),
-			},
-			observers: observers,
-		})
-	}
-	if r.notifying {
-		return false
-	}
-	r.notifying = true
-	return true
-}
-
-func (r *Registry) drainNotifications() {
-	for {
-		r.mu.Lock()
-		if len(r.notifications) == 0 {
-			r.notifying = false
-			r.mu.Unlock()
-			return
-		}
-		queued := r.notifications[0]
-		r.notifications[0] = queuedObservation{}
-		r.notifications = r.notifications[1:]
-		r.mu.Unlock()
-		for _, delivery := range queued.observers {
-			delivery.enqueue(EventObservation{
-				Event:  cloneEvent(queued.observation.Event),
-				Record: cloneRecord(queued.observation.Record),
-			})
-		}
-	}
-}
-
 func notifyObserver(observer Observer, observation EventObservation) {
 	defer func() {
 		if recovered := recover(); recovered != nil {

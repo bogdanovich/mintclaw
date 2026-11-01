@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "id": "general.history.restart",
+  "suite": "general",
+  "tags": ["core", "history", "restart", "multi-turn"],
+  "description": "Recall a synthetic marker after an owned native gateway restart, without replaying inputs or resetting the budget.",
+  "requires": ["conversation", "bounded_calls", "owned_restart"],
+  "task": "Remember the synthetic code mc-restart-104be82d for this conversation. Reply only Noted.",
+  "fixtures": [],
+  "driver": {
+    "mode": "scripted",
+    "steps": [{"wait_for": {"kind": "final"}, "action": {"kind": "message", "text": "Reply only with the synthetic code I supplied earlier."}}]
+  },
+  "limits": {"max_user_turns": 2, "max_driver_calls": 1, "turn_timeout": "2m", "case_timeout": "5m"},
+  "checks": [
+    {"id": "native-restart", "kind": "owned_restart"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"},
+    {"id": "remembered", "kind": "response_contains", "expected": "mc-restart-104be82d"}
+  ],
+  "rubric": [{"id": "restart-recall", "description": "The final answer recalls the original synthetic code without guessing, asking again or claiming unavailable context.", "required": true}],
+  "restart": {"marker": "mc-restart-104be82d", "recall": "Reply only with the synthetic code I supplied earlier."}
+}

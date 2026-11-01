@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,16 +21,19 @@ var (
 const MaxRepeat = 64
 
 type RunOptions struct {
-	Home            string
-	OutputParent    string
-	SuiteTimeout    time.Duration
-	PDFOraclePython string
-	Repeat          int
-	StartTarget     bool
+	Home              string
+	OutputParent      string
+	SuiteTimeout      time.Duration
+	PDFOraclePython   string
+	Repeat            int
+	StartTarget       bool
+	IncludePending    bool
+	restart           func(context.Context, Trial) (admittedTarget, int, error)
+	restartGeneration int
 }
 
 // Run defaults to attachment after prepared-target admission. StartTarget owns
-// one fresh gateway child, never adopts/restarts a PID or replays a task.
+// a fresh gateway; only an admitted owned_restart case can request a successor.
 func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOptions) (RunReport, error) {
 	if len(cases) == 0 || len(cases) > MaxCorpusCases {
 		return RunReport{}, ErrRunOptions
@@ -47,10 +51,54 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		options.PDFOraclePython != "" && !filepath.IsAbs(options.PDFOraclePython) {
 		return RunReport{}, ErrRunOptions
 	}
+	if err := CheckRunAvailability(cases, options.IncludePending); err != nil {
+		return RunReport{}, err
+	}
+	options.restart, options.restartGeneration = nil, 0
+	if hasOwnedRestart(preset) && (len(cases) != 1 || options.Repeat > maxOwnedGatewayGenerations-1 ||
+		!options.StartTarget) {
+		return RunReport{}, ErrUnsafeTarget
+	}
+	if hasCompaction(preset) && (len(cases) != 1 || options.Repeat > 3) {
+		return RunReport{}, ErrUnsafeTarget
+	}
 	seen := make(map[string]bool)
+	if preset.Validate() != nil ||
+		(preset.TargetCallBudget != nil || preset.ActiveTool != nil) && !options.StartTarget {
+		return RunReport{}, ErrUnsafeTarget
+	}
 	for _, item := range cases {
 		if item.Case.Validate() != nil || !validDigest(item.Digest) || seen[item.Case.ID] {
 			return RunReport{}, ErrInvalidCase
+		}
+		if requiresTargetBudget(item.Case) && (preset.TargetCallBudget == nil || !options.StartTarget) {
+			return RunReport{}, ErrUnsafeTarget
+		}
+		if validateReadRecoveryBinding(preset, item.Case) != nil ||
+			validateNativeStopBinding(preset, item.Case) != nil ||
+			validateApprovalDeniedBinding(preset, item.Case) != nil ||
+			validateFinalDeliveryBinding(preset, item.Case) != nil ||
+			validateSkillSelectionBinding(
+				preset,
+				item.Case,
+			) != nil || validateRestartBinding(preset, item.Case) != nil || validateCompactionBinding(preset, item.Case) != nil {
+			return RunReport{}, ErrUnsafeTarget
+		}
+		if item.Case.Steering != nil && (preset.ActiveTool == nil || !options.StartTarget ||
+			!slices.Contains(item.Case.Steering.Modes, preset.ActiveTool.SteeringMode)) {
+			return RunReport{}, ErrUnsafeTarget
+		}
+		if item.Case.Steering != nil && item.Case.Steering.Peer != nil && preset.ActiveTool.MaxParallelTurns != 2 {
+			return RunReport{}, ErrUnsafeTarget
+		}
+		if item.Case.PDF != nil && item.Case.PDF.SourceFields != nil &&
+			containsAll(preset.Capabilities, item.Case.Requires) && !preset.CaptureModelMetadata {
+			return RunReport{}, ErrUnsafeTarget
+		}
+		if (isBrowserForm(item.Case) || isBrowserAmbiguity(item.Case)) &&
+			containsAll(preset.Capabilities, item.Case.Requires) &&
+			(!preset.CaptureModelMetadata || !options.StartTarget) {
+			return RunReport{}, ErrUnsafeTarget
 		}
 		seen[item.Case.ID] = true
 	}
@@ -58,12 +106,16 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	defer cancel()
 	var child *ownedGateway
 	var fixtures *browserFixtureHost
+	var active *activeToolFixture
 	var target admittedTarget
 	var err error
 	if options.StartTarget {
-		fixtures, err = bindOwnedBrowserFixture(preset, options.Home)
+		active, err = bindOwnedActiveTool(preset, options.Home)
 		if err == nil {
-			child, target, err = startOwnedGatewayWithBrowser(suiteCtx, preset, options.Home, fixtures)
+			fixtures, err = bindOwnedBrowserFixture(preset, options.Home)
+		}
+		if err == nil {
+			child, target, err = startOwnedGatewayWithFixtures(suiteCtx, preset, options.Home, fixtures, active)
 		}
 	} else {
 		target, err = admitPreparedTarget(suiteCtx, preset, options.Home)
@@ -72,7 +124,19 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	var retainedFacts privateFactRetention
 	var pendingPDF pdfRunFinalization
 	pendingBrowser := browserRun{host: fixtures}
+	pendingCore := coreEvidenceRun{}
 	var privateSurfaces *PrivateSurfaceObservation
+	var activeHost *ActiveToolHostEvidence
+	closeActive := func() {
+		if active == nil || activeHost != nil {
+			return
+		}
+		code := "closed"
+		if closeActiveTool(active) != nil {
+			code = "shutdown_unknown"
+		}
+		activeHost = &ActiveToolHostEvidence{Version: Version, Profile: *preset.ActiveTool, Code: code}
+	}
 	stopTarget := func() {
 		if child == nil || lifecycle != nil {
 			return
@@ -83,18 +147,20 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		lifecycle = &receipt
 	}
 	observeOwnedSurfaces := func() {
-		if child == nil || privateSurfaces != nil || retainedFacts.values == nil && !preset.CaptureModelMetadata {
+		if child == nil || privateSurfaces != nil ||
+			retainedFacts.values == nil && !preset.CaptureModelMetadata && child.budgetSpec == nil {
 			return
 		}
 		scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer scanCancel()
 		observation := observePrivateSurfaces(scanCtx, child.profile.home, retainedFacts.values,
 			child.profile.config.SensitiveDataReplacer(), retainedFacts.documents,
-			pendingBrowser.approvalKeyWitness(child.profile.home))
+			pendingCore.approvalKeyWitness(child.profile.home, pendingBrowser.approvalKeyWitness(child.profile.home)))
 		privateSurfaces = &observation
 	}
 	defer func() {
 		stopTarget()
+		closeActive()
 		pendingBrowser.close(lifecycle)
 		// Even report I/O failures must not discard the only private fact set
 		// before attempting the post-stop raw observation.
@@ -145,11 +211,29 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	defer func() { _ = writer.root.Close() }()
 	result.ReportDir = writer.dir
+	if writer.startTrialStaging() != nil {
+		return result, ErrReport
+	}
 	result.WorkspaceInputs = &WorkspaceInputs{
 		Scope:  workspaceInputScope,
 		Before: observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter),
 	}
 	roles := prepareConversationRoles(target, cases)
+	var restart *ownedRestartRun
+	if hasOwnedRestart(preset) {
+		restart = &ownedRestartRun{child: &child, target: &target, preset: preset}
+		options.restart = func(ctx context.Context, trial Trial) (admittedTarget, int, error) {
+			previous := child
+			next, generation, restartErr := restart.next(ctx, trial)
+			if child != previous {
+				lifecycle, privateSurfaces = nil, nil
+			}
+			if restartErr != nil {
+				cancel()
+			}
+			return next, generation, restartErr
+		}
+	}
 	for _, role := range []*ModelRole{roles.user, roles.judge} {
 		if role != nil {
 			role.retained = &retainedFacts
@@ -164,21 +248,27 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	roleCalls := []RoleCall{}
 	// Case-major repetitions are independent trials, not retries of one session.
 	for ordinal := range len(cases) * options.Repeat {
+		if restart != nil && child != nil {
+			options.restartGeneration = child.identity.generation
+		}
 		item := cases[ordinal/options.Repeat]
 		trial := newUnattemptedTrial(item, preset.ExpectedAgent)
 		switch {
 		case item.Case.Browser != nil && fixtures == nil:
 			trial.Verdict, trial.Code = Skipped, "browser_evidence_unavailable"
-		case item.Case.Browser != nil && len(item.Case.Driver.Facts) != 0:
+		case item.Case.Browser != nil && len(item.Case.Driver.Facts) != 0 && !isBrowserForm(item.Case):
 			trial.Verdict, trial.Code = Skipped, "browser_private_input_unavailable"
 		case item.Case.Browser != nil && item.Case.Browser.Scenario != "read" &&
-			item.Case.Browser.Scenario != "artifact" && item.Case.Browser.Scenario != "denied":
+			item.Case.Browser.Scenario != "artifact" && item.Case.Browser.Scenario != "denied" &&
+			!isBrowserForm(item.Case) && !isBrowserAmbiguity(item.Case):
 			trial.Verdict, trial.Code = Skipped, "browser_action_evidence_unavailable"
 		case !containsAll(preset.Capabilities, item.Case.Requires):
 			trial.Verdict, trial.Code = Skipped, "capability_unavailable"
 		case item.Case.Driver.Mode == "llm_user" && roles.user == nil:
 			trial.Verdict, trial.Code = Skipped, "driver_unavailable"
-		case item.Case.PDF == nil && (len(item.Case.Fixtures) != 0 || len(item.Case.Driver.Facts) != 0):
+		case item.Case.PDF == nil && item.Case.Browser == nil && item.Case.ReadRecovery == nil &&
+			item.Case.ApprovalDenied == nil && item.Case.SkillSelection == nil &&
+			(len(item.Case.Fixtures) != 0 || len(item.Case.Driver.Facts) != 0):
 			trial.Verdict, trial.Code = Skipped, "domain_evidence_unavailable"
 		case suiteCtx.Err() != nil:
 			trial.Verdict, trial.Code = Inconclusive, "suite_interrupted"
@@ -187,8 +277,14 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 				&retainedFacts, &pendingPDF, &pendingBrowser)
 		}
 		trial.Repetition = ordinal%options.Repeat + 1
+		if restart != nil && restart.remember(trial) != nil {
+			trial.Verdict, trial.Code = Inconclusive, "restart_binding_unavailable"
+		}
 		result.TargetUsage.addTrial(trial)
 		pendingPDF.observeTrial(trial)
+		if deferredCoreEvidence(item.Case) {
+			pendingCore.retain(item.Case, trial)
+		}
 		name := "trial-" + trial.ID + ".json"
 		roleCalls = append(roleCalls, trial.DriverCalls...)
 		if trial.Judge != nil && trial.Judge.Call != nil {
@@ -202,14 +298,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		})
 		result.Coverage[trial.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, trial.Verdict)
-		checkpoint := name
-		if _, pending := pendingPDF.trials[trial.ID]; pending {
-			checkpoint = "pending-trial-" + trial.ID + ".json"
-		}
-		if _, pending := pendingBrowser.trials[trial.ID]; pending {
-			checkpoint = "pending-trial-" + trial.ID + ".json"
-		}
-		if writer.write(checkpoint, trial) != nil {
+		_, pdfPending := pendingPDF.trials[trial.ID]
+		_, browserPending := pendingBrowser.trials[trial.ID]
+		if writer.checkpointTrial(name, trial, pdfPending || browserPending || deferredCoreEvidence(item.Case)) != nil {
 			result.Trials[len(result.Trials)-1].File = ""
 			result.Verdict = combineVerdicts(result.Verdict, Error)
 			result.DurationMS = time.Since(result.StartedAt).Milliseconds()
@@ -218,6 +309,10 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	result.WorkspaceInputs.After = observeWorkspaceInputs(suiteCtx, preset.ExpectedWorkspace, cases, filter)
 	stopTarget()
+	closeActive()
+	result.ActiveTool = activeHost
+	result.Verdict = combineVerdicts(result.Verdict, activeHost.verdict(lifecycle))
+	result.TargetBudget = observeTargetBudget(child, retainedFacts.values, filter)
 	result.BrowserFixtures = pendingBrowser.close(lifecycle)
 	observeOwnedSurfaces()
 	if privateSurfaces != nil {
@@ -236,9 +331,23 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 			result.Cleanup = "owned_gateway_cleanup_uncertain"
 		}
 	}
+	if restart != nil {
+		observation, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		restart.finish(observation, &result, retainedFacts.values, filter)
+		stop()
+	}
 	finalCtx, finalCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	err = pendingPDF.finish(finalCtx, writer, &result, lifecycle, retainedFacts.values, filter, privateSurfaces,
 		func(item Case, trial *Trial) {
+			if item.PDF != nil && item.PDF.SourceFields != nil {
+				readCtx, readCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				trial.PDF.SourceFields = observePDFSourceFields(readCtx, target, lifecycle, privateSurfaces,
+					*trial, retainedFacts.values, filter)
+				readCancel()
+				if trial.PDF.SourceFields.Code == "leak_observed" {
+					failPDFArtifact(trial, Fail, "private_native_evidence")
+				}
+			}
 			assessFinalizedPDF(
 				suiteCtx,
 				roles.judge,
@@ -267,15 +376,55 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	if browserErr != nil {
 		err = ErrReport
 	}
+	coreCtx, coreCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	coreErr := pendingCore.finish(coreCtx, target, writer, &result, retainedFacts.values, filter,
+		func(item Case, trial *Trial) {
+			assessCoreConversation(suiteCtx, roles.judge, item, trial, result, target.preset.ExpectedWorkspace)
+			if trial.Judge != nil && trial.Judge.Call != nil {
+				roleCalls = append(roleCalls, *trial.Judge.Call)
+			}
+		})
+	coreCancel()
+	if coreErr != nil {
+		err = ErrReport
+	}
 	result.RoleUsage = []RoleUsage{summarizeRoleCalls("user", roleCalls), summarizeRoleCalls("judge", roleCalls)}
 	if err != nil {
 		result.Verdict = combineVerdicts(result.Verdict, Error)
 		result.DurationMS = time.Since(result.StartedAt).Milliseconds()
 		return result, ErrReport
 	}
+	result.TrialScratch, err = writer.finishTrialStaging(result)
+	if err != nil {
+		result.Verdict = combineVerdicts(result.Verdict, Error)
+		return result, ErrReport
+	}
+	if preset.CaptureModelMetadata && restart == nil {
+		bindings, bindingErr := readRunModelBindings(writer, result, preset.ExpectedWorkspace)
+		if errors.Is(bindingErr, ErrReport) {
+			result.Verdict = combineVerdicts(result.Verdict, Error)
+			return result, ErrReport
+		}
+		if bindingErr != nil {
+			result.NativeModels = unavailableNativeModels("native_evidence_unavailable")
+		} else {
+			modelCtx, modelCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			result.NativeModels = observeNativeModels(modelCtx, target, lifecycle, privateSurfaces, bindings,
+				retainedFacts.values, filter)
+			modelCancel()
+		}
+	}
 	result.Coverage = map[Verdict]int{}
-	result.Verdict = combineVerdicts(result.TargetLifecycle.verdict(), result.PrivateSurfaces.verdict(),
-		result.BrowserFixtures.verdict())
+	result.Verdict = combineVerdicts(
+		result.TargetLifecycle.verdict(),
+		result.PrivateSurfaces.verdict(),
+		result.BrowserFixtures.verdict(),
+		result.NativeModels.verdict(),
+		result.TrialScratch.verdict(),
+		result.TargetBudget.verdict(),
+		result.ActiveTool.verdict(result.TargetLifecycle),
+		targetGenerationsVerdict(result),
+	)
 	for _, summary := range result.Trials {
 		result.Coverage[summary.Verdict]++
 		result.Verdict = combineVerdicts(result.Verdict, summary.Verdict)
@@ -336,9 +485,13 @@ func runAdmittedTrial(
 	caseTimeout, _ := time.ParseDuration(item.Case.Limits.CaseTimeout)
 	caseCtx, cancel := context.WithTimeout(ctx, caseTimeout)
 	defer cancel()
+	if report.beginTrialStaging(caseCtx, sessionID, item.Digest) != nil {
+		trial.Verdict, trial.Code = Inconclusive, "trial_scratch_unavailable"
+		return trial
+	}
 	// Recheck the running instance between trials before any new task is sent.
 	probe, err := requestRuntimeProbe(caseCtx, target.config, target.serviceToken)
-	if err != nil || probe != target.probe {
+	if err != nil || probe != target.probe || !activeToolMatches(target.preset, target.activeTool) {
 		trial.Verdict, trial.Code = Inconclusive, "target_changed"
 		return trial
 	}
@@ -349,11 +502,37 @@ func runAdmittedTrial(
 		return inspectNativeJSON(data, retainedFacts.values, roles.filter)
 	}}
 	var browser *browserConversation
+	var delivery *finalDeliveryConversation
+	var selection *skillSelectionConversation
+	if item.Case.SkillSelection != nil {
+		selection, err = newSkillSelectionConversation(caseCtx, item.Case, target)
+		if err != nil {
+			trial.Verdict, trial.Code = Inconclusive, "skill_selection_preparation_unavailable"
+			return trial
+		}
+	}
+	if item.Case.FinalDelivery != nil {
+		if !finalDeliveryStreamingMatches(target, item.Case) {
+			trial.Verdict, trial.Code = Inconclusive, "final_delivery_profile_mismatch"
+			return trial
+		}
+		delivery = &finalDeliveryConversation{
+			item: item.Case, target: target, sessionID: sessionID,
+			wire: &finalDeliveryWire{sessionID: sessionID},
+		}
+		options.ObserveMessage = delivery.wire.observe
+	}
 	if item.Case.Browser != nil {
 		name, _ := browserEvalProfile(target.config)
 		if pendingBrowser.host == nil || name != item.Case.Browser.Profile ||
-			!browserFixtureMatches(target.config, pendingBrowser.host) || !retainedFacts.add(nil) {
+			!browserFixtureMatches(target.config, pendingBrowser.host) {
 			trial.Verdict, trial.Code = Inconclusive, "browser_preparation_unavailable"
+			return trial
+		}
+		item.Case.Driver.Facts, err = materializePrivateFacts(item.Case.Driver.Facts)
+		if err != nil || !retainedFacts.add(item.Case.Driver.Facts) {
+			clear(item.Case.Driver.Facts)
+			trial.Verdict, trial.Code = Inconclusive, "private_fact_retention_limit"
 			return trial
 		}
 		fixture, fixtureErr := pendingBrowser.host.newTrial(sessionID)
@@ -412,6 +591,88 @@ func runAdmittedTrial(
 		trial.DurationMS = time.Since(trial.StartedAt).Milliseconds()
 		return trial
 	}
+	if selection != nil {
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, selection)
+	}
+	if item.Case.Restart != nil {
+		if runOptions.restart == nil || validateRestartPolicy(target.config, target.preset) != nil {
+			client.Close()
+			trial.Verdict, trial.Code = Inconclusive, "restart_owner_unavailable"
+			return trial
+		}
+		transport := &restartTransport{conversationTransport: client, number: runOptions.restartGeneration}
+		restart := &restartConversation{
+			item: item.Case, target: target, transport: transport, options: options,
+			next: runOptions.restart, firstGeneration: runOptions.restartGeneration,
+			settlement: finalDeliveryConversation{item: item.Case, target: target, sessionID: sessionID},
+		}
+		return runDomainConversation(caseCtx, transport, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, restart)
+	}
+	if item.Case.Compaction != nil {
+		domain := &compactionConversation{item: item.Case, target: target, session: sessionID}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, domain)
+	}
+	if item.Case.Steering != nil {
+		if item.Case.Steering.Peer != nil {
+			isolation, prepareErr := newIsolationConversation(item, target, sessionID, roles, options)
+			if prepareErr != nil {
+				client.Close()
+				trial.Verdict, trial.Code = Inconclusive, "isolation_preparation_unavailable"
+				return trial
+			}
+			mainItem := item
+			mainItem.Case = isolationMainCase(item.Case)
+			return runDomainConversation(caseCtx, client, mainItem, sessionID,
+				target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, isolation)
+		}
+		steering, err := newSteeringConversation(item.Case, target, sessionID)
+		if err != nil {
+			client.Close()
+			trial.Verdict, trial.Code = Inconclusive, "steering_preparation_unavailable"
+			return trial
+		}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, steering)
+	}
+	if item.Case.FinalDelivery != nil {
+		trial = runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, delivery)
+		delivery.freezeWire(&trial, client.Failure() == nil)
+		return trial
+	}
+	if item.Case.NativeStop != nil {
+		stop, prepareErr := newNativeStopConversation(item.Case, target, sessionID)
+		if prepareErr != nil {
+			client.Close()
+			trial.Verdict, trial.Code = Inconclusive, "native_stop_preparation_unavailable"
+			return trial
+		}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, stop)
+	}
+	if item.Case.ReadRecovery != nil {
+		recovery, prepareErr := newReadRecoveryConversation(caseCtx, item.Case, target)
+		if prepareErr != nil {
+			client.Close()
+			trial.Verdict, trial.Code = Inconclusive, "read_recovery_preparation_unavailable"
+			return trial
+		}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, recovery)
+	}
+	if item.Case.ApprovalDenied != nil {
+		denial, prepareErr := newApprovalDeniedConversation(caseCtx, item.Case, target, sessionID)
+		if prepareErr != nil {
+			client.Close()
+			trial.Verdict, trial.Code = Inconclusive, "approval_denied_preparation_unavailable"
+			return trial
+		}
+		return runDomainConversation(caseCtx, client, item, sessionID,
+			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, denial)
+	}
 	if browser != nil {
 		trial = runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, browser)
@@ -445,6 +706,7 @@ func runAdmittedTrial(
 			task: item.Case.Task, home: target.preset.IsolationRoot,
 			workspace: target.preset.ExpectedWorkspace, sessionID: sessionID,
 			agent: target.preset.ExpectedAgent, started: started, filter: roles.filter,
+			answerCheckID: questionAnswerCheckID(item.Case),
 		}
 		return runDomainConversation(caseCtx, client, item, sessionID,
 			target.preset.ExpectedAgent, target.preset.ExpectedWorkspace, roles, questions)
@@ -458,6 +720,8 @@ func newUnattemptedTrial(item LoadedCase, agent string) Trial {
 		Version: Version, ID: uuid.NewString(), CaseID: item.Case.ID, CaseSHA256: item.Digest,
 		SessionID: uuid.NewString(), AgentID: agent, Verdict: Inconclusive, Code: "not_attempted",
 		StartedAt: time.Now().UTC(), Events: []Event{}, Checks: []CheckResult{}, RemoteState: "not_sent",
+		TargetBudgetRequired: requiresTargetBudget(item.Case),
+		ActiveToolRequired:   requiresActiveTool(item.Case),
 	}
 }
 

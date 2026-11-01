@@ -287,7 +287,8 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	}
 	retained, found, err := captureSpool.LookupTransfer(captureOwner, captureOwner.ToolCallID)
 	if err != nil || !found || retained.State != nodes.TransferArtifactCommitted ||
-		retained.Ref != capture.Retained.Ref || retained.Spec.SHA256 != capture.Retained.SHA256 {
+		retained.Ref != capture.Retained.Ref || retained.Spec.SHA256 != capture.Retained.SHA256 ||
+		retained.Spec.SourceRevision != initial.SnapshotGeneration {
 		t.Fatalf("companion screenshot retention = %#v, %v, found=%v", retained, err, found)
 	}
 	prepared, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
@@ -322,6 +323,27 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 			final.SnapshotGeneration, final.URL, len(final.Snapshot), err, host.commandSequence(),
 		)
 	}
+	pageOwner := captureOwner
+	pageOwner.ToolCallID = "capture_wss_page_after_navigation"
+	pageCapture, err := broker.CaptureScreenshot(t.Context(), browser.ScreenshotRequest{
+		Owner: owner, RequestID: pageOwner.ToolCallID, SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: final.SnapshotID, SnapshotGeneration: final.SnapshotGeneration,
+		Target: browser.ScreenshotTargetPage,
+		Retention: &browser.ScreenshotRetentionAuthority{
+			WorkspaceID: pageOwner.WorkspaceID, AgentID: pageOwner.AgentID,
+			ActorID: pageOwner.ActorID, RouteID: pageOwner.RouteID,
+			SessionID: pageOwner.SessionID, ToolCallID: pageOwner.ToolCallID,
+		},
+	})
+	if err != nil || pageCapture.Retained == nil {
+		t.Fatalf("companion page screenshot after navigation = %#v, %v", pageCapture, err)
+	}
+	pageRecord, found, err := captureSpool.LookupTransfer(pageOwner, pageOwner.ToolCallID)
+	if err != nil || !found || pageRecord.State != nodes.TransferArtifactCommitted ||
+		pageRecord.Spec.SourceRevision != final.SnapshotGeneration {
+		t.Fatalf("page screenshot source revision = %#v, found=%v, error=%v; published=%d",
+			pageRecord.Spec, found, err, final.SnapshotGeneration)
+	}
 	elementMarker := `[ref=`
 	elementStart := strings.Index(final.Snapshot, elementMarker)
 	elementEnd := -1
@@ -349,6 +371,12 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if err != nil || elementCapture.Retained == nil ||
 		elementCapture.CaptureTarget != browser.ScreenshotTargetElement {
 		t.Fatalf("companion element screenshot = %#v, %v", elementCapture, err)
+	}
+	elementRecord, found, err := captureSpool.LookupTransfer(elementOwner, elementOwner.ToolCallID)
+	if err != nil || !found || elementRecord.State != nodes.TransferArtifactCommitted ||
+		elementRecord.Spec.SourceRevision != final.SnapshotGeneration {
+		t.Fatalf("element screenshot source revision = %#v, found=%v, error=%v; published=%d",
+			elementRecord.Spec, found, err, final.SnapshotGeneration)
 	}
 	fillMarker := `textbox "Display name" [ref=`
 	fillStart := strings.Index(final.Snapshot, fillMarker)
@@ -1127,6 +1155,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		// never a replay of the accepted navigation.
 		"observe",
 		"capture",
+		"capture",
 		"fill",
 		"click",
 		"select",
@@ -1529,6 +1558,7 @@ func TestCompanionBrowserClickDryRunDeniedOverProductionWSS(t *testing.T) {
 	profile := wssBrowserProfile()
 	profile.DryRun = true
 	profile.AllowApprovedActions = false
+	profile.Actions = slices.DeleteFunc(profile.Actions, func(action string) bool { return action == "drag" })
 	host := &wssBrowserHost{profile: profile}
 	identity, err := companion.LoadOrCreateIdentity(filepath.Join(t.TempDir(), "identity"))
 	if err != nil {

@@ -198,7 +198,8 @@ type turnExecution struct {
 
 	loopGuard *loopguard.Controller
 
-	// Live-only tool context is exposed to at most one successful model call.
+	// Extracted tool data is exposed to at most one successful model call.
+	// A freshly authorized task input stays live for this turn's tool/model loop.
 	// Its text budget is aggregate across the whole root turn, not per tool
 	// invocation, so repeated extracts cannot grow the prompt without bound.
 	liveToolContextTextBytes int
@@ -221,6 +222,8 @@ type liveToolContextProjection struct {
 	durableMedia           []string
 	durableAttachments     []providers.Attachment
 	requiresDocumentVision bool
+	turnScopedInput        bool
+	userInputText          string
 }
 
 // turnPendingInputs is the single owner of messages accepted for a later
@@ -381,12 +384,14 @@ type LLMIterationState struct {
 	iteration                    int
 	modelAttemptID               string
 	diagnosticMessages           []providers.Message
+	liveUserInputs               []liveToolContextProjection
 	promptCacheTailStart         int
 	promptCacheTailBoundaryFound bool
 	assistantMessageID           string
 	response                     *providers.LLMResponse
 	normalizedToolCalls          []providers.ToolCall
 	toolResponseDisposition      toolResponseDisposition
+	handledAttachments           []providers.Attachment
 	streamingPublisher           *streamingChunkPublisher
 	streamingFallback            bool
 	suppressReasoning            bool
@@ -425,26 +430,44 @@ func (state *LLMIterationState) beginModelAttempt() string {
 func (state *LLMIterationState) setCanonicalAttemptMessages(
 	messages []providers.Message,
 	boundary promptCacheTailBoundary,
-) {
+) error {
 	if state == nil {
-		return
+		return nil
 	}
 	state.diagnosticMessages = cloneProviderMessages(messages)
+	state.protectedDiagnosticContext = state.protectedDiagnosticContext || hasDocumentConversation(messages)
 	state.promptCacheTailStart = boundary.Start
 	state.promptCacheTailBoundaryFound = boundary.Found
-	state.callMessages = projectTurnEnvelopesForProvider(messages)
+	projected, err := projectLiveUserInputs(messages, state.liveUserInputs)
+	if err != nil {
+		state.callMessages = nil
+		return err
+	}
+	state.callMessages = projectTurnEnvelopesForProvider(projected)
+	return nil
 }
 
-func (state *LLMIterationState) replaceCanonicalAttemptMessages(messages []providers.Message) {
+func (state *LLMIterationState) replaceCanonicalAttemptMessages(messages []providers.Message) error {
 	start, found := promptCacheDynamicTailStart(messages)
-	state.setCanonicalAttemptMessages(messages, promptCacheTailBoundary{Start: start, Found: found})
+	return state.setCanonicalAttemptMessages(messages, promptCacheTailBoundary{Start: start, Found: found})
+}
+
+func (state *LLMIterationState) promptHashMessagesForAttempt() []providers.Message {
+	if hasLiveUserInput(state.liveUserInputs) {
+		return projectTurnEnvelopesForProvider(state.diagnosticMessages)
+	}
+	return state.callMessages
 }
 
 func (state *LLMIterationState) diagnosticMessagesForAttempt() []providers.Message {
 	if state == nil {
 		return nil
 	}
-	return stripCanonicalMessageStateFromAll(state.diagnosticMessages)
+	messages := state.diagnosticMessages
+	if hasDocumentConversation(messages) {
+		messages = omitProtectedDiagnosticContext(messages)
+	}
+	return stripCanonicalMessageStateFromAll(messages)
 }
 
 func (state *LLMIterationState) recordResponseSource(
@@ -582,6 +605,7 @@ type turnState struct {
 	skillContextTrace   []SkillContextSnapshot
 	toolKinds           []string
 	toolExecutions      []ToolExecutionRecord
+	cleanup             turnResourceCleanup
 	turnCtx             *TurnContext
 	codingInstructions  *codingInstructionTurnState
 	runtimeCapabilities runtimecap.Context
@@ -1492,6 +1516,7 @@ func normalizeMessageForComparison(msg providers.Message) providers.Message {
 			msg.SystemParts[i].PromptLayer = ""
 			msg.SystemParts[i].PromptSlot = ""
 			msg.SystemParts[i].PromptSource = ""
+			msg.SystemParts[i].PromptSections = nil
 		}
 	}
 	if len(msg.ToolCalls) == 0 {

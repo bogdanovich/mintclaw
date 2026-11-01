@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -722,7 +723,7 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 }
 
 // ExecuteJob executes a cron job through the agent
-func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
+func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, error) {
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
 	target := cronOutboundTarget(job)
@@ -734,8 +735,15 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer pubCancel()
 			err := t.publishProactiveMessage(pubCtx, target, output)
-			t.finishCronTaskRecord(taskID, taskregistry.StatusFailed, cronDeliveryStatusForPublish(err), output, err)
-			return "ok"
+			execErr := errors.New(output)
+			t.finishCronTaskRecord(
+				taskID,
+				taskregistry.StatusFailed,
+				cronDeliveryStatusForPublish(err),
+				output,
+				execErr,
+			)
+			return output, errors.Join(execErr, err)
 		}
 
 		args := map[string]any{
@@ -756,12 +764,20 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
 		err := t.publishProactiveMessage(pubCtx, target, output)
+		var execErr error
+		status := taskregistry.StatusSucceeded
 		if result.IsError {
-			t.finishCronTaskRecord(taskID, taskregistry.StatusFailed, cronDeliveryStatusForPublish(err), output, err)
-		} else {
-			t.finishCronTaskRecord(taskID, taskregistry.StatusSucceeded, cronDeliveryStatusForPublish(err), output, err)
+			execErr = errors.New(output)
+			status = taskregistry.StatusFailed
+		} else if err != nil {
+			status = taskregistry.StatusFailed
 		}
-		return "ok"
+		combinedErr := errors.Join(execErr, err)
+		t.finishCronTaskRecord(taskID, status, cronDeliveryStatusForPublish(err), output, combinedErr)
+		if combinedErr != nil {
+			return output, combinedErr
+		}
+		return "ok", nil
 	}
 
 	if job.Payload.Kind == cron.PayloadDeliverText {
@@ -774,12 +790,12 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 			status = taskregistry.StatusFailed
 		}
 		t.finishCronTaskRecord(taskID, status, cronDeliveryStatusForPublish(err), output, err)
-		return "ok"
+		return "ok", err
 	}
 	if job.Payload.Kind != cron.PayloadAgentTurn {
 		err := fmt.Errorf("unsupported cron payload kind %q", job.Payload.Kind)
 		t.finishCronTaskRecord(taskID, taskregistry.StatusFailed, taskregistry.DeliveryNotApplicable, "", err)
-		return fmt.Sprintf("Error: %v", err)
+		return fmt.Sprintf("Error: %v", err), err
 	}
 
 	sessionKey := session.BuildOpaqueSessionKey(fmt.Sprintf("cron|job=%s|run=%s", job.ID, uuid.New().String()))
@@ -824,7 +840,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	}
 	if err != nil {
 		t.finishCronTaskRecord(taskID, taskregistry.StatusFailed, taskregistry.DeliveryFailed, "", err)
-		return fmt.Sprintf("Error: %v", err)
+		return fmt.Sprintf("Error: %v", err), err
 	}
 
 	if response != "" {
@@ -844,16 +860,16 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 				string(control.Control),
 				nil,
 			)
-			return "ok"
+			return "ok", nil
 		}
 		t.executor.PublishResponseIfNeeded(
 			ctx, t.workspace, agentID, channel, chatID, sessionKey, response,
 		)
 		t.finishCronTaskRecord(taskID, taskregistry.StatusSucceeded, taskregistry.DeliveryDelivered, response, nil)
-		return "ok"
+		return "ok", nil
 	}
 	t.finishCronTaskRecord(taskID, taskregistry.StatusSucceeded, taskregistry.DeliveryNotApplicable, "", nil)
-	return "ok"
+	return "ok", nil
 }
 
 func (t *CronTool) startCronTaskRecord(job *cron.CronJob, channel, chatID string) string {

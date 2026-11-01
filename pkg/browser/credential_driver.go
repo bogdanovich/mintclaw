@@ -13,8 +13,9 @@ import (
 )
 
 var (
-	errCredentialDriver = errors.New("private browser login unavailable")
-	credentialCapsuleID = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	errCredentialDriver          = errors.New("private browser login unavailable")
+	errCredentialObserveRequired = errors.New("private browser observation required")
+	credentialCapsuleID          = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 
 // CredentialFields is trusted runtime metadata, containing no login values.
@@ -104,12 +105,22 @@ func (client *playwrightLibraryClient) prepareCredential(ctx context.Context, fi
 	if !ok {
 		return "", errCredentialDriver
 	}
+	return decodeCredentialPreparation(text, fields.Origin)
+}
+
+func decodeCredentialPreparation(text, origin string) (string, error) {
 	var ready struct {
 		ID     string `json:"id"`
 		Origin string `json:"origin"`
+		Code   string `json:"code"`
 	}
-	if decodeCredentialEnvelope(text, &ready) != nil || !credentialCapsuleID.MatchString(ready.ID) ||
-		ready.Origin != fields.Origin {
+	if decodeCredentialEnvelope(text, &ready) != nil || ready.Origin != origin {
+		return "", errCredentialDriver
+	}
+	if ready.Code == "observe_required" && ready.ID == "" {
+		return "", errCredentialObserveRequired
+	}
+	if ready.Code != "" || !credentialCapsuleID.MatchString(ready.ID) {
 		return "", errCredentialDriver
 	}
 	return ready.ID, nil

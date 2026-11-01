@@ -62,9 +62,10 @@ wait and remains ineligible for automatic replay.
    fresh Facebook pilot. Do not require another real-account attempt while the
    approval waiting behavior is being replaced.
 
-This remains part of the existing credential discovery goal. The physical
-Facebook login/TOTP gate is still open; a plan or waiting task does not certify
-an authenticated account.
+This remains part of the existing credential discovery goal. The later owner
+Facebook pilot confirmed authentication and stored TOTP after phone approval;
+see the [rollout evidence](credential-website-login-rollout.md). A plan or
+waiting task alone does not certify an authenticated account.
 
 ## Credential composition
 
@@ -111,8 +112,9 @@ the model; it neither replays the paused call nor creates approval authority.
 
 Qualification must cover a resumed frozen envelope, unchanged original context,
 current uncached guidance/receipts and the actual OpenAI-compatible/Codex
-requests after delayed phone approval. Real Facebook authentication remains a
-separate deployment/pilot gate.
+requests after delayed phone approval. The deployed composition subsequently
+passed the separate real Facebook authentication pilot, with a fresh browser
+after approval and native closure after verification.
 
 Native coding-question and remote handoff integration checks also enforce
 byte-for-byte extension of the provider's historical messages. Adding the live

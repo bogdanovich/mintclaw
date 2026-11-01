@@ -3,7 +3,9 @@ package agent
 import (
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -105,6 +107,7 @@ type LLMRequestPayload struct {
 	Provider           string
 	Model              string
 	PromptHash         string
+	SystemSources      *diagnostictrace.SystemSourceFingerprint
 	PromptCacheMode    string
 	PromptCache        PromptCacheFingerprint
 	MessagesCount      int
@@ -304,6 +307,8 @@ type ToolExecEndPayload struct {
 	DiagnosticResult   string
 	WriteAudit         []toolshared.WriteAuditEntry
 	Observation        *toolshared.ToolObservation
+	DocumentFields     toolshared.DocumentFieldsObservation `json:"-"`
+	BrowserInputTarget browseraction.InputTargetObservation `json:"-"`
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.

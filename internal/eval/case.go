@@ -28,20 +28,28 @@ var (
 )
 
 type Case struct {
-	Version     int          `json:"version"`
-	ID          string       `json:"id"`
-	Suite       string       `json:"suite"`
-	Tags        []string     `json:"tags"`
-	Description string       `json:"description"`
-	Task        string       `json:"task"`
-	Requires    []string     `json:"requires"`
-	Fixtures    []Fixture    `json:"fixtures"`
-	Driver      Driver       `json:"driver"`
-	Limits      Limits       `json:"limits"`
-	Checks      []Check      `json:"checks"`
-	Rubric      []Criterion  `json:"rubric"`
-	PDF         *PDFCase     `json:"pdf,omitempty"`
-	Browser     *BrowserCase `json:"browser,omitempty"`
+	Version        int                 `json:"version"`
+	ID             string              `json:"id"`
+	Suite          string              `json:"suite"`
+	Tags           []string            `json:"tags"`
+	Description    string              `json:"description"`
+	Task           string              `json:"task"`
+	Requires       []string            `json:"requires"`
+	Fixtures       []Fixture           `json:"fixtures"`
+	Driver         Driver              `json:"driver"`
+	Limits         Limits              `json:"limits"`
+	Checks         []Check             `json:"checks"`
+	Rubric         []Criterion         `json:"rubric"`
+	PDF            *PDFCase            `json:"pdf,omitempty"`
+	Browser        *BrowserCase        `json:"browser,omitempty"`
+	Steering       *SteeringCase       `json:"steering,omitempty"`
+	ReadRecovery   *ReadRecoveryCase   `json:"read_recovery,omitempty"`
+	NativeStop     *NativeStopCase     `json:"native_stop,omitempty"`
+	ApprovalDenied *ApprovalDeniedCase `json:"approval_denied,omitempty"`
+	FinalDelivery  *FinalDeliveryCase  `json:"final_delivery,omitempty"`
+	SkillSelection *SkillSelectionCase `json:"skill_selection,omitempty"`
+	Restart        *RestartCase        `json:"restart,omitempty"`
+	Compaction     *CompactionCase     `json:"compaction,omitempty"`
 }
 
 type Fixture struct {
@@ -126,6 +134,9 @@ func (c Case) Validate() error {
 	if (c.Suite == "browser" || slices.Contains(c.Requires, "browser")) && c.Browser == nil {
 		return ErrInvalidCase
 	}
+	if requiresTargetBudget(c) && (c.PDF != nil || c.Browser != nil || c.Suite != "general") {
+		return ErrInvalidCase
+	}
 	fixtureIDs := make(map[string]bool)
 	for _, fixture := range c.Fixtures {
 		if !validID(fixture.ID) || fixtureIDs[fixture.ID] || !safeRelativePath(fixture.Path) ||
@@ -138,6 +149,15 @@ func (c Case) Validate() error {
 		return ErrInvalidCase
 	}
 	for _, step := range c.Driver.Steps {
+		if step.Action.Kind == "deny" && (c.ApprovalDenied == nil || step.WaitFor.Kind != "approval") {
+			return ErrInvalidCase
+		}
+		if step.WaitFor.Kind == "stopped" && c.NativeStop == nil {
+			return ErrInvalidCase
+		}
+		if step.Action.Kind == "answer" && (step.WaitFor.Kind != "question" || !hasQuestionAnswerCheck(c)) {
+			return ErrInvalidCase
+		}
 		if step.WaitFor.Kind == "question_or_approval" && (c.Browser == nil || c.Browser.Scenario != "denied") {
 			return ErrInvalidCase
 		}
@@ -147,7 +167,8 @@ func (c Case) Validate() error {
 		if step.Action.Kind == "confirm" || step.Action.Kind == "allow_once" {
 			pdfOutput := c.PDF != nil && c.PDF.Output == "required"
 			browserDownload := c.Browser != nil && c.Browser.Scenario == "artifact" && step.Action.Kind == "allow_once"
-			if !pdfOutput && !browserDownload ||
+			browserRemoval := isBrowserAmbiguity(c) && step.Action.Kind == "allow_once"
+			if !pdfOutput && !browserDownload && !browserRemoval ||
 				step.Action.Kind == "confirm" && step.WaitFor.Kind != "final" ||
 				step.Action.Kind == "allow_once" && step.WaitFor.Kind != "approval" {
 				return ErrInvalidCase
@@ -160,7 +181,7 @@ func (c Case) Validate() error {
 			return ErrInvalidCase
 		}
 		switch check.Kind {
-		case "response_contains", "response_absent":
+		case "response_contains", "response_absent", "final_response_absent":
 			if !boundedText(check.Expected, 4096) {
 				return ErrInvalidCase
 			}
@@ -172,7 +193,43 @@ func (c Case) Validate() error {
 			if check.Expected != "" {
 				return ErrInvalidCase
 			}
-		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write":
+		case "interaction_answered":
+			if check.Expected != "" || !validQuestionAnswerCase(c) {
+				return ErrInvalidCase
+			}
+		case "steering_boundary":
+			if c.Steering == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
+		case "read_recovery":
+			if c.ReadRecovery == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
+		case "native_stop":
+			if c.NativeStop == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
+		case "approval_denied":
+			if c.ApprovalDenied == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
+		case "final_delivery":
+			if c.FinalDelivery == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
+		case "skill_selection":
+			if c.SkillSelection == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
+		case "owned_restart":
+			if c.Restart == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
+		case "compaction":
+			if c.Compaction == nil || check.Expected != "" {
+				return ErrInvalidCase
+			}
+		case "pdf_fields", "pdf_structure", "pdf_delivery", "pdf_no_write", "pdf_source_fields":
 			if c.PDF == nil || check.Expected != "" {
 				return ErrInvalidCase
 			}
@@ -207,6 +264,36 @@ func (c Case) Validate() error {
 	if c.Browser != nil && c.Browser.validate(c) != nil {
 		return ErrInvalidCase
 	}
+	if c.Steering != nil && c.Steering.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if slices.Contains(c.Requires, readToolCapability) != (c.ReadRecovery != nil) ||
+		c.ReadRecovery != nil && c.ReadRecovery.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if c.NativeStop != nil && c.NativeStop.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if slices.Contains(c.Requires, approvalToolCapability) != (c.ApprovalDenied != nil) ||
+		c.ApprovalDenied != nil && c.ApprovalDenied.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if slices.Contains(c.Requires, finalDeliveryCapability) != (c.FinalDelivery != nil) ||
+		c.FinalDelivery != nil && c.FinalDelivery.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if slices.Contains(c.Requires, skillSelectionCapability) != (c.SkillSelection != nil) ||
+		c.SkillSelection != nil && c.SkillSelection.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if slices.Contains(c.Requires, ownedRestartCapability) != (c.Restart != nil) ||
+		c.Restart != nil && c.Restart.validate(c) != nil {
+		return ErrInvalidCase
+	}
+	if slices.Contains(c.Requires, compactionCapability) != (c.Compaction != nil) ||
+		c.Compaction != nil && c.Compaction.validate(c) != nil {
+		return ErrInvalidCase
+	}
 	return nil
 }
 
@@ -233,7 +320,10 @@ func (driver Driver) validate(limits Limits) error {
 	}
 	for _, step := range driver.Steps {
 		if step.Action.validate(driver.Facts) != nil ||
-			!slices.Contains([]string{"final", "question", "approval", "question_or_approval"}, step.WaitFor.Kind) ||
+			!slices.Contains(
+				[]string{"final", "question", "approval", "question_or_approval", "stopped"},
+				step.WaitFor.Kind,
+			) ||
 			step.WaitFor.Kind == "question_or_approval" && step.Action.Kind != "cancel" ||
 			step.WaitFor.Contains != "" && !boundedText(step.WaitFor.Contains, 4096) {
 			return ErrInvalidCase
@@ -244,15 +334,18 @@ func (driver Driver) validate(limits Limits) error {
 
 func (action Action) validate(facts map[string]string) error {
 	switch action.Kind {
-	case "message", "finish":
+	case "message", "finish", "answer":
 		if !boundedText(action.Text, MaxInputBytes) || action.Fact != "" {
+			return ErrInvalidCase
+		}
+		if action.Kind == "answer" && len(action.Text) > 16*1024 {
 			return ErrInvalidCase
 		}
 	case "protected_answer":
 		if !validID(action.Fact) || facts[action.Fact] == "" || action.Text != "" {
 			return ErrInvalidCase
 		}
-	case "clarify", "back", "skip", "not_applicable", "cancel", "stop", "confirm", "allow_once":
+	case "clarify", "back", "skip", "not_applicable", "cancel", "stop", "confirm", "allow_once", "deny":
 		if action.Text != "" || action.Fact != "" {
 			return ErrInvalidCase
 		}

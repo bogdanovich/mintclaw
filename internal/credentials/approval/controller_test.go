@@ -250,7 +250,7 @@ func TestRealPasskeyApprovalLifecycle(t *testing.T) {
 	ceremony.Scope.Accounts[0] = "ebay"
 	response := fixture.assertion(t, ceremony, testOrigin, protocol.FlagUserPresent|protocol.FlagUserVerified, 1, false)
 	grant, err := fixture.controller.FinishApproval(context.Background(), ceremony.ID, response)
-	if err != nil || fixture.store.commits != 2 || !slices.Equal(grant.Accounts, []string{"facebook"}) ||
+	if err != nil || fixture.store.commits != 3 || !slices.Equal(grant.Accounts, []string{"facebook"}) ||
 		grant.ExpiresAt.Sub(grant.IssuedAt) != 20*time.Hour {
 		t.Fatal("verified scope did not issue a persisted bounded grant", err)
 	}
@@ -324,8 +324,8 @@ func TestRealPasskeyApprovalLifecycle(t *testing.T) {
 	) {
 		t.Fatal("revoked grant remains usable")
 	}
-	if fixture.store.commits != 3 {
-		t.Fatal("revocation skipped counter persistence")
+	if fixture.store.commits != 5 {
+		t.Fatal("revocation skipped counter or grant persistence")
 	}
 }
 
@@ -534,7 +534,7 @@ func TestConcurrentAssertionIssuesOnce(t *testing.T) {
 			issued++
 		}
 	}
-	if issued != 1 || fixture.store.commits != 2 {
+	if issued != 1 || fixture.store.commits != 3 {
 		t.Fatal("concurrent assertion was not consumed once")
 	}
 }

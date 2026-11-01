@@ -237,6 +237,7 @@ func (m *modelExecutionManager) buildExecutionStateForModelTarget(
 		overrideCandidates[1:],
 		candidateProviders,
 		nil,
+		factory,
 	)
 	if len(overrideCandidates) > 0 {
 		candidateProviders[candidateProviderKey(overrideCandidates[0])] = overrideProvider

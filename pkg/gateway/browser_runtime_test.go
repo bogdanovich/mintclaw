@@ -55,6 +55,43 @@ func TestBrowserRuntimeDisabledDoesNotOwnState(t *testing.T) {
 	}
 }
 
+func TestBrowserProtectedInputSourceRejectsStaleRuntimeGeneration(t *testing.T) {
+	cfg := gatewayBrowserConfig(t.TempDir())
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), &attachedOnlyGatewayDiagnosticsFactory{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &gatewayBrowserToolSource{
+		services:       &services{Browser: &browserRuntime{broker: broker, policyRevision: "current"}},
+		policyRevision: "obsolete",
+	}
+	checks := map[string]func() error{
+		"bind": func() error {
+			_, err := source.CreateProtectedFillBinding(t.Context(), browser.PrepareActionRequest{})
+			return err
+		},
+		"inspect": func() error {
+			_, err := source.InspectProtectedFillBinding(t.Context(), browser.Owner{}, "obsolete-token")
+			return err
+		},
+		"stage": func() error {
+			_, err := source.PrepareProtectedFill(t.Context(), browser.Owner{}, "obsolete-token", "private-value")
+			return err
+		},
+		"read": func() error {
+			_, err := source.ProtectedFillPreparation(t.Context(), browser.Owner{}, "prepared_obsolete")
+			return err
+		},
+	}
+	for name, check := range checks {
+		t.Run(name, func(t *testing.T) {
+			if err := check(); !errors.Is(err, browser.ErrDenied) {
+				t.Fatal("stale source reached a replacement broker", err)
+			}
+		})
+	}
+}
+
 func TestGatewayAttachedOnlyDiscoveryDoesNotAdvertiseUnsupportedDownload(t *testing.T) {
 	cfg := gatewayBrowserConfig(t.TempDir())
 	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
@@ -100,7 +137,7 @@ func TestGatewayAttachedOnlyDiscoveryDoesNotAdvertiseUnsupportedDownload(t *test
 	}
 }
 
-func TestBrowserHandoffProfilesAreScopedPerLocalOrCloudManagedIdentity(t *testing.T) {
+func TestBrowserHandoffProfilesAreScopedToOperatorVisibleLocalOrCloudIdentity(t *testing.T) {
 	policy := config.BrowserToolsConfig{Targets: map[string]config.BrowserTargetConfig{
 		"gateway": {
 			Enabled: true, Placement: config.BrowserPlacementGateway,
@@ -111,6 +148,13 @@ func TestBrowserHandoffProfilesAreScopedPerLocalOrCloudManagedIdentity(t *testin
 				},
 				"headless": {
 					Enabled: true, Mode: config.BrowserProfileManaged,
+				},
+				"temporary_visible": {
+					Enabled: true, Mode: config.BrowserProfileEphemeral,
+					Runtime: config.BrowserProfileRuntimeConfig{Headed: true},
+				},
+				"temporary_headless": {
+					Enabled: true, Mode: config.BrowserProfileEphemeral,
 				},
 			},
 		},
@@ -134,11 +178,12 @@ func TestBrowserHandoffProfilesAreScopedPerLocalOrCloudManagedIdentity(t *testin
 		},
 	}}
 	profiles := browserHandoffProfiles(policy)
-	if len(profiles) != 2 {
+	if len(profiles) != 3 {
 		t.Fatalf("handoff profiles = %#v", profiles)
 	}
 	for _, key := range []string{
 		gatewayBrowserProfileKey("gateway", "managed"),
+		gatewayBrowserProfileKey("gateway", "temporary_visible"),
 		gatewayBrowserProfileKey("cloud", "personal"),
 	} {
 		if _, found := profiles[key]; !found {
@@ -147,6 +192,7 @@ func TestBrowserHandoffProfilesAreScopedPerLocalOrCloudManagedIdentity(t *testin
 	}
 	for _, key := range []string{
 		gatewayBrowserProfileKey("gateway", "headless"),
+		gatewayBrowserProfileKey("gateway", "temporary_headless"),
 		gatewayBrowserProfileKey("companion", "managed"),
 	} {
 		if _, found := profiles[key]; found {

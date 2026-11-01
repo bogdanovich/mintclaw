@@ -2,6 +2,11 @@
 
 ## Current Status
 
+All six PDF cases are currently **pending/non-default** by operator decision.
+Offline inspection is unchanged; explicit execution requires selecting them and adding `--include-pending`.
+The [latest full baseline](manual-agent-evals-baseline-20261024.md) remains red; historical scoped passes below
+do not supersede it. See the [core follow-up](../architecture/agent-evals-core-roadmap.md).
+
 The repository contains six PDF scenarios and four deterministic synthetic AcroForms, with exact SHA-256 checked
 by offline corpus validation. The dialogue packet lets `eval run` attempt PDF conversations on a narrowly admitted
 isolated profile, using protected facts and owned fixtures. The write-intent packet adds native review-bound separate
@@ -11,8 +16,8 @@ downloaded PDF for independent field/structure/appearance checks. Delivery uniqu
 coverage, and complete owned-resource cleanup remain pending. Owned post-stop census can establish a scoped no-write
 check and remove a verified settled source fixture. The finalized cancellation/no-write contract below
 can additionally admit judging/regrading without private facts or output artifacts. The distinct finalized-output
-contract below admits live judging only after all of its independent witnesses; output/private-value regrade and
-the complete six-case qualification remain pending.
+contract below admits live judging only after all of its independent witnesses. Newly eligible output reports can
+also be regraded under the generated-fact and retained-binary contract below; complete six-case qualification remains pending.
 Required missing evidence still prevents a passing trial;
 a first question, caption, or oracle control is not qualification.
 
@@ -161,11 +166,23 @@ unchanged source and owned-source removal permit the output scope. Hard artifact
 authoritative. The tools-disabled judge receives only the permitted conversation/rubric, never PDF bytes, private
 answers or hidden field expectations. Private or uninspectable judge output revokes the scope/privacy claim.
 
-This scope can produce a live trial verdict but deliberately leaves `evidence_eligible: false`: private-value and
-output offline-regrade admission is still pending. `grade` refuses such sources before model billing rather than
-reusing a live privacy claim without its private guard. Older no-write receipts and incomplete output pilots are
-not upgraded. Deterministic controls with stubbed oracle/profile/process receipts are not real-worker qualification;
-the required first live output attempt and remaining PDF/browser cases stay part of the active goal.
+New complete output assessments retain `evidence_eligible: true`; that flag alone never admits a regrade.
+`grade` still requires the complete frozen output/native/oracle/delivery/cleanup witnesses and either no private
+facts or exclusively v1 generation markers. Literal facts and older `evidence_eligible: false` reports remain refused.
+The shared `generated_canary_format_v1` guard scans original JSON before decoding and both full typed judge
+boundaries, including other trials' generated values, without retaining the actual values. Unscannable evidence
+refuses admission; bounded JSON-escape coverage is not arbitrary-encoding or raw-provider-traffic certification.
+
+Before any judge call, regrade reads the private regular 0600 artifact under the existing 64 MiB file and 128 MiB
+cohort bounds, verifies the native size/SHA-256, and preserves the exact binary in its new private result directory.
+A known current credential literal in those bytes is refused. Binary PDF evidence may intentionally contain
+synthetic answers; it is never treated as model/JSON content. This reuses the frozen independent oracle witness,
+not a new field/appearance inspection or an arbitrary-binary privacy certificate. No gateway, source fixture,
+document worker, PDF parser or oracle is reopened, and original reports/native stores are not changed.
+All selected evidence is admitted before billing; a positive judge still cannot override a hard failure.
+
+Older no-write receipts and incomplete output pilots are not upgraded. Deterministic controls with stubbed
+oracle/profile/process receipts are not real-worker qualification; remaining live PDF/browser cases stay part of the active goal.
 Offline controls do not establish a real-model cancellation result or qualify the remaining five PDF cases.
 
 ## Post-Stop Raw File Observation
@@ -231,9 +248,21 @@ bounded exception, not complete E3 qualification.
 ## Dialogue Admission
 
 The prepared profile must declare `pdf` and `interactions`, enable the document tool with an enabled native audit
-model, and allow only `document` and `request_user_input` under a deny-default tool policy. Exec, MCP, browser,
-hooks, trace capture, external channels, reload/deploy, broad path permissions, and approval bypass remain refused.
+model, and explicitly allow `document`, `request_user_input` and `tool_search_tool_bm25` under a deny-default tool
+policy. The native gateway keeps `document` hidden until its existing BM25 discovery promotes it. A PDF policy
+without that search tool is unusable and is refused before gateway probes/tasks and before preparation opens the
+native repository or allocates a profile. Discovery is admitted only with `pdf`; regex search and general
+file/exec/MCP tools remain unadmitted. Preparation never silently widens an existing seed's policy.
+
+Exec, MCP, browser, hooks, unadmitted trace capture, external channels, reload/deploy, broad path permissions, and
+approval bypass remain refused. Fixed metadata-only capture has its separate explicit owned-profile admission.
 Undeclared document access and unadmitted audit fallbacks are refused before sending a task.
+
+Native composition controls construct the actual AgentLoop with a non-network stub provider, verify document is
+hidden, execute native BM25 discovery and require document promotion while unrelated tools stay absent. These are
+not PDF worker/source-use qualification. The [empty-fields v1 false positive](manual-agent-evals-pdf-empty-v1-pilot-20261019.md)
+still requires a source-bound inspection/field-use hard check before a new case experiment; a discovery fix alone
+cannot upgrade that frozen pass or establish that the PDF was read.
 
 The common conversation runner owns streaming, request correlation and follow-ups. The PDF adapter substitutes
 the owned source path, admits native public or protected question prompts, and binds all protected answers to one
@@ -249,6 +278,62 @@ claim of artifact correctness, no-write safety, complete privacy coverage or rem
 fixtures are conservatively retained while native settlement is unknown. Only the finalized no-write
 contract above is currently eligible for judge-only regrading. Later write/delivery/private-value witnesses must
 replace the other explicit unknowns before E3 exits.
+
+## Native Field-Read Metadata
+
+Opt-in native diagnostic capture can retain a `tool.result.document_fields` observation for a successful,
+synchronous `document` `fields` or `form.discover` invocation. The document tool projects its typed native report,
+not model prose, tool arguments, result previews, or a second PDF parser. The observation contains only the exact
+source SHA-256, operation, schema/returned field counts, and counts of required fields, saved values and defaults.
+It contains no field IDs/names/options/values, source refs, paths, or document text. The native field ceiling is
+256. Unknown/failed/asynchronous/suspended reads, capabilities, inspect-only calls and hook-only responses do not
+produce this observation. The originating scalar observation is captured before `AfterTool` can replace it.
+
+`schema_fields` counts the complete schema read by the native tool. `returned_fields` counts the native result's
+field window; `fields` returns the full schema, while `form.discover` may return fewer or zero candidates. Schema
+aggregates are not aggregates of that smaller window. This is read evidence, not proof of model comprehension,
+model-visible completeness after hook transformation, write/approval authority, or successful output creation.
+The transient observation is excluded from canonical tool results and ordinary runtime-event JSON; only the
+existing diagnostic projector emits the bounded metadata when capture is explicitly enabled. Capture defaults,
+source authorization, document execution, delivery and question handling are unchanged.
+
+The producer alone does not qualify a live PDF run. The retained v1 coverage false positive remains unchanged.
+
+## Source-Use Hard Check
+
+`pdf_source_fields`, paired with a PDF `source_fields` expectation, checks the exact fixture SHA, total field count,
+minimum returned window, required fields, saved-value presence and default presence. This first contract supports
+public no-output cancellation cases and reads on the native turn that asked the canceled question. It does not
+claim all earlier/later turns, private-value handling, model comprehension or successful PDF output. Other PDF
+cases keep their existing independent checks. A PDF-capable run selecting this check requires explicit
+`capture_model_metadata: true` and an owned target; it refuses before startup/report allocation without opt-in.
+It does not silently enable capture, and capability-unavailable cases remain skipped.
+
+After native stop, the raw profile privacy scan and PDF resource settlement/cleanup, but before the judge, the
+consumer reuses the existing rooted, bounded native-trace reader. Raw privacy inspection precedes native decode
+and continues past malformed files. Native source/build, exact metadata-only capture policy, permissions,
+same-file snapshots, codec/digests and unique trace identity must qualify. The complete non-truncated question
+turn must match the retained request/agent/session/workspace scope and native filtered session hash. Document
+call/result IDs and generations must pair uniquely, within that turn and before its terminal record. Only typed
+successful field-read observations qualify; claims, arguments, arbitrary successful tools and preview text do not.
+
+A complete bound trace with no document invocation fails even if the LLM judge passes. Missing, ambiguous,
+foreign, truncated, malformed or old successful document metadata remains inconclusive. A known wrong-source or
+insufficient/mismatched read cannot pass; unclassified successful document results can leave that outcome unknown.
+Errors are not reads. A valid matching observation can prove the requested read despite other non-reading document
+operations. Raw private-value leaks fail and never become retained content.
+
+The frozen, value-free proof retains native source/trace hashes, routed binding, call identities/sequences and
+bounded counts. Offline regrade validates its case/route/build/shape and recomputes the hard check without opening
+runtime traces, restoring a deleted fixture or sending a target task. The existing strict JSON schema rejects
+omitted counts rather than treating absence as observed zero. Operator-owned edited reports are not authenticated.
+
+The `pdf.empty.required` manifest now has a new case hash with this hard check; task, driver and rubric are
+unchanged. An independent pypdf 6.20.0 inspection of its exact source SHA found 5 fields, 3 required flags, 2 saved
+values and 4 default entries. The borrower has an empty saved string despite a default; unchecked `Off` is an
+explicit saved button value. `schema_fields` and `returned_fields` must both cover all 5 for this case. Do not infer
+zero values from the filename. This contract change does not upgrade the original v1 report or authorize replay
+of its used profile. A new versioned experiment on reviewed, merged code is still required.
 
 ## Question Cancellation Receipts
 

@@ -375,6 +375,7 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["context_limit_tokens"] = payload.ContextLimitTokens
 		_, finalContentLen := diagnosticTurnFinalContent(payload)
 		fields["final_len"] = finalContentLen
+		appendRuntimeSkillContextSummary(fields, payload.SkillContextSnapshots)
 	case LLMRequestPayload:
 		fields["model"] = payload.Model
 		fields["messages"] = payload.MessagesCount
@@ -560,6 +561,7 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		setStringField(fields, "error_code", payload.ErrorCode)
 	case InterruptReceivedPayload:
 		fields["interrupt_kind"] = payload.Kind
+		setStringField(fields, "message_hash", payload.MessageHash)
 		fields["role"] = payload.Role
 		fields["content_len"] = payload.ContentLen
 		fields["queue_depth"] = payload.QueueDepth

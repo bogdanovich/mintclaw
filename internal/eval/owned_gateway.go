@@ -15,7 +15,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bogdanovich/mintclaw/internal/evaltarget"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 var ErrOwnedGateway = errors.New("eval: owned gateway could not be admitted or stopped cleanly")
@@ -74,14 +76,17 @@ func targetLifecycleMode(receipt *TargetLifecycle) string {
 }
 
 type ownedGateway struct {
-	command  *exec.Cmd
-	profile  preparedProfile
-	done     chan struct{}
-	err      error
-	log      *boundedGatewayLog
-	stop     sync.Once
-	forced   atomic.Bool
-	admitted bool
+	command     *exec.Cmd
+	profile     preparedProfile
+	done        chan struct{}
+	err         error
+	log         *boundedGatewayLog
+	stop        sync.Once
+	forced      atomic.Bool
+	admitted    bool
+	budgetSpec  *evaltarget.Spec
+	identity    ownedLaunchIdentity
+	restartUsed atomic.Bool
 }
 
 type boundedGatewayLog struct {
@@ -113,6 +118,12 @@ func startOwnedGateway(ctx context.Context, preset Preset, home string) (*ownedG
 func startOwnedGatewayWithBrowser(
 	ctx context.Context, preset Preset, home string, fixture *browserFixtureHost,
 ) (*ownedGateway, admittedTarget, error) {
+	return startOwnedGatewayWithFixtures(ctx, preset, home, fixture, nil)
+}
+
+func startOwnedGatewayWithFixtures(
+	ctx context.Context, preset Preset, home string, fixture *browserFixtureHost, active *activeToolFixture,
+) (*ownedGateway, admittedTarget, error) {
 	var target admittedTarget
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" || ctx == nil || ctx.Err() != nil {
 		return nil, target, ErrOwnedGateway
@@ -121,44 +132,64 @@ func startOwnedGatewayWithBrowser(
 	if err != nil || validateConversationProfile(profile.config, preset, profile.workspace) != nil ||
 		profile.config.Diagnostics.TraceCapture.Enabled != preset.CaptureModelMetadata ||
 		validateFreshOwnedProfile(profile) != nil ||
+		!validReadToolWorkspace(ctx, preset, profile.workspace) ||
+		!validApprovalToolWorkspace(ctx, preset, profile.workspace) ||
 		!browserFixtureMatches(profile.config, fixture) ||
-		!slices.Contains([]string{"warn", "error", "fatal"}, config.EffectiveGatewayLogLevel(profile.config)) {
+		!activeToolMatches(preset, active) ||
+		!admittedEvalLogLevel(preset, config.EffectiveGatewayLogLevel(profile.config)) {
 		return nil, target, ErrOwnedGateway
 	}
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, target, ErrOwnedGateway
 	}
-	child, err := launchOwnedGateway(profile, executable)
+	child, err := launchOwnedGatewayWithBudget(profile, executable, preset.TargetCallBudget)
 	if err != nil {
 		return nil, target, ErrOwnedGateway
 	}
+	target, err = admitOwnedGateway(ctx, child, preset, home, fixture, active)
+	return child, target, err
+}
+
+func admitOwnedGateway(
+	ctx context.Context, child *ownedGateway, preset Preset, home string,
+	fixture *browserFixtureHost, active *activeToolFixture,
+) (admittedTarget, error) {
+	var target admittedTarget
+	if ctx == nil || ctx.Err() != nil || child == nil || child.command == nil ||
+		child.command.Process == nil || child.profile.config == nil {
+		return target, ErrOwnedGateway
+	}
+	profile := child.profile
 	startupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if !browserFixtureMatches(profile.config, fixture) {
-			return child, admittedTarget{}, ErrOwnedGateway
+		if !browserFixtureMatches(profile.config, fixture) || !activeToolMatches(preset, active) {
+			return admittedTarget{}, ErrOwnedGateway
 		}
 		select {
 		case <-child.done:
-			return child, target, ErrOwnedGateway
+			return target, ErrOwnedGateway
 		default:
 		}
-		target, err = admitPreparedTargetWithBrowser(startupCtx, preset, home, fixture)
+		var err error
+		target, err = admitPreparedTargetWithFixtures(startupCtx, preset, home, fixture, active)
 		if err == nil {
 			if target.probe.PID != child.command.Process.Pid {
-				return child, admittedTarget{}, ErrOwnedGateway
+				return admittedTarget{}, ErrOwnedGateway
 			}
+			child.identity.bind(preset, profile, target)
 			child.admitted = true
-			return child, target, nil
+			target.activeTool, target.ownedLog = active, child.log.file.Name()
+			return target, nil
 		}
 		select {
 		case <-child.done:
-			return child, admittedTarget{}, ErrOwnedGateway
+			return admittedTarget{}, ErrOwnedGateway
 		case <-startupCtx.Done():
-			return child, admittedTarget{}, ErrOwnedGateway
+			return admittedTarget{}, ErrOwnedGateway
 		case <-ticker.C:
 		}
 	}
@@ -177,6 +208,14 @@ func validateFreshOwnedProfile(profile preparedProfile) error {
 		return ErrOwnedGateway
 	}
 	if profile.config.Tools.Browser.Enabled && validateFreshBrowserRuntime(root) != nil {
+		return ErrOwnedGateway
+	}
+	if nativeReadToolEnabled(profile.config) &&
+		observeWorkspaceReadFixture(context.Background(), profile.workspace).Code != "observed" {
+		return ErrOwnedGateway
+	}
+	if nativeApprovalToolEnabled(profile.config) &&
+		!approvalFixtureMatches(observeApprovalFixture(context.Background(), profile.workspace)) {
 		return ErrOwnedGateway
 	}
 	for _, directory := range []string{".", "workspace"} {
@@ -201,6 +240,9 @@ func validateFreshOwnedProfile(profile preparedProfile) error {
 		}
 		if directory == "workspace" {
 			allowed = []string{"AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "skills"}
+			if nativeReadToolEnabled(profile.config) || nativeApprovalToolEnabled(profile.config) {
+				allowed = append(allowed, readFixtureDirectory)
+			}
 		}
 		for _, entry := range entries {
 			if !slices.Contains(allowed, entry.Name()) || entry.Type()&os.ModeSymlink != 0 {
@@ -246,11 +288,44 @@ func validateFreshPDFJournal(root *os.Root) error {
 }
 
 func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGateway, error) {
+	return launchOwnedGatewayWithBudget(profile, executable, nil)
+}
+
+func launchOwnedGatewayWithBudget(
+	profile preparedProfile, executable string, limits *providers.CallBudgetLimits,
+) (*ownedGateway, error) {
+	return launchOwnedGatewayGeneration(profile, executable, limits, nil)
+}
+
+func launchOwnedGatewayGeneration(
+	profile preparedProfile, executable string, limits *providers.CallBudgetLimits, previous *ownedGateway,
+) (*ownedGateway, error) {
+	var spec *evaltarget.Spec
+	args := []string{"gateway"}
+	if limits != nil {
+		value := evaltarget.Spec{Version: evaltarget.Version, Nonce: uuid.NewString(), Limits: *limits}
+		encoded, err := value.Encode()
+		if err != nil {
+			return nil, ErrOwnedGateway
+		}
+		spec = &value
+		args = append(args, "--"+evaltarget.FlagName, encoded)
+	}
 	root, err := os.OpenRoot(profile.home)
 	if err != nil {
 		return nil, ErrOwnedGateway
 	}
 	defer func() { _ = root.Close() }()
+	identity, err := newOwnedLaunchIdentity(root, profile, executable, previous)
+	if err != nil {
+		return nil, ErrOwnedGateway
+	}
+	if previous != nil {
+		_, remaining, budgetErr := remainingOwnedBudget(previous)
+		if budgetErr != nil || limits == nil || *limits != remaining {
+			return nil, ErrOwnedGateway
+		}
+	}
 	// A stale ownership marker is deliberately not adopted or removed.
 	lock, err := root.OpenFile(".eval-gateway-owner", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -261,18 +336,25 @@ func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGatew
 	}
 	// Keep native tools' os.TempDir scratch inside the observed private home.
 	// An existing directory is never adopted, including after an earlier run.
-	if root.Mkdir(ownedGatewayTempDirectory, 0o700) != nil {
+	temporaryName := ownedGatewayTempDirectory
+	if previous != nil {
+		temporaryName = filepath.Join(ownedGatewayTempDirectory, "generation-"+uuid.NewString())
+	}
+	if root.Mkdir(temporaryName, 0o700) != nil {
 		_ = root.Remove(".eval-gateway-owner")
 		return nil, ErrOwnedGateway
 	}
-	temporary := filepath.Join(profile.home, ownedGatewayTempDirectory)
+	if previous == nil {
+		identity.temporary, _ = root.Lstat(ownedGatewayTempDirectory)
+	}
+	temporary := filepath.Join(profile.home, temporaryName)
 	logFile, err := root.OpenFile("eval-gateway-"+uuid.NewString()+".jsonl", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = root.Remove(".eval-gateway-owner")
 		return nil, ErrOwnedGateway
 	}
 	log := &boundedGatewayLog{file: logFile, remaining: ownedGatewayLogBytes}
-	command := exec.Command(executable, "gateway")
+	command := exec.Command(executable, args...)
 	command.Dir = profile.home
 	command.Env = []string{
 		"HOME=" + profile.home, config.EnvHome + "=" + profile.home,
@@ -288,7 +370,10 @@ func launchOwnedGateway(profile preparedProfile, executable string) (*ownedGatew
 		_ = root.Remove(".eval-gateway-owner")
 		return nil, ErrOwnedGateway
 	}
-	child := &ownedGateway{command: command, profile: profile, done: make(chan struct{}), log: log}
+	child := &ownedGateway{
+		command: command, profile: profile, done: make(chan struct{}), log: log, budgetSpec: spec,
+		identity: identity,
+	}
 	go func() {
 		defer close(child.done)
 		child.err = command.Wait()

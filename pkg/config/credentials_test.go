@@ -12,6 +12,7 @@ func TestCredentialConfigurationRequiresDedicatedVaultAndPrivateStateLocation(t 
 	for _, kind := range []string{
 		"valid", "workspace", "agent-workspace", "different-vault", "different-owner", "missing-workspace",
 		"login-valid", "login-disabled-runtime", "login-no-host", "login-invalid-host", "discovery-valid", "discovery-multiple",
+		"approval-phone", "approval-automatic", "approval-unknown",
 	} {
 		t.Run(kind, func(t *testing.T) {
 			cfg := DefaultConfig()
@@ -34,6 +35,12 @@ func TestCredentialConfigurationRequiresDedicatedVaultAndPrivateStateLocation(t 
 				},
 			}
 			switch kind {
+			case "approval-phone":
+				cfg.Credentials.ApprovalMode = "phone"
+			case "approval-automatic":
+				cfg.Credentials.ApprovalMode = "automatic"
+			case "approval-unknown":
+				cfg.Credentials.ApprovalMode = "other"
 			case "discovery-valid", "discovery-multiple":
 				cfg.Credentials.BrowserLoginEnabled, cfg.Credentials.HostID = true, "host"
 				account := &cfg.Credentials.Accounts[0]
@@ -70,7 +77,8 @@ func TestCredentialConfigurationRequiresDedicatedVaultAndPrivateStateLocation(t 
 			case "different-owner":
 				cfg.Credentials.Accounts[0].Principals[0].OwnerID = "other-owner"
 			}
-			valid := kind == "valid" || kind == "login-valid" || kind == "discovery-valid"
+			valid := kind == "valid" || kind == "login-valid" || kind == "discovery-valid" ||
+				kind == "approval-phone" || kind == "approval-automatic"
 			if (cfg.ValidateCredentials() == nil) != valid {
 				t.Fatal("credential configuration admission differs from its scope/state contract")
 			}

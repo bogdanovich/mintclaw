@@ -464,6 +464,8 @@ func (p *Pipeline) invokeLLMWithRetry(
 				llm.providerToolDefs,
 				p.maxMediaSize(),
 			)
+			liveInputReserve := liveUserInputTokenReserve(llm.liveUserInputs)
+			reserveTokens += liveInputReserve
 			compactBudget := effectiveHistoryBudget(
 				ts.agent.ContextWindow,
 				ts.agent.MaxTokens,
@@ -562,14 +564,20 @@ func (p *Pipeline) invokeLLMWithRetry(
 				},
 				ts.agent.ContextWindow,
 				llm.providerToolDefs,
-				ts.agent.MaxTokens,
+				ts.agent.MaxTokens+liveInputReserve,
 			)
-			llm.replaceCanonicalAttemptMessages(callMessages)
+			if projectionErr := llm.replaceCanonicalAttemptMessages(callMessages); projectionErr != nil {
+				return llmStageResult{}, projectionErr
+			}
 			exec.history = append(trimmedStableHistory, protectedTurnTail...)
 			exec.messages = buildMessages(trimmedStableHistory)
 			if llm.gracefulTerminal {
 				msgs := append([]providers.Message(nil), exec.messages...)
-				llm.replaceCanonicalAttemptMessages(append(msgs, ts.interruptHintMessage()))
+				if projectionErr := llm.replaceCanonicalAttemptMessages(
+					append(msgs, ts.interruptHintMessage()),
+				); projectionErr != nil {
+					return llmStageResult{}, projectionErr
+				}
 			}
 			if dropped := originalHistoryCount - len(exec.history); dropped > 0 {
 				logger.WarnCF(
@@ -666,9 +674,9 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	llm *LLMIterationState,
 ) (LLMCallOutcome, error) {
 	iteration := llm.iteration
-	// A successful provider call has consumed live-only tool context. Keep the
-	// call-local copy available for response diagnostics, then replace the turn
-	// transcript with its durable projection before any next tool/model phase.
+	// A successful call consumes one-shot tool data, not an authorized task's
+	// input. Keep call-local data for response diagnostics; task input remains
+	// live across discovery and subsequent tool/model steps until turn cleanup.
 	defer exec.consumeLiveToolContexts(ts)
 	if ts != nil {
 		ts.documentVisionAvailable = llm.documentVisionResolved && llm.documentVisionAvailable
@@ -1073,6 +1081,8 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			// Reusing the durable projection here makes a later tool call see the
 			// placeholder instead of the source it just authored.
 			liveCall.Arguments = cloneStringAnyMap(tc.Arguments)
+			// Provider replay metadata is needed only by this live exchange.
+			liveCall.ThoughtSignature = tc.ThoughtSignature
 		}
 		liveAssistantMsg.ToolCalls = append(liveAssistantMsg.ToolCalls, liveCall)
 	}

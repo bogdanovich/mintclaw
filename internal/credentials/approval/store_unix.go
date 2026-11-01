@@ -96,7 +96,7 @@ func (store *fileStore) load() (ownerRecord, error) {
 
 // commit acknowledges only after file and directory sync. Any error, including
 // an uncertain post-rename result, permanently disables this controller. A
-// restart reloads the actual durable record; it never replays a grant issuance.
+// restart reloads the actual durable record, preserving original grant deadlines.
 func (store *fileStore) commit(owner ownerRecord) error {
 	if store.check(int(store.dir.Fd()), true) != nil {
 		return ErrUnavailable

@@ -134,6 +134,9 @@ func (role *ModelRole) call(
 	}
 	if role.retained != nil {
 		call.Boundary.FactScope = "run_retained_facts"
+		if role.retained.generated {
+			call.Boundary.FactScope = generatedFactGuardScope
+		}
 	}
 	defer func() { call.DurationMS = time.Since(started).Milliseconds() }()
 	if !validID(promptVersion) || !boundedText(system, MaxRoleOutputBytes) ||
