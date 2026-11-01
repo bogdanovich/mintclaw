@@ -26,8 +26,10 @@ PDFI5 remains conditional on a second accepted non-PDF protected-input consumer.
 The operator-approved [ordinary history and verified draft goal](pdf-chat-history-and-draft-goal.md)
 supersedes the former live-only retention policy for **new ordinary conversation**. Form-related,
 unrelated, mixed and uncertain authored messages belong to the existing owner-scoped chat history;
-verified values additionally belong to the native draft. This follow-up is not complete until its
-reviewed code, deployment and fresh two-form qualification gates pass. Historical protected content
+verified values additionally belong to the native draft. Its bounded implementation, reviewed merges,
+deployment and fresh two-form gateway qualification are complete in the
+[2026-11-01 exit evidence](pdf-chat-history-and-draft-qualification.md), including a manual Telegram recipe.
+This does not close actual Telegram, full PDFI4 or I-134/XFA gates. Historical protected content
 is not migrated; dedicated secret/authentication inputs and diagnostic boundaries remain protected.
 
 ## Operator outcome
