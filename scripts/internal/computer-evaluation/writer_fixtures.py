@@ -51,6 +51,8 @@ class Task:
     expected: tuple
     candidate: str = CANDIDATE
     exact_directory: bool = False
+    unchanged_documents: tuple = ()
+    intermediate_states: tuple = ()
 
 
 TASKS = MappingProxyType({
@@ -91,16 +93,35 @@ TASKS = MappingProxyType({
         candidate="Крем-世界.odt",
         exact_directory=True,
     ),
+    "CU-T11": Task(
+        "<text:p>" + escape(shared.U) + "</text:p>",
+        "Use Writer's admitted Open dialog to open the owned document.odt in the task directory. "
+        "Replace its paragraph with exactly " + shared.R
+        + ". Save the same file and close the saved document to release its temporary lock file. "
+        "Do not open or change unrelated.odt or the guard window.",
+        (("paragraph", shared.R, False),),
+        exact_directory=True,
+        unchanged_documents=(("unrelated.odt", "<text:p>GUARD_UNCHANGED</text:p>"),),
+    ),
+    "CU-T12": Task(
+        "<text:p>" + escape(shared.U) + "</text:p>",
+        "Open the owned document.odt. Replace its paragraph with exactly " + shared.R
+        + ". Observe that edit, undo it and observe the original paragraph, then redo it and observe "
+        "the replacement again. Save the same file. The native controller must independently observe all three states.",
+        (("paragraph", shared.R, False),),
+        intermediate_states=(("after_edit", shared.R), ("after_undo", shared.U), ("after_redo", shared.R)),
+    ),
 })
 
 # This is a subset/input revision, not a native-runner revision or task score.
 FIXTURE_REVISION = shared.digest(json.dumps({
-    "subset": "writer-v2", "tasks": {key: asdict(task) for key, task in TASKS.items()}, "candidate": CANDIDATE,
+    "subset": "writer-v3", "tasks": {key: asdict(task) for key, task in TASKS.items()}, "candidate": CANDIDATE,
     "maximum_bytes": MAX_ARTIFACT_BYTES, "maximum_xml_bytes": MAX_XML_BYTES,
     "maximum_entries": MAX_ENTRIES, "maximum_nodes": MAX_NODES, "maximum_depth": MAX_DEPTH,
     "maximum_directory_entries": MAX_DIRECTORY_ENTRIES,
     "semantic_rules": "heading; all nonempty paragraph runs bold; numbered list level 1; exact unmerged table; "
-                      "ignore empty paragraphs; no Unicode normalization; unsupported structures unverifiable",
+                      "ignore empty paragraphs; no Unicode normalization; unsupported structures unverifiable; "
+                      "unchanged document bytes; selected exact census; ordered intermediate requirements are not receipts",
 }, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
@@ -350,8 +371,17 @@ def prepare(task_id, path):
         seed = TASKS[task_id].seed
         if seed is not None:
             shared.write_new(directory, TASKS[task_id].candidate, seed_odt(seed))
-        return {**record, "candidate": TASKS[task_id].candidate, "seeded": seed is not None,
-                "instruction": TASKS[task_id].instruction, "native_task_qualified": False}
+        for name, body in TASKS[task_id].unchanged_documents:
+            shared.write_new(directory, name, seed_odt(body))
+        result = {**record, "candidate": TASKS[task_id].candidate, "seeded": seed is not None,
+                  "instruction": TASKS[task_id].instruction, "native_task_qualified": False}
+        if TASKS[task_id].intermediate_states:
+            # Requirements for a future independent native controller. These
+            # are not receipts, and the artifact checker cannot attest them.
+            result["required_intermediate_states"] = [
+                {"phase": phase, "text": text} for phase, text in TASKS[task_id].intermediate_states
+            ]
+        return result
     finally:
         os.close(directory)
 
@@ -391,11 +421,19 @@ def check_artifact(task_id, path):
             projection = Document(content, styles).projection()
             matches = (json.dumps(projection, ensure_ascii=False)
                        == json.dumps(task.expected, ensure_ascii=False))
+            if task.unchanged_documents:
+                guard_matches = True
+                for name, body in task.unchanged_documents:
+                    guard = shared.read_owned_file(directory, name, MAX_ARTIFACT_BYTES)
+                    guard_matches = (shared.digest(guard) == shared.digest(seed_odt(body))) and guard_matches
+                result["unchanged_document_bytes_match"] = guard_matches
+                matches = matches and guard_matches
             if task.exact_directory:
                 if names != directory_names(directory) or shared.file_identity(root) != \
                         shared.file_identity(os.fstat(directory)):
                     raise shared.Unverifiable("directory_changed")
-                directory_matches = names == {MARKER, task.candidate}
+                expected_names = {MARKER, task.candidate} | {name for name, _ in task.unchanged_documents}
+                directory_matches = names == expected_names
                 result["directory_matches"] = directory_matches
                 matches = matches and directory_matches
             named = os.stat(path, follow_symlinks=False)
