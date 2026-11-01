@@ -35,21 +35,25 @@ native_module_path="$source_dir/libs/cua-driver/rust/crates/platform-linux/src/i
 keyboard_module_path="$source_dir/libs/cua-driver/rust/crates/platform-linux/src/input/mintclaw_native_keyboard.rs"
 qualification_module_path="$source_dir/libs/cua-driver/rust/crates/platform-linux/src/input/mintclaw_native_keyboard_qualification.rs"
 worker_module_path="$source_dir/libs/cua-driver/rust/crates/platform-linux/src/input/mintclaw_native_keyboard_worker.rs"
+history_module_path="$source_dir/libs/cua-driver/rust/crates/platform-linux/src/input/mintclaw_native_x11_history.rs"
 if [[ "$candidate" == native-keyboard ]]; then
   [[ ! -e "$native_module_path" && ! -L "$native_module_path" ]] || exit 2
   [[ ! -e "$keyboard_module_path" && ! -L "$keyboard_module_path" ]] || exit 2
   [[ ! -e "$qualification_module_path" && ! -L "$qualification_module_path" ]] || exit 2
   [[ ! -e "$worker_module_path" && ! -L "$worker_module_path" ]] || exit 2
+  [[ ! -e "$history_module_path" && ! -L "$history_module_path" ]] || exit 2
   git -C "$source_dir" apply --unidiff-zero --whitespace=error-all --check "$helper_dir/native-keyboard.patch"
   git -C "$source_dir" apply --unidiff-zero --whitespace=error-all "$helper_dir/native-keyboard.patch"
   install -m 600 "$helper_dir/native_x11_io.rs" "$native_module_path"
   install -m 600 "$helper_dir/native_keyboard.rs" "$keyboard_module_path"
   install -m 600 "$helper_dir/native_keyboard_qualification.rs" "$qualification_module_path"
   install -m 600 "$helper_dir/native_keyboard_worker.rs" "$worker_module_path"
+  install -m 600 "$helper_dir/native_x11_history.rs" "$history_module_path"
   native_module_sha=$(sha256sum "$native_module_path" | cut -d ' ' -f 1)
   keyboard_module_sha=$(sha256sum "$keyboard_module_path" | cut -d ' ' -f 1)
   qualification_module_sha=$(sha256sum "$qualification_module_path" | cut -d ' ' -f 1)
   worker_module_sha=$(sha256sum "$worker_module_path" | cut -d ' ' -f 1)
+  history_module_sha=$(sha256sum "$history_module_path" | cut -d ' ' -f 1)
   features+=,mintclaw-native-keyboard
 fi
 export CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 CARGO_PROFILE_RELEASE_DEBUG=0
@@ -74,9 +78,11 @@ if [[ "$candidate" == native-keyboard ]]; then
   cargo +1.97.1 test --locked --release -p platform-linux --bin mintclaw-private-keyboard \
     --target x86_64-unknown-linux-gnu --features "$features" wire_tests:: -- --test-threads=1
   [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_x11_io::tests::.*: test$/ {n++} END {print n+0}') == 9 ]] || exit 1
-  [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::native::.*: test$/ {n++} END {print n+0}') == 13 ]] || exit 1
+  [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::native::.*: test$/ {n++} END {print n+0}') == 19 ]] || exit 1
+  [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::history::tests::.*: test$/ {n++} END {print n+0}') == 6 ]] || exit 1
   [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::qualification::.*: test$/ {n++} END {print n+0}') == 1 ]] || exit 1
   "$probe_path" input::mintclaw_native_x11_io::tests:: --test-threads=1
+  "$probe_path" input::mintclaw_native_keyboard::history::tests:: --test-threads=1
   [[ $(sha256sum "$native_module_path" | cut -d ' ' -f 1) == "$native_module_sha" ]] || exit 1
   [[ $(sha256sum "$helper_dir/native_x11_io.rs" | cut -d ' ' -f 1) == "$native_module_sha" ]] || exit 1
   [[ $(sha256sum "$keyboard_module_path" | cut -d ' ' -f 1) == "$keyboard_module_sha" ]] || exit 1
@@ -85,6 +91,8 @@ if [[ "$candidate" == native-keyboard ]]; then
   [[ $(sha256sum "$helper_dir/native_keyboard_qualification.rs" | cut -d ' ' -f 1) == "$qualification_module_sha" ]] || exit 1
   [[ $(sha256sum "$worker_module_path" | cut -d ' ' -f 1) == "$worker_module_sha" ]] || exit 1
   [[ $(sha256sum "$helper_dir/native_keyboard_worker.rs" | cut -d ' ' -f 1) == "$worker_module_sha" ]] || exit 1
+  [[ $(sha256sum "$history_module_path" | cut -d ' ' -f 1) == "$history_module_sha" ]] || exit 1
+  [[ $(sha256sum "$helper_dir/native_x11_history.rs" | cut -d ' ' -f 1) == "$history_module_sha" ]] || exit 1
 fi
 [[ $(sha256sum "$module_path" | cut -d ' ' -f 1) == "$module_sha" ]] || exit 1
 [[ $(sha256sum "$helper_dir/window_keys.rs" | cut -d ' ' -f 1) == "$module_sha" ]] || exit 1
@@ -103,7 +111,8 @@ install -m 600 "$source_dir/libs/cua-driver/rust/THIRD_PARTY_NOTICES.md" "$outpu
   sha256sum "$patch_path" "$helper_dir/window_keys.rs" Cargo.lock "$output_dir/window-keys.test"
   if [[ "$candidate" == native-keyboard ]]; then
     sha256sum "$helper_dir/native-keyboard.patch" "$helper_dir/native_x11_io.rs" \
-      "$helper_dir/native_keyboard.rs" "$helper_dir/native_keyboard_qualification.rs"
+      "$helper_dir/native_keyboard.rs" "$helper_dir/native_keyboard_qualification.rs" \
+      "$helper_dir/native_x11_history.rs"
     sha256sum "$helper_dir/native-keyboard-fixture.py" "$helper_dir/native-keyboard-gtk-fixture.py" \
       "$helper_dir/native_state_oracle.py"
     sha256sum "$helper_dir/native_keyboard_worker.rs" "$helper_dir/native_keyboard_process_fixture.py" \

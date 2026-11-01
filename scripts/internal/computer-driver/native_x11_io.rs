@@ -95,6 +95,14 @@ impl Inner {
 }
 
 impl IoBoundary {
+    /// Borrow the enclosing owner's absolute budget; a dependent metadata
+    /// read must never start a fresh timeout while a server grab is held.
+    pub(super) fn deadline(&self) -> io::Result<Instant> {
+        self.inner.check(true)?.ok_or_else(|| {
+            self.inner.failure(ErrorKind::ConnectionAborted, "native phase unavailable")
+        })
+    }
+
     /// Single owner, no admission queue. The native session caps this deadline
     /// against its lease/action and short-grab budgets before entering here.
     pub(super) fn begin(&self, deadline: Instant) -> io::Result<Phase> {

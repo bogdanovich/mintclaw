@@ -2,7 +2,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-linux/Cargo.toml b/libs/cua-dr
 --- a/libs/cua-driver/rust/crates/platform-linux/Cargo.toml
 +++ b/libs/cua-driver/rust/crates/platform-linux/Cargo.toml
 @@ -130,0 +131 @@
-+mintclaw-native-keyboard = ["mintclaw-window-keys", "x11rb/xkb"]
++mintclaw-native-keyboard = ["mintclaw-window-keys", "x11rb/xkb", "x11rb/record"]
 @@ -177,0 +179,5 @@
 +
 +[[bin]]

@@ -11,6 +11,7 @@ use std::io::{self, ErrorKind};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use zeroize::Zeroize;
 
@@ -26,6 +27,9 @@ use x11rb::rust_connection::{DefaultStream, RustConnection};
 use x11rb::x11_utils::Serialize;
 
 use super::mintclaw_native_x11_io::{IoBoundary, NativeStream};
+
+#[path = "mintclaw_native_x11_history.rs"]
+mod history;
 
 type Result<T> = io::Result<T>;
 const PREFIX: &[u8] = b"MintClaw private input ";
@@ -64,15 +68,15 @@ fn at<T>(stage: &'static str, result: Result<T>) -> Result<T> {
 /// Already-connected literal Unix socket, explicit authentication and screen.
 /// No DISPLAY scan, ambient cookie discovery, TCP, or reconnect exists here.
 /// The supervisor separately bounds connecting and attests the server peer.
-pub(super) struct Endpoint {
+pub(super) struct NativeConnection {
     connection: RustConnection<NativeStream>,
     boundary: IoBoundary,
     root: u32,
     peer: (i32, u32),
 }
 
-impl Endpoint {
-    pub(super) fn from_socket(
+impl NativeConnection {
+    fn from_socket(
         socket: UnixStream,
         screen: usize,
         auth_name: Vec<u8>,
@@ -112,6 +116,46 @@ impl Endpoint {
         checked(checked(self.connection.ungrab_server())?.check())?;
         phase.finish()?;
         result
+    }
+}
+
+/// One original control/input connection and its sealed metadata stream.
+/// The witness is established before any target, private device or host grant.
+pub(super) struct Endpoint {
+    native: NativeConnection,
+    history: Mutex<history::MutationHistory>,
+}
+
+impl std::ops::Deref for Endpoint {
+    type Target = NativeConnection;
+
+    fn deref(&self) -> &Self::Target { &self.native }
+}
+
+impl Endpoint {
+    pub(super) fn from_sockets(
+        socket: UnixStream,
+        metadata: UnixStream,
+        screen: usize,
+        auth_name: Vec<u8>,
+        auth_data: Vec<u8>,
+        deadline: Instant,
+    ) -> Result<Self> {
+        let native = NativeConnection::from_socket(
+            socket, screen, auth_name.clone(), auth_data.clone(), deadline,
+        )?;
+        let metadata = NativeConnection::from_socket(metadata, screen, auth_name, auth_data, deadline)?;
+        if native.server() != metadata.server() {
+            return Err(unavailable());
+        }
+        let history = history::MutationHistory::new(&native, metadata, deadline)?;
+        Ok(Self { native, history: Mutex::new(history) })
+    }
+
+    /// Called only inside this connection's already-held server transaction.
+    /// Read-only state and focus clearing remain possible after history loss.
+    fn check_history(&self) -> Result<()> {
+        self.history.lock().map_err(|_| unavailable())?.fence(&self.native)
     }
 }
 
@@ -492,6 +536,7 @@ impl SafeKeymap {
     }
 
     fn admit(endpoint: &Endpoint, pair: &Pair) -> Result<Self> {
+        endpoint.check_history()?;
         let connection = &endpoint.connection;
         if !checked(checked(connection.xkb_use_extension(1, 0))?.reply())?.supported {
             return Err(unavailable());
@@ -547,6 +592,7 @@ impl SafeKeymap {
     }
 
     fn check(&self, endpoint: &Endpoint, pair: &Pair) -> Result<()> {
+        endpoint.check_history()?;
         if !self.maps_match(endpoint, pair)? {
             return Err(unavailable());
         }
@@ -755,7 +801,7 @@ struct DeviceWitness {
     name: Vec<u8>,
 }
 
-impl Endpoint {
+impl NativeConnection {
     pub(super) fn server(&self) -> ServerIdentity {
         ServerIdentity { pid: self.peer.0, uid: self.peer.1, root: self.root }
     }
@@ -1726,11 +1772,14 @@ mod native {
         let number = std::env::var("MINTCLAW_PRIVATE_X_DISPLAY_NUMBER").unwrap();
         assert!(!number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()));
         let socket = UnixStream::connect(format!("/tmp/.X11-unix/X{number}")).unwrap();
+        let metadata = UnixStream::connect(format!("/tmp/.X11-unix/X{number}")).unwrap();
         let cookie = std::env::var("MINTCLAW_PRIVATE_X_COOKIE").unwrap();
         assert_eq!(cookie.len(), 32);
         let cookie =
             (0..32).step_by(2).map(|index| u8::from_str_radix(&cookie[index..index + 2], 16).unwrap()).collect();
-        let endpoint = Endpoint::from_socket(socket, 0, b"MIT-MAGIC-COOKIE-1".to_vec(), cookie, deadline()).unwrap();
+        let endpoint = Endpoint::from_sockets(
+            socket, metadata, 0, b"MIT-MAGIC-COOKIE-1".to_vec(), cookie, deadline(),
+        ).unwrap();
         let expected_pid: i32 = std::env::var("MINTCLAW_PRIVATE_XVFB_PID").unwrap().parse().unwrap();
         assert_eq!(endpoint.peer, (expected_pid, unsafe { libc::getuid() }));
         let expected = std::fs::canonicalize(std::env::var("MINTCLAW_PRIVATE_XVFB_EXECUTABLE").unwrap()).unwrap();
@@ -1865,6 +1914,181 @@ mod native {
                 })
                 .unwrap();
         }
+
+        fn silent_map_restore(&self, session: &NativeKeyboard, source: &Endpoint) {
+            source.transaction(deadline(), || {
+                let connection = &source.connection;
+                assert!(checked(checked(connection.xkb_use_extension(1, 0))?.reply())?.supported);
+                let setup = connection.setup();
+                let profile = session.keeper.channel.profile.as_ref().unwrap();
+                for mods in [xproto::ModMask::CONTROL, 0u8.into()] {
+                    let values = xkb::SetMapAux {
+                        modmap: Some(vec![xkb::KeyModMap { keycode: self.key, mods }]),
+                        ..Default::default()
+                    };
+                    checked(checked(connection.xkb_set_map(
+                        u16::from(session.pair.slave), 0u16.into(), setup.min_keycode, setup.max_keycode,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        self.key, 1, 1, 0, 0, 0, 0u16.into(), &values,
+                    ))?.check())?;
+                    assert_eq!(profile.maps_match(source, &session.pair)?, u16::from(mods) == 0);
+                }
+                Ok(())
+            }).unwrap();
+        }
+
+        /// Only this attested disposable fixture may dispose an uncertain pair.
+        /// Runtime refusal/Drop cannot retry a release or claim native cleanup.
+        fn dispose_uncertain(&self, session: &mut NativeKeyboard) {
+            session.worker.input.boundary.stop();
+            wait_client_gone(&self.endpoint, session.input_token, std::process::id(), deadline()).unwrap();
+            self.endpoint.transaction(deadline(), || {
+                session.pair.check(&self.endpoint)?;
+                let remove = xinput::HierarchyChange {
+                    len: 3,
+                    data: xinput::HierarchyChangeData::RemoveMaster(xinput::HierarchyChangeDataRemoveMaster {
+                        deviceid: session.pair.pointer, return_mode: xinput::ChangeMode::FLOAT,
+                        return_pointer: 0, return_keyboard: 0,
+                    }),
+                };
+                checked(checked(self.endpoint.connection.xinput_xi_change_hierarchy(&[remove]))?.check())
+            }).unwrap();
+            self.remains();
+        }
+    }
+
+    #[test]
+    #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
+    fn silent_map_restore_between_keeper_and_edge_never_releases_a_held_key() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        session.worker.begin(deadline()).unwrap();
+        session.worker.edge(0, fixture.key, true).unwrap();
+        session.keeper.check(deadline()).unwrap();
+        let future = endpoint();
+        fixture.silent_map_restore(&session, &future);
+        assert!(session.worker.edge(1, fixture.key, false).is_err());
+        assert!(session.keeper.quiesce().is_err());
+        fixture.endpoint.transaction(deadline(), || {
+            assert_ne!(key_state(&fixture.endpoint, session.pair.slave)?, [0; 32]);
+            let focus = checked(checked(fixture.endpoint.connection
+                .xinput_get_device_focus(session.pair.keyboard))?.reply())?;
+            assert_eq!(focus.focus, x11rb::NONE);
+            Ok(())
+        }).unwrap();
+        assert_eq!(fixture.events(), [(fixture.target, true)]);
+        fixture.dispose_uncertain(&mut session);
+    }
+
+    #[test]
+    #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
+    fn silent_map_restore_while_idle_cannot_join_a_fresh_action() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        session.worker.input.boundary.stop();
+        session.keeper.quiesce().unwrap();
+        fixture.silent_map_restore(&session, &fixture.endpoint);
+        let next = Binding {
+            window: fixture.guard, pid: std::process::id(), lease_window: fixture.token,
+            lease_pid: std::process::id(),
+        };
+        assert!(session.keeper.prepare_action(next, deadline()).is_err());
+        assert!(!session.keeper.channel.control.history.lock().unwrap().test_live());
+        assert!(fixture.events().is_empty());
+        fixture.dispose_uncertain(&mut session);
+    }
+
+    #[test]
+    #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
+    fn removing_original_context_ranges_cannot_preserve_the_history_epoch() {
+        use x11rb::protocol::record::ConnectionExt as _;
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        let control = &session.keeper.channel.control;
+        let context = control.history.lock().unwrap().test_context();
+        let client = control.connection.setup().resource_id_base;
+        fixture.endpoint.transaction(deadline(), || {
+            checked(checked(fixture.endpoint.connection.record_unregister_clients(context, &[client]))?.check())
+        }).unwrap();
+        assert!(session.keeper.check(deadline()).is_err());
+        assert!(session.keeper.check(deadline()).is_err());
+        // No key was held; independent zero-state inspection still works.
+        assert!(session.finish());
+        assert!(fixture.events().is_empty());
+        fixture.remains();
+    }
+
+    #[test]
+    #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
+    fn disabled_recreated_context_cannot_revive_the_original_stream() {
+        use x11rb::protocol::record::{self, ConnectionExt as _};
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        let context = session.keeper.channel.control.history.lock().unwrap().test_context();
+        let control = &session.keeper.channel.control;
+        control.transaction(deadline(), || {
+            let connection = &control.connection;
+            checked(checked(connection.record_disable_context(context))?.check())?;
+            checked(checked(connection.record_free_context(context))?.check())?;
+            let range = record::Range {
+                core_requests: record::Range8 {
+                    first: xproto::GET_INPUT_FOCUS_REQUEST, last: xproto::GET_INPUT_FOCUS_REQUEST,
+                },
+                ..Default::default()
+            };
+            checked(checked(connection.record_create_context(context, 4, &[3], &[range]))?.check())
+        }).unwrap();
+        assert!(session.keeper.check(deadline()).is_err());
+        assert!(session.keeper.check(deadline()).is_err());
+        assert!(session.finish());
+        assert!(fixture.events().is_empty());
+        fixture.remains();
+    }
+
+    #[test]
+    #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
+    fn lost_input_metadata_stops_input_but_independent_original_release_still_works() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        session.worker.begin(deadline()).unwrap();
+        session.worker.edge(0, fixture.key, true).unwrap();
+        let old = session.worker.input.history.lock().unwrap().test_stop_handle();
+        old.stop();
+        assert!(session.worker.edge(1, fixture.key, false).is_err());
+        assert_eq!(fixture.events(), [(fixture.target, true)]);
+        // Its independently retained witness is continuous, so the original
+        // release owner may safely quiesce without sending release to target.
+        session.keeper.quiesce().unwrap();
+        fixture.endpoint.transaction(deadline(), || NativeChannel::clear_keys(&fixture.endpoint, &session.pair))
+            .unwrap();
+        let fresh = endpoint();
+        old.stop();
+        fresh.transaction(deadline(), || fresh.check_history()).unwrap();
+        assert!(session.keeper.dispose_fixture_pair());
+        assert!(fixture.events().is_empty());
+        fixture.remains();
+    }
+
+    #[test]
+    #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
+    fn foreign_focus_markers_are_excluded_but_future_mutations_remain_observed() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        let future = endpoint();
+        future.transaction(deadline(), || {
+            for _ in 0..32 {
+                checked(checked(future.connection.get_input_focus())?.reply())?;
+            }
+            Ok(())
+        }).unwrap();
+        // A foreign focus frame would be refused by the strict original-client
+        // parser. Success positively verifies the server-side private filter.
+        session.keeper.check(deadline()).unwrap();
+        fixture.silent_map_restore(&session, &future);
+        assert!(session.keeper.check(deadline()).is_err());
+        assert!(session.finish());
+        assert!(fixture.events().is_empty());
+        fixture.remains();
     }
 
     #[test]

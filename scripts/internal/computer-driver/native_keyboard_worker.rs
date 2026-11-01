@@ -93,21 +93,25 @@ impl Bootstrap {
         {
             return Err(refused());
         }
-        let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
-        let budget = deadline
-            .saturating_duration_since(Instant::now())
-            .min(Duration::from_millis(250));
-        if budget.is_zero() {
-            return Err(refused());
-        }
-        socket.connect_timeout(&socket2::SockAddr::unix(&self.socket)?, budget)?;
-        let descriptor: OwnedFd = socket.into();
-        let socket = UnixStream::from(descriptor);
-        if !self.server.matches_peer(&socket) {
-            return Err(refused());
-        }
-        let endpoint = Endpoint::from_socket(
-            socket,
+        let connect = || -> Result<UnixStream> {
+            let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
+            let budget = deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(250));
+            if budget.is_zero() {
+                return Err(refused());
+            }
+            socket.connect_timeout(&socket2::SockAddr::unix(&self.socket)?, budget)?;
+            let descriptor: OwnedFd = socket.into();
+            let socket = UnixStream::from(descriptor);
+            if !self.server.matches_peer(&socket) {
+                return Err(refused());
+            }
+            Ok(socket)
+        };
+        let endpoint = Endpoint::from_sockets(
+            connect()?,
+            connect()?,
             self.screen,
             b"MIT-MAGIC-COOKIE-1".to_vec(),
             self.auth.clone(),
