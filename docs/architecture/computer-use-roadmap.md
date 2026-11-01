@@ -1,14 +1,15 @@
 # MintClaw cross-platform computer-use roadmap
 
-Status: in progress. Updated: 2026-10-31. The opt-in read-only Linux and macOS
+Status: in progress. Updated: 2026-11-01. The opt-in read-only Linux and macOS
 milestone is implemented, natively qualified and merged. Public native input,
 full interactive task evaluation and the production pilot are not complete.
 Production desktop control remains disabled by default.
 
 The [Linux keyboard qualification checkpoint](computer-linux-keyboard-qualification.md)
-records the current private backend's passing component suites and blocking
-routing/application-lifetime findings. Neither those component results nor the
-separate lifetime prototype qualify public input. The Mac ownership PR still
+records the current private backend's passing component suites, preserved failed
+controls and remaining native hosting gates. The committed routing and lifetime
+changes remain in a draft PR; their component results do not qualify public
+input. The Mac ownership PR still
 requires its actual approved-app native gate; the operator selected desktop-free
 work while that gate is deferred. Full host composition, interactive/model task
 evaluation and pilot qualification remain open.
@@ -219,19 +220,20 @@ deployment remain separately authorized operations.
 
 ### Current evidence and status
 
-| Phase | Status on October 18 | Remaining gate |
+| Phase | Status on November 1 | Remaining gate |
 | --- | --- | --- |
 | CU-0 | Read-only contracts, canonical catalogs, default-disabled composition and generic resource disposition are implemented. | Preserve these invariants as input commands are introduced. |
 | CU-1 | Read-only paths and native incarnation guards qualify on selected Linux GNOME X11 and unlocked macOS 26.6.2. Private semantic-input fixtures include seven nonempty Unicode caret cases on both platforms, with the original Mac driver through the actual app. | Generic exact-root input, cancellation/held-state cleanup, pixel/key/scroll/drag, geometry and alternative-driver comparisons remain incomplete. |
 | CU-2 | Merged in [#1672](https://github.com/bogdanovich/mintclaw/pull/1672) and [#1683](https://github.com/bogdanovich/mintclaw/pull/1683). | Requalify supported platform tuples after driver, OS or signing changes. |
-| CU-3 | Bounded input contracts merged in [#1771](https://github.com/bogdanovich/mintclaw/pull/1771), and a native Linux X11 cooperative lease primitive in [#1787](https://github.com/bogdanovich/mintclaw/pull/1787); no executor, public input tool or production enablement. | Implement and qualify Mac arbitration, guarded native execution, ephemeral invocation binding, no-replay outcomes, cancellation and independent verification. |
+| CU-3 | Bounded contracts [#1771](https://github.com/bogdanovich/mintclaw/pull/1771), Linux cooperative ownership [#1787](https://github.com/bogdanovich/mintclaw/pull/1787), and protected companion invocation transport [#1799](https://github.com/bogdanovich/mintclaw/pull/1799) are merged. Linux execution [#1813](https://github.com/bogdanovich/mintclaw/pull/1813) and Mac ownership [#1797](https://github.com/bogdanovich/mintclaw/pull/1797) remain unmerged; no public native executor or production enablement. | Qualify Mac ownership and guarded native execution, then join the native host to the merged ephemeral-payload/no-replay transport, cancellation and independent post-action evidence. |
 | CU-4 | Read-only localized handoff, same-target fresh resume and typed finish/release are implemented. | Extend interlocks to input, held-state cancellation and overlapping capabilities; evaluate interactive continuity. |
 | CU-5 | Function tools and protected one-shot vision context are implemented for observations. | Complete action planning and budgets, representative full-task evaluation and adversarial task tests on both OSes. |
 | CU-6 | Not deployed or enabled in production. | Prepare explicit profiles, health, rollback and recovery evidence; obtain deployment/enablement approval before a pilot. |
 
-The actual installed Mac companion passes the current-GUI native lifecycle
-smoke in 18.31 seconds and the public gateway/native smoke in 27.44 seconds.
-A fresh Linux public/native smoke passes in 23.42 seconds. These runs verify
+The October 18 read-only measurements through the actual installed Mac companion
+passed the current-GUI native lifecycle smoke in 18.31 seconds and the public
+gateway/native smoke in 27.44 seconds. The Linux public/native repeat passed in
+23.42 seconds. These runs verify
 changed fresh pixels, original window/session/worker identity, human-control
 capture denial, and release/exit preserving independently attested windows.
 The companion suite also verifies target destruction without rebinding. All 14
@@ -271,6 +273,14 @@ twenty-task evaluation. The existing in-process read-only arbiter is unchanged.
 The [pinned Peekaboo source audit](computer-peekaboo-qualification.md) also records
 why a private config directory alone cannot isolate a stock CLI snapshot run;
 that candidate has not been executed or qualified.
+
+The protected [companion input transport](computer-input-contract.md) merged in
+[#1799](https://github.com/bogdanovich/mintclaw/pull/1799). Its counter-host tests
+exercise the existing invocation ledger, payload commitments, terminal protected
+receipts and uncertain-outcome no-replay behavior. This completes the transport
+foundation, not native execution or held-state cleanup. The ordinary host remains
+read-only; native admission and the public action facade still require their own
+qualified implementation.
 
 ### Remaining implementation sequence
 
