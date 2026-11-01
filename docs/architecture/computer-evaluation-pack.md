@@ -161,7 +161,8 @@ pack or oracle-source revision. Freeze source/artifact hashes before GUI runs.
 CU-T11 seeds `document.odt` with `U` and a separate `unrelated.odt`. The candidate
 must contain exactly `R`, the unrelated document must retain its original bytes,
 and the bounded directory census must contain only those two files and the
-controller marker. This does not attest opening through the app's dialog or an
+controller marker. Close the saved document before this census to release its
+temporary lock file. This does not attest opening through the app's dialog or an
 unchanged guard window; the independent native controller must attest both.
 CU-T12 seeds `U`, expects saved `R`, and declares the required live intermediate
 states: after edit `R`, after undo `U`, after redo `R`. These declarations are

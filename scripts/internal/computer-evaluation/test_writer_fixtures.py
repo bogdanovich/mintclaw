@@ -86,7 +86,7 @@ class WriterFixtureTests(unittest.TestCase):
         return result
 
     def test_frozen_revision_and_task_data(self):
-        self.assertEqual(fixtures.FIXTURE_REVISION, "a616f2a1e95bd44fa527b7366f35dbf2e8f4ac7b2019e6be038e2287627cca3c")
+        self.assertEqual(fixtures.FIXTURE_REVISION, "81dce53354aa5d5fdfbd13258f4ea38dda143f8151e4d773394fc8ad900593f9")
         self.assertEqual(tuple(fixtures.TASKS), ("CU-T06", "CU-T07", "CU-T08", "CU-T09", "CU-T10", "CU-T11", "CU-T12"))
         with self.assertRaises(TypeError):
             fixtures.TASKS["new"] = None

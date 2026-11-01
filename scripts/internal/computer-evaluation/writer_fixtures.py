@@ -97,7 +97,8 @@ TASKS = MappingProxyType({
         "<text:p>" + escape(shared.U) + "</text:p>",
         "Use Writer's admitted Open dialog to open the owned document.odt in the task directory. "
         "Replace its paragraph with exactly " + shared.R
-        + ". Save the same file. Do not open or change unrelated.odt or the guard window.",
+        + ". Save the same file and close the saved document to release its temporary lock file. "
+        "Do not open or change unrelated.odt or the guard window.",
         (("paragraph", shared.R, False),),
         exact_directory=True,
         unchanged_documents=(("unrelated.odt", "<text:p>GUARD_UNCHANGED</text:p>"),),
