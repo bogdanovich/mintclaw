@@ -165,6 +165,9 @@ func (p *Pipeline) buildTurnMessagesWithProtectedTurnBoundary(
 	if p == nil || ts == nil || ts.agent == nil || ts.agent.ContextBuilder == nil {
 		return nil
 	}
+	if documentConversationBound(ts) {
+		media = nil // Canonical references remain; no implicit pending-attachment execution.
+	}
 	req := p.promptRequestForTurn(ts, history, checkpoint, currentMessage, media)
 	req.ActiveSkills = append([]string(nil), activeSkills...)
 	req.SelectedSkills = append([]skills.SelectedSkill(nil), ts.selectedSkills...)

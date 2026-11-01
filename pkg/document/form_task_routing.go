@@ -89,10 +89,18 @@ type FormTaskRouteDecision struct {
 }
 
 type FormTaskHandoff struct {
-	Progress FormIntakeProgress `json:"progress"`
-	Reused   bool               `json:"reused"`
-	Text     string             `json:"-"`
-	Media    []string           `json:"-"`
+	Progress FormIntakeProgress     `json:"progress"`
+	Reused   bool                   `json:"reused"`
+	Text     string                 `json:"-"`
+	Media    []string               `json:"-"`
+	Inputs   []FormTaskHandoffInput `json:"-"`
+}
+
+// Inputs identify the admitted utterances behind one fresh grant. They are
+// projection provenance, not another copy of conversation history or authority.
+type FormTaskHandoffInput struct {
+	ConversationInputID string
+	Text                string
 }
 
 type formTaskRouteStoredDecision struct {
@@ -103,24 +111,25 @@ type formTaskRouteStoredDecision struct {
 }
 
 type formTaskRouteStored struct {
-	AdmissionOrder   int                           `json:"admission_order"`
-	Context          FormIntakeContext             `json:"context"`
-	ID               string                        `json:"id"`
-	MessageDigest    string                        `json:"message_digest"`
-	BodyDigest       string                        `json:"body_digest"`
-	Revision         int64                         `json:"revision"`
-	CreatedAt        int64                         `json:"created_at"`
-	State            FormTaskRouteState            `json:"state"`
-	Text             string                        `json:"text,omitempty"`
-	MediaRefs        []string                      `json:"media_refs,omitempty"`
-	Passes           int                           `json:"passes,omitempty"`
-	ReservedRevision int64                         `json:"reserved_revision,omitempty"`
-	Decisions        []formTaskRouteStoredDecision `json:"decisions,omitempty"`
-	FieldReference   string                        `json:"field_reference,omitempty"`
-	QuestionRound    int                           `json:"question_round,omitempty"`
-	Question         *formTaskRouteQuestion        `json:"question,omitempty"`
-	Answers          []formTaskRouteAnswerStored   `json:"answers,omitempty"`
-	ConsentAnswerID  string                        `json:"consent_answer_id,omitempty"`
+	ConversationInputID string                        `json:"conversation_input_id,omitempty"`
+	AdmissionOrder      int                           `json:"admission_order"`
+	Context             FormIntakeContext             `json:"context"`
+	ID                  string                        `json:"id"`
+	MessageDigest       string                        `json:"message_digest"`
+	BodyDigest          string                        `json:"body_digest"`
+	Revision            int64                         `json:"revision"`
+	CreatedAt           int64                         `json:"created_at"`
+	State               FormTaskRouteState            `json:"state"`
+	Text                string                        `json:"text,omitempty"`
+	MediaRefs           []string                      `json:"media_refs,omitempty"`
+	Passes              int                           `json:"passes,omitempty"`
+	ReservedRevision    int64                         `json:"reserved_revision,omitempty"`
+	Decisions           []formTaskRouteStoredDecision `json:"decisions,omitempty"`
+	FieldReference      string                        `json:"field_reference,omitempty"`
+	QuestionRound       int                           `json:"question_round,omitempty"`
+	Question            *formTaskRouteQuestion        `json:"question,omitempty"`
+	Answers             []formTaskRouteAnswerStored   `json:"answers,omitempty"`
+	ConsentAnswerID     string                        `json:"consent_answer_id,omitempty"`
 }
 
 func (store *FormJobStore) BeginFormTaskRoute(
@@ -176,7 +185,8 @@ func (store *FormJobStore) BeginFormTaskRoute(
 			return false, ErrFormJobCapacityExceeded
 		}
 		route := formTaskRouteStored{
-			AdmissionOrder: nextFormIntakeAdmissionOrder(mode), Context: cloneFormIntakeContext(mode.Context),
+			ConversationInputID: request.MessageIdentity,
+			AdmissionOrder:      nextFormIntakeAdmissionOrder(mode), Context: cloneFormIntakeContext(mode.Context),
 			ID: "form_route_" + identity[:32], MessageDigest: identity, BodyDigest: body,
 			Revision: record.Public.Revision, CreatedAt: now.UnixMilli(), State: FormTaskPending,
 			Text: request.Text, MediaRefs: slices.Clone(request.MediaRefs),
@@ -322,9 +332,13 @@ func (store *FormJobStore) GrantFormTaskHandoff(
 			return false, ErrFormJobConflict
 		}
 		result.Text, result.Media = route.Text, slices.Clone(route.MediaRefs)
+		result.Inputs = []FormTaskHandoffInput{{ConversationInputID: route.ConversationInputID, Text: route.Text}}
 		for index := range route.Answers {
 			answer := &route.Answers[index]
 			if answer.ID == route.ConsentAnswerID && answer.ChoiceKind == "private" && answer.Choice == FormTaskSwitch {
+				result.Inputs = append(result.Inputs, FormTaskHandoffInput{
+					ConversationInputID: answer.ConversationInputID, Text: answer.Text,
+				})
 				result.Text = strings.TrimSpace(result.Text + "\n\n" + answer.Text)
 				answer.Text = ""
 			}
@@ -468,6 +482,9 @@ func validateStoredFormTaskRoutes(record FormJobRecord, mode *formIntakeStoredMo
 	seen := make(map[string]bool, len(mode.TaskRoutes))
 	pending := 0
 	for _, route := range mode.TaskRoutes {
+		if route.ConversationInputID != "" && !validFormIntakeKey(route.ConversationInputID) {
+			return ErrFormJobRecordCorrupt
+		}
 		if route.ID != "form_route_"+prefixFormIntakeDigest(route.MessageDigest) || seen[route.ID] ||
 			!validDocumentDigest(route.MessageDigest) || !validDocumentDigest(route.BodyDigest) ||
 			route.Revision < mode.StartRevision || route.Revision > record.Revision || route.CreatedAt <= 0 ||

@@ -1540,6 +1540,9 @@ func prepareHistoryForProvider(history []providers.Message, preserveTurnEnvelope
 		if preserveTurnEnvelope {
 			msg.TurnEnvelope = envelope
 			msg.LiveToolContextID = liveToolContextID
+			if documentConversationID(msg) != "" {
+				msg.Media = nil // Native grants, not historical references, release binary input.
+			}
 		}
 		switch msg.Role {
 		case "system":

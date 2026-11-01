@@ -129,13 +129,24 @@ type InboundDocumentIntakeGuard struct {
 	JobID     string `json:"job_id"`
 	ModeID    string `json:"mode_id"`
 	Reference string `json:"reference,omitempty"`
+	// ConversationHistory marks prospective ordinary conversation at first
+	// admission. Existing protected spool records are not history migrations.
+	ConversationHistory bool `json:"conversation_history,omitempty"`
+	// Unavailable retains ordinary conversation without granting any native
+	// operation when draft admission cannot be confirmed. Replay cannot clear
+	// this fence or reinterpret that input against another form.
+	Unavailable bool `json:"unavailable,omitempty"`
 }
 
 func (guard InboundDocumentIntakeGuard) IsZero() bool {
-	return guard.JobID == "" && guard.ModeID == "" && guard.Reference == ""
+	return guard.JobID == "" && guard.ModeID == "" && guard.Reference == "" &&
+		!guard.Unavailable && !guard.ConversationHistory
 }
 
 func (guard InboundDocumentIntakeGuard) Valid() bool {
+	if guard.Unavailable && guard.JobID == "" && guard.ModeID == "" && guard.Reference == "" {
+		return true
+	}
 	validID := func(value, prefix string) bool {
 		if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+32 {
 			return false

@@ -464,7 +464,14 @@ func (p *Pipeline) invokeLLMWithRetry(
 				llm.providerToolDefs,
 				p.maxMediaSize(),
 			)
-			liveInputReserve := liveUserInputTokenReserve(llm.liveUserInputs)
+			protectedInputs := ts.liveTurnMessagesSnapshot()
+			if ts.opts.mode == turnModeInteractionContinuation {
+				_, parentInputs := splitHistoryForInteractionContinuation(
+					exec.history, ts.opts.InteractionContinuation.OriginToolCallID,
+				)
+				protectedInputs = append(parentInputs, protectedInputs...)
+			}
+			liveInputReserve := liveUserInputTokenReserveForHistory(llm.liveUserInputs, protectedInputs)
 			reserveTokens += liveInputReserve
 			compactBudget := effectiveHistoryBudget(
 				ts.agent.ContextWindow,

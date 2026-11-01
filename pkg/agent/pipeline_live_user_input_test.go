@@ -160,3 +160,93 @@ func TestLiveUserInputTokenReserveIgnoresGenericToolData(t *testing.T) {
 		t.Fatal("generic tool context changed existing token budgets")
 	}
 }
+
+func TestLiveUserInputSourceIdentityRestoresOnlyMissingComponents(t *testing.T) {
+	messages, projection := liveUserInputFixture()
+	projection.userInputSources = []toolshared.ToolContextInputSource{
+		{ConversationInputID: "original", Text: "original request"},
+		{ConversationInputID: "reply", Text: "current selection"},
+	}
+	projection.userInputText = "original request\n\ncurrent selection"
+	messages[1] = providers.Message{
+		Role: "user", Content: "current selection",
+		TurnEnvelope: &providers.TurnEnvelope{Version: 1, DocumentConversationID: "reply"},
+	}
+	projected, err := projectLiveUserInputs(messages, []liveToolContextProjection{projection})
+	if err != nil || len(projected) != len(messages)+1 || projected[5].Content != "original request" {
+		t.Fatal("fresh grant duplicated current selection or lost the missing original request")
+	}
+	if got := liveUserInputTokenReserveForHistory([]liveToolContextProjection{projection}, messages); got !=
+		EstimateMessageTokens(providers.Message{Role: "user", Content: "original request"}) {
+		t.Fatal("protected current input was reserved again or missing input framing was ignored")
+	}
+	messages[1].TurnEnvelope.DocumentConversationID = "wrong-owner-frame"
+	projected, err = projectLiveUserInputs(messages, []liveToolContextProjection{projection})
+	if err != nil || len(projected) != len(messages)+2 || projected[5].Content != "original request" ||
+		projected[6].Content != "current selection" || projected[7].Content != "later steering wins" {
+		t.Fatal("equal text with a different source identity suppressed authorized input or changed order")
+	}
+	messages[1].TurnEnvelope.DocumentConversationID = "reply"
+	messages = append(messages, providers.Message{
+		Role: "user", Content: "original request",
+		TurnEnvelope: &providers.TurnEnvelope{Version: 1, DocumentConversationID: "original"},
+	})
+	projected, err = projectLiveUserInputs(messages, []liveToolContextProjection{projection})
+	if err != nil || len(projected) != len(messages) ||
+		liveUserInputTokenReserveForHistory([]liveToolContextProjection{projection}, messages) != 0 {
+		t.Fatal("already-canonical input was projected or reserved twice")
+	}
+	if _, err = projectLiveUserInputs(messages, []liveToolContextProjection{projection, projection}); err == nil {
+		t.Fatal("a repeated native owner was accepted because no projection was necessary")
+	}
+	messages = append(messages, messages[1])
+	if _, err = projectLiveUserInputs(messages, []liveToolContextProjection{projection}); err == nil {
+		t.Fatal("two source frames borrowed the same ordinary input identity")
+	}
+}
+
+func TestLiveUserInputSourcesCannotExpandTheWholeAdmittedBody(t *testing.T) {
+	pipeline := &Pipeline{}
+	input := &toolshared.ToolContextInput{Text: "first \n\n second", Sources: []toolshared.ToolContextInputSource{
+		{ConversationInputID: "first", Text: " first "}, {ConversationInputID: "second", Text: " second "},
+	}}
+	sources, err := pipeline.liveUserInputSources(input, input.Text)
+	if err != nil || sources[0].Text != "first " || sources[1].Text != " second" {
+		t.Fatal("outer native trimming changed internal whitespace or expanded the admitted body")
+	}
+	projection := liveToolContextProjection{turnScopedInput: true, userInputText: input.Text, userInputSources: sources}
+	want := EstimateMessageTokens(providers.Message{Role: "user", Content: sources[0].Text}) +
+		EstimateMessageTokens(providers.Message{Role: "user", Content: sources[1].Text})
+	if liveUserInputTokenReserve([]liveToolContextProjection{projection}) != want {
+		t.Fatal("the reserve omitted one of two user-message frames")
+	}
+	for _, mutate := range []func(*toolshared.ToolContextInput){
+		func(value *toolshared.ToolContextInput) { value.Sources[1].Text += " unadmitted bytes" },
+		func(value *toolshared.ToolContextInput) { value.Sources[1].ConversationInputID = "first" },
+		func(value *toolshared.ToolContextInput) {
+			value.Sources[1].ConversationInputID = strings.Repeat("x", 257)
+		},
+	} {
+		copy := *input
+		copy.Sources = append([]toolshared.ToolContextInputSource(nil), input.Sources...)
+		mutate(&copy)
+		if _, err = pipeline.liveUserInputSources(&copy, input.Text); err == nil {
+			t.Fatal("malformed or expanded native source was accepted")
+		}
+	}
+}
+
+func TestLiveUserInputCacheProjectionDependsOnVisibleBodyNotHiddenSourceIDs(t *testing.T) {
+	messages, projection := liveUserInputFixture()
+	projection.userInputSources = []toolshared.ToolContextInputSource{{
+		ConversationInputID: "source-one", Text: projection.userInputText,
+	}}
+	ts := &turnState{agent: &AgentInstance{ID: "agent"}, sessionKey: "owned-session"}
+	exec := &turnExecution{messages: messages, liveToolContexts: []liveToolContextProjection{projection}}
+	first := promptCacheScopeForTurn(ts, exec, promptCachePurposeTurn)
+	exec.liveToolContexts[0].userInputSources[0].ConversationInputID = "source-two"
+	second := promptCacheScopeForTurn(ts, exec, promptCachePurposeTurn)
+	if first.LiveToolProjection == "" || first.LiveToolProjection != second.LiveToolProjection {
+		t.Fatal("hidden source metadata changed an identical provider projection")
+	}
+}

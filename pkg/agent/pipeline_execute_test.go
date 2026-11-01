@@ -595,7 +595,7 @@ func TestAuthorizedTaskInputHasTurnLifetimeWithoutChangingExtractedDataLifetime(
 		runner.messages = append(runner.messages, live)
 		ts.recordPersistedMessagePair(live, durable)
 		runner.registerLiveToolContext(callID, durable, true, len(result.ContextMedia) > 0, false,
-			result.ContextInput != nil)
+			result.ContextInput != nil, nil)
 	}
 	exec.messages = runner.messages
 	spent := exec.liveToolContextTextBytes
@@ -661,6 +661,7 @@ func TestLiveToolContextIsAggregateBoundedAndConsumedAfterOneModelCall(t *testin
 			len(result.ContextMedia) > 0,
 			len(result.ContextMedia) > 0,
 			false,
+			nil,
 		)
 	}
 	exec.messages = runner.messages

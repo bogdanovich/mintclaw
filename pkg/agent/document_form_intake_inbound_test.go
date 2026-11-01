@@ -347,8 +347,25 @@ func TestDocumentIntakeTurnAndSteeringRearmTheExistingProtectedFence(t *testing.
 	}
 }
 
-func TestDocumentIntakeGuardNeverFallsBackWhenItsToolIsUnavailable(t *testing.T) {
-	provider := &countingAdmissionProvider{}
+type unavailableFormConversationProvider struct {
+	calls int
+	tools int
+}
+
+func (p *unavailableFormConversationProvider) GetDefaultModel() string {
+	return "unavailable-form-test"
+}
+
+func (p *unavailableFormConversationProvider) Chat(
+	_ context.Context, _ []providers.Message, tools []providers.ToolDefinition, _ string, _ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.calls++
+	p.tools += len(tools)
+	return &providers.LLMResponse{Content: "Form processing is unavailable; acceptance is not confirmed."}, nil
+}
+
+func TestDocumentIntakeGuardRetainsOrdinaryHistoryWithoutExecutionWhenItsToolIsUnavailable(t *testing.T) {
+	provider := &unavailableFormConversationProvider{}
 	loop, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	trackingBus := &finalResponseAdmissionTestBus{MessageBus: loop.bus.(*bus.MessageBus)}
@@ -358,6 +375,7 @@ func TestDocumentIntakeGuardNeverFallsBackWhenItsToolIsUnavailable(t *testing.T)
 	msg.Content = private
 	msg.Context.DocumentIntake = bus.InboundDocumentIntakeGuard{
 		JobID: "form_job_" + strings.Repeat("a", 32), ModeID: "form_intake_" + strings.Repeat("b", 32),
+		ConversationHistory: true,
 	}
 	target, ok := loop.resolveSteeringTarget(msg)
 	if !ok {
@@ -366,13 +384,19 @@ func TestDocumentIntakeGuardNeverFallsBackWhenItsToolIsUnavailable(t *testing.T)
 	coordinator := newInboundTurnCoordinator(loop)
 	coordinator.handleInbound(t.Context(), msg)
 	coordinator.wait()
-	if provider.calls != 0 || len(agent.Sessions.GetHistory(target.SessionKey)) != 0 {
-		t.Fatal("guarded replay entered ordinary history or model")
+	seen := 0
+	for _, message := range agent.Sessions.GetHistory(target.SessionKey) {
+		if message.Role == "user" && message.Content == private && documentConversationID(message) != "" {
+			seen++
+		}
+	}
+	if provider.calls != 1 || provider.tools != 0 || seen != 1 {
+		t.Fatal("unavailable draft lost ordinary conversation or allowed tools")
 	}
 	select {
 	case outbound := <-trackingBus.OutboundChan():
-		if strings.Contains(outbound.Content, private) || !strings.Contains(outbound.Content, "Protected form") {
-			t.Fatal("guard refusal echoed data or provided no notice")
+		if strings.Contains(outbound.Content, private) || !strings.Contains(outbound.Content, "unavailable") {
+			t.Fatal("safe failure echoed data or provided no notice")
 		}
 	default:
 		t.Fatal("guarded replay was silently dropped")
@@ -380,5 +404,37 @@ func TestDocumentIntakeGuardNeverFallsBackWhenItsToolIsUnavailable(t *testing.T)
 	acked, released, _ := trackingBus.ownership()
 	if len(acked) != 1 || acked[0] != msg.SpoolID || len(released) != 0 {
 		t.Fatal("safe refusal did not settle transport")
+	}
+}
+
+func TestDocumentIntakeGuardDoesNotBackfillLegacyProtectedDelivery(t *testing.T) {
+	provider := &unavailableFormConversationProvider{}
+	loop, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	msg := finalResponseAdmissionInboundMessage("legacy-form-delivery")
+	const historical = "HISTORICAL_PROTECTED_DELIVERY_817"
+	msg.Content = historical
+	msg.Media = []string{"media://historical-protected-attachment"}
+	msg.Context.DocumentIntake = bus.InboundDocumentIntakeGuard{
+		JobID: "form_job_" + strings.Repeat("a", 32), ModeID: "form_intake_" + strings.Repeat("b", 32),
+	}
+	target, ok := loop.resolveSteeringTarget(msg)
+	if !ok {
+		t.Fatal("test message was not routed")
+	}
+	coordinator := newInboundTurnCoordinator(loop)
+	// Exercise the already-owned protected delivery boundary. This synthetic
+	// historical reference intentionally has no live media-store registration.
+	if !coordinator.handleDocumentIntakeInbound(t.Context(), msg, target) {
+		t.Fatal("legacy protected delivery lost its bound handling")
+	}
+	coordinator.wait()
+	for _, message := range agent.Sessions.GetHistory(target.SessionKey) {
+		if strings.Contains(message.Content, historical) || len(message.Media) != 0 {
+			t.Fatal("a pre-policy protected delivery was migrated into ordinary history")
+		}
+	}
+	if provider.calls != 1 || provider.tools != 0 {
+		t.Fatal("legacy failure became unrestricted execution")
 	}
 }

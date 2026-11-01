@@ -14,7 +14,8 @@ import (
 )
 
 // handleDocumentIntakeInbound uses existing session ownership and steering.
-// Neither path ever receives the raw utterance after protected admission.
+// Ordinary authored text stays in normal history; native receipts control the
+// independent draft and never become permission merely by appearing in chat.
 func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 	ctx context.Context, msg bus.InboundMessage, target *inboundDispatchTarget,
 ) bool {
@@ -22,19 +23,20 @@ func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 	if target == nil || target.Agent == nil {
 		return guarded
 	}
+	if guarded && !msg.Context.DocumentIntake.Valid() {
+		c.rejectDocumentIntakeInbound(ctx, msg, target, "The form message has an invalid binding. Nothing was applied.")
+		return true
+	}
+	if msg.Context.DocumentIntake.Unavailable && msg.Context.DocumentIntake.Valid() {
+		return c.dispatchDocumentConversation(ctx, msg, target)
+	}
 	tool, available := target.Agent.Tools.GetRegistered("document")
 	documentTool, supported := tool.(*tools.DocumentTool)
 	if !available || !supported || !documentTool.ProtectedFormIntakeConfigured() {
 		if !guarded {
 			return false
 		}
-		c.rejectDocumentIntakeInbound(
-			ctx,
-			msg,
-			target,
-			"Protected form intake is unavailable. The message was not sent to ordinary chat.",
-		)
-		return true
+		return c.unavailableDocumentConversation(ctx, msg, target)
 	}
 	toolCtx := toolshared.WithToolContext(ctx, msg.Context.Channel, msg.Context.ChatID)
 	toolCtx = toolshared.WithToolTopicID(toolCtx, msg.Context.TopicID)
@@ -51,25 +53,13 @@ func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 		progress, err = documentTool.BoundProtectedFormIntake(toolCtx, msg.Context.DocumentIntake)
 	}
 	if err != nil {
-		c.rejectDocumentIntakeInbound(
-			ctx,
-			msg,
-			target,
-			"Protected form state could not be read. Nothing was sent to ordinary chat; please retry.",
-		)
-		return true
+		return c.unavailableDocumentConversation(ctx, msg, target)
 	}
 	if progress == nil {
 		if !guarded {
 			return false
 		}
-		c.rejectDocumentIntakeInbound(
-			ctx,
-			msg,
-			target,
-			"This protected form conversation is no longer active. Its message was not replayed into ordinary chat.",
-		)
-		return true
+		return c.unavailableDocumentConversation(ctx, msg, target)
 	}
 	guard := msg.Context.DocumentIntake
 	if msg.SpoolID == "" {
@@ -94,7 +84,9 @@ func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 		return true
 	}
 	if !guarded {
-		guard = bus.InboundDocumentIntakeGuard{JobID: progress.JobID, ModeID: progress.ModeID}
+		guard = bus.InboundDocumentIntakeGuard{
+			JobID: progress.JobID, ModeID: progress.ModeID, ConversationHistory: true,
+		}
 		msg.Context.DocumentIntake = guard
 		if err = c.al.turns.inbound.persistContext(ctx, msg); err != nil {
 			c.al.turns.inbound.release(ctx, msg, err)
@@ -123,7 +115,10 @@ func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 	}
 	routeTask := documentTool.ProtectedFormTaskRoutingConfigured() &&
 		!strings.HasPrefix(guard.Reference, "form_intake.")
-	if (!routeTask && len(msg.Media) != 0) || (strings.TrimSpace(msg.Content) == "" && len(msg.Media) == 0) {
+	if !routeTask && len(msg.Media) != 0 {
+		return c.unavailableDocumentConversation(ctx, msg, target)
+	}
+	if strings.TrimSpace(msg.Content) == "" && len(msg.Media) == 0 {
 		c.rejectDocumentIntakeInbound(
 			ctx,
 			msg,
@@ -154,22 +149,45 @@ func (c *inboundTurnCoordinator) handleDocumentIntakeInbound(
 		}
 	}
 	if err != nil || guard.Reference != "" && guard.Reference != reference {
-		c.rejectDocumentIntakeInbound(
-			ctx,
-			msg,
-			target,
-			"Form details could not be admitted or retried. Accepted data are preserved; use /retry_form for retained input, /resume_form if paused, /pause_form or /cancel_form.",
-		)
-		return true
+		return c.unavailableDocumentConversation(ctx, msg, target)
 	}
 	msg.Context.DocumentIntake.Reference = reference
 	if err = c.al.turns.inbound.persistContext(ctx, msg); err != nil {
 		c.al.turns.inbound.release(ctx, msg, err)
 		return true
 	}
-	msg.Content = "Protected form input is ready. Continue the same document using its opaque receipt; do not ask the user to repeat admitted data."
-	msg.Media = nil
+	if control == "/retry_form" {
+		msg.Content = "Protected form input is ready. Continue the same document using its opaque receipt; do not ask the user to repeat admitted data."
+		msg.Media = nil
+	}
 	msg.Context.Interaction = bus.InboundInteractionProjection{}
+	return c.dispatchDocumentConversation(ctx, msg, target)
+}
+
+func (c *inboundTurnCoordinator) unavailableDocumentConversation(
+	ctx context.Context, msg bus.InboundMessage, target *inboundDispatchTarget,
+) bool {
+	if msg.Context.DocumentIntake.IsZero() {
+		msg.Context.DocumentIntake.ConversationHistory = true
+	}
+	msg.Context.DocumentIntake.Unavailable = true
+	if err := c.al.turns.inbound.persistContext(ctx, msg); err != nil {
+		c.al.turns.inbound.release(ctx, msg, err)
+		return true
+	}
+	msg.Context.Interaction = bus.InboundInteractionProjection{}
+	return c.dispatchDocumentConversation(ctx, msg, target)
+}
+
+func (c *inboundTurnCoordinator) dispatchDocumentConversation(
+	ctx context.Context, msg bus.InboundMessage, target *inboundDispatchTarget,
+) bool {
+	if !msg.Context.DocumentIntake.ConversationHistory {
+		// A pre-policy durable delivery keeps its old receipt-only projection.
+		// Native processing may resume, but it cannot backfill old authored text.
+		msg.Content = "Protected form input is retained by its existing native receipt; continue only the bound operation."
+		msg.Media = nil
+	}
 	claim, activeTarget, claimed := c.claimSession(targetWithInboundRelationRoot(target, msg))
 	if !claimed {
 		c.handleBusySession(ctx, msg, activeTarget)

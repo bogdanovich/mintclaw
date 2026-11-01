@@ -16,7 +16,7 @@ func TestGatewayDocumentIntakeCompositionKeepsNormalChatAndUnavailableStateSepar
 	for _, model := range []string{"", "unconfigured-audit-alias", "test-model"} {
 		t.Run("audit="+model, func(t *testing.T) {
 			t.Setenv(config.EnvHome, t.TempDir())
-			provider := &countingAdmissionProvider{}
+			provider := &unavailableFormConversationProvider{}
 			fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
 				cfg.Tools.Document.Enabled = true
 				cfg.Tools.Document.AuditModel = model
@@ -56,13 +56,20 @@ func TestGatewayDocumentIntakeCompositionKeepsNormalChatAndUnavailableStateSepar
 			if !coordinator.handleDocumentIntakeInbound(t.Context(), msg, target) {
 				t.Fatal("unreadable protected state fell through into normal chat")
 			}
-			if provider.calls != 0 || len(fixture.Agent.Sessions.GetHistory(target.SessionKey)) != 0 {
-				t.Fatal("ingress lookup exposed data to ordinary model/history")
+			coordinator.wait()
+			seen := 0
+			for _, message := range fixture.Agent.Sessions.GetHistory(target.SessionKey) {
+				if message.Role == "user" && message.Content == private && documentConversationID(message) != "" {
+					seen++
+				}
+			}
+			if provider.calls != 1 || provider.tools != 0 || seen != 1 {
+				t.Fatal("native lookup failure lost ordinary text or granted tools")
 			}
 			select {
 			case notice := <-tracking.OutboundChan():
 				if strings.Contains(notice.Content, private) ||
-					!strings.Contains(notice.Content, "state could not be read") {
+					!strings.Contains(notice.Content, "unavailable") {
 					t.Fatal("fail-closed composition omitted its notice or echoed private input")
 				}
 			default:

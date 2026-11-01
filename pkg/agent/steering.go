@@ -458,11 +458,21 @@ func (al *AgentLoop) enqueueInboundSteering(
 	agentID string,
 	msg bus.InboundMessage,
 ) error {
+	var envelope *providers.TurnEnvelope
+	if !msg.Context.DocumentIntake.IsZero() {
+		identity, err := protectedAnswerIdempotencyKey("", msg)
+		if err != nil {
+			return err
+		}
+		envelope = &providers.TurnEnvelope{Version: providers.TurnEnvelopeVersion1, DocumentConversationID: identity}
+	}
 	return al.enqueueSteeringEntry(scope, agentID, steeringEntry{
 		msg: providers.Message{
 			Role: "user", Content: msg.Content, CreatedAt: inboundReceivedAt(msg),
 			Media: append([]string(nil), msg.Media...), InboundSpoolID: msg.SpoolID,
-			DocumentIntakeReference: msg.Context.DocumentIntake.Reference,
+			DocumentIntakeReference:   msg.Context.DocumentIntake.Reference,
+			DocumentIntakeUnavailable: msg.Context.DocumentIntake.Unavailable,
+			TurnEnvelope:              envelope,
 		},
 		senderID: strings.TrimSpace(msg.Context.SenderID),
 		inbound:  steeringContextForSender(&msg.Context, msg.Context.SenderID),

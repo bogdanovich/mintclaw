@@ -1,6 +1,7 @@
 package document
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -27,6 +28,15 @@ func TestFormTaskTextDetourKeepsTheSameDraftCapturing(t *testing.T) {
 	handoff, err := store.GrantFormTaskHandoff(t.Context(), route.Reference, request.Owner)
 	if err != nil || handoff.Text != route.Text || handoff.Progress.State != FormIntakeActive {
 		t.Fatal("ordinary text detour suspended the draft and lost protected return routing")
+	}
+	if len(handoff.Inputs) != 1 || handoff.Inputs[0].ConversationInputID != "casual-detour" ||
+		handoff.Inputs[0].Text != route.Text {
+		t.Fatal("fresh native handoff lost the exact admitted ordinary input source")
+	}
+	encoded, err := json.Marshal(handoff)
+	if err != nil || strings.Contains(string(encoded), route.Text) ||
+		strings.Contains(string(encoded), "casual-detour") {
+		t.Fatal("private native source parts escaped the public projection")
 	}
 	progress, err := store.FindFormIntake(t.Context(), request.Owner)
 	if err != nil || progress == nil || progress.ModeID != mode.Progress.ModeID {
@@ -65,10 +75,11 @@ func TestFormTaskIndependentReplyConcurrentGrantIsOnceOnly(t *testing.T) {
 	for result := range results {
 		if !result.Reused {
 			fresh++
-			if result.Text != answer.Text || len(result.Media) != 0 {
+			if result.Text != answer.Text || len(result.Media) != 0 || len(result.Inputs) != 1 ||
+				result.Inputs[0].ConversationInputID != answer.MessageIdentity || result.Inputs[0].Text != answer.Text {
 				t.Fatal("fresh reply grant was incomplete or contained the original media")
 			}
-		} else if result.Text != "" || len(result.Media) != 0 {
+		} else if result.Text != "" || len(result.Media) != 0 || len(result.Inputs) != 0 {
 			t.Fatal("concurrent replay released text or media")
 		}
 	}
@@ -122,6 +133,10 @@ func TestFormTaskIndependentReplyNeverGrantsOriginalRequestAcrossRestart(t *test
 		handoff.Progress.State != FormIntakeActive {
 		t.Fatal("side reply was lost, repeated, attached original media or suspended the form")
 	}
+	if len(handoff.Inputs) != 1 || handoff.Inputs[0].ConversationInputID != answer.MessageIdentity ||
+		handoff.Inputs[0].Text != answer.Text {
+		t.Fatal("native reply source identity did not survive restart")
+	}
 	current, err := store.ReadFormTaskRoute(t.Context(), route.Reference, request.Owner)
 	if err != nil || current.State != FormTaskQuestion || current.Text != before.Text ||
 		!reflect.DeepEqual(current.MediaRefs, before.MediaRefs) || current.GrantRevision != before.GrantRevision {
@@ -131,7 +146,7 @@ func TestFormTaskIndependentReplyNeverGrantsOriginalRequestAcrossRestart(t *test
 		t.Fatal("unrelated conversation became consent for the original request")
 	}
 	replay, err := store.GrantFormTaskIndependentReply(t.Context(), receipt.Reference, request.Owner)
-	if err != nil || !replay.Reused || replay.Text != "" || len(replay.Media) != 0 {
+	if err != nil || !replay.Reused || replay.Text != "" || len(replay.Media) != 0 || len(replay.Inputs) != 0 {
 		t.Fatal("side reply replay repeated a task")
 	}
 	record, err := store.Get(t.Context(), request.JobID, request.Owner)

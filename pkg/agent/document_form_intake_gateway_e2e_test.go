@@ -43,6 +43,8 @@ func TestGatewayDocumentIntakeUsesProductionCompositionAndOrdinaryTransport(t *t
 	provider := &documentIntakeGatewayE2EProvider{
 		documentFormReviewE2EProvider: newDocumentFormReviewE2EProvider(ref, digest, sourcePath, values),
 	}
+	paragraph := "The date is " + values[0] + " and the notes are " + values[1]
+	provider.ordinaryIntakeText = paragraph
 	fixture := newAgentLoopTestFixtureWithWorkspace(t, workspace, provider, func(cfg *config.Config) {
 		configureDocumentE2E(cfg, provider.GetDefaultModel(), false)
 		cfg.Tools.Document.AuditModel = provider.GetDefaultModel()
@@ -64,8 +66,7 @@ func TestGatewayDocumentIntakeUsesProductionCompositionAndOrdinaryTransport(t *t
 		}
 		return false
 	})
-	publishDocumentE2EFollowup(t, fixture.Bus,
-		"The date is "+values[0]+" and the notes are "+values[1], 1)
+	publishDocumentE2EFollowup(t, fixture.Bus, paragraph, 1)
 	waitDocumentFormReviewReady(t, channel)
 	assertDocumentFormPromptCounts(t, channel, 0, 0)
 	assertDocumentSourceDigest(t, sourcePath, digest)
@@ -87,18 +88,26 @@ func TestGatewayDocumentIntakeUsesProductionCompositionAndOrdinaryTransport(t *t
 	if provider.routingCalls.Load() != 1 {
 		t.Fatal("ordinary form paragraph did not cross the private task-routing boundary exactly once")
 	}
+	seen := 0
 	for _, key := range fixture.Agent.Sessions.ListSessions() {
 		for _, message := range fixture.Agent.Sessions.GetHistory(key) {
+			if message.Role == "user" && message.Content == paragraph && documentConversationID(message) != "" {
+				seen++
+				continue
+			}
 			encoded, err := json.Marshal(message)
 			if err != nil {
 				t.Fatal("cannot inspect complete ordinary history projection")
 			}
 			for _, value := range values {
 				if strings.Contains(string(encoded), value) {
-					t.Fatal("ordinary gateway history retained the admitted paragraph")
+					t.Fatal("native/private values escaped their exact ordinary authored user frame")
 				}
 			}
 		}
+	}
+	if seen != 1 {
+		t.Fatal("ordinary gateway paragraph was omitted or persisted more than once")
 	}
 }
 

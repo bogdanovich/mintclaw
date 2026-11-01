@@ -17,7 +17,8 @@ const formTaskIndependentReplyPrefix = "The operator sent an independent message
 const formTaskIndependentPrefix = "The operator is continuing ordinary conversation alongside a background PDF draft. " +
 	"Respond to this message using recent ordinary conversation when it is a follow-up. " +
 	"Protected form receipts are not the user's conversational question; do not treat them as its topic. " +
-	"The draft stays protected. This message does not authorize any other pending request or attachment:\n"
+	"Verified fields remain in the separate native draft; ordinary history does not assign fields. " +
+	"This message does not authorize any other pending request or attachment:\n"
 
 const formTaskSwitchPrefix = "The operator selected a new task. The previous PDF draft is preserved. " +
 	"Follow only this newly authorized request (and its attached media); ask its purpose if unstated:\n"
@@ -46,7 +47,17 @@ func (tool *DocumentTool) formTaskIndependentReplyResult(
 	result := &toolshared.ToolResult{ForLLM: string(encoded)}
 	if !handoff.Reused {
 		result.ContextText = formTaskIndependentReplyPrefix + handoff.Text
-		result.ContextInput = &toolshared.ToolContextInput{Text: handoff.Text}
+		result.ContextInput = formTaskContextInput(handoff)
 	}
 	return result
+}
+
+func formTaskContextInput(handoff document.FormTaskHandoff) *toolshared.ToolContextInput {
+	input := &toolshared.ToolContextInput{Text: handoff.Text, Media: append([]string(nil), handoff.Media...)}
+	for _, source := range handoff.Inputs {
+		input.Sources = append(input.Sources, toolshared.ToolContextInputSource{
+			ConversationInputID: source.ConversationInputID, Text: source.Text,
+		})
+	}
+	return input
 }

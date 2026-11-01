@@ -224,6 +224,7 @@ type liveToolContextProjection struct {
 	requiresDocumentVision bool
 	turnScopedInput        bool
 	userInputText          string
+	userInputSources       []toolshared.ToolContextInputSource
 }
 
 // turnPendingInputs is the single owner of messages accepted for a later
@@ -402,6 +403,7 @@ type LLMIterationState struct {
 	gracefulTerminal             bool
 	useNativeSearch              bool
 	protectedDiagnosticContext   bool
+	protectedConversationContext bool
 	assistantToolCallsPersisted  bool
 	assistantToolCallsWriteErr   error
 	codingInstructionBarrier     bool
@@ -435,7 +437,8 @@ func (state *LLMIterationState) setCanonicalAttemptMessages(
 		return nil
 	}
 	state.diagnosticMessages = cloneProviderMessages(messages)
-	state.protectedDiagnosticContext = state.protectedDiagnosticContext || hasDocumentConversation(messages)
+	state.protectedConversationContext = state.protectedConversationContext || hasDocumentConversation(messages)
+	state.protectedDiagnosticContext = state.protectedDiagnosticContext || state.protectedConversationContext
 	state.promptCacheTailStart = boundary.Start
 	state.promptCacheTailBoundaryFound = boundary.Found
 	projected, err := projectLiveUserInputs(messages, state.liveUserInputs)
@@ -464,7 +467,7 @@ func (state *LLMIterationState) diagnosticMessagesForAttempt() []providers.Messa
 		return nil
 	}
 	messages := state.diagnosticMessages
-	if hasDocumentConversation(messages) {
+	if state.protectedConversationContext {
 		messages = omitProtectedDiagnosticContext(messages)
 	}
 	return stripCanonicalMessageStateFromAll(messages)
@@ -885,6 +888,7 @@ func (al *AgentLoop) GetActiveTurnByScope(workspace, sessionKey string) *ActiveT
 // =============================================================================
 
 func (ts *turnState) snapshot() ActiveTurnInfo {
+	userMessage := ts.diagnosticUserMessage()
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
@@ -894,7 +898,7 @@ func (ts *turnState) snapshot() ActiveTurnInfo {
 		SessionKey:   ts.sessionKey,
 		Channel:      ts.channel,
 		ChatID:       ts.chatID,
-		UserMessage:  ts.userMessage,
+		UserMessage:  userMessage,
 		Phase:        ts.phase,
 		Iteration:    ts.iteration,
 		StartedAt:    ts.startedAt,

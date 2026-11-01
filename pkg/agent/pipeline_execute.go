@@ -620,9 +620,9 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 	hasContextMedia bool,
 	requiresDocumentVision bool,
 	turnScopedInput bool,
-	userInput ...string,
+	userInput *toolshared.ToolContextInput,
 ) {
-	hasUserInput := turnScopedInput && len(userInput) > 0 && userInput[0] != ""
+	hasUserInput := turnScopedInput && userInput != nil && userInput.Text != ""
 	if runner == nil || runner.exec == nil || (!hasContextText && !hasContextMedia && !hasUserInput) {
 		return
 	}
@@ -632,8 +632,10 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 			continue
 		}
 		inputText := ""
-		if turnScopedInput && len(userInput) > 0 {
-			inputText = userInput[0]
+		var inputSources []toolshared.ToolContextInputSource
+		if turnScopedInput && userInput != nil {
+			inputText = userInput.Text
+			inputSources = append(inputSources, userInput.Sources...)
 		}
 		runner.exec.liveToolContexts = append(runner.exec.liveToolContexts, liveToolContextProjection{
 			toolCallID:             toolCallID,
@@ -644,6 +646,7 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 			requiresDocumentVision: requiresDocumentVision,
 			turnScopedInput:        turnScopedInput,
 			userInputText:          inputText,
+			userInputSources:       inputSources,
 		})
 		return
 	}
@@ -1937,6 +1940,14 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		if inputErr != nil {
 			return stopToolBatch(ToolLoopOutcome{TurnErr: inputErr})
 		}
+		inputSources, sourceErr := p.liveUserInputSources(toolResult.ContextInput, userInputText)
+		if sourceErr != nil {
+			return stopToolBatch(ToolLoopOutcome{TurnErr: sourceErr})
+		}
+		var liveInput *toolshared.ToolContextInput
+		if toolResult.ContextInput != nil {
+			liveInput = &toolshared.ToolContextInput{Text: userInputText, Sources: inputSources}
+		}
 		p.prepareDocumentHandoff(ts, toolResult.ContextInput)
 		hasLiveContextMedia := len(toolResult.ContextMedia) > 0
 		modelContextResult := toolResultForModelContext(toolName, toolResult)
@@ -2018,7 +2029,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				hasLiveContextMedia,
 				hasLiveContextMedia && toolResult.ContextMediaRequiresVision,
 				toolResult.ContextInput != nil,
-				userInputText,
+				liveInput,
 			)
 		}
 	}

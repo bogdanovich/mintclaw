@@ -465,15 +465,6 @@ func (service interactionService) acceptProtectedAnswer(
 	parsed interactions.Answer,
 	result answerInteractionResult,
 ) (answerInteractionResult, error) {
-	sink, ok := service.runtime.interactions.protectedAnswerSink(record.ProtectedAnswer.Namespace)
-	if !ok {
-		return service.notice(
-			ctx,
-			command,
-			result,
-			"Protected answer storage is unavailable. The question is still waiting; please try again later.",
-		)
-	}
 	idempotencyKey, err := protectedAnswerIdempotencyKey(record.ID, command.Message)
 	if err != nil {
 		return service.notice(
@@ -486,6 +477,18 @@ func (service interactionService) acceptProtectedAnswer(
 	messageIdentity, err := protectedAnswerIdempotencyKey("", command.Message)
 	if err != nil {
 		return result, err
+	}
+	if err = preserveDocumentConversationReply(ctx, command, record, messageIdentity); err != nil {
+		return result, err
+	}
+	sink, ok := service.runtime.interactions.protectedAnswerSink(record.ProtectedAnswer.Namespace)
+	if !ok {
+		return service.notice(
+			ctx,
+			command,
+			result,
+			"Protected answer storage is unavailable. The question is still waiting; please try again later.",
+		)
 	}
 	intent := interactions.ProtectedAnswerValue
 	text := parsed.Text
