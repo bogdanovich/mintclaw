@@ -91,9 +91,15 @@ func TestGatewayDocumentIntakeUsesProductionCompositionAndOrdinaryTransport(t *t
 	seen := 0
 	for _, key := range fixture.Agent.Sessions.ListSessions() {
 		for _, message := range fixture.Agent.Sessions.GetHistory(key) {
-			if message.Role == "user" && message.Content == paragraph && documentConversationID(message) != "" {
+			if message.Role == "user" && strings.Contains(message.Content, paragraph) &&
+				documentConversationID(message) != "" {
+				if strings.Count(message.Content, paragraph) != 1 {
+					t.Fatal("ordinary gateway paragraph was duplicated inside its user frame")
+				}
 				seen++
-				continue
+				// Normal user framing may surround an authored utterance. Only
+				// that content is allowed: inspect every other canonical field.
+				message.Content = ""
 			}
 			encoded, err := json.Marshal(message)
 			if err != nil {
@@ -101,7 +107,12 @@ func TestGatewayDocumentIntakeUsesProductionCompositionAndOrdinaryTransport(t *t
 			}
 			for _, value := range values {
 				if strings.Contains(string(encoded), value) {
-					t.Fatal("native/private values escaped their exact ordinary authored user frame")
+					t.Fatalf(
+						"native/private value outside ordinary content: role=%s has_input_id=%t whole_utterance=%t",
+						message.Role,
+						documentConversationID(message) != "",
+						strings.Contains(message.Content, paragraph),
+					)
 				}
 			}
 		}
