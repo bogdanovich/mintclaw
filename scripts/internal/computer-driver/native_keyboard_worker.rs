@@ -706,7 +706,10 @@ fn active(
                 if !permit(host, operation, Permit::Edge(ordinal), deadline)? {
                     return Ok(false);
                 }
-                keeper.check(deadline)?;
+                // The retained resource owner must keep control for cleanup
+                // after action expiry. Permits and input writes keep the
+                // action deadline; this read-only check retains its 250ms cap.
+                keeper.check(overall)?;
                 worker.send(
                     &WorkerMessage::Edge {
                         operation,

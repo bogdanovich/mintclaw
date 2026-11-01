@@ -223,6 +223,18 @@ def main():
                 admitted_devices = []
                 late_grab_installed = False
 
+                def deadline_server_grab():
+                    # This client and server were attested above and belong
+                    # only to this disposable fixture. No ambient display.
+                    bind(x, "XGrabServer", integer, ptr)(opened)
+                    sync(opened, 0)
+
+                    def release():
+                        bind(x, "XUngrabServer", integer, ptr)(opened)
+                        sync(opened, 0)
+
+                    return release
+
                 def late_grab():
                     nonlocal late_grab_installed
                     bits = (C.c_ubyte * 1)((1 << 2) | (1 << 3))
@@ -292,7 +304,8 @@ def main():
                                           "uid": os.getuid(), "root": root}},
                               {"window": target, "pid": os.getpid(), "lease_window": token,
                                "lease_pid": os.getpid()}, chords, pump, process_ready, process_observed, cleanup_observed,
-                              late_grab if args.process_mode == "late_grab_repeat" else None)
+                              late_grab=late_grab if args.process_mode == "late_grab_repeat" else None,
+                              deadline_grab=deadline_server_grab if args.process_mode == "deadline_io" else None)
                 if args.process_mode == "late_grab_repeat":
                     pending = bind(x, "XPending", integer, ptr)
                     next_event = bind(x, "XNextEvent", integer, ptr, C.POINTER(NativeEvent))

@@ -40,9 +40,10 @@ def signal_owned_input(keeper, executable, signum):
         raise
 
 
-def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cleanup_observed, late_grab=None):
+def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cleanup_observed,
+        late_grab=None, deadline_grab=None):
     allowed = {"normal", "cancel_held", "crash_held", "blocked_stop", "foreign_stop", "duplicate_permit", "wire_loss",
-               "keeper_crash_held", "group_term_held", "late_grab_repeat"}
+               "keeper_crash_held", "group_term_held", "late_grab_repeat", "deadline_io"}
     if mode not in allowed:
         raise RuntimeError("unknown private qualification mode")
     channel = list(secrets.token_bytes(32))
@@ -59,6 +60,8 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
     cancelled_at = None
     lost_wire = False
     fault_descriptor = None
+    ready_at = None
+    deadline_fault = None
 
     def send(kind, **data):
         value = {"kind": kind, "data": data}
@@ -90,7 +93,8 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
                 if kind == "opened":
                     if data != {"channel": channel}:
                         raise RuntimeError("foreign channel open receipt")
-                    send("start", operation=operation, binding=binding, chords=chords, budget_ms=10000)
+                    send("start", operation=operation, binding=binding, chords=chords,
+                         budget_ms=1500 if mode == "deadline_io" else 10000)
                     continue
                 if kind != "rejected" and data.get("operation") != operation:
                     raise RuntimeError("foreign private result")
@@ -102,7 +106,31 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
                     keyboard = data["keyboard"]
                 elif kind == "edge":
                     ordinal, held = data["ordinal"], data["held"]
-                    if mode == "late_grab_repeat" and held:
+                    if mode == "deadline_io" and held and not injected:
+                        if ready_at is None or deadline_grab is None:
+                            raise RuntimeError("deadline fixture phase unavailable")
+                        injected = True
+                        # Fault injection only: stop the owned server across
+                        # action expiry, inside the unchanged 250ms IO budget.
+                        while time.monotonic() < ready_at + 1.470:
+                            pump(0.001)
+                        release = deadline_grab()
+                        try:
+                            permitted_at = time.monotonic()
+                            if permitted_at >= ready_at + 1.500:
+                                raise RuntimeError("deadline fixture missed its pre-expiry permit")
+                            send("continue", operation=operation, ordinal=ordinal)
+                            time.sleep(0.080)
+                        finally:
+                            release()
+                        released_at = time.monotonic()
+                        deadline_fault = {
+                            "permit_after_ready_seconds": permitted_at - ready_at,
+                            "release_after_ready_seconds": released_at - ready_at,
+                        }
+                        if released_at <= ready_at + 1.500:
+                            raise RuntimeError("deadline fixture did not cross action expiry")
+                    elif mode == "late_grab_repeat" and held:
                         if injected or late_grab is None:
                             raise RuntimeError("late-grab fixture phase unavailable")
                         injected = True
@@ -178,6 +206,7 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
             if result is not None:
                 break
             if keyboard is not None and not sent_ready and ready(keyboard):
+                ready_at = time.monotonic()
                 send("ready", operation=operation)
                 sent_ready = True
             if sent_finish and observed():
@@ -200,6 +229,11 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
             raise RuntimeError("private process qualification deadline")
         completion_latency = None if cancelled_at is None else time.monotonic() - cancelled_at
         if not lost_wire:
+            if mode == "deadline_io":
+                # Preserve independent evidence on the old failing backend too.
+                print(json.dumps({"deadline_io_receipt": result, "fault": deadline_fault,
+                                  "independent_held_and_exact_partial": cleanup_observed(False),
+                                  "independent_clear_and_exact_partial": cleanup_observed(True)}), flush=True)
             # Action completion is not channel shutdown or device disposal.
             if not result["input_quiescent"] or result["resource_disposition"] != "retained":
                 raise RuntimeError("native action did not confirm quiescence with retained resources")
@@ -244,6 +278,7 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
         if mode != "normal" and not injected:
             raise RuntimeError("private adversarial case did not run")
         return {"mode": mode, "cancel_latency_seconds": completion_latency,
+                "deadline_fault": deadline_fault,
                 "metadata": result, "full_native_driver_qualified": False}
     finally:
         if fault_descriptor is not None:

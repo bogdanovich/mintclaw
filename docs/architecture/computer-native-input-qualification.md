@@ -191,6 +191,16 @@ available and is a separate application-effect gate: observed text is not proof
 that Save is ready or that a document was saved. Both modes retain the original
 native budgets and all hosting, application, model-task and admission limits.
 
+The private process fixture's `deadline_io` fault holds only its attested owned
+server across action expiry after a real key press. Resource validation uses
+the existing channel lifetime with its unchanged 250ms I/O cap; permits, worker
+writes and input keep the action deadline. This preserves the original control
+connection for release-only cleanup without admitting a late edge or reconnect.
+Independent GTK and native observations require the exact partial effect,
+unchanged guard/core focus, live original windows and both keyboards clear.
+This regression does not by itself resolve a separate observed Go-race
+application timeout with unverified held input; that application gate remains.
+
 ## Limits and remaining gates
 
 The actual-companion launcher is macOS-only because the Linux direct fixture run already uses

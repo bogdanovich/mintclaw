@@ -127,7 +127,7 @@ def main():
     parser.add_argument("--process-worker-sha256")
     parser.add_argument("--process-modes", nargs="+", default=["normal"], choices=(
         "normal", "cancel_held", "blocked_stop", "crash_held", "foreign_stop", "duplicate_permit", "wire_loss",
-        "keeper_crash_held", "group_term_held", "late_grab_repeat"))
+        "keeper_crash_held", "group_term_held", "late_grab_repeat", "deadline_io"))
     parser.add_argument("--host-probe", type=Path)
     parser.add_argument("--host-probe-sha256")
     args = parser.parse_args()
