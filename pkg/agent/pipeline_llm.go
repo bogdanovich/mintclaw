@@ -464,7 +464,14 @@ func (p *Pipeline) invokeLLMWithRetry(
 				llm.providerToolDefs,
 				p.maxMediaSize(),
 			)
-			liveInputReserve := liveUserInputTokenReserve(llm.liveUserInputs)
+			protectedInputs := ts.liveTurnMessagesSnapshot()
+			if ts.opts.mode == turnModeInteractionContinuation {
+				_, parentInputs := splitHistoryForInteractionContinuation(
+					exec.history, ts.opts.InteractionContinuation.OriginToolCallID,
+				)
+				protectedInputs = append(parentInputs, protectedInputs...)
+			}
+			liveInputReserve := liveUserInputTokenReserveForHistory(llm.liveUserInputs, protectedInputs)
 			reserveTokens += liveInputReserve
 			compactBudget := effectiveHistoryBudget(
 				ts.agent.ContextWindow,
@@ -1058,7 +1065,9 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			exec.messages,
 		)
 		toolFeedbackExplanation = projectDocumentUserMessageForDurableBoundary(toolFeedbackExplanation)
-		if projection.protected {
+		// Feedback metadata is not another conversation carrier. In particular,
+		// its fallback must not copy an ordinary form utterance into a tool call.
+		if projection.protected || llm.protectedConversationContext {
 			toolFeedbackExplanation = ""
 		}
 		thoughtSignature := ""

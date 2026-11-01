@@ -233,6 +233,8 @@ func (s *InboundSpool) PersistContext(msg InboundMessage) error {
 	context := normalizeInboundContext(msg.Context)
 	guard := rec.Message.Context.DocumentIntake
 	if !guard.IsZero() && (guard.JobID != context.DocumentIntake.JobID ||
+		guard.ConversationHistory != context.DocumentIntake.ConversationHistory ||
+		guard.Unavailable && !context.DocumentIntake.Unavailable ||
 		guard.ModeID != context.DocumentIntake.ModeID || guard.Reference != "" && guard.Reference != context.DocumentIntake.Reference) {
 		return errInboundDocumentIntakeGuard
 	}

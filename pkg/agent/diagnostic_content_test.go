@@ -6,9 +6,33 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
+
+func TestDiagnosticConversationLogPreviewsPreserveHistoryNotJournalDisclosure(t *testing.T) {
+	const authored = "error: BORROWER_PRIVATE_LOG_SENTINEL_291"
+	for _, guard := range []bus.InboundDocumentIntakeGuard{
+		{JobID: "native-binding"},
+		{Unavailable: true, ConversationHistory: true},
+	} {
+		message := bus.InboundMessage{Content: authored, Context: bus.InboundContext{DocumentIntake: guard}}
+		if preview := diagnosticInboundLogPreview(message); strings.Contains(preview, authored) || preview == "" {
+			t.Fatal("native conversation or its error text escaped into the input journal preview")
+		}
+		if message.Content != authored {
+			t.Fatal("log redaction changed ordinary authored history")
+		}
+	}
+	if preview := diagnosticResponseLogPreview(authored, true); strings.Contains(preview, authored) || preview == "" {
+		t.Fatal("a response quoting protected conversation escaped into the response journal preview")
+	}
+	if diagnosticInboundLogPreview(bus.InboundMessage{Content: "ordinary message"}) != "ordinary message" ||
+		diagnosticResponseLogPreview("ordinary reply", false) != "ordinary reply" {
+		t.Fatal("conversation-specific redaction changed unrelated ordinary previews")
+	}
+}
 
 func TestDiagnosticContentHelpersAreOptInAndExcludeProviderSecrets(t *testing.T) {
 	cfg := config.DefaultConfig()

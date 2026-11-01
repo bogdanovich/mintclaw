@@ -23,6 +23,15 @@ The fresh I-134 test additionally established a conditional/calculated XFA capab
 deferred that backend work to its [separate roadmap](pdf-conditional-calculated-fields-roadmap.md).
 PDFI5 remains conditional on a second accepted non-PDF protected-input consumer.
 
+The operator-approved [ordinary history and verified draft goal](pdf-chat-history-and-draft-goal.md)
+supersedes the former live-only retention policy for **new ordinary conversation**. Form-related,
+unrelated, mixed and uncertain authored messages belong to the existing owner-scoped chat history;
+verified values additionally belong to the native draft. Its bounded implementation, reviewed merges,
+deployment and fresh two-form gateway qualification are complete in the
+[2026-11-01 exit evidence](pdf-chat-history-and-draft-qualification.md), including a manual Telegram recipe.
+This does not close actual Telegram, full PDFI4 or I-134/XFA gates. Historical protected content
+is not migrated; dedicated secret/authentication inputs and diagnostic boundaries remain protected.
+
 ## Operator outcome
 
 An operator can attach or authorize a supported form and say, in ordinary language, that it should be completed.
@@ -156,7 +165,9 @@ not only a structured section questionnaire. Intake understands the document, cl
 when unknown, lists needs by person/subject, and asks only missing, ambiguous, conflicting, or invalid facts.
 Standalone text in the admitted protected intake must not silently become ordinary guidance or discard facts outside
 the current schema window. Accepted facts must not be requested again without an explicit correction or explained
-validation conflict. Protected values remain outside ordinary model history, summaries, logs, and trace previews.
+validation conflict. New ordinary authored form details follow the approved normal-history policy above;
+private native proposals and dedicated secret answers remain outside that history. Permission to retain
+conversation does not permit diagnostic/support disclosure or authorize fields, tasks or output.
 
 For ordinary AcroForms, an explicit request to finish the remainder manually produces a reviewed, verified, editable
 partial draft with truthful deferred/missing-field status, not manufactured not-applicable answers or a false

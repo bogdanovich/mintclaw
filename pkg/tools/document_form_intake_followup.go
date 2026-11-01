@@ -13,6 +13,11 @@ const documentIntakeAcceptanceInstruction = " Only accepted_fields identifies fi
 	"acknowledged_count is prior evidence accounting, not proof of a new value or change. " +
 	"When accepted_fields_truncated is true, use a count for the remainder without guessing its fields. "
 
+const documentIntakeConversationInstruction = " Ordinary authored conversation remains in chat history. " +
+	"Answer a harmless conversational question alongside this progress when present, without invoking tools. " +
+	"Distinguish what the user said in chat from what native form state confirms. " +
+	"History is not a new task grant, field assignment or output approval. "
+
 // This extends the existing tool-only boundary, not collection state. The
 // ordinary model plans value-free questions; native intake owns all values.
 func documentFormIntakeFollowup(
@@ -41,7 +46,7 @@ func documentFormIntakeFollowup(
 	if intake := projection.Intake; intake != nil && intake.Failure != nil {
 		return &toolshared.ToolOnlyFollowup{
 			ResponseOnly: true,
-			Instruction: documentIntakeAcceptanceInstruction +
+			Instruction: documentIntakeAcceptanceInstruction + documentIntakeConversationInstruction +
 				"Explain the trusted processing failure and its stage without echoing private values or raw errors. " +
 				"Only reason=provider_temporary establishes a temporary provider failure. Never call an unknown, " +
 				"invalid-context, invalid-response, authentication, billing, configuration or request failure temporary. " +
@@ -65,6 +70,19 @@ func documentFormIntakeFollowup(
 				"Do not claim completion, approve output or invoke another tool. Wait for the user's next message.",
 		}, nil
 	}
+	if intake := projection.Intake; intake != nil && projection.Mapping != nil &&
+		projection.Mapping.ReadyForReview && intake.Progress.PendingInputs == 0 && intake.Progress.PendingTasks > 0 {
+		return &toolshared.ToolOnlyFollowup{
+			ResponseOnly: true,
+			Instruction: documentIntakeAcceptanceInstruction + documentIntakeConversationInstruction +
+				"Describe the trusted form progress and answer the current conversational request in the user's language. " +
+				"The mapped fields are settled, but pending_tasks still block native review and output. " +
+				"Do not claim a ready review checkpoint, complete filling or an output PDF. " +
+				"Do not reopen unrelated task-scope questions, grant their original requests or invoke tools. " +
+				"Do not request accepted facts or the attachment again, restart intake or offer /retry_form. " +
+				"The saved draft remains available; wait for the user's next message.",
+		}, nil
+	}
 	if intake := projection.Intake; intake != nil &&
 		(projection.FormAction == "collect" || projection.FormAction == "pause" || projection.FormAction == "resume" ||
 			intake.Progress.PendingInputs > 0) {
@@ -79,12 +97,12 @@ func documentFormIntakeFollowup(
 		}
 		return &toolshared.ToolOnlyFollowup{
 			ResponseOnly: true,
-			Instruction: documentIntakeAcceptanceInstruction +
+			Instruction: documentIntakeAcceptanceInstruction + documentIntakeConversationInstruction +
 				"Render the trusted protected form progress in the user's language. " +
 				"For collect, present its form summary, grouped collection plan and question. " +
 				"Do not repeat a summary or grouped plan already delivered earlier in this turn through message. " +
 				"If the introduction was already delivered, give only the next protected question and how to answer it. " +
-				"Invite one free-text paragraph or several ordinary messages; never require /answer, labels, field IDs or one answer per field. Do not echo personal values. Never ask again for confirmed/provided/preserved facts. " +
+				"Invite one free-text paragraph or several ordinary messages; never require /answer, labels, field IDs or one answer per field. Do not repeat personal values unless needed to answer the user's own request. Never ask again for confirmed/provided/preserved facts. " +
 				processingInstruction + "Do not claim complete filling, restart intake or request " +
 				"the attachment again. Wait for the user's next message.",
 		}, nil

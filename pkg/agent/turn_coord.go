@@ -92,7 +92,7 @@ func (r *turnRunner) run(
 				ContextLimitTokens:    contextLimitTokens,
 				FinalContentLen:       ts.finalContentLen(),
 				FinalContentProtected: ts.finalContentProtectedSnapshot(),
-				UserMessage:           ts.userMessage,
+				UserMessage:           ts.diagnosticUserMessage(),
 				FinalContent:          ts.finalContentSnapshot(),
 				ActiveSkills:          append([]string(nil), ts.activeSkills...),
 				AttemptedSkills:       attemptedSkills,
@@ -148,7 +148,7 @@ func (r *turnRunner) run(
 		runtimeevents.KindAgentTurnStart,
 		ts.eventMeta("runTurn", "turn.start"),
 		TurnStartPayload{
-			UserMessage: ts.userMessage,
+			UserMessage: ts.diagnosticUserMessage(),
 			MediaCount:  len(ts.media),
 			Workspace:   ts.workspace,
 		},

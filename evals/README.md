@@ -30,9 +30,13 @@ browser/owned-target execution and baseline comparison have their own evidence c
 live scenario qualification.
 General cases require a configured judge for their quality rubric, in addition to mandatory hard checks.
 
-The corpus has 26 cases: six active/default General, pending isolation, tool recovery,
-native stop, approval denial, final delivery, skill selection, owned restart and compaction,
-six pending PDF and six pending browser. The fixed
+The corpus has 26 cases: six active/default General, three active/on-demand
+(native stop, approval denial and owned restart), five pending General
+(isolation, recovery, final delivery, skill selection and compaction), six pending
+PDF and six pending browser. The [fixed C3 record](../docs/operations/manual-agent-evals-core-c3-20261026.md)
+retains 20 trials: 12 pass, 8 fail. Only independent batch 3/3 results are
+promoted; no default membership, old definition/digest or failed result changes.
+The fixed
 [C2 campaign](../docs/operations/manual-agent-evals-core-c2-20261025.md) qualified
 boundary and both order modes with 3/3 batches; it also retains one failed order
 qualification and an inconclusive isolation batch caused by provider quota/unknown usage.
@@ -41,23 +45,27 @@ uses a separate read-only profile and does not widen the default active-tool pro
 Its [fixed C3a campaign](../docs/operations/manual-agent-evals-core-c3a-20261025.md)
 retains a passing qualification and a batch of one pass/two judge provider errors;
 all native hard checks passed, but it is not qualified or promoted.
-The pending [native stop/reuse contract](../docs/reference/core-stop-eval.md)
+The qualified on-demand [native stop/reuse contract](../docs/reference/core-stop-eval.md)
 uses the owned active-tool profile with an explicit one-turn pin. It joins a
 genuine queued input, native abort, cancellation/history and final deliveries;
-it is distinct from local driver stop and is not yet live-qualified.
-The pending [approval denial contract](../docs/reference/core-approval-denied-eval.md)
+it is distinct from local driver stop. Its failed qualification is retained
+alongside the passing fixed batch, not retried or relabeled.
+The qualified on-demand [approval denial contract](../docs/reference/core-approval-denied-eval.md)
 uses a separate single-file protected-write profile, native prompt-bound denial,
 terminal/history/log witnesses and an independent unchanged-target census.
 The pending [skill selection contract](../docs/reference/core-skill-selection-eval.md)
 uses a pinned read-only skill, native `/use` and complete typed revision digests
-with contrasting controls. Model-free native validation is not live qualification.
-The pending [owned restart contract](../docs/reference/core-owned-restart-eval.md)
+with contrasting controls. Its fixed live batch failed all three first-unselected
+controls; native selection and the following unselected controls worked.
+The qualified on-demand [owned restart contract](../docs/reference/core-owned-restart-eval.md)
 uses an actual owner-controlled process successor and same-session reconnect,
 with separate native receipts and a decreasing run-wide ceiling across generations.
 The pending [compaction contract](../docs/reference/core-compaction-eval.md)
 uses a numeric-only pressure profile, five scripted turns and a paired native
 completion witness before recall. The native engine and production defaults
-are unchanged; synthetic controls are not live qualification.
+are unchanged. Its live qualification recalled the wrong value after actual
+compaction; the batch later had unknown usage and all three trials remain
+non-passing. Synthetic controls are not live qualification.
 Steering order records separate explicit
 `one-at-a-time`/`all` profile variants; native same-sender inputs coalesce in FIFO
 order in both modes. These live cases hold one read, not a parallel tool batch or

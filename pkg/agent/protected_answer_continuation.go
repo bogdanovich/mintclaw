@@ -32,6 +32,18 @@ func newProtectedAnswerContinuationState(
 	opts turnInput,
 	registry *tools.ToolRegistry,
 ) protectedAnswerContinuationState {
+	for index := len(opts.InitialSteeringMessages) - 1; index >= 0; index-- {
+		message := opts.InitialSteeringMessages[index]
+		if message.DocumentIntakeUnavailable {
+			return unavailableDocumentContinuation()
+		}
+		if message.DocumentIntakeReference != "" {
+			return newDocumentIntakeContinuationState(message.DocumentIntakeReference, message.InboundSpoolID, registry)
+		}
+	}
+	if opts.Dispatch.InboundContext != nil && opts.Dispatch.InboundContext.DocumentIntake.Unavailable {
+		return unavailableDocumentContinuation()
+	}
 	if reference, spoolID := documentIntakeInputForTurn(opts); reference != "" {
 		return newDocumentIntakeContinuationState(reference, spoolID, registry)
 	}
@@ -64,6 +76,20 @@ func newProtectedAnswerContinuationState(
 		enabled:   true,
 		toolName:  strings.TrimSpace(continuation.OriginToolName),
 		arguments: cloneStringAnyMap(arguments),
+	}
+}
+
+func unavailableDocumentContinuation() protectedAnswerContinuationState {
+	return protectedAnswerContinuationState{
+		enabled: true,
+		followup: &toolshared.ToolOnlyFollowup{
+			ResponseOnly: true,
+			Instruction: "Native form admission could not be confirmed for the current message. " +
+				"The cause is unknown. Do not claim any form field was accepted, rejected or changed from this message. " +
+				"Previously accepted draft data are preserved. You may answer an ordinary harmless conversational question. " +
+				"Explain the form-processing limitation without raw errors or unnecessary personal values. " +
+				"Do not execute a request, retry an uncertain effect, approve output or ask for already received facts again.",
+		},
 	}
 }
 

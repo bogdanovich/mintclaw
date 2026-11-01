@@ -4,10 +4,12 @@ import (
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
+	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
 const protectedConversationDiagnosticReceipt = "Ordinary form conversation omitted from diagnostic state."
@@ -34,6 +36,24 @@ func diagnosticTurnFinalContent(payload TurnEndPayload) (string, int) {
 		return protectedTurnFinalDiagnosticReceipt, len(protectedTurnFinalDiagnosticReceipt)
 	}
 	return payload.FinalContent, payload.FinalContentLen
+}
+
+func diagnosticInboundLogPreview(message bus.InboundMessage) string {
+	if !message.Context.DocumentIntake.IsZero() {
+		return protectedConversationDiagnosticReceipt
+	}
+	// Preserve existing ordinary-message logging outside the native ingress.
+	if strings.Contains(message.Content, "Error:") || strings.Contains(message.Content, "error") {
+		return message.Content
+	}
+	return utils.Truncate(message.Content, 80)
+}
+
+func diagnosticResponseLogPreview(content string, protected bool) string {
+	projected, _ := diagnosticTurnFinalContent(TurnEndPayload{
+		FinalContent: content, FinalContentProtected: protected,
+	})
+	return utils.Truncate(projected, 120)
 }
 
 func diagnosticContentEnabled(cfg *config.Config) bool {

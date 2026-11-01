@@ -26,7 +26,9 @@ const documentFormTaskRoutingPrompt = `Classify the entire current protected mes
 	`Choose switch_task for a clear replacement task about a distinct attachment/document or an explicit selection ` +
 	`to leave the current form workflow. side_task cannot release attachments or start another form workflow. ` +
 	`A new attachment alone, or a request to fill a form whose relation to the active form is unclear, is ask. ` +
-	`Mixed current-form facts and another task, uncertainty or conflicting purpose are ask, ` +
+	`Current-form facts accompanied by a harmless non-actionable conversational question are continue_form: ` +
+	`the trusted form update can be followed by an ordinary response without executing a separate task. ` +
+	`Mixed current-form facts and a distinct action/task, uncertainty or conflicting purpose are ask, ` +
 	`never switch_task or side_task. ` +
 	`Do not infer what an attachment contains: only its count is supplied. ` +
 	`A text-only detour preserves the old draft and automatic protected return. ` +
@@ -44,7 +46,8 @@ const documentFormTaskReplyPrompt = `Interpret the operator's protected message 
 	`Choose switch_task only for a clear choice of the new task instead. The ENTIRE reply would accompany ` +
 	`the new request into ordinary task context: mixed old-form facts and another task must be ask, ` +
 	`never switch_task or side_task. ` +
-	`Choose continue_form for facts or clarification clearly about the old form without selecting the attachment's purpose. ` +
+	`Choose continue_form for facts or clarification clearly about the old form, including a harmless non-actionable ` +
+	`conversational question alongside those facts, without selecting the attachment's purpose. ` +
 	`An open question does not own every later message. Choose side_task for ordinary unrelated conversation, ` +
 	`greetings, check-ins, or an independent request rather than a selection about the original pending request. ` +
 	`This releases ONLY the current reply, NEVER the original request or attachment, which remains protected. ` +

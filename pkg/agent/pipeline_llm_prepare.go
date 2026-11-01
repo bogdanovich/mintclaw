@@ -118,8 +118,9 @@ func (p *Pipeline) prepareLLMRequest(
 	// allow later stages to add sensitivity. Hook-returned message metadata
 	// must never clear it.
 	llm.liveUserInputs = append([]liveToolContextProjection(nil), exec.liveToolContexts...)
+	llm.protectedConversationContext = ts.documentConversationProtected() || hasDocumentConversation(llm.callMessages)
 	llm.protectedDiagnosticContext = diagnosticCurrentTurnContainsSensitiveEvidence(llm.callMessages) ||
-		hasDocumentConversation(llm.callMessages) ||
+		llm.protectedConversationContext ||
 		hasLiveUserInput(llm.liveUserInputs)
 	promptCacheTailStart, promptCacheTailBoundaryFound := promptCacheDynamicTailStart(llm.callMessages)
 	frozenTurnMessages := cloneProviderMessages(llm.callMessages)

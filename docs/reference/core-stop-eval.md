@@ -1,6 +1,6 @@
 # Core Native Stop Eval
 
-`general.control.stop` is pending/non-default. It checks a genuine native
+`general.control.stop` is active/on-demand, not part of the default set. It checks a genuine native
 `/stop` during a held read, non-vacuous queued-input settlement and subsequent
 same-session reuse. It is not qualified by model-free controls, an ACK's prose,
 a closed client, or the existing local `Action{kind: stop}`.
@@ -30,7 +30,7 @@ select the first terminal control response; arbitrary/unsent IDs are refused.
 
 ```sh
 MINTCLAW_HOME=/private/fresh-profile MINTCLAW_CONFIG=/private/fresh-profile/config.json \
-  mintclaw eval run --root evals --case general.control.stop --include-pending \
+  mintclaw eval run --root evals --case general.control.stop \
     --preset /private/fresh-profile/reports/preset.json --out /private/fresh-profile/reports \
     --start-target --json
 ```
@@ -86,4 +86,8 @@ These are operator-owned observations, not hostile-local attestation or proof of
 unrelated external effects. Model-free native success/failure/unknown, admission
 and frozen regrade controls are separate from the later fixed live campaign:
 one qualification plus one immutable three-trial batch, no retry-until-green,
-promotion only after independent hard-check-plus-judge 3/3. PDF/browser stay deferred.
+promotion only after independent hard-check-plus-judge 3/3. The
+[fixed live campaign](../operations/manual-agent-evals-core-c3-20261026.md)
+passed that batch on immutable `c769faf3d`; its failed qualification remains
+recorded. The case is active only on explicit selection with its admitted
+profile; the six defaults and deferred PDF/browser policies are unchanged.

@@ -58,8 +58,10 @@ attestations against a hostile editor of private reports.
 
 ## Status
 
-The public case is pending/non-default until separate bounded live
-qualification and an immutable three-trial batch succeed. Model-free HTTP/CLI
+The public case is active/on-demand after separate bounded live qualification
+and an immutable three-trial batch succeeded on `c769faf3d`; see the
+[fixed campaign](../operations/manual-agent-evals-core-c3-20261026.md).
+Model-free HTTP/CLI
 repeat-three, frozen mutation and offline grading controls pass, including
 grading after deleting live stores/logs and refusal of missing frozen evidence
 before a judge call. These are development controls, not paid semantic

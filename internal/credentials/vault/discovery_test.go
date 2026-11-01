@@ -14,9 +14,14 @@ type discoveryItems struct {
 	err   error
 	panic bool
 	calls int
+	list  func(context.Context) ([]onepassword.ItemOverview, error)
+	get   func(context.Context) (onepassword.Item, error)
 }
 
-func (*discoveryItems) Get(context.Context, string, string) (onepassword.Item, error) {
+func (items *discoveryItems) Get(ctx context.Context, _, _ string) (onepassword.Item, error) {
+	if items.get != nil {
+		return items.get(ctx)
+	}
 	panic("metadata discovery must not read full items")
 }
 
@@ -48,6 +53,9 @@ func (items *discoveryItems) List(ctx context.Context, vaultID string,
 	items.calls++
 	if items.panic {
 		panic("synthetic-private-sdk-error")
+	}
+	if items.list != nil {
+		return items.list(ctx)
 	}
 	return items.items, items.err
 }

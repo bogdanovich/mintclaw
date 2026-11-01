@@ -194,9 +194,10 @@ type Message struct {
 	// SteeringSenderID preserves the admission scope of an in-memory steering
 	// message when a suspended turn returns it to the runtime queue.
 	SteeringSenderID string `json:"-"`
-	// DocumentIntakeReference is trusted, value-free ingress metadata. Raw
-	// utterances stay in the document's encrypted store, never in this queue.
-	DocumentIntakeReference string `json:"-"`
+	// DocumentIntakeReference is trusted, value-free control metadata, separate
+	// from ordinary authored conversation and never inferred from its history.
+	DocumentIntakeReference   string `json:"-"`
+	DocumentIntakeUnavailable bool   `json:"-"`
 }
 
 const TurnEnvelopeVersion1 = 1

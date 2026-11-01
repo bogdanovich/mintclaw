@@ -38,6 +38,9 @@ func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
 	if ts == nil {
 		return
 	}
+	if documentConversationBound(ts) {
+		return // Only a fresh native handoff may admit selectors/media for execution.
+	}
 	p.prepareDocumentInput(ts, ts.userMessage, ts.media)
 }
 

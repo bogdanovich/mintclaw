@@ -49,25 +49,26 @@ type formTaskQuestionPayload struct {
 }
 
 type formTaskRouteAnswerStored struct {
-	AdmissionOrder   int                           `json:"admission_order"`
-	Context          FormIntakeContext             `json:"context"`
-	ID               string                        `json:"id"`
-	MessageDigest    string                        `json:"message_digest"`
-	BodyDigest       string                        `json:"body_digest"`
-	InteractionID    string                        `json:"interaction_id"`
-	Round            int                           `json:"round"`
-	Revision         int64                         `json:"revision"`
-	CreatedAt        int64                         `json:"created_at"`
-	CommittedAt      int64                         `json:"committed_at,omitempty"`
-	State            string                        `json:"state"`
-	Text             string                        `json:"text,omitempty"`
-	FieldReference   string                        `json:"field_reference,omitempty"`
-	ForForm          bool                          `json:"for_form,omitempty"`
-	Choice           FormTaskRouteAction           `json:"choice,omitempty"`
-	ChoiceKind       string                        `json:"choice_kind,omitempty"`
-	Passes           int                           `json:"passes,omitempty"`
-	ReservedRevision int64                         `json:"reserved_revision,omitempty"`
-	Decisions        []formTaskRouteStoredDecision `json:"decisions,omitempty"`
+	ConversationInputID string                        `json:"conversation_input_id,omitempty"`
+	AdmissionOrder      int                           `json:"admission_order"`
+	Context             FormIntakeContext             `json:"context"`
+	ID                  string                        `json:"id"`
+	MessageDigest       string                        `json:"message_digest"`
+	BodyDigest          string                        `json:"body_digest"`
+	InteractionID       string                        `json:"interaction_id"`
+	Round               int                           `json:"round"`
+	Revision            int64                         `json:"revision"`
+	CreatedAt           int64                         `json:"created_at"`
+	CommittedAt         int64                         `json:"committed_at,omitempty"`
+	State               string                        `json:"state"`
+	Text                string                        `json:"text,omitempty"`
+	FieldReference      string                        `json:"field_reference,omitempty"`
+	ForForm             bool                          `json:"for_form,omitempty"`
+	Choice              FormTaskRouteAction           `json:"choice,omitempty"`
+	ChoiceKind          string                        `json:"choice_kind,omitempty"`
+	Passes              int                           `json:"passes,omitempty"`
+	ReservedRevision    int64                         `json:"reserved_revision,omitempty"`
+	Decisions           []formTaskRouteStoredDecision `json:"decisions,omitempty"`
 }
 
 // Answers remain inside the native encrypted source, including when their
@@ -293,7 +294,8 @@ func (sink *FormProtectedAnswerSink) acceptFormTaskQuestion(
 			return false, ErrFormJobCapacityExceeded
 		}
 		answer := formTaskRouteAnswerStored{
-			AdmissionOrder: nextFormIntakeAdmissionOrder(mode), Context: cloneFormIntakeContext(route.Context),
+			ConversationInputID: request.MessageIdentity,
+			AdmissionOrder:      nextFormIntakeAdmissionOrder(mode), Context: cloneFormIntakeContext(route.Context),
 			ID: "form_task_answer_" + identity[:32], MessageDigest: identity, BodyDigest: body,
 			InteractionID: request.InteractionID, Round: payload.Round, Revision: payload.Revision,
 			CreatedAt: sink.store.now().UnixMilli(), State: "staged", Text: request.Text,
@@ -470,6 +472,7 @@ func validateStoredFormTaskQuestion(record FormJobRecord, mode *formIntakeStored
 	seen := make(map[string]bool, len(route.Answers))
 	for _, answer := range route.Answers {
 		if answer.ID != "form_task_answer_"+prefixFormIntakeDigest(answer.MessageDigest) || seen[answer.ID] ||
+			(answer.ConversationInputID != "" && !validFormIntakeKey(answer.ConversationInputID)) ||
 			!validDocumentDigest(answer.MessageDigest) || !validDocumentDigest(answer.BodyDigest) ||
 			!validFormIntakeKey(answer.InteractionID) || answer.Round < 1 || answer.Round > route.QuestionRound ||
 			answer.Revision < mode.StartRevision || answer.Revision > record.Revision || answer.CreatedAt <= 0 ||

@@ -20,25 +20,23 @@
       "id": "general.context.compaction",
       "status": "pending",
       "default": false,
-      "reason": "C3f native compaction/corrected-recall contract awaits bounded live qualification."
+      "reason": "C3f fixed qualification failed corrected recall after native compaction; batch 3 fail after unknown native usage. Pending/non-default; no reruns."
     },
     {
       "id": "general.skills.selection",
       "status": "pending",
       "default": false,
-      "reason": "C3g native selection/revision and no-selection controls are implemented; separate bounded live qualification and immutable fixed batch have not run."
+      "reason": "C3g fixed batch 3 fail: first unselected controls violate exact plaintext behavior. Native selection and following unselected controls work; no judge overrides or reruns."
     },
     {
       "id": "general.history.restart",
-      "status": "pending",
-      "default": false,
-      "reason": "C3e owned restart and retained generation evidence await bounded live qualification."
+      "status": "active",
+      "default": false
     },
     {
       "id": "general.approval.denied",
-      "status": "pending",
-      "default": false,
-      "reason": "C3c exact native denial/no-effect contract awaits implementation validation and fixed qualification."
+      "status": "active",
+      "default": false
     },
     {
       "id": "general.delivery.final-once",
@@ -48,9 +46,8 @@
     },
     {
       "id": "general.control.stop",
-      "status": "pending",
-      "default": false,
-      "reason": "C3b native stop/reuse contract awaits implementation validation and fixed qualification."
+      "status": "active",
+      "default": false
     },
     {
       "id": "general.context.correction",

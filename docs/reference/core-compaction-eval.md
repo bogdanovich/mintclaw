@@ -76,6 +76,10 @@ outbox, trace and log evidence, without target or summary calls. Missing frozen
 proof is refused before another judge call.
 
 These controls do not qualify a paid model. The public case stays
-pending/non-default until separate bounded qualification and an immutable
-three-trial batch succeed. The existing six General defaults, historical case
+pending/non-default after its
+[fixed live campaign](../operations/manual-agent-evals-core-c3-20261026.md):
+qualification observed actual compaction but failed corrected recall; all three
+batch trials failed and a later unknown-usage call invalidated the shared-run
+proof even for earlier trials. No judge was called and no attempt was retried.
+The existing six General defaults, historical case
 digests and deferred PDF/browser policies are unchanged.

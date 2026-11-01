@@ -27,6 +27,19 @@ does not reopen C0 or E0-E5.
   production deploy/service/config mutation, production PID adoption, broad
   tool/approval authority, or PDF/browser qualification.
 
+## Exit Record
+
+All twelve contracts and native prerequisites are implemented/merged. The
+[final C3 record](../operations/manual-agent-evals-core-c3-20261026.md) closes
+five immutable campaigns: 20 trials, 12 pass and 8 fail, without reruns. Stop,
+denial and restart passed independent fixed 3/3 batches and are active/on-demand.
+Compaction and skill selection remain pending with concrete observed failures;
+streaming delivery remains blocked by the native durable-delivery guard.
+Earlier isolation/recovery failures are retained, not reopened. The catalog has
+26 cases, nine active (six unchanged defaults) and seventeen pending. Completion
+of this bounded roadmap does not promise an all-green full-suite baseline or
+authorize follow-up repairs, new packs, paid reruns or deployment.
+
 ## Packet Order
 
 | Packet | Dependency | Deliverable | Status |
@@ -38,13 +51,13 @@ does not reopen C0 or E0-E5.
 | C1q | C1b | Explicit target-call/token qualification bounds and retained metadata checks | Complete: #1884, #1882, #1885, #1887 and #1888 merged; both cases qualified 1 + fixed 3/3 on `c69659c5` |
 | C2 | C1q | Active-turn barrier, bounded in-flight driver, steering/mode/order and two-session isolation | Implemented, #1890-#1893; boundary/order fixed batches qualified; isolation pending quota |
 | C3a | C2 | Narrow read-only fixtures and tool failure/recovery | Implemented/merged #1895; qualification pass, fixed batch 1 pass/2 judge errors; pending |
-| C3b | C2 | Native active stop/reuse, distinct from local driver stop | Implemented/merged #1897-#1898; native model-free validation and green reviewed CI; live qualification pending |
-| C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Implemented/merged #1899-#1900; native model-free validation and green reviewed CI; live qualification pending |
+| C3b | C2 | Native active stop/reuse, distinct from local driver stop | Complete, #1897-#1898; failed qualification retained, fixed 3/3 batch pass; active/on-demand |
+| C3c | C3a | Exact-prompt denial and native terminal/no-effect proof | Complete, #1899-#1900; qualification and fixed 3/3 batch pass; active/on-demand |
 | C3d | C2 | Final-once delivery with streaming/non-streaming controls | Implemented; real-CLI repeat-three control, negative/unknown controls and frozen grading validated; durable gateway streaming guard is an explicit qualification blocker |
-| C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Foundation #1903 and complete scenario #1907 merged after all-green exact-head CI, substantive review and owner PR-root approval; live qualification not started |
-| C3f | C1q | Controlled small context and actual compaction witness | Typed five-input/numeric-profile/native barrier and frozen grading implemented; model-free native repeat-three passes; broader validation/review pending |
-| C3g | C1q | Pinned native skill selection and no-skill control | Complete implementation #1906 merged after all-green CI and SHA-bound review; native model-free repeat-three/frozen controls pass; live qualification not started |
-| Qualification | All prerequisites | Fixed attempts/batches, result matrix, explicit promotion | C1/C2/C3a fixed campaigns complete; C3b and later live campaigns not started; goal active |
+| C3e | C1q | Explicit owned restart; no bypass of fresh-home admission | Complete, #1903/#1907; qualification and fixed 3/3 batch pass; active/on-demand |
+| C3f | C1q | Controlled small context and actual compaction witness | Complete, #1911; model-free native controls pass; live recall fails and batch later has unknown usage; pending |
+| C3g | C1q | Pinned native skill selection and no-skill control | Complete, #1904/#1906; qualification pass, batch three strict unselected-control failures; pending |
+| Qualification | All prerequisites | Fixed attempts/batches, result matrix, explicit promotion | Complete bounded matrix; C1/C2/C3a immutable records preserved; final C3 record retains all 20 new trials |
 
 Split genuine prerequisites when needed, but do not silently redefine contracts
 or add capabilities. Apply the autonomous PR skill's architecture checkpoints.
@@ -55,7 +68,8 @@ The [skill context observation](../reference/skill-context-observation.md)
 commits to existing typed native snapshots without raw identity or full-payload
 logging. The [C3g contract](../reference/core-skill-selection-eval.md) joins that
 native witness to a pinned file, actual `/use`, canonical history, deliveries
-and contrasting controls. It remains pending/non-default, not live-qualified.
+and contrasting controls. It remains pending/non-default after the fixed batch's
+three first-unselected-control failures, not a native sticky-selection failure.
 
 The C3g model-free native repeat-three control passes locally. Broader and
 rebased race attempts on this macOS host stalled in `_dyld_start` before Go
@@ -66,7 +80,7 @@ broader/race and platform merge gates before its reviewed merge.
 The [owned restart foundation](../reference/eval-owned-restart.md) is an
 internal prerequisite. The [full restart contract](../reference/core-owned-restart-eval.md)
 adds actual same-session continuation and independently retained generation
-evidence; it remains pending/non-default, not live-qualified. Neither path
+evidence; qualification and the fixed batch pass, so it is active/on-demand. Neither path
 introduces a public used-home/attach option.
 
 The complete restart implementation was reviewed and merged in
@@ -91,7 +105,9 @@ not pass: an owned-restart privacy observation was unavailable, then the
 declared twelve-minute package bound expired during a later test. The CLI
 package passed (9.358s). A current Linux model-free selection passes all
 58 tests, including all seven native C3 controls and frozen grading. The
-compaction PR's review/merge gates remain outstanding. Its initial CI exposed
+compaction PR was reviewed and merged in
+[#1911](https://github.com/bogdanovich/mintclaw/pull/1911) after green exact-head
+CI, substantive SHA-bound review and owner PR-root approval. Its initial CI exposed
 an existing worker-process cancellation-race test that omitted the valid
 pre-write disconnect outcome; the independent test-only
 [#1912](https://github.com/bogdanovich/mintclaw/pull/1912) fix was reviewed and
@@ -106,12 +122,12 @@ behavior, terminal assertion, timeout or test skip changed.
 | `general.steering.order` | C2 explicit same-sender mode variants | FIFO/coalescence, no orphan/duplicate final; exact edge races in native Go tests | Both mode batches 3/3; one failed qualification retained; active/default |
 | `general.session.isolation` | C2 scope-pair, #1893 | Distinct owners, enclosed held reads, scoped markers/history/delivery | Qualification pass; batch 3 inconclusive from HTTP 429/unknown usage; pending |
 | `general.tools.recovery` | C3a, #1895 | Failed read then successful pinned-fixture read | Qualification pass; batch 1 pass/2 judge provider errors; pending/non-default |
-| `general.control.stop` | C3b typed in-flight native control | Terminal abort, canceled held read, absent queued B, canonical pairing, outbox census and new final | Pending/non-default; no live qualification |
-| `general.approval.denied` | C3c, #1900 | HMAC-bound exact denial, terminal resolution, canonical pairing, no execution, unchanged target and complete delivery | Pending/non-default; no live qualification |
+| `general.control.stop` | C3b typed in-flight native control | Terminal abort, canceled held read, absent queued B, canonical pairing, outbox census and new final | Fixed batch 3/3; failed qualification retained; active/on-demand |
+| `general.approval.denied` | C3c, #1900 | HMAC-bound exact denial, terminal resolution, canonical pairing, no execution, unchanged target and complete delivery | Qualification and fixed batch 3/3; active/on-demand |
 | `general.delivery.final-once` | C3d typed native settlement/history/delivery observer | Stable create/update identity; delivered receipt per request; complete terminal census | Pending/non-default: durable gateway intentionally disables configured streaming; no paid qualification |
-| `general.history.restart` | C3e retained owner/successor and generation-scoped observer | Distinct native child receipts; decreasing budget ceiling; unchanged history prefix and grounded recall | Pending/non-default; model-free native repeat-three/offline grade and broader controls pass; no live qualification |
-| `general.context.compaction` | C3f numeric-only pressure profile and native completion barrier | Paired positive count-eight receipt before recall; native turn ordering; ten canonical messages and five deliveries | Pending/non-default; native repeat-three/frozen controls pass; no live qualification |
-| `general.skills.selection` | C3g typed native selection observer and pinned read-only profile | Complete native revision digest; selected turn and two empty controls; unchanged file/history/delivery census | Pending/non-default; model-free real-CLI repeat-three and frozen grading pass; no live qualification |
+| `general.history.restart` | C3e retained owner/successor and generation-scoped observer | Distinct native child receipts; decreasing budget ceiling; unchanged history prefix and grounded recall | Qualification and fixed batch 3/3; active/on-demand |
+| `general.context.compaction` | C3f numeric-only pressure profile and native completion barrier | Paired positive count-eight receipt before recall; native turn ordering; ten canonical messages and five deliveries | Live qualification failed corrected recall; batch three fail, later unknown usage; pending |
+| `general.skills.selection` | C3g typed native selection observer and pinned read-only profile | Complete native revision digest; selected turn and two empty controls; unchanged file/history/delivery census | Qualification pass, batch three strict first-unselected-control failures; pending |
 
 ## C1a Contract
 
@@ -197,8 +213,9 @@ Operator-owned reports are observations, not hostile-filesystem attestations;
 `compare` summarizes recorded outcomes rather than performing a new grading.
 
 Model-free controls are not live qualification. C1q's separately retained live
-campaign qualifies these two contracts. C3e restart, C3f compaction and C3g skill
-selection remain queued; C3b-C3d implementations do not claim live qualification.
+campaign qualifies these two contracts. The final C3 record separately qualifies
+stop, denial and restart while retaining compaction/skill failures and the
+streaming-delivery blocker.
 
 ## C2 Active Tool Prerequisite
 
@@ -255,8 +272,8 @@ defaults (six total). One order qualification failed after Gemini HTTP 429/unkno
 usage; it is retained, not relabeled. Isolation qualification passed, but its
 batch's shared budget became unknown after another HTTP 429, refusing all three
 judges; isolation stays pending. No retry or candidate change followed failure.
-The native scheduler remains the sole steering authority. The overall goal is
-active and incomplete. PDF/browser remain deferred.
+The native scheduler remains the sole steering authority. The final C3 exit
+record does not reopen this campaign. PDF/browser remain deferred.
 
 ## C3b Native Stop
 
@@ -274,8 +291,8 @@ native AgentLoop is the sole queue/cancellation authority.
 
 Model-free CLI controls include real queued input/abort/reuse, failure/unknown
 gates, and frozen regrade after deleting live observations. They are not live
-qualification. Stop stays pending/non-default until its separately bounded fixed
-campaign; restart, compaction and skill selection remain queued. The
+qualification. The separately bounded fixed campaign passed its 3/3 batch and
+promotes stop to active/on-demand, retaining its failed qualification. The
 [C3a report](../operations/manual-agent-evals-core-c3a-20261025.md)
 retains recovery's immutable fixed results; no further paid recovery run is planned.
 
@@ -293,8 +310,8 @@ retains a passing qualification and a batch of one pass/two judge errors on
 immutable `2853ede5a`. All four target conversations and required hard checks
 passed; two batch judge calls returned `provider_unavailable` without usage.
 Their deeper provider error class was not retained; do not infer quota/HTTP 429.
-Recovery stays pending/non-default, with no retry or candidate change. Three C3
-contracts remain queued; the overall goal is active and incomplete.
+Recovery stays pending/non-default, with no retry or candidate change. The final
+C3 record closes the later contracts without changing these historical results.
 
 ## C3c Native Denial
 
@@ -302,7 +319,8 @@ The [approval denial contract](../reference/core-approval-denied-eval.md) reuses
 the existing native approver, registry and continuation coordinator. The fixed
 fixture prerequisite was reviewed/merged in
 [#1899](https://github.com/bogdanovich/mintclaw/pull/1899), with green CI,
-SHA-bound review and owner PR-root approval. The full case remains pending.
+SHA-bound review and owner PR-root approval. The later fixed qualification and
+3/3 batch pass; the full case is now active/on-demand.
 
 Its observer passively verifies exact native argument HMAC/prompt identity, sends
 a bound denial, waits for actual terminal resolution and refreshes all native
@@ -312,8 +330,9 @@ no-execution witnesses. Suspension `exec_end` is not confused with execution.
 The existing private signer-key classifier admits only the exact HMAC-verified
 key; neither scanner strictness nor arbitrary binary-file admission is relaxed.
 
-Native model-free controls and frozen regrade pass; this is not live
-qualification. Four later C3 contracts remain, and the overall goal stays active.
+Native model-free controls and frozen regrade pass; those controls are not live
+qualification. The separate fixed live campaign supplies the qualification and
+3/3 batch evidence recorded above.
 
 ## C1q Provider Primitive
 

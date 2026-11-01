@@ -100,6 +100,22 @@ and any provider-required confirmation remain independent checks.
 
 ## Required execution integration
 
+The read-only host's `ObserveUntil` is an independent local prerequisite for
+readiness and effect checks. A trusted, side-effect-free condition inspects each
+fresh protected observation. Only a positive condition ends the wait successfully;
+elapsed time, stable pixels and a driver acknowledgement do not establish a match.
+It checks the original stored binding, control, policy and evidence expiry after
+condition evaluation as well as during capture. Polling is limited to one minute
+with 100 ms between unsuccessful checks, and a shorter caller deadline wins.
+Cancellation and capture/condition failures stop the wait without replaying input,
+changing control or releasing the session. Private condition errors are sanitized.
+
+This adds no public command, model tool, native executor or readiness heuristic.
+The condition must cooperate with cancellation; it cannot be an unbounded model
+call. Returned evidence still needs immediate host revalidation before input and
+does not by itself prove a business outcome. Native application qualification and
+integration into a separately admitted input host remain required.
+
 Before exposing input, subsequent slices must provide:
 
 - Qualified exact native targeting and immediate geometry/focus revalidation;
