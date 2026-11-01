@@ -201,6 +201,15 @@ whole-workflow limits stay unchanged. This is qualification orchestration, not a
 public text planner or native application rule. Historical one-action macro and
 Save-readiness failures remain separate recorded failures.
 
+Release-only cleanup maps its owned InputOnly sink with `override_redirect`
+before taking the private keyboard grab. A window manager can otherwise defer
+the mapping through `MapRequest` while the original cleanup transaction holds
+the server. The native regression retains an independent root redirect client,
+proves both original keyboard states were held, then verifies parked, clear
+devices and no synthetic release to the application or ambient focus. Ordinary
+windows remain redirected before and after cleanup. No user window attribute,
+native authority check, cleanup deadline or unknown-outcome rule is changed.
+
 The private process fixture's `deadline_io` fault holds only its attested owned
 server across action expiry after a real key press. Resource validation uses
 the existing channel lifetime with its unchanged 250ms I/O cap; permits, worker

@@ -1340,6 +1340,11 @@ impl NativeChannel {
         profile.check(control, pair)?;
         let connection = &control.connection;
         let sink = observer(control)?;
+        // Cleanup holds GrabServer: a WM cannot service a redirected MapRequest.
+        // Only this owned InputOnly sink bypasses window-manager mapping.
+        checked(checked(connection.change_window_attributes(
+            sink, &xproto::ChangeWindowAttributesAux::new().override_redirect(1),
+        ))?.check())?;
         checked(checked(connection.map_window(sink))?.check())?;
         let mask = [u32::from(xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE)];
         let grab = checked(checked(connection.xinput_xi_grab_device(
@@ -3183,6 +3188,49 @@ for command in sys.stdin:
         let (core, xi) = fixture.keyboard_observations();
         assert_eq!(core, [(fixture.target, true)]);
         assert!(xi.is_empty(), "cleanup released into an unrelated window: {xi:?}");
+        assert!(session.keeper.dispose_fixture_pair());
+        fixture.remains();
+    }
+
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; independent WM redirect client"]
+    fn held_cleanup_sink_maps_without_window_manager_participation() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        fixture.observe_slave(&session.pair);
+        fixture.endpoint.transaction(deadline(), || {
+            checked(checked(fixture.endpoint.connection.change_window_attributes(
+                fixture.endpoint.root,
+                &xproto::ChangeWindowAttributesAux::new().event_mask(xproto::EventMask::SUBSTRUCTURE_REDIRECT),
+            ))?.check())
+        }).unwrap();
+        // This distinct client observes the same native redirect behavior as a
+        // WM. A normal window must stay unmapped before and after cleanup.
+        let normal_window_is_redirected = |control: &Endpoint| {
+            control.transaction(deadline(), || {
+                let window = observer(control)?;
+                checked(checked(control.connection.map_window(window))?.check())?;
+                let attributes = checked(checked(control.connection.get_window_attributes(window))?.reply())?;
+                checked(checked(control.connection.destroy_window(window))?.check())?;
+                assert!(!attributes.override_redirect);
+                assert_eq!(attributes.map_state, xproto::MapState::UNMAPPED);
+                Ok(())
+            }).unwrap();
+        };
+        normal_window_is_redirected(&session.keeper.channel.control);
+        session.worker.begin(deadline()).unwrap();
+        session.worker.edge(0, fixture.key, true).unwrap();
+        fixture.endpoint.transaction(deadline(), || {
+            for device in [session.pair.keyboard, session.pair.slave] {
+                assert_ne!(key_state(&fixture.endpoint, device)?, [0; 32]);
+            }
+            Ok(())
+        }).unwrap();
+        session.worker.input.boundary.stop();
+        session.keeper.quiesce().unwrap();
+        fixture.assert_pair_parked(&session.pair);
+        normal_window_is_redirected(&session.keeper.channel.control);
+        assert_eq!(fixture.keyboard_observations(), (vec![(fixture.target, true)], vec![]));
         assert!(session.keeper.dispose_fixture_pair());
         fixture.remains();
     }
