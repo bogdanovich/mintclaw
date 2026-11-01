@@ -1,9 +1,17 @@
 # MintClaw cross-platform computer-use roadmap
 
-Status: in progress. Updated: 2026-10-18. The opt-in read-only Linux and macOS
+Status: in progress. Updated: 2026-10-31. The opt-in read-only Linux and macOS
 milestone is implemented, natively qualified and merged. Public native input,
 full interactive task evaluation and the production pilot are not complete.
 Production desktop control remains disabled by default.
+
+The [Linux keyboard qualification checkpoint](computer-linux-keyboard-qualification.md)
+records the current private backend's passing component suites and blocking
+routing/application-lifetime findings. Neither those component results nor the
+separate lifetime prototype qualify public input. The Mac ownership PR still
+requires its actual approved-app native gate; the operator selected desktop-free
+work while that gate is deferred. Full host composition, interactive/model task
+evaluation and pilot qualification remain open.
 
 ## Decision and scope
 
