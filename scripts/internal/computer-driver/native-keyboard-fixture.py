@@ -85,7 +85,7 @@ def main():
                                    stdin=subprocess.DEVNULL, stdout=probe_log, stderr=subprocess.STDOUT,
                                    timeout=20, check=True)
                 report = (work / "probe.log").read_text()
-                if len(re.findall(r"^test result: ok\. 11 passed; 0 failed; 0 ignored;", report, re.M)) != 1:
+                if len(re.findall(r"^test result: ok\. 12 passed; 0 failed; 0 ignored;", report, re.M)) != 1:
                     raise RuntimeError("native keyboard cases missing")
                 if args.gtk:
                     environment.update(DISPLAY=f":{number}", XAUTHORITY=str(auth), NO_AT_BRIDGE="1",
@@ -116,7 +116,7 @@ def main():
                             or "SKIP" in host_report or "FAIL" in host_report):
                         raise RuntimeError("original Go host generation cases missing")
                     print(f"original Go host fixture round {attempt}: eight cases PASS", flush=True)
-                print(f"native-keyboard fixture round {attempt}: eleven cases PASS", flush=True)
+                print(f"native-keyboard fixture round {attempt}: twelve cases PASS", flush=True)
             finally:
                 server.stdout.close()
                 if server.poll() is None:

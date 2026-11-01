@@ -74,7 +74,7 @@ if [[ "$candidate" == native-keyboard ]]; then
   cargo +1.97.1 test --locked --release -p platform-linux --bin mintclaw-private-keyboard \
     --target x86_64-unknown-linux-gnu --features "$features" wire_tests:: -- --test-threads=1
   [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_x11_io::tests::.*: test$/ {n++} END {print n+0}') == 9 ]] || exit 1
-  [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::native::.*: test$/ {n++} END {print n+0}') == 11 ]] || exit 1
+  [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::native::.*: test$/ {n++} END {print n+0}') == 12 ]] || exit 1
   [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::qualification::.*: test$/ {n++} END {print n+0}') == 1 ]] || exit 1
   "$probe_path" input::mintclaw_native_x11_io::tests:: --test-threads=1
   [[ $(sha256sum "$native_module_path" | cut -d ' ' -f 1) == "$native_module_sha" ]] || exit 1

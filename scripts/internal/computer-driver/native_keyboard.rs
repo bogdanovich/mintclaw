@@ -383,20 +383,25 @@ impl NativeRepeatGuard {
     }
 }
 
-struct Watch {
-    target_good: bool,
+/// Native resource history outlives any individual action. A fresh target or
+/// unchanged numeric device IDs cannot restore either lost epoch.
+struct ResourceEpoch {
     pair_good: bool,
-    input_gone: bool,
-    controller: Option<(u32, bool)>,
+    input_safe: bool,
 }
 
-impl Watch {
+impl ResourceEpoch {
+    fn new() -> Self {
+        Self { pair_good: true, input_safe: true }
+    }
+
     fn drain(
         &mut self,
         endpoint: &Endpoint,
         authority: &Authority,
         pair: &Pair,
         input_token: u32,
+        action: &mut ActionWatch,
         allow_creation: bool,
     ) -> Result<()> {
         let stop_at = Instant::now() + Duration::from_millis(100);
@@ -407,57 +412,65 @@ impl Watch {
             let Some(event) = checked(endpoint.connection.poll_for_event())? else {
                 return Ok(());
             };
-            // A client-forged DestroyNotify cannot attest that the original
-            // input client is gone (and thereby skip the KillClient fence).
-            // response_type() deliberately masks this protocol flag in x11rb.
+            // response_type() masks SendEvent's flag. A forged DestroyNotify
+            // must never attest that an original client has been fenced.
             if event.raw_response_type() & 0x80 != 0 {
-                self.target_good = false;
+                action.target_good = false;
                 self.pair_good = false;
+                self.input_safe = false;
                 continue;
             }
             match event {
                 Event::DestroyNotify(event) => {
                     if [authority.binding.window, authority.binding.lease_window].contains(&event.window) {
-                        self.target_good = false;
+                        action.target_good = false;
                     }
                     if event.window == input_token {
-                        self.input_gone = true;
+                        action.input_gone = true;
                     }
-                    if let Some((token, gone)) = &mut self.controller {
+                    if let Some((token, gone)) = &mut action.controller {
                         if event.window == *token {
                             *gone = true;
                         }
                     }
                 }
-                Event::UnmapNotify(event) if event.window == authority.binding.window => self.target_good = false,
+                Event::UnmapNotify(event) if event.window == authority.binding.window => action.target_good = false,
                 Event::XfixesSelectionNotify(event) if event.selection == authority.selection => {
-                    self.target_good = false
+                    action.target_good = false
                 }
                 Event::XinputHierarchy(event) => {
-                    for info in
-                        event.infos.iter().filter(|info| pair.devices.iter().any(|own| own.deviceid == info.deviceid))
-                    {
+                    for info in &event.infos {
+                        let own = pair.devices.iter().any(|device| device.deviceid == info.deviceid);
+                        let foreign_member = !own
+                            && [u16::from(pair.keyboard), pair.pointer].contains(&info.attachment);
                         let allowed = xinput::HierarchyMask::MASTER_ADDED
                             | xinput::HierarchyMask::SLAVE_ADDED
                             | xinput::HierarchyMask::DEVICE_ENABLED
                             | xinput::HierarchyMask::SLAVE_ATTACHED;
                         if u32::from(info.flags) != 0
-                            && (!allow_creation || u32::from(info.flags) & !u32::from(allowed) != 0)
+                            && (foreign_member
+                                || (own && (!allow_creation || u32::from(info.flags) & !u32::from(allowed) != 0)))
                         {
                             self.pair_good = false;
                         }
                     }
                 }
                 Event::XkbControlsNotify(event) if [pair.keyboard, pair.slave].contains(&event.device_id) => {
-                    // Restoration cannot resurrect a lost admission. This
-                    // stops input but does not invalidate pair cleanup identity.
-                    self.target_good = false;
+                    // Controls changing back cannot restore input permission.
+                    // Original pair identity remains available for cleanup.
+                    self.input_safe = false;
                 }
                 _ => (),
             }
         }
         Err(unavailable())
     }
+}
+
+struct ActionWatch {
+    target_good: bool,
+    input_gone: bool,
+    controller: Option<(u32, bool)>,
 }
 
 fn observer(endpoint: &Endpoint) -> Result<u32> {
@@ -711,30 +724,38 @@ impl PreparedKeeper {
         // Construct the owner before focus: any later failure uses the same
         // independent cleanup path instead of losing an allocated pair.
         let mut keeper = Keeper {
-            control: self.control,
-            authority: self.authority,
-            pair,
-            input_token: identity.input_token,
-            _input_process: input_process,
-            watch: Watch { target_good: true, pair_good: true, input_gone: false, controller: None },
+            channel: NativeChannel { control: self.control, pair, epoch: ResourceEpoch::new() },
+            action: NativeAction {
+                authority: self.authority,
+                input_token: identity.input_token,
+                _input_process: input_process,
+                watch: ActionWatch { target_good: true, input_gone: false, controller: None },
+            },
             cleanup_result: None,
         };
-        keeper.control.transaction(deadline, || {
-            keeper.authority.check(&keeper.control)?;
-            keeper.pair.check(&keeper.control)?;
+        keeper.channel.control.transaction(deadline, || {
+            keeper.action.authority.check(&keeper.channel.control)?;
+            keeper.channel.pair.check(&keeper.channel.control)?;
             // Construct the owner first: an uncertain/refused device-control
             // write must still use the original retained cleanup identity.
-            NativeRepeatGuard::configure(&keeper.control, &keeper.pair)?;
-            keeper.watch.drain(&keeper.control, &keeper.authority, &keeper.pair, keeper.input_token, true)?;
-            if !keeper.watch.target_good || !keeper.watch.pair_good {
+            NativeRepeatGuard::configure(&keeper.channel.control, &keeper.channel.pair)?;
+            NativeRepeatGuard::subscribe(&keeper.channel.control, &keeper.channel.pair)?;
+            keeper.channel.epoch.drain(
+                &keeper.channel.control, &keeper.action.authority, &keeper.channel.pair,
+                keeper.action.input_token, &mut keeper.action.watch, true,
+            )?;
+            if !keeper.action.watch.target_good
+                || !keeper.channel.epoch.pair_good
+                || !keeper.channel.epoch.input_safe
+            {
                 return Err(unavailable());
             }
             checked(
-                checked(keeper.control.connection.xinput_set_device_focus(
-                    keeper.authority.binding.window,
+                checked(keeper.channel.control.connection.xinput_set_device_focus(
+                    keeper.action.authority.binding.window,
                     x11rb::CURRENT_TIME,
                     xproto::InputFocus::NONE,
-                    keeper.pair.keyboard,
+                    keeper.channel.pair.keyboard,
                 ))?
                 .check(),
             )
@@ -752,7 +773,8 @@ pub(super) struct BackupCleanup {
     input_process: Process,
     input_token: u32,
     pair: Option<Pair>,
-    watch: Watch,
+    epoch: ResourceEpoch,
+    watch: ActionWatch,
 }
 
 impl BackupCleanup {
@@ -813,9 +835,9 @@ impl BackupCleanup {
             input_process,
             input_token: input.input_token,
             pair: None,
-            watch: Watch {
+            epoch: ResourceEpoch::new(),
+            watch: ActionWatch {
                 target_good: true,
-                pair_good: true,
                 input_gone: false,
                 controller: Some((controller_token, false)),
             },
@@ -827,10 +849,14 @@ impl BackupCleanup {
         self.prepared.control.transaction(deadline, || {
             self.prepared.authority.check(&self.prepared.control)?;
             pair.check(&self.prepared.control)?;
-            self.watch.drain(&self.prepared.control, &self.prepared.authority, &pair, self.input_token, true)?;
+            NativeRepeatGuard::subscribe(&self.prepared.control, &pair)?;
+            self.epoch.drain(
+                &self.prepared.control, &self.prepared.authority, &pair, self.input_token, &mut self.watch, true,
+            )?;
             if !self.controller.alive()
                 || !self.watch.target_good
-                || !self.watch.pair_good
+                || !self.epoch.pair_good
+                || !self.epoch.input_safe
                 || self.watch.input_gone
                 || !matches!(self.watch.controller, Some((_, false)))
             {
@@ -859,8 +885,10 @@ impl BackupCleanup {
         };
         let fenced = self.prepared.control.transaction(Instant::now() + TRANSACTION, || {
             pair.check(&self.prepared.control)?;
-            self.watch.drain(&self.prepared.control, &self.prepared.authority, &pair, self.input_token, false)?;
-            if !self.watch.pair_good {
+            self.epoch.drain(
+                &self.prepared.control, &self.prepared.authority, &pair, self.input_token, &mut self.watch, false,
+            )?;
+            if !self.epoch.pair_good {
                 return Err(unavailable());
             }
             let Some((token, gone)) = self.watch.controller else {
@@ -869,7 +897,9 @@ impl BackupCleanup {
             if !gone {
                 let killed = checked(self.prepared.control.connection.kill_client(token))?.check();
                 checked(checked(self.prepared.control.connection.get_input_focus())?.reply())?;
-                self.watch.drain(&self.prepared.control, &self.prepared.authority, &pair, self.input_token, false)?;
+                self.epoch.drain(
+                    &self.prepared.control, &self.prepared.authority, &pair, self.input_token, &mut self.watch, false,
+                )?;
                 if !matches!(self.watch.controller, Some((_, true))) {
                     checked(killed)?;
                     return Err(unavailable());
@@ -883,12 +913,13 @@ impl BackupCleanup {
             return false;
         }
         let mut keeper = Keeper {
-            control: self.prepared.control,
-            authority: self.prepared.authority,
-            pair,
-            input_token: self.input_token,
-            _input_process: self.input_process,
-            watch: self.watch,
+            channel: NativeChannel { control: self.prepared.control, pair, epoch: self.epoch },
+            action: NativeAction {
+                authority: self.prepared.authority,
+                input_token: self.input_token,
+                _input_process: self.input_process,
+                watch: self.watch,
+            },
             cleanup_result: None,
         };
         keeper.cleanup()
@@ -915,13 +946,14 @@ impl PreparedInput {
 
     pub(super) fn bind(self, witness: PairWitness, deadline: Instant) -> Result<InputWorker> {
         let pair = Pair::from_witness(witness)?;
-        let mut watch = Watch { target_good: true, pair_good: true, input_gone: false, controller: None };
+        let mut epoch = ResourceEpoch::new();
+        let mut watch = ActionWatch { target_good: true, input_gone: false, controller: None };
         let event_base = self.input.transaction(deadline, || {
             self.authority.check(&self.input)?;
             pair.check(&self.input)?;
             NativeRepeatGuard::subscribe(&self.input, &pair)?;
-            watch.drain(&self.input, &self.authority, &pair, self.input_token, true)?;
-            if !watch.target_good || !watch.pair_good {
+            epoch.drain(&self.input, &self.authority, &pair, self.input_token, &mut watch, true)?;
+            if !watch.target_good || !epoch.pair_good || !epoch.input_safe {
                 return Err(unavailable());
             }
             let extension = checked(self.input.connection.extension_information(xinput::X11_EXTENSION_NAME))?
@@ -934,6 +966,7 @@ impl PreparedInput {
             input_authority: self.authority,
             pair,
             input_token: self.input_token,
+            input_epoch: epoch,
             input_watch: watch,
             phase: InputPhase::Fresh,
             attempted: false,
@@ -942,32 +975,53 @@ impl PreparedInput {
     }
 }
 
-/// This owner must remain outside the killable input process and keep the host
-/// desktop lease alive until cleanup is independently confirmed. It never types.
-pub(super) struct Keeper {
+/// Original desktop resources have no target-window or action payload. Their
+/// identity/history must survive replacing an individual action authority.
+struct NativeChannel {
     control: Endpoint,
-    authority: Authority,
     pair: Pair,
+    epoch: ResourceEpoch,
+}
+
+/// These witnesses authorize just one original target and input child. A new
+/// action must supply a fresh authority; it cannot reset the channel's epoch.
+struct NativeAction {
+    authority: Authority,
     input_token: u32,
     _input_process: Process,
-    watch: Watch,
+    watch: ActionWatch,
+}
+
+/// This owner remains outside the killable input process. Its current private
+/// wire is still one-shot; reusable lifetime/receipt integration is a later
+/// gate, and this refactor does not make per-action disposal safe for GTK.
+pub(super) struct Keeper {
+    channel: NativeChannel,
+    action: NativeAction,
     cleanup_result: Option<bool>,
 }
 
 impl Keeper {
     pub(super) fn witness(&self) -> PairWitness {
-        self.pair.witness()
+        self.channel.pair.witness()
     }
     pub(super) fn keyboard(&self) -> u8 {
-        self.pair.keyboard
+        self.channel.pair.keyboard
     }
 
     pub(super) fn check(&mut self, deadline: Instant) -> Result<()> {
-        self.control.transaction(deadline, || {
-            self.authority.check(&self.control)?;
-            self.pair.check(&self.control)?;
-            self.watch.drain(&self.control, &self.authority, &self.pair, self.input_token, false)?;
-            if !self.watch.target_good || !self.watch.pair_good || self.watch.input_gone {
+        self.channel.control.transaction(deadline, || {
+            self.action.authority.check(&self.channel.control)?;
+            self.channel.pair.check(&self.channel.control)?;
+            self.channel.epoch.drain(
+                &self.channel.control, &self.action.authority, &self.channel.pair,
+                self.action.input_token, &mut self.action.watch, false,
+            )?;
+            if !self.action.watch.target_good
+                || !self.channel.epoch.pair_good
+                || !self.channel.epoch.input_safe
+                || self.action.watch.input_gone
+            {
                 return Err(unavailable());
             }
             Ok(())
@@ -981,45 +1035,54 @@ impl Keeper {
         self.cleanup_result = Some(false);
         let deadline = Instant::now() + TRANSACTION;
         let result = self
+            .channel
             .control
             .transaction(deadline, || {
-                self.pair.check(&self.control)?;
-                self.watch.drain(&self.control, &self.authority, &self.pair, self.input_token, false)?;
-                if !self.watch.pair_good {
+                self.channel.pair.check(&self.channel.control)?;
+                self.channel.epoch.drain(
+                    &self.channel.control, &self.action.authority, &self.channel.pair,
+                    self.action.input_token, &mut self.action.watch, false,
+                )?;
+                if !self.channel.epoch.pair_good {
                     return Err(unavailable());
                 }
-                if !self.watch.input_gone {
-                    let killed = checked(self.control.connection.kill_client(self.input_token))?.check();
-                    checked(checked(self.control.connection.get_input_focus())?.reply())?;
-                    self.watch.drain(&self.control, &self.authority, &self.pair, self.input_token, false)?;
-                    if !self.watch.input_gone {
+                if !self.action.watch.input_gone {
+                    let killed =
+                        checked(self.channel.control.connection.kill_client(self.action.input_token))?.check();
+                    checked(checked(self.channel.control.connection.get_input_focus())?.reply())?;
+                    self.channel.epoch.drain(
+                        &self.channel.control, &self.action.authority, &self.channel.pair,
+                        self.action.input_token, &mut self.action.watch, false,
+                    )?;
+                    if !self.action.watch.input_gone {
                         checked(killed)?;
                         return Err(unavailable());
                     }
                 }
                 checked(
-                    checked(self.control.connection.xinput_set_device_focus(
+                    checked(self.channel.control.connection.xinput_set_device_focus(
                         x11rb::NONE,
                         x11rb::CURRENT_TIME,
                         xproto::InputFocus::NONE,
-                        self.pair.keyboard,
+                        self.channel.pair.keyboard,
                     ))?
                     .check(),
                 )?;
                 let remove = xinput::HierarchyChange {
                     len: 3,
                     data: xinput::HierarchyChangeData::RemoveMaster(xinput::HierarchyChangeDataRemoveMaster {
-                        deviceid: self.pair.pointer,
+                        deviceid: self.channel.pair.pointer,
                         return_mode: xinput::ChangeMode::FLOAT,
                         return_pointer: 0,
                         return_keyboard: 0,
                     }),
                 };
-                checked(checked(self.control.connection.xinput_xi_change_hierarchy(&[remove]))?.check())?;
-                let devices = checked(checked(self.control.connection.xinput_xi_query_device(0u16))?.reply())?.infos;
+                checked(checked(self.channel.control.connection.xinput_xi_change_hierarchy(&[remove]))?.check())?;
+                let devices =
+                    checked(checked(self.channel.control.connection.xinput_xi_query_device(0u16))?.reply())?.infos;
                 if devices.iter().any(|device| {
-                    self.pair.devices.iter().any(|own| own.deviceid == device.deviceid)
-                        || device.name.starts_with(&self.pair.name)
+                    self.channel.pair.devices.iter().any(|own| own.deviceid == device.deviceid)
+                        || device.name.starts_with(&self.channel.pair.name)
                 }) {
                     return Err(unavailable());
                 }
@@ -1065,7 +1128,8 @@ pub(super) struct InputWorker {
     input_authority: Authority,
     pair: Pair,
     input_token: u32,
-    input_watch: Watch,
+    input_epoch: ResourceEpoch,
+    input_watch: ActionWatch,
     phase: InputPhase,
     attempted: bool,
     event_base: u8,
@@ -1143,9 +1207,12 @@ impl InputWorker {
             self.pair.check(&self.input)?;
             NativeRepeatGuard::check(&self.input, &self.pair)?;
             let focus = checked(checked(self.input.connection.xinput_get_device_focus(self.pair.keyboard))?.reply())?;
-            self.input_watch.drain(&self.input, &self.input_authority, &self.pair, self.input_token, false)?;
+            self.input_epoch.drain(
+                &self.input, &self.input_authority, &self.pair, self.input_token, &mut self.input_watch, false,
+            )?;
             if !self.input_watch.target_good
-                || !self.input_watch.pair_good
+                || !self.input_epoch.pair_good
+                || !self.input_epoch.input_safe
                 || focus.focus != self.input_authority.binding.window
                 || focus.revert_to != xproto::InputFocus::NONE
             {
@@ -1565,7 +1632,7 @@ mod native {
     fn private_repeat_change_and_restoration_do_not_resurrect_admission() {
         for slave in [false, true] {
             let fixture = Fixture::new();
-            let session = fixture.session();
+            let mut session = fixture.session();
             fixture.endpoint.transaction(deadline(), || {
                 let connection = &fixture.endpoint.connection;
                 checked(checked(connection.xkb_use_extension(1, 0))?.reply())?;
@@ -1581,6 +1648,10 @@ mod native {
                 NativeRepeatGuard::configure(&fixture.endpoint, &session.pair)?;
                 session.pair.check(&fixture.endpoint)
             }).unwrap();
+            assert!(session.keeper.check(deadline()).is_err());
+            assert!(!session.keeper.channel.epoch.input_safe);
+            assert!(session.keeper.channel.epoch.pair_good);
+            assert!(session.keeper.check(deadline()).is_err());
             let receipt = session.run(&[vec![fixture.key]], deadline());
             assert!(!receipt.dispatched && !receipt.acknowledged && receipt.cleanup_confirmed, "{receipt:?}");
             assert!(fixture.events().is_empty());
@@ -1637,7 +1708,7 @@ mod native {
         let fixture = Fixture::new();
         let mut session = fixture.session();
         let pair = session.pair.clone();
-        session.keeper.watch.controller = Some((session.input_token, false));
+        session.keeper.action.watch.controller = Some((session.input_token, false));
         fixture
             .endpoint
             .transaction(deadline(), || {
@@ -1660,8 +1731,8 @@ mod native {
             })
             .unwrap();
         assert!(session.keeper.check(deadline()).is_err());
-        assert!(!session.keeper.watch.pair_good);
-        assert!(matches!(session.keeper.watch.controller, Some((_, false))));
+        assert!(!session.keeper.channel.epoch.pair_good);
+        assert!(matches!(session.keeper.action.watch.controller, Some((_, false))));
         let receipt = session.run(&[vec![fixture.key]], deadline());
         assert!(!receipt.dispatched && !receipt.acknowledged && !receipt.cleanup_confirmed, "{receipt:?}");
         assert!(fixture.events().is_empty());
@@ -1681,6 +1752,68 @@ mod native {
                 checked(checked(fixture.endpoint.connection.xinput_xi_change_hierarchy(&[remove]))?.check())
             })
             .unwrap();
+        fixture.remains();
+    }
+
+    #[test]
+    #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
+    fn foreign_attachment_and_restoration_do_not_restore_the_channel_epoch() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        let original = session.pair.clone();
+        fixture.endpoint.transaction(deadline(), || {
+            let connection = &fixture.endpoint.connection;
+            let devices = checked(checked(connection.xinput_xi_query_device(0u16))?.reply())?.infos;
+            // This is the attested disposable Xvfb's synthetic keyboard, never
+            // a physical device on an operator desktop. XTEST slaves cannot
+            // be detached, so they cannot exercise this native ABA history.
+            let candidates: Vec<_> = devices.iter().filter(|device| {
+                device.type_ == xinput::DeviceType::SLAVE_KEYBOARD
+                    && !device.name.ends_with(b"XTEST keyboard")
+            }).collect();
+            assert_eq!(candidates.len(), 1);
+            let foreign = candidates[0];
+            assert!(foreign.enabled && foreign.attachment > 1);
+            assert_ne!(foreign.attachment, u16::from(original.keyboard));
+            for master in [u16::from(original.keyboard), foreign.attachment] {
+                let attach = xinput::HierarchyChange {
+                    len: 2,
+                    data: xinput::HierarchyChangeData::AttachSlave(xinput::HierarchyChangeDataAttachSlave {
+                        deviceid: foreign.deviceid,
+                        master,
+                    }),
+                };
+                checked(checked(connection.xinput_xi_change_hierarchy(&[attach]))?.check())?;
+            }
+            // A fresh snapshot now passes. Only the continuously retained
+            // native history can detect the intervening foreign membership.
+            original.check(&fixture.endpoint)?;
+            let restored = checked(checked(connection.xinput_xi_query_device(foreign.deviceid))?.reply())?.infos;
+            assert_eq!(restored.len(), 1);
+            assert_eq!(restored[0].name, foreign.name);
+            assert_eq!(restored[0].attachment, foreign.attachment);
+            assert_eq!(restored[0].enabled, foreign.enabled);
+            Ok(())
+        }).unwrap();
+        assert!(session.keeper.check(deadline()).is_err());
+        assert!(!session.keeper.channel.epoch.pair_good);
+        let receipt = session.run(&[vec![fixture.key]], deadline());
+        assert!(!receipt.dispatched && !receipt.acknowledged && !receipt.cleanup_confirmed, "{receipt:?}");
+        assert!(fixture.events().is_empty());
+        // The runtime refuses mutating cleanup once resource history is lost.
+        // This fixture still owns the disposable server and its original pair.
+        fixture.endpoint.transaction(deadline(), || {
+            let remove = xinput::HierarchyChange {
+                len: 3,
+                data: xinput::HierarchyChangeData::RemoveMaster(xinput::HierarchyChangeDataRemoveMaster {
+                    deviceid: original.pointer,
+                    return_mode: xinput::ChangeMode::FLOAT,
+                    return_pointer: 0,
+                    return_keyboard: 0,
+                }),
+            };
+            checked(checked(fixture.endpoint.connection.xinput_xi_change_hierarchy(&[remove]))?.check())
+        }).unwrap();
         fixture.remains();
     }
 
