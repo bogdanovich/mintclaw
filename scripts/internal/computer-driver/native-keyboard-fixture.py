@@ -165,7 +165,7 @@ def main():
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                timeout=20, check=True)
             report = (work / "probe.log").read_text()
-            if len(re.findall(r"^test result: ok\. 33 passed; 0 failed; 0 ignored;", report, re.M)) != 1:
+            if len(re.findall(r"^test result: ok\. 34 passed; 0 failed; 0 ignored;", report, re.M)) != 1:
                 raise RuntimeError("native keyboard cases missing")
             if args.gtk:
                 subprocess.run(["/usr/bin/python3", gtk_script, "--probe", str(args.probe),
