@@ -1,11 +1,53 @@
 # Linux keyboard qualification checkpoint
 
-Status: private, unmerged backend and separate experimental lifetime probe.
-Recorded October 31, 2026 (November 1 UTC). Public native input and production
-desktop control remain disabled. This is a qualification record, not approval
+Status: private, unmerged backend. Updated November 1, 2026. The earlier separate
+lifetime probe and its failures remain historical evidence. Public native input
+and production desktop control remain disabled. This is a qualification record, not approval
 to widen a target scope or enable a provider.
 
-## Committed component results
+## November 1 committed candidate
+
+Draft [PR #1813](https://github.com/bogdanovich/mintclaw/pull/1813), head
+`786179658d3f82f24d6e7ab0fd8f251a11d4e5e8`, now separates the retained resource
+channel from per-action authority and the killable input child. Original control
+and death-fenced backup connections retain cleanup authority. Runtime teardown
+does not remove GTK-visible devices or kill an application; uncertain resource
+authority remains quarantined rather than being adopted from fresh snapshots.
+
+The candidate continuously witnesses native map/compatibility mutations and
+checks original device and target epochs before input. One routing guard checks
+active/frozen private devices, core/XI1/XI2 passive grabs, actual ancestors and
+the private pointer's descendant path. Native child ownership is checked through
+XRes on both press and release. Core passive probes run under a grab pinned to
+the original private master, preserving unrelated input. No geometry/title match
+or command dictionary supplies authority.
+
+Exact-source component qualification passed twenty rounds: 620 native cases,
+20 direct GTK caret/Unicode checks, 200 process-fault cases and 220 actual Go-host
+race cases, plus thirteen wire, nine transport and six history units. Independent
+checks cover app/guard state, native key state, original resource identity and
+window retention. Maximum measured scoped process cancellation was 16.16 ms;
+this is a measurement, not a universal latency guarantee. The component worker
+SHA256 is `25bd193e46edcb5026e1bc70bb197a03b3d29f291e889f768c6de6405313936e`.
+
+Additional controls preserve why narrower checks were insufficient: an active
+XI1 slave grab diverted input and a cleanup release; frozen native input survived
+a zero-key-state quiescence receipt; a late foreign-process child received a
+release when only presses checked the path. A superseded 28-case candidate passed
+its lifecycle suite but still routed Ctrl+A to root: Xorg's GetState reply left
+the derived grab-modifier field at zero despite held Control. The current guard
+derives the native mask from populated state and controls and passes matching
+and unrelated core/XI2 modifier cases. Earlier failures are excluded from passing
+qualification counts and are not relabeled green.
+
+These results use owned, attested disposable Xvfb servers. They do not qualify
+the selected attached GNOME desktop, other window managers, broad application
+behavior, an admitted full driver or model tasks. The exact-head complete pinned
+Cua artifact and selected native hosting/application gates remain separate;
+the PR records their current status. The PR stays draft until its required native
+gates pass, with no public host, model grant or production enablement.
+
+## Historical component results
 
 Draft [PR #1813](https://github.com/bogdanovich/mintclaw/pull/1813), head
 `9ff9acd58b453b3640df50842cc8462c0befe089`, contains the private native X11
@@ -24,7 +66,7 @@ These are component repetitions, not twenty distinct tasks or a full-driver,
 window-manager, host, model or production qualification. Other CI checks and
 review remain separate gates. Passing this job cannot override the findings below.
 
-## Blocking findings
+## Historical blocking findings
 
 The experiments preserve distinct failure evidence:
 
@@ -46,10 +88,10 @@ chose to investigate resource ownership separate from action authority. The PR
 remains intentionally incomplete and must not be promoted or merged on component
 test results alone.
 
-## Separate lifetime hypothesis
+## Historical separate lifetime hypothesis
 
 The [experimental result](https://github.com/bogdanovich/mintclaw/pull/1813#issuecomment-6552252574)
-is outside PR source. Directly disabling XTEST is rejected by Xorg. Disabling
+was outside PR source. Directly disabling XTEST is rejected by Xorg. Disabling
 the private master instead floats its original slave and clears master state,
 but a held key remains in that slave. The failed runs are retained.
 
@@ -81,8 +123,10 @@ replace neither host authority nor the durable invocation lifecycle.
 The probe's disposal identity check is deliberately not represented as an
 epoch-safe production implementation. Cleanup map/action history, channel-owner
 and transport loss, retention/reuse, simultaneous actor loss, selected window
-managers and actual host composition remain unqualified. No prototype code has
-been adopted and no committed cleanup test or timeout has been weakened.
+managers and actual host composition remained unqualified at that checkpoint.
+That probe had not been adopted into PR source. The later committed candidate
+above uses a retained-channel design and separate qualification; its passing
+results do not retroactively qualify this earlier probe.
 
 ## Remaining roadmap gates
 
