@@ -166,6 +166,31 @@ all native actions, full business tasks or twenty distinct model tasks. Failures
 stop the run and remain in its output; no uncertain input is replayed. Existing
 native fault/race, hosting and full-roadmap gates remain independent.
 
+The optional `--effect observed-text --text-observer-sha256 PINNED_SOURCE_SHA256`
+mode separates insertion from saving. Pin the source of
+`scripts/internal/computer-driver/atspi_text_observer.py` and use a matching Go
+probe containing `TestPrivateNativeTextObservationQualification`. This mode starts
+an accessibility bus only inside the owned fixture and discovers its original
+text object before native input. Subsequent captures read fresh text/state from
+that original unique bus owner/object path, check the actual peer PID and role,
+and never scan for a replacement endpoint. No accessibility action is invoked.
+
+The actual Go read-only host uses the merged `ObserveUntil` API with a one-second
+observation lifetime. Valid UI state stays in the protected observation; the
+condition decides whether it matches. Whole-tree discovery is not repeated inside
+that lifetime. Each native phase still requires the separate original
+WindowGuard/InputLease. The observation scope is explicitly the entire owned
+disposable desktop; this does not establish an accessibility-root/native-window
+identity mapping or authorize window-scoped accessibility input.
+
+The fixture positions the caret inside existing prefix/suffix text, composes the
+mixed Unicode corpus and withholds Finish until a fresh observation matches.
+It independently checks that the original file remains unchanged. No-input
+controls must retain both the original UI text and file. Saved-file mode remains
+available and is a separate application-effect gate: observed text is not proof
+that Save is ready or that a document was saved. Both modes retain the original
+native budgets and all hosting, application, model-task and admission limits.
+
 ## Limits and remaining gates
 
 The actual-companion launcher is macOS-only because the Linux direct fixture run already uses

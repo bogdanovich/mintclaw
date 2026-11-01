@@ -21,6 +21,20 @@ fixture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixture)
 
 
+def observe_text(observer, pid, environment, work, label, binding=None):
+    arguments = [sys.executable, str(observer), "--pid", str(pid)]
+    if binding is None:
+        arguments.append("--bind")
+    result = subprocess.run(
+        arguments, env=environment, input=json.dumps(binding) if binding is not None else None,
+        capture_output=True, text=True, timeout=3 if binding is not None else 8,
+    )
+    (work / (label + ".log")).write_text(result.stderr)
+    if result.returncode != 0 or len(result.stdout.encode()) > 40 * 1024:
+        raise RuntimeError("owned fixture text observation refused")
+    return json.loads(result.stdout)
+
+
 def run_case(work, args, control):
     work.mkdir(mode=0o700, exist_ok=False)
     worker, xvfb = args.worker, args.xvfb
@@ -28,6 +42,8 @@ def run_case(work, args, control):
               "worker_sha256": hashlib.sha256(worker.read_bytes()).hexdigest(),
               "host_probe_sha256": args.host_probe_sha256,
               "application_sha256": args.application_sha256, "model_tasks": 0}
+    text_effect = args.effect == "observed-text"
+    report["effect_under_test"] = args.effect
     with fixture.owned_server(xvfb, work / "server") as env:
         env.update(HOME=str(work), LANG="C.UTF-8", GSK_RENDERER="cairo", GTK_A11Y="none",
                    PULSE_SERVER=f"unix:{work}/no-audio", PIPEWIRE_REMOTE="mintclaw-no-audio",
@@ -36,7 +52,7 @@ def run_case(work, args, control):
         for key in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"):
             Path(env[key]).mkdir(mode=0o700)
         env["MINTCLAW_PRIVATE_DIAGNOSTIC_DIR"] = str(work)
-        with private_gnome(env, work):
+        with private_gnome(env, work, accessibility=text_effect):
             os.environ.update(env)
             oracle = FixtureOracle(env)
             x, d = oracle.x, oracle.display
@@ -197,13 +213,25 @@ def run_case(work, args, control):
                     report["fixture_guard_focus"] = activate_fixture_window(guard, exact_focus=True)
                     report["guard_window"] = guard
                     report["focus_after_guard"] = sample_focus("after_guard")
+                    bound = None
+                    if text_effect:
+                        observer = HERE / "atspi_text_observer.py"
+                        bound = observe_text(observer, app.pid, env, work, "initial-text")
+                        initial = bound["initial"]
+                        assert initial["text"] in (original_text, original_text[:-1])
+                        expected_observed = initial["text"].replace(
+                            "PREFIX||SUFFIX", "PREFIX|" + inserted + "|SUFFIX", 1,
+                        )
+                        report["original_observed_text"] = initial["text"]
+                        report["expected_observed_text"] = expected_observed
                     keycode = bind(x, "XKeysymToKeycode", C.c_ubyte, ptr, win)
                     symbols = [(0xffe3, 0xff50)] + [(0xff53,)] * len("PREFIX|")
                     for character in inserted:
                         symbols.append((0xffe3, 0xffe1, ord("u")))
                         symbols.extend((ord(digit),) for digit in format(ord(character), "x"))
                         symbols.append((0xff0d,))
-                    symbols.append((0xffe3, ord("s")))
+                    if not text_effect:
+                        symbols.append((0xffe3, ord("s")))
                     assert len(symbols) <= 256
                     report["text_mechanism_under_test"] = "explicit_owned_IBus_unicode_compose_at_existing_caret"
                     report["native_chord_count"] = len(symbols)
@@ -229,20 +257,32 @@ def run_case(work, args, control):
                         probe = args.host_probe
                         assert hashlib.sha256(probe.read_bytes()).hexdigest() == args.host_probe_sha256
                         config = work / "go-application-fixture.json"
-                        config.write_text(json.dumps({
+                        configuration = {
                             "window": {"PID": app.pid, "WindowID": target,
                                        "Display": env["DISPLAY"], "XAuthority": env["XAUTHORITY"]},
                             "server_pid": int(env["MINTCLAW_PRIVATE_XVFB_PID"]),
                             "chords": chords, "artifact": str(sample),
-                            "expected_hash": hashlib.sha256(expected.encode("utf-8")).hexdigest()}))
+                            "expected_hash": hashlib.sha256(
+                                (original_text if text_effect else expected).encode("utf-8"),
+                            ).hexdigest(),
+                        }
+                        if text_effect:
+                            configuration.update(
+                                observer=str(observer), observer_sha=args.text_observer_sha256,
+                                observer_binding=bound["binding"], expected_text=expected_observed,
+                                original_text=initial["text"],
+                            )
+                        config.write_text(json.dumps(configuration))
                         config.chmod(0o600)
                         go_env = dict(env, MINTCLAW_PRIVATE_NATIVE_APP_TEST="1",
                             MINTCLAW_PRIVATE_NATIVE_APP_CONFIG=str(config),
                             MINTCLAW_PRIVATE_NATIVE_HOST_WORKER=str(worker),
                             MINTCLAW_PRIVATE_NATIVE_HOST_WORKER_SHA256=args.worker_sha256)
                         with (work / "actual-go-host.log").open("xb") as go_log:
+                            test_name = ("TestPrivateNativeTextObservationQualification" if text_effect
+                                         else "TestPrivateNativeApplicationHostQualification")
                             host_process = subprocess.Popen([str(probe),
-                                "-test.run=^TestPrivateNativeApplicationHostQualification$",
+                                "-test.run=^" + test_name + "$",
                                 "-test.v", "-test.count=1", "-test.timeout=35s"],env=go_env,
                                 stdin=subprocess.DEVNULL,stdout=go_log,stderr=subprocess.STDOUT)
                             until = time.monotonic() + 40
@@ -259,12 +299,23 @@ def run_case(work, args, control):
                             finally:
                                 if host_process.poll() is None:
                                     host_process.terminate();host_process.wait(timeout=3)
-                        marker = ("actual Go application effect verified; original guard/lease retained; "
-                                  "quiescent retained resources")
+                        marker = (
+                            "actual Go Unicode text effect independently observed; "
+                            "original file/guard/lease preserved; quiescent retained resources"
+                            if text_effect else
+                            "actual Go application effect verified; original guard/lease retained; "
+                            "quiescent retained resources"
+                        )
                         report["actual_go_host_verified"] = marker in (work / "actual-go-host.log").read_text()
                         assert report["actual_go_host_verified"]
                     except Exception as error:
                         report["input_error"] = str(error)
+                    if text_effect:
+                        final = observe_text(observer, app.pid, env, work, "final-text", bound["binding"])
+                        report["final_observed_text"] = final["text"]
+                        report["independent_text_matches"] = final["text"] == (
+                            initial["text"] if control else expected_observed
+                        )
                     report["overview_after_action"] = overview_state()
                     report.update(
                         file_text=sample.read_text(), expected=expected,
@@ -300,8 +351,14 @@ def run_case(work, args, control):
     if control:
         assert report["file_text"] == original_text and report["retained_pair"] == {}
         assert report.get("input_error") == "intentional_no_input_control"
+        if text_effect:
+            assert report["independent_text_matches"]
     else:
-        assert report.get("actual_go_host_verified") and report["independently_saved"]
+        assert report.get("actual_go_host_verified")
+        if text_effect:
+            assert report["independent_text_matches"] and report["file_text"] == original_text
+        else:
+            assert report["independently_saved"]
         assert "input_error" not in report, "actual Go application effect gate failed"
 
 
@@ -312,6 +369,8 @@ def main():
         parser.add_argument("--" + kind + "-sha256", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repetitions", type=int, choices=range(1, 21), default=20)
+    parser.add_argument("--effect", choices=("saved-file", "observed-text"), default="saved-file")
+    parser.add_argument("--text-observer-sha256")
     args = parser.parse_args()
     if sys.platform != "linux" or not hasattr(os, "pidfd_open"):
         parser.error("Linux with original process-handle support is required")
@@ -320,6 +379,11 @@ def main():
         if (not path.is_absolute() or path.is_symlink() or not path.is_file()
                 or hashlib.sha256(path.read_bytes()).hexdigest() != expected):
             parser.error("pinned private fixture executable identity mismatch")
+    if args.effect == "observed-text":
+        observer = HERE / "atspi_text_observer.py"
+        if (observer.is_symlink() or not observer.is_file()
+                or hashlib.sha256(observer.read_bytes()).hexdigest() != args.text_observer_sha256):
+            parser.error("explicit pinned text-observer source identity required")
     if not args.output.is_absolute() or args.output.is_symlink():
         parser.error("an explicit new private output directory is required")
     args.output.mkdir(mode=0o700, exist_ok=False)

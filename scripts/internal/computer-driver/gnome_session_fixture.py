@@ -61,7 +61,7 @@ def _owned_descendants(marker):
 
 
 @contextmanager
-def private_gnome(environment, work):
+def private_gnome(environment, work, *, accessibility=False):
     marker = secrets.token_hex(24)
     environment.update(
         DBUS_SYSTEM_BUS_ADDRESS=f"unix:path={work}/no-system-bus",
@@ -216,6 +216,24 @@ def private_gnome(environment, work):
                 "startup_complete_observed": True, "readiness_timeout_count": readiness_timeouts,
                 "startup_core_slot_available": True, "attached_host_qualified": False,
             }) + "\n")
+            if accessibility:
+                a11y = launch(
+                    ["/usr/libexec/at-spi-bus-launcher", "--launch-immediately"], "a11y-bus.log",
+                )
+                until = time.monotonic() + 5
+                while time.monotonic() < until and a11y.poll() is None:
+                    address = subprocess.run(
+                        ["/usr/bin/gdbus", "call", "--session", "--dest", "org.a11y.Bus",
+                         "--object-path", "/org/a11y/bus", "--method", "org.a11y.Bus.GetAddress"],
+                        env=environment, capture_output=True, text=True, timeout=1,
+                    )
+                    if address.returncode == 0 and address.stdout.startswith("('unix:"):
+                        break
+                    time.sleep(0.02)
+                else:
+                    raise RuntimeError("private accessibility bus readiness failed")
+                environment["GTK_A11Y"] = "atspi"
+                environment.pop("NO_AT_BRIDGE", None)
             yield environment
             finish = {
                 "original_shell_alive": shell.poll() is None, "original_wm_window_retained": wm_window() == original_wm,
