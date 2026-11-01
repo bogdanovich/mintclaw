@@ -152,22 +152,33 @@ func TestRepositoryCorpus(t *testing.T) {
 		defaults[5].Case.ID != "general.steering.order" || CheckRunAvailability(defaults, false) != nil {
 		t.Fatal("repository general baseline missing", err)
 	}
-	pending := 0
+	pending, onDemand := 0, 0
+	qualified := map[string]string{
+		"general.control.stop":    "f850914757a9ef4cf39d90be44ab4c16dd2a8b40e0b5ab17237800b1b73a0096",
+		"general.approval.denied": "401acf3c3165d57634fee2a8ec6043e259036c4e371d2ea487ca1bc3eab3f745",
+		"general.history.restart": "f7e027e5fb32bcae436453a0635cf10108de07b3e8b7cc8753671fd871a6ea12",
+	}
 	for _, item := range corpus {
 		policy := item.Availability()
+		if want, found := qualified[item.Case.ID]; found {
+			onDemand++
+			if item.Digest != want || policy.Status != "active" || policy.Default || policy.Reason != "" ||
+				CheckRunAvailability([]LoadedCase{item}, false) != nil {
+				t.Fatal("qualified on-demand selection incorrect")
+			}
+		}
 		if policy.Status == "pending" {
 			pending++
 			core := item.Case.ID == "general.session.isolation" || item.Case.ID == "general.tools.recovery" ||
-				item.Case.ID == "general.control.stop" || item.Case.ID == "general.approval.denied" ||
 				item.Case.ID == "general.delivery.final-once" || item.Case.ID == "general.skills.selection" ||
-				item.Case.ID == "general.history.restart" || item.Case.ID == "general.context.compaction"
+				item.Case.ID == "general.context.compaction"
 			if policy.Default || policy.Reason == "" ||
 				item.Case.Suite == "general" && !core {
 				t.Fatal("invalid deferred coverage")
 			}
 		}
 	}
-	if pending != 20 || !errors.Is(CheckRunAvailability(corpus, false), ErrPendingCases) {
+	if pending != 17 || onDemand != 3 || !errors.Is(CheckRunAvailability(corpus, false), ErrPendingCases) {
 		t.Fatal("deferred domain cases were lost or implicitly enabled")
 	}
 	pdf, err := Select(corpus, Selection{Suite: "pdf"})

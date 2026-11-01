@@ -63,8 +63,11 @@ unknowns and successful offline grading after deletion of live stores, logs
 and SKILL.md. Missing frozen proof is refused before another judge call.
 
 These controls use local synthetic HTTP, not a paid model or a live semantic
-qualification. The repository case remains **pending/non-default** until its
-separate bounded qualification and immutable three-trial batch succeed. Existing
+qualification. The repository case remains **pending/non-default**: its
+[fixed live campaign](../operations/manual-agent-evals-core-c3-20261026.md)
+passed qualification but failed all three batch first-unselected controls.
+Actual selection/revision and following unselected controls worked; the strict
+plain-text first controls did not. No judge overrode these failures. Existing
 six General defaults, historical case digests and deferred PDF/browser policies
 are unchanged. A full repeat-three target budget needs at least nine calls;
 ceilings also bound reported tokens, request bytes, output and concurrency.

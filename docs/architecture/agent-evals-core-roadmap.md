@@ -3,9 +3,13 @@
 Date: 2026-10-24. This is a bounded follow-up to the completed
 [first-release program](agent-evals-goal.md), not a reopening of E0-E5.
 
-Implementation of C1-C3 is now authorized in a new goal. The
+Implementation of all twelve C1-C3 contracts is complete. The
 [execution ledger](agent-evals-core-execution.md) records dependencies, current
 status, qualification and stop criteria without relabeling controls as live passes.
+The [final fixed C3 record](../operations/manual-agent-evals-core-c3-20261026.md)
+retains 20 new trials (12 pass, 8 fail); bounded completion is not an all-green
+full suite. Only stop, denial and restart gain active/on-demand status, leaving
+the six existing defaults and failed/deferred scenarios unchanged.
 
 ## Decision And Current Baseline
 
@@ -70,18 +74,18 @@ one ordered result per emitted call, then include new input. It is not hard abor
 or graceful interrupt. Tests must pin the selected native execution profile and
 its current contract instead of treating all control modes as interchangeable.
 
-## Proposed Scenarios
+## Implemented Contracts
 
 The sections below specify the twelve target contracts. Correction and
 answer/resume are qualified C1 defaults. C2 implements steering and isolation;
 C3a recovery is implemented but pending after two judge provider errors in its
-fixed batch. C3b native stop/reuse and C3c exact approval denial are implemented
-and merged, but not yet live-qualified. C3d final delivery is implemented with a
-native durable-streaming qualification blocker. C3g skill selection is implemented
-with native revision/control evidence but remains pending qualification.
-Restart has a typed native generation contract with passing model-free controls.
-Compaction has a typed pressure/barrier contract with passing model-free controls.
-These implementations do not imply live qualification or roadmap completion.
+fixed batch. C3b stop/reuse, C3c exact denial and C3e restart passed independent
+fixed batches and are active/on-demand. C3d final delivery has a native
+durable-streaming qualification blocker. C3g selection remains pending after
+three strict unselected-control failures. C3f compaction remains pending after
+incorrect corrected recall and later unknown usage in its batch. All native
+harnesses and frozen/model-free controls are merged; no failed live outcome is
+relabeled as a pass and no runtime repair expansion is part of this roadmap.
 P0 is the first useful expansion; P1 follows after its required harness support. Use synthetic random
 markers and local fixtures, never production conversations or accounts. Fixed
 user actions are preferable to an LLM user for these mechanical regressions.
@@ -258,12 +262,13 @@ Budget: 2 inputs plus control, 1 judge call, 5 minutes.
 | --- | --- | --- |
 | C0: Catalog + proposal | Complete, #1868 | Default = 2 general; 12 domain cases pending; deliberate opt-in; unchanged identities/historical eligibility |
 | C1: Correction + answer/resume | Complete | Two new cases, answer evidence, stale-answer controls, native budget/frozen admission and fixed live 3/3 batches |
-| C2: In-flight evidence + steering | Authorized, queued | One bounded native-boundary fixture/observer, steering/order and two-session isolation; no copied scheduler or timing-only oracle |
-| C3: Focused P1 packs | All seven authorized, queued | Admit prerequisites; separate lifecycle/tools/delivery/skill scope and stop criteria |
+| C2: In-flight evidence + steering | Complete implementation and fixed matrix | Native-boundary fixture/observer; boundary/order qualified, isolation pending; no copied scheduler or timing-only oracle |
+| C3: Focused P1 packs | All seven implemented/merged; fixed matrix recorded | Stop/denial/restart active on-demand; recovery, delivery, selection and compaction remain pending with concrete blockers |
 
 The initial C0 goal ended after reviewed merge and delivery of the proposal.
 The new C1-C3 goal ends at twelve implemented/merged contracts, deterministic
 validation and the bounded honest qualification matrix in the ledger. It does
 not run/fix pending PDF/browser cases, deploy production or promise a growing
 all-green suite indefinitely. Steering needs a real in-flight oracle before
-it can be claimed as coverage.
+it can be claimed as coverage. That oracle and the remaining native harnesses
+are now merged; the fixed exit matrix supplies the bounded stopping point.

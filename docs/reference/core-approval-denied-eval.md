@@ -1,7 +1,8 @@
 # Native Approval Denial Eval
 
-`general.approval.denied` is pending/non-default. Model-free native validation
-is not live model qualification. The original General definitions and frozen
+`general.approval.denied` is active/on-demand after a separately recorded
+qualification and fixed 3/3 batch. Model-free native validation alone is not
+live model qualification. The original General definitions and frozen
 campaigns are unchanged; PDF and browser remain pending.
 
 ## Scope
@@ -87,3 +88,7 @@ Live qualification remains separate: one qualification attempt and one fixed
 three-trial immutable-candidate batch. Only independently evidenced 3/3 passes
 can promote this incompatible specialized profile; it cannot silently join the
 six-case default profile.
+
+The [fixed campaign](../operations/manual-agent-evals-core-c3-20261026.md) on
+immutable `c769faf3d` passes the qualification and all three batch trials.
+Activation does not grant a broader tool policy or default membership.

@@ -2,7 +2,6 @@ package eval
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/internal/gatewayclient"
@@ -48,8 +47,10 @@ func TestRestartCaseAndProfileAdmission(t *testing.T) {
 		validateRestartBinding(fixture.preset, item) != nil {
 		t.Fatal("scoped restart admission")
 	}
-	if !errors.Is(CheckRunAvailability([]LoadedCase{restartDefinition(t)}, false), ErrPendingCases) {
-		t.Fatal("restart became default runnable before qualification")
+	loaded := restartDefinition(t)
+	if policy := loaded.Availability(); policy.Status != "active" || policy.Default ||
+		CheckRunAvailability([]LoadedCase{loaded}, false) != nil {
+		t.Fatal("qualified restart on-demand policy incorrect")
 	}
 	for _, kind := range []string{
 		"no_budget", "no_metadata", "model_user", "tool", "skill", "stateless",

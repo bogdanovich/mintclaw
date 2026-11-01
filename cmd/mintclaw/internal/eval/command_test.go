@@ -128,15 +128,17 @@ func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
 			switch item.Status {
 			case "active":
 				active++
-				if !item.Default || item.PendingReason != "" || item.Suite != "general" {
-					t.Fatal("active default metadata incorrect")
+				onDemand := item.ID == "general.control.stop" || item.ID == "general.approval.denied" ||
+					item.ID == "general.history.restart"
+				wantDefault := !onDemand
+				if item.Default != wantDefault || item.PendingReason != "" || item.Suite != "general" {
+					t.Fatal("active selection metadata incorrect")
 				}
 			case "pending":
 				pending++
 				core := item.ID == "general.session.isolation" || item.ID == "general.tools.recovery" ||
-					item.ID == "general.control.stop" || item.ID == "general.approval.denied" ||
 					item.ID == "general.delivery.final-once" || item.ID == "general.skills.selection" ||
-					item.ID == "general.history.restart" || item.ID == "general.context.compaction"
+					item.ID == "general.context.compaction"
 				if item.Default || item.PendingReason == "" ||
 					item.Suite == "general" && !core {
 					t.Fatal("pending metadata incorrect")
@@ -145,7 +147,7 @@ func TestOfflineCatalogShowsAllDeferredCases(t *testing.T) {
 				t.Fatal("catalog status unavailable")
 			}
 		}
-		if active != 6 || pending != 20 || result.RuntimeRun {
+		if active != 9 || pending != 17 || result.RuntimeRun {
 			t.Fatal("offline inspection hid deferred coverage or claimed execution")
 		}
 	}
@@ -179,8 +181,9 @@ func TestRunDefaultAndExplicitPendingAdmissionBeforePreset(t *testing.T) {
 		{name: "pdf", flags: []string{"--suite", "pdf"}, pending: true},
 		{name: "browser", flags: []string{"--suite", "browser"}, pending: true},
 		{name: "pending-id", flags: []string{"--case", "pdf.loan.fill"}, pending: true},
-		{name: "native-stop-pending", flags: []string{"--case", "general.control.stop"}, pending: true},
-		{name: "approval-denied-pending", flags: []string{"--case", "general.approval.denied"}, pending: true},
+		{name: "qualified-native-stop", flags: []string{"--case", "general.control.stop"}},
+		{name: "qualified-approval-denied", flags: []string{"--case", "general.approval.denied"}},
+		{name: "qualified-owned-restart", flags: []string{"--case", "general.history.restart"}},
 		{name: "mixed-id", flags: []string{"--case", "general.context.followup", "--case", "pdf.loan.fill"}, pending: true},
 		{name: "broad-tag", flags: []string{"--tag", "multi-turn"}, pending: true},
 		{name: "explicit-opt-in", flags: []string{"--suite", "all", "--include-pending"}},
