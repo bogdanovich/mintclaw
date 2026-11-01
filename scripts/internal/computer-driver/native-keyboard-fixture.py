@@ -165,7 +165,7 @@ def main():
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                timeout=20, check=True)
             report = (work / "probe.log").read_text()
-            if len(re.findall(r"^test result: ok\. 19 passed; 0 failed; 0 ignored;", report, re.M)) != 1:
+            if len(re.findall(r"^test result: ok\. 22 passed; 0 failed; 0 ignored;", report, re.M)) != 1:
                 raise RuntimeError("native keyboard cases missing")
             if args.gtk:
                 subprocess.run(["/usr/bin/python3", gtk_script, "--probe", str(args.probe),
@@ -186,7 +186,7 @@ def main():
                 with owned_server(args.xvfb, work / name) as environment:
                     host_case(args, name, environment, work / name)
             print(f"original Go host fixture round {attempt}: eleven cases PASS", flush=True)
-        print(f"native-keyboard fixture round {attempt}: nineteen cases PASS", flush=True)
+        print(f"native-keyboard fixture round {attempt}: twenty-two cases PASS", flush=True)
     print("Mechanism fixture only; full driver/host/model qualification remains required.", flush=True)
 
 

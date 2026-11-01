@@ -346,6 +346,28 @@ struct Pair {
 }
 
 impl Pair {
+    /// Only the master delivers application events. An attached XTEST slave
+    /// otherwise retains PointerRoot focus and can deliver a duplicate stream
+    /// outside the target. Keep that original injection source unfocused.
+    fn set_focus(&self, endpoint: &Endpoint, window: u32) -> Result<()> {
+        for (device, desired) in [(self.keyboard, window), (self.slave, x11rb::NONE)] {
+            checked(checked(endpoint.connection.xinput_set_device_focus(
+                desired, x11rb::CURRENT_TIME, xproto::InputFocus::NONE, device,
+            ))?.check())?;
+        }
+        self.check_focus(endpoint, window)
+    }
+
+    fn check_focus(&self, endpoint: &Endpoint, window: u32) -> Result<()> {
+        for (device, desired) in [(self.keyboard, window), (self.slave, x11rb::NONE)] {
+            let focus = checked(checked(endpoint.connection.xinput_get_device_focus(device))?.reply())?;
+            if focus.focus != desired || focus.revert_to != xproto::InputFocus::NONE {
+                return Err(unavailable());
+            }
+        }
+        Ok(())
+    }
+
     fn create(endpoint: &Endpoint) -> Result<Self> {
         let connection = &endpoint.connection;
         checked(checked(connection.xinput_xi_query_version(2, 0))?.reply())?;
@@ -983,15 +1005,7 @@ impl PreparedKeeper {
             {
                 return Err(unavailable());
             }
-            checked(
-                checked(keeper.channel.control.connection.xinput_set_device_focus(
-                    action.authority.binding.window,
-                    x11rb::CURRENT_TIME,
-                    xproto::InputFocus::NONE,
-                    keeper.channel.pair.keyboard,
-                ))?
-                .check(),
-            )
+            keeper.channel.pair.set_focus(&keeper.channel.control, action.authority.binding.window)
         })?;
         Ok(keeper)
     }
@@ -1185,6 +1199,7 @@ impl PreparedInput {
             let extension = checked(self.input.connection.extension_information(xinput::X11_EXTENSION_NAME))?
                 .ok_or_else(unavailable)?;
             extension.first_event.checked_add(xinput::DEVICE_KEY_RELEASE_EVENT).ok_or_else(unavailable)?;
+            pair.check_focus(&self.input, self.authority.binding.window)?;
             Ok((extension.first_event, SafeKeymap::admit(&self.input, &pair)?))
         })?;
         Ok(InputWorker {
@@ -1373,11 +1388,7 @@ impl Keeper {
                 return Err(unavailable());
             }
             NativeChannel::clear_keys(&self.channel.control, &self.channel.pair)?;
-            let focus = checked(checked(self.channel.control.connection
-                .xinput_get_device_focus(self.channel.pair.keyboard))?.reply())?;
-            if focus.focus != x11rb::NONE {
-                return Err(unavailable());
-            }
+            self.channel.pair.check_focus(&self.channel.control, x11rb::NONE)?;
             let authority = Authority::subscribe(&self.channel.control, binding, self.channel.observer)?;
             Ok((authority, ActionWatch { target_good: true, input_gone: false, controller: None }))
         })?;
@@ -1408,10 +1419,7 @@ impl Keeper {
         self.phase = ChannelPhase::Active(NativeAction { authority, watch, input_token: identity.input_token, input_process });
         let ChannelPhase::Active(action) = &self.phase else { unreachable!() };
         self.channel.control.transaction(deadline, || {
-            checked(checked(self.channel.control.connection.xinput_set_device_focus(
-                action.authority.binding.window, x11rb::CURRENT_TIME,
-                xproto::InputFocus::NONE, self.channel.pair.keyboard,
-            ))?.check())
+            self.channel.pair.set_focus(&self.channel.control, action.authority.binding.window)
         })
     }
 
@@ -1453,9 +1461,7 @@ impl Keeper {
             if !self.channel.epoch.pair_good {
                 return Err(unavailable());
             }
-            checked(checked(self.channel.control.connection.xinput_set_device_focus(
-                x11rb::NONE, x11rb::CURRENT_TIME, xproto::InputFocus::NONE, self.channel.pair.keyboard,
-            ))?.check())?;
+            self.channel.pair.set_focus(&self.channel.control, x11rb::NONE)?;
             NativeChannel::release_held(
                 &self.channel.control, &self.channel.pair, self.channel.profile.as_ref(),
             )?;
@@ -1619,7 +1625,7 @@ impl InputWorker {
             if !self.profile.safe[usize::from(code)] {
                 return Err(unavailable());
             }
-            let focus = checked(checked(self.input.connection.xinput_get_device_focus(self.pair.keyboard))?.reply())?;
+            self.pair.check_focus(&self.input, self.input_authority.binding.window)?;
             self.input_epoch.drain(
                 &self.input, &self.pair, Some((&self.input_authority, self.input_token, &mut self.input_watch)), false,
             )?;
@@ -1627,8 +1633,6 @@ impl InputWorker {
                 || self.input_watch.input_gone
                 || !self.input_epoch.pair_good
                 || !self.input_epoch.input_safe
-                || focus.focus != self.input_authority.binding.window
-                || focus.revert_to != xproto::InputFocus::NONE
             {
                 return Err(unavailable());
             }
@@ -1915,6 +1919,51 @@ mod native {
                 .unwrap();
         }
 
+        fn observe_slave(&self, pair: &Pair) {
+            self.endpoint.transaction(deadline(), || {
+                let masks = [xinput::EventMask {
+                    deviceid: u16::from(pair.slave),
+                    mask: vec![xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE],
+                }];
+                for window in [self.endpoint.root, self.guard] {
+                    checked(checked(self.endpoint.connection.xinput_xi_select_events(window, &masks))?.check())?;
+                }
+                Ok(())
+            }).unwrap();
+        }
+
+        fn keyboard_observations(&self) -> (Vec<(u32, bool)>, Vec<(u16, u32)>) {
+            self.endpoint.transaction(deadline(), || {
+                let connection = &self.endpoint.connection;
+                checked(checked(connection.get_input_focus())?.reply())?;
+                let mut core = Vec::new();
+                let mut xi = Vec::new();
+                while let Some(event) = checked(connection.poll_for_event())? {
+                    match event {
+                        Event::KeyPress(value) => core.push((value.event, true)),
+                        Event::KeyRelease(value) => core.push((value.event, false)),
+                        Event::XinputKeyPress(value) | Event::XinputKeyRelease(value) => {
+                            xi.push((value.deviceid, value.event));
+                        }
+                        _ => (),
+                    }
+                }
+                Ok((core, xi))
+            }).unwrap()
+        }
+
+        fn assert_pair_parked(&self, pair: &Pair) {
+            self.endpoint.transaction(deadline(), || {
+                for device in [pair.keyboard, pair.slave] {
+                    let focus = checked(checked(self.endpoint.connection.xinput_get_device_focus(device))?.reply())?;
+                    assert_eq!(focus.focus, x11rb::NONE);
+                    assert_eq!(focus.revert_to, xproto::InputFocus::NONE);
+                    assert_eq!(key_state(&self.endpoint, device)?, [0; 32]);
+                }
+                Ok(())
+            }).unwrap();
+        }
+
         fn silent_map_restore(&self, session: &NativeKeyboard, source: &Endpoint) {
             source.transaction(deadline(), || {
                 let connection = &source.connection;
@@ -1955,6 +2004,75 @@ mod native {
             }).unwrap();
             self.remains();
         }
+    }
+
+    #[test]
+    #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
+    fn injection_slave_never_delivers_to_ambient_focus_or_root() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        fixture.observe_slave(&session.pair);
+        fixture.endpoint.transaction(deadline(), || {
+            let focus = checked(checked(fixture.endpoint.connection
+                .xinput_get_device_focus(session.pair.slave))?.reply())?;
+            assert_eq!(focus.focus, x11rb::NONE);
+            Ok(())
+        }).unwrap();
+        session.worker.begin(deadline()).unwrap();
+        session.worker.edge(0, fixture.key, true).unwrap();
+        session.worker.edge(1, fixture.key, false).unwrap();
+        session.worker.end().unwrap();
+        let (core, xi) = fixture.keyboard_observations();
+        assert_eq!(core, [(fixture.target, true), (fixture.target, false)]);
+        assert!(xi.is_empty(), "injection events escaped the original target: {xi:?}");
+        assert!(session.finish());
+        fixture.remains();
+    }
+
+    #[test]
+    #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
+    fn changed_injection_focus_is_refused_before_any_key() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        fixture.observe_slave(&session.pair);
+        fixture.endpoint.transaction(deadline(), || {
+            checked(checked(fixture.endpoint.connection.xinput_set_device_focus(
+                u32::from(xproto::InputFocus::POINTER_ROOT), x11rb::CURRENT_TIME,
+                xproto::InputFocus::NONE, session.pair.slave,
+            ))?.check())
+        }).unwrap();
+        session.worker.begin(deadline()).unwrap();
+        assert!(session.worker.edge(0, fixture.key, true).is_err());
+        assert!(!session.worker.attempted);
+        assert_eq!(fixture.keyboard_observations(), (vec![], vec![]));
+        session.keeper.quiesce().unwrap();
+        fixture.assert_pair_parked(&session.pair);
+        assert!(session.keeper.dispose_fixture_pair());
+        fixture.remains();
+    }
+
+    #[test]
+    #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
+    fn held_cleanup_parks_injection_source_before_synthetic_release() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        fixture.observe_slave(&session.pair);
+        session.worker.begin(deadline()).unwrap();
+        session.worker.edge(0, fixture.key, true).unwrap();
+        fixture.endpoint.transaction(deadline(), || {
+            checked(checked(fixture.endpoint.connection.xinput_set_device_focus(
+                u32::from(xproto::InputFocus::POINTER_ROOT), x11rb::CURRENT_TIME,
+                xproto::InputFocus::NONE, session.pair.slave,
+            ))?.check())
+        }).unwrap();
+        session.worker.input.boundary.stop();
+        session.keeper.quiesce().unwrap();
+        fixture.assert_pair_parked(&session.pair);
+        let (core, xi) = fixture.keyboard_observations();
+        assert_eq!(core, [(fixture.target, true)]);
+        assert!(xi.is_empty(), "cleanup released into an unrelated window: {xi:?}");
+        assert!(session.keeper.dispose_fixture_pair());
+        fixture.remains();
     }
 
     #[test]
