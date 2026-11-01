@@ -75,7 +75,7 @@ class WriterFixtureTests(unittest.TestCase):
         return path
 
     def check(self, task, path, data):
-        candidate = path / "document.odt"
+        candidate = path / fixtures.TASKS[task].candidate
         candidate.write_bytes(data)
         before = candidate.stat()
         result = fixtures.check_artifact(task, path)
@@ -86,8 +86,8 @@ class WriterFixtureTests(unittest.TestCase):
         return result
 
     def test_frozen_revision_and_task_data(self):
-        self.assertEqual(fixtures.FIXTURE_REVISION, "e083268149089218b2b26a85b175a255643af256ab212083e3077ebdbd5dfb4f")
-        self.assertEqual(tuple(fixtures.TASKS), ("CU-T06", "CU-T07", "CU-T08"))
+        self.assertEqual(fixtures.FIXTURE_REVISION, "0d51dab17b44e0f3aed0216d320b587cb8c15bd1de3da02ccb33de9a83cbfe64")
+        self.assertEqual(tuple(fixtures.TASKS), ("CU-T06", "CU-T07", "CU-T08", "CU-T09", "CU-T10"))
         with self.assertRaises(TypeError):
             fixtures.TASKS["new"] = None
         with self.assertRaises(FrozenInstanceError):
@@ -101,7 +101,8 @@ class WriterFixtureTests(unittest.TestCase):
         for task in fixtures.TASKS:
             with self.subTest(task=task):
                 path = self.prepare(task)
-                self.assertEqual((path / "document.odt").exists(), task != "CU-T06")
+                self.assertEqual((path / fixtures.TASKS[task].candidate).exists(),
+                                 fixtures.TASKS[task].seed is not None)
                 self.assertIsNot(fixtures.check_artifact(task, path)["artifact_matches"], True)
                 (path / "preserve").write_bytes(b"owned canary")
                 with self.assertRaises(FileExistsError):
@@ -115,6 +116,99 @@ class WriterFixtureTests(unittest.TestCase):
             result = self.check(task, path, package(body, styles))
             self.assertTrue(result["artifact_matches"], result)
             self.assertNotIn("reason", result)
+
+    def test_long_seed_retains_order_and_rejects_editing_the_earlier_marker(self):
+        path = self.prepare("CU-T09")
+        paragraphs = fixtures.LONG_PARAGRAPHS
+        self.assertEqual(len(paragraphs), 129)
+        self.assertEqual(paragraphs[0], f"Paragraph 001: {U} — preserve this seeded paragraph exactly.")
+        self.assertIn("END-MARKER is not the final marker.", paragraphs[63])
+        self.assertEqual(paragraphs[-1], "END-MARKER")
+        self.assertFalse(fixtures.check_artifact("CU-T09", path)["artifact_matches"])
+        # Build actual ODT inputs from the immutable seed data, independently
+        # of the implementation's expected semantic projection.
+        final = list(paragraphs)
+        final[-1] = "END-MARKER " + R
+        body = "".join(f"<text:p>{value}</text:p>" for value in final)
+        self.assertTrue(self.check("CU-T09", path, package(body))["artifact_matches"])
+        for changed in [final[:10] + final[11:], [final[1], final[0]] + final[2:],
+                        final[:-1] + ["END-MARKER " + R + " " + R],
+                        list(paragraphs[:63]) + [paragraphs[63] + " " + R] + list(paragraphs[64:])]:
+            malformed = "".join(f"<text:p>{value}</text:p>" for value in changed)
+            self.assertFalse(self.check("CU-T09", path, package(malformed))["artifact_matches"])
+
+    def test_save_as_requires_the_exact_unicode_filename_and_only_one_document(self):
+        path = self.prepare("CU-T10")
+        self.assertEqual(set(item.name for item in path.iterdir()), {fixtures.MARKER})
+        wrong = path / "document.odt"
+        wrong.write_bytes(package(f"<text:p>{U}</text:p>"))
+        self.assertIsNone(fixtures.check_artifact("CU-T10", path)["artifact_matches"])
+        wrong.rename(path / "Крем-世界.odt")
+        result = fixtures.check_artifact("CU-T10", path)
+        self.assertTrue(result["artifact_matches"], result)
+        self.assertTrue(result["directory_matches"])
+        for name in ["document.odt", "Крем-世界-copy.odt", ".~lock.Крем-世界.odt#"]:
+            extra = path / name
+            extra.write_bytes(b"private canary")
+            result = fixtures.check_artifact("CU-T10", path)
+            self.assertFalse(result["artifact_matches"], result)
+            self.assertFalse(result["directory_matches"])
+            self.assertNotIn("private canary", json.dumps(result))
+            extra.unlink()
+        (path / "extra-directory").mkdir()
+        self.assertFalse(fixtures.check_artifact("CU-T10", path)["artifact_matches"])
+
+    def test_save_as_census_is_bounded_and_refuses_observed_directory_changes(self):
+        path = self.prepare("CU-T10")
+        candidate = path / "Крем-世界.odt"
+        candidate.write_bytes(package(f"<text:p>{U}</text:p>"))
+        original = fixtures.directory_names
+        calls = 0
+
+        def mutate_after_first_census(directory):
+            nonlocal calls
+            calls += 1
+            names = original(directory)
+            if calls == 1:
+                (path / "changed").write_bytes(b"canary")
+            return names
+
+        with mock.patch.object(fixtures, "directory_names", side_effect=mutate_after_first_census):
+            result = fixtures.check_artifact("CU-T10", path)
+        self.assertIsNone(result["artifact_matches"])
+        self.assertEqual(result["reason"], "directory_changed")
+        for index in range(fixtures.MAX_DIRECTORY_ENTRIES):
+            (path / f"extra-{index}").write_bytes(b"")
+        result = fixtures.check_artifact("CU-T10", path)
+        self.assertIsNone(result["artifact_matches"])
+        self.assertEqual(result["reason"], "directory_bounds")
+
+    def test_save_as_never_follows_the_unicode_candidate_symlink(self):
+        path = self.prepare("CU-T10")
+        outside = self.parent / "outside.odt"
+        content = package(f"<text:p>{U}</text:p>")
+        outside.write_bytes(content)
+        (path / "Крем-世界.odt").symlink_to(outside)
+        result = fixtures.check_artifact("CU-T10", path)
+        self.assertIsNone(result["artifact_matches"])
+        self.assertEqual(outside.read_bytes(), content)
+
+    def test_save_as_rejects_wrong_case_even_on_case_insensitive_filesystems(self):
+        path = self.prepare("CU-T10")
+        (path / "Крем-世界.ODT").write_bytes(package(f"<text:p>{U}</text:p>"))
+        self.assertIsNot(fixtures.check_artifact("CU-T10", path)["artifact_matches"], True)
+
+    def test_save_as_census_refuses_duplicate_entries_during_mutation(self):
+        path = self.prepare("CU-T10")
+        (path / "Крем-世界.odt").write_bytes(package(f"<text:p>{U}</text:p>"))
+        entry = mock.Mock(name="entry")
+        entry.name = "repeated"
+        iterator = mock.MagicMock()
+        iterator.__enter__.return_value = iter([entry, entry])
+        with mock.patch.object(fixtures.os, "scandir", return_value=iterator):
+            result = fixtures.check_artifact("CU-T10", path)
+        self.assertIsNone(result["artifact_matches"])
+        self.assertEqual(result["reason"], "directory_changed")
 
     def test_visible_text_without_heading_or_complete_bold_does_not_match(self):
         path = self.prepare("CU-T06")
