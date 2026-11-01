@@ -146,6 +146,22 @@ class WriterFixtureTests(unittest.TestCase):
         conditional = HEADING_BODY.replace('<text:p>', '<text:p text:cond-style-name="Other">')
         self.assertIsNone(self.check("CU-T06", path, package(conditional, BOLD))["artifact_matches"])
 
+    def test_span_style_classes_cannot_override_inherited_bold_silently(self):
+        path = self.prepare("CU-T06")
+        styles = ('<style:style style:name="BoldParagraph" style:family="paragraph">'
+                  '<style:text-properties fo:font-weight="bold"/></style:style>'
+                  '<style:style style:name="NormalClass" style:family="text">'
+                  '<style:text-properties fo:font-weight="normal"/></style:style>')
+        body = (f'<text:h text:outline-level="1">{U}</text:h>'
+                f'<text:p text:style-name="BoldParagraph"><text:span text:style-name="NormalClass">{R}'
+                '</text:span></text:p>')
+        self.assertFalse(self.check("CU-T06", path, package(body, styles))["artifact_matches"])
+        for attribute in ("text:class-names", "text:cond-style-name"):
+            unsupported = body.replace('text:style-name="NormalClass"', f'{attribute}="NormalClass"')
+            result = self.check("CU-T06", path, package(unsupported, styles))
+            self.assertIsNone(result["artifact_matches"], result)
+            self.assertEqual(result["reason"], "unsupported_style")
+
     def test_real_ordered_list_preserves_original_paragraph_and_item_order(self):
         path = self.prepare("CU-T07")
         for body, style in [(LIST_BODY, ORDERED.replace("list-level-style-number", "list-level-style-bullet")),

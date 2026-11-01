@@ -220,6 +220,8 @@ class Document:
         return self.weight(node, parent)
 
     def runs(self, node, weight):
+        if any(key in node.attrib for key in (tag("text:cond-style-name"), tag("text:class-names"))):
+            raise shared.Unverifiable("unsupported_style")
         weight = self.styled_weight("text", node.get(tag("text:style-name")), weight) \
             if node.tag == tag("text:span") else weight
         result = [(node.text, weight)] if node.text else []
@@ -242,8 +244,6 @@ class Document:
         return result
 
     def paragraph(self, node):
-        if any(key in node.attrib for key in (tag("text:cond-style-name"), tag("text:class-names"))):
-            raise shared.Unverifiable("unsupported_style")
         inherited = self.styled_weight("paragraph", node.get(tag("text:style-name")), self.default_weight or "normal")
         runs = self.runs(node, inherited)
         text = "".join(value for value, _ in runs)
