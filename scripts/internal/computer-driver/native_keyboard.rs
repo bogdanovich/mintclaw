@@ -478,20 +478,6 @@ impl NativeRepeatGuard {
         Self::check(endpoint, pair)
     }
 
-    fn subscribe(endpoint: &Endpoint, pair: &Pair) -> Result<()> {
-        let connection = &endpoint.connection;
-        if !checked(checked(connection.xkb_use_extension(1, 0))?.reply())?.supported {
-            return Err(unavailable());
-        }
-        for device in [pair.keyboard, pair.slave] {
-            checked(checked(connection.xkb_select_events(
-                u16::from(device), 0u16.into(), xkb::EventType::CONTROLS_NOTIFY,
-                0u16.into(), 0u16.into(), &xkb::SelectEventsAux::default(),
-            ))?.check())?;
-        }
-        Self::check(endpoint, pair)
-    }
-
     fn check(endpoint: &Endpoint, pair: &Pair) -> Result<()> {
         for device in [pair.keyboard, pair.slave] {
             let controls = checked(checked(endpoint.connection.xkb_get_controls(u16::from(device)))?.reply())?;
@@ -630,6 +616,27 @@ struct ResourceEpoch {
 }
 
 impl ResourceEpoch {
+    fn subscribe(endpoint: &Endpoint, pair: &Pair) -> Result<()> {
+        let connection = &endpoint.connection;
+        if !checked(checked(connection.xkb_use_extension(1, 0))?.reply())?.supported {
+            return Err(unavailable());
+        }
+        for device in [pair.keyboard, pair.slave] {
+            checked(
+                checked(connection.xkb_select_events(
+                    u16::from(device),
+                    0u16.into(),
+                    xkb::EventType::CONTROLS_NOTIFY | xkb::EventType::NEW_KEYBOARD_NOTIFY,
+                    0u16.into(),
+                    0u16.into(),
+                    &xkb::SelectEventsAux::default(),
+                ))?
+                .check(),
+            )?;
+        }
+        NativeRepeatGuard::check(endpoint, pair)
+    }
+
     fn new() -> Self {
         Self { pair_good: true, input_safe: true }
     }
@@ -704,6 +711,25 @@ impl ResourceEpoch {
                         {
                             self.pair_good = false;
                         }
+                    }
+                }
+                Event::XkbNewKeyboardNotify(event)
+                    if [pair.keyboard, pair.slave]
+                        .iter()
+                        .any(|id| *id == event.device_id || *id == event.old_device_id) =>
+                {
+                    let xkb_major = checked(endpoint.connection.extension_information(xkb::X11_EXTENSION_NAME))?
+                        .ok_or_else(unavailable)?
+                        .major_opcode;
+                    let record_covers_set_map =
+                        event.request_major == xkb_major && event.request_minor == xkb::SET_MAP_REQUEST;
+                    // The label alone proves no actor. External SetMap requests
+                    // are terminal in the ORIGINAL RECORD stream; fence it here
+                    // before accepting an unchanged snapshot's internal copy.
+                    // Full-load/unknown notifications remain terminal. Never
+                    // restore an epoch already invalidated by another event.
+                    if !record_covers_set_map || endpoint.check_history().is_err() {
+                        self.input_safe = false;
                     }
                 }
                 Event::XkbControlsNotify(event) if [pair.keyboard, pair.slave].contains(&event.device_id) => {
@@ -993,7 +1019,7 @@ impl PreparedKeeper {
             // Construct the owner first: an uncertain/refused device-control
             // write must still use the original retained cleanup identity.
             NativeRepeatGuard::configure(&keeper.channel.control, &keeper.channel.pair)?;
-            NativeRepeatGuard::subscribe(&keeper.channel.control, &keeper.channel.pair)?;
+            ResourceEpoch::subscribe(&keeper.channel.control, &keeper.channel.pair)?;
             keeper.channel.profile = Some(SafeKeymap::admit(&keeper.channel.control, &keeper.channel.pair)?);
             keeper.channel.epoch.drain(
                 &keeper.channel.control, &keeper.channel.pair,
@@ -1098,7 +1124,7 @@ impl BackupCleanup {
         self.prepared.control.transaction(deadline, || {
             self.prepared.authority.check(&self.prepared.control)?;
             pair.check(&self.prepared.control)?;
-            NativeRepeatGuard::subscribe(&self.prepared.control, &pair)?;
+            ResourceEpoch::subscribe(&self.prepared.control, &pair)?;
             self.profile = Some(SafeKeymap::admit(&self.prepared.control, &pair)?);
             self.epoch.drain(
                 &self.prepared.control, &pair, Some((&self.prepared.authority, self.input_token, &mut self.watch)), true,
@@ -1191,7 +1217,7 @@ impl PreparedInput {
         let (event_base, profile) = self.input.transaction(deadline, || {
             self.authority.check(&self.input)?;
             pair.check(&self.input)?;
-            NativeRepeatGuard::subscribe(&self.input, &pair)?;
+            ResourceEpoch::subscribe(&self.input, &pair)?;
             epoch.drain(&self.input, &pair, Some((&self.authority, self.input_token, &mut watch)), true)?;
             if !watch.target_good || !epoch.pair_good || !epoch.input_safe {
                 return Err(unavailable());
@@ -1298,12 +1324,17 @@ impl NativeChannel {
         Ok(())
     }
 
-    fn release_held(control: &Endpoint, pair: &Pair, profile: Option<&SafeKeymap>) -> Result<()> {
+    fn release_held(
+        control: &Endpoint, pair: &Pair, profile: Option<&SafeKeymap>, input_safe: bool,
+    ) -> Result<()> {
         let slave_keys = key_state(control, pair.slave)?;
         if slave_keys == [0; 32] {
             // A foreign grab must not make a verified zero-key action require
             // synthetic releases or a new grab. Both states still must be zero.
             return Self::clear_keys(control, pair);
+        }
+        if !input_safe {
+            return Err(unavailable());
         }
         let profile = profile.ok_or_else(unavailable)?;
         profile.check(control, pair)?;
@@ -1464,7 +1495,8 @@ impl Keeper {
             }
             self.channel.pair.set_focus(&self.channel.control, x11rb::NONE)?;
             NativeChannel::release_held(
-                &self.channel.control, &self.channel.pair, self.channel.profile.as_ref(),
+                &self.channel.control, &self.channel.pair,
+                self.channel.profile.as_ref(), self.channel.epoch.input_safe,
             )?;
             self.channel.pair.check(&self.channel.control)
         }));
@@ -1920,6 +1952,167 @@ impl Drop for NativeKeyboard {
 
 #[cfg(test)]
 mod native {
+    fn load_complete_native_map(source: &Endpoint, device: u16, pointer: Option<u16>) {
+        source
+            .transaction(deadline(), || {
+                let connection = &source.connection;
+                assert!(checked(checked(connection.xkb_use_extension(1, 0))?.reply())?.supported);
+                if let Some(pointer) = pointer {
+                    checked(checked(connection.xinput_xi_set_client_pointer(x11rb::NONE, pointer))?.check())?;
+                }
+                let opcode = checked(connection.extension_information(xkb::X11_EXTENSION_NAME))?
+                    .ok_or_else(unavailable)?
+                    .major_opcode;
+                let (buffers, fds) =
+                    xkb::GetKbdByNameRequest { device_spec: device, need: 0u16.into(), want: 0u16.into(), load: true }
+                        .serialize(opcode);
+                let mut bytes = buffers[0].to_vec();
+                // Native '%' components resolve the original device's own names.
+                // x11rb 0.13.2 omits the six counted component strings.
+                for component in [b"".as_slice(), b"%", b"%", b"%", b"%", b"%"] {
+                    bytes.push(component.len() as u8);
+                    bytes.extend_from_slice(component);
+                }
+                while bytes.len() % 4 != 0 {
+                    bytes.push(0)
+                }
+                let length = u16::try_from(bytes.len() / 4).unwrap();
+                bytes[2..4].copy_from_slice(&length.to_ne_bytes());
+                let cookie = checked(
+                    connection.send_request_with_reply::<xkb::GetKbdByNameReply>(&[std::io::IoSlice::new(&bytes)], fds),
+                )?;
+                let reply = checked(cookie.reply())?;
+                assert!(reply.loaded, "fixture must exercise an actual complete native load");
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; unrelated complete keyboard reload"]
+    fn complete_core_keyboard_reload_preserves_the_original_private_epoch() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        let pointer = fixture
+            .endpoint
+            .transaction(deadline(), || {
+                let all = checked(checked(fixture.endpoint.connection.xinput_xi_query_device(0u16))?.reply())?.infos;
+                let keyboards: Vec<_> = all
+                    .iter()
+                    .filter(|d| {
+                        d.type_ == xinput::DeviceType::MASTER_KEYBOARD && d.deviceid != u16::from(session.pair.keyboard)
+                    })
+                    .collect();
+                assert_eq!(keyboards.len(), 1);
+                Ok(keyboards[0].attachment)
+            })
+            .unwrap();
+        load_complete_native_map(&fixture.endpoint, 256, Some(pointer));
+        assert!(session.keeper.check(deadline()).is_ok());
+        assert!(session.keeper.channel.epoch.input_safe);
+        assert!(session
+            .keeper
+            .channel
+            .control
+            .transaction(deadline(), || {
+                session
+                    .keeper
+                    .channel
+                    .profile
+                    .as_ref()
+                    .unwrap()
+                    .maps_match(&session.keeper.channel.control, &session.pair)
+            })
+            .unwrap());
+        let receipt = session.run(&[vec![fixture.key]], deadline());
+        assert!(receipt.dispatched && receipt.acknowledged && receipt.cleanup_confirmed, "{receipt:?}");
+        assert_eq!(fixture.events(), [(fixture.target, true), (fixture.target, false)]);
+        fixture.remains();
+        println!("complete_map unrelated_core=true original_epoch=true exact_target=true");
+    }
+
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; complete native map epochs and held cleanup"]
+    fn complete_original_keyboard_reload_cannot_restore_input_or_held_release() {
+        for target in 0..3 {
+            for held in [false, true] {
+                let fixture = Fixture::new();
+                let mut session = fixture.session();
+                session.worker.begin(deadline()).unwrap();
+                if held {
+                    session.worker.edge(0, fixture.key, true).unwrap();
+                    assert_eq!(fixture.events(), [(fixture.target, true)]);
+                }
+                let (device, pointer) = match target {
+                    0 => (u16::from(session.pair.keyboard), None),
+                    1 => (u16::from(session.pair.slave), None),
+                    _ => (256, Some(session.pair.pointer)),
+                };
+                load_complete_native_map(&fixture.endpoint, device, pointer);
+                {
+                    let channel = &mut session.keeper.channel;
+                    channel
+                        .control
+                        .transaction(deadline(), || channel.epoch.drain(&channel.control, &channel.pair, None, false))
+                        .unwrap();
+                    assert!(!channel.epoch.input_safe, "real original-device notification was lost");
+                    assert!(channel.control.history.lock().unwrap().test_live());
+                }
+                let snapshot_matches = session
+                    .keeper
+                    .channel
+                    .control
+                    .transaction(deadline(), || {
+                        session
+                            .keeper
+                            .channel
+                            .profile
+                            .as_ref()
+                            .unwrap()
+                            .maps_match(&session.keeper.channel.control, &session.pair)
+                    })
+                    .unwrap();
+                assert!(session.keeper.check(deadline()).is_err());
+                assert!(session.worker.edge(u32::from(held), fixture.key, !held).is_err());
+                assert!(fixture.events().is_empty(), "stale input sent another application edge");
+                session.worker.input.boundary.stop();
+                let cleaned = session.keeper.quiesce();
+                if held {
+                    assert!(cleaned.is_err(), "a stale map epoch cannot attest held-key cleanup");
+                    fixture
+                        .endpoint
+                        .transaction(deadline(), || {
+                            session.pair.check(&fixture.endpoint)?;
+                            assert_ne!(key_state(&fixture.endpoint, session.pair.slave)?, [0; 32]);
+                            let remove = xinput::HierarchyChange {
+                                len: 3,
+                                data: xinput::HierarchyChangeData::RemoveMaster(
+                                    xinput::HierarchyChangeDataRemoveMaster {
+                                        deviceid: session.pair.pointer,
+                                        return_mode: xinput::ChangeMode::FLOAT,
+                                        return_pointer: 0,
+                                        return_keyboard: 0,
+                                    },
+                                ),
+                            };
+                            checked(checked(fixture.endpoint.connection.xinput_xi_change_hierarchy(&[remove]))?.check())
+                        })
+                        .unwrap();
+                } else {
+                    assert!(cleaned.is_ok());
+                    assert!(session.keeper.dispose_fixture_pair());
+                }
+                fixture.remains();
+                println!(
+                    concat!(
+                        "complete_map original_target={} held={} epoch_terminal=true ",
+                        "snapshot_matches={} stale_edges=0 cleanup_confirmed={}",
+                    ),
+                    target, held, snapshot_matches, cleaned.is_ok(),
+                );
+            }
+        }
+    }
     #[test]
     #[ignore = "owned attested disposable Xvfb only; active master and held cleanup"]
     fn active_master_grabs_refuse_input_and_never_capture_cleanup_releases() {

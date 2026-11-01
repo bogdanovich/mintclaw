@@ -78,8 +78,10 @@ if [[ "$candidate" == native-keyboard ]]; then
   cargo +1.97.1 test --locked --release -p platform-linux --bin mintclaw-private-keyboard \
     --target x86_64-unknown-linux-gnu --features "$features" wire_tests:: -- --test-threads=1
   [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_x11_io::tests::.*: test$/ {n++} END {print n+0}') == 9 ]] || exit 1
-  [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::native::.*: test$/ {n++} END {print n+0}') == 31 ]] || exit 1
-  [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::history::tests::.*: test$/ {n++} END {print n+0}') == 6 ]] || exit 1
+  [[ $(printf '%s\n' "$listing" |
+    awk '/^input::mintclaw_native_keyboard::native::.*: test$/ {n++} END {print n+0}') == 33 ]] || exit 1
+  [[ $(printf '%s\n' "$listing" |
+    awk '/^input::mintclaw_native_keyboard::history::tests::.*: test$/ {n++} END {print n+0}') == 8 ]] || exit 1
   [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::qualification::.*: test$/ {n++} END {print n+0}') == 1 ]] || exit 1
   "$probe_path" input::mintclaw_native_x11_io::tests:: --test-threads=1
   "$probe_path" input::mintclaw_native_keyboard::history::tests:: --test-threads=1
