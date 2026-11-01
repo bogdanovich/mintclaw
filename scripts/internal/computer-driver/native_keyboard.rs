@@ -1,7 +1,8 @@
 //! Private native keyboard engine under construction; not an admitted host.
 //!
-//! One action owns one MPX pair and two original transports. Only the input
-//! transport issues key events. The retained control transport kills that
+//! One action owns one MPX pair, two active original transports and a dormant
+//! death-fenced cleanup transport. Only the input transport issues key events.
+//! The retained control transport kills that
 //! exact input client and removes only the original pair during cleanup.
 //! The caller must keep its host desktop lease until cleanup is confirmed.
 //! Neither protocol acknowledgement nor removal proves an application effect.
@@ -17,6 +18,7 @@ use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::res::ConnectionExt as _;
 use x11rb::protocol::xfixes::ConnectionExt as _;
 use x11rb::protocol::xinput::ConnectionExt as _;
+use x11rb::protocol::xkb::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{self, ConnectionExt as _};
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::protocol::{Event, res, xfixes, xinput};
@@ -329,6 +331,58 @@ impl Pair {
     }
 }
 
+/// Repeat is a device control, not a per-edge host permission. This guard
+/// changes only the newly owned master and its sole original XTEST slave.
+/// It does not establish grab routing or a complete window-isolation profile.
+struct NativeRepeatGuard;
+
+impl NativeRepeatGuard {
+    fn configure(endpoint: &Endpoint, pair: &Pair) -> Result<()> {
+        let connection = &endpoint.connection;
+        if !checked(checked(connection.xkb_use_extension(1, 0))?.reply())?.supported {
+            return Err(unavailable());
+        }
+        for device in [pair.keyboard, pair.slave] {
+            checked(checked(connection.xkb_set_controls(
+                u16::from(device),
+                0u8.into(), 0u8.into(), 0u8.into(), 0u8.into(),
+                0u16.into(), 0u16.into(), 0u16.into(), 0u16.into(), 0, 0, 0u16.into(),
+                xkb::BoolCtrl::REPEAT_KEYS, 0u32.into(), xkb::Control::CONTROLS_ENABLED,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0u32.into(), 0u32.into(), 0u16.into(), 0u16.into(), &[0; 32],
+            ))?.check())?;
+        }
+        Self::check(endpoint, pair)
+    }
+
+    fn subscribe(endpoint: &Endpoint, pair: &Pair) -> Result<()> {
+        let connection = &endpoint.connection;
+        if !checked(checked(connection.xkb_use_extension(1, 0))?.reply())?.supported {
+            return Err(unavailable());
+        }
+        for device in [pair.keyboard, pair.slave] {
+            checked(checked(connection.xkb_select_events(
+                u16::from(device), 0u16.into(), xkb::EventType::CONTROLS_NOTIFY,
+                0u16.into(), 0u16.into(), &xkb::SelectEventsAux::default(),
+            ))?.check())?;
+        }
+        Self::check(endpoint, pair)
+    }
+
+    fn check(endpoint: &Endpoint, pair: &Pair) -> Result<()> {
+        for device in [pair.keyboard, pair.slave] {
+            let controls = checked(checked(endpoint.connection.xkb_get_controls(u16::from(device)))?.reply())?;
+            let repeat = u32::from(xkb::BoolCtrl::REPEAT_KEYS);
+            if controls.device_id != device || u32::from(controls.enabled_controls) & repeat != 0
+                || u32::from(controls.access_x_timeout_mask) & u32::from(controls.access_x_timeout_values) & repeat != 0
+            {
+                return Err(unavailable());
+            }
+        }
+        Ok(())
+    }
+}
+
 struct Watch {
     target_good: bool,
     pair_good: bool,
@@ -393,6 +447,11 @@ impl Watch {
                             self.pair_good = false;
                         }
                     }
+                }
+                Event::XkbControlsNotify(event) if [pair.keyboard, pair.slave].contains(&event.device_id) => {
+                    // Restoration cannot resurrect a lost admission. This
+                    // stops input but does not invalidate pair cleanup identity.
+                    self.target_good = false;
                 }
                 _ => (),
             }
@@ -663,6 +722,9 @@ impl PreparedKeeper {
         keeper.control.transaction(deadline, || {
             keeper.authority.check(&keeper.control)?;
             keeper.pair.check(&keeper.control)?;
+            // Construct the owner first: an uncertain/refused device-control
+            // write must still use the original retained cleanup identity.
+            NativeRepeatGuard::configure(&keeper.control, &keeper.pair)?;
             keeper.watch.drain(&keeper.control, &keeper.authority, &keeper.pair, keeper.input_token, true)?;
             if !keeper.watch.target_good || !keeper.watch.pair_good {
                 return Err(unavailable());
@@ -857,6 +919,7 @@ impl PreparedInput {
         let event_base = self.input.transaction(deadline, || {
             self.authority.check(&self.input)?;
             pair.check(&self.input)?;
+            NativeRepeatGuard::subscribe(&self.input, &pair)?;
             watch.drain(&self.input, &self.authority, &pair, self.input_token, true)?;
             if !watch.target_good || !watch.pair_good {
                 return Err(unavailable());
@@ -1078,6 +1141,7 @@ impl InputWorker {
         let result = self.input.transaction(deadline, || {
             self.input_authority.check(&self.input)?;
             self.pair.check(&self.input)?;
+            NativeRepeatGuard::check(&self.input, &self.pair)?;
             let focus = checked(checked(self.input.connection.xinput_get_device_focus(self.pair.keyboard))?.reply())?;
             self.input_watch.drain(&self.input, &self.input_authority, &self.pair, self.input_token, false)?;
             if !self.input_watch.target_good
@@ -1494,6 +1558,34 @@ mod native {
         drop(fixture.session());
         assert!(fixture.events().is_empty());
         fixture.remains();
+    }
+
+    #[test]
+    #[ignore = "explicit disposable Xvfb with attested PID and private cookie only"]
+    fn private_repeat_change_and_restoration_do_not_resurrect_admission() {
+        for slave in [false, true] {
+            let fixture = Fixture::new();
+            let session = fixture.session();
+            fixture.endpoint.transaction(deadline(), || {
+                let connection = &fixture.endpoint.connection;
+                checked(checked(connection.xkb_use_extension(1, 0))?.reply())?;
+                let device = if slave { session.pair.slave } else { session.pair.keyboard };
+                checked(checked(connection.xkb_set_controls(
+                    u16::from(device),
+                    0u8.into(), 0u8.into(), 0u8.into(), 0u8.into(),
+                    0u16.into(), 0u16.into(), 0u16.into(), 0u16.into(), 0, 0, 0u16.into(),
+                    xkb::BoolCtrl::REPEAT_KEYS, xkb::BoolCtrl::REPEAT_KEYS, xkb::Control::CONTROLS_ENABLED,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0u32.into(), 0u32.into(), 0u16.into(), 0u16.into(), &[0; 32],
+                ))?.check())?;
+                NativeRepeatGuard::configure(&fixture.endpoint, &session.pair)?;
+                session.pair.check(&fixture.endpoint)
+            }).unwrap();
+            let receipt = session.run(&[vec![fixture.key]], deadline());
+            assert!(!receipt.dispatched && !receipt.acknowledged && receipt.cleanup_confirmed, "{receipt:?}");
+            assert!(fixture.events().is_empty());
+            fixture.remains();
+        }
     }
 
     #[test]

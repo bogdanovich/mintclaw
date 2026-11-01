@@ -40,9 +40,9 @@ def signal_owned_input(keeper, executable, signum):
         raise
 
 
-def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cleanup_observed):
+def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cleanup_observed, late_grab=None):
     allowed = {"normal", "cancel_held", "crash_held", "blocked_stop", "foreign_stop", "duplicate_permit", "wire_loss",
-               "keeper_crash_held", "group_term_held"}
+               "keeper_crash_held", "group_term_held", "late_grab_repeat"}
     if mode not in allowed:
         raise RuntimeError("unknown private qualification mode")
     operation = list(secrets.token_bytes(32))
@@ -95,7 +95,17 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
                     keyboard = data["keyboard"]
                 elif kind == "edge":
                     ordinal, held = data["ordinal"], data["held"]
-                    if not injected and mode in {"cancel_held", "crash_held", "blocked_stop", "wire_loss",
+                    if mode == "late_grab_repeat" and held:
+                        if injected or late_grab is None:
+                            raise RuntimeError("late-grab fixture phase unavailable")
+                        injected = True
+                        late_grab()
+                        # No further Continue is sent. Native server repeat
+                        # would bypass every per-edge host/generation fence.
+                        pump(0.9)
+                        cancelled_at = time.monotonic()
+                        send("stop", operation=operation)
+                    elif not injected and mode in {"cancel_held", "crash_held", "blocked_stop", "wire_loss",
                                                  "keeper_crash_held", "group_term_held"} and held:
                         injected = True
                         if mode in {"keeper_crash_held", "group_term_held"}:
@@ -190,7 +200,7 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
             normal = mode in {"normal", "foreign_stop", "duplicate_permit"}
             if result["acknowledged"] != normal:
                 raise RuntimeError("native acknowledgement outcome mismatch")
-            if mode in {"cancel_held", "blocked_stop"}:
+            if mode in {"cancel_held", "blocked_stop", "late_grab_repeat"}:
                 if not result["canceled"] or not result["cancellation_delivered"]:
                     raise RuntimeError("scoped stop was not delivered")
                 if time.monotonic() - cancelled_at > 1:

@@ -26,6 +26,55 @@ class DeviceInfo(C.Structure):
                 ("num_classes", C.c_int), ("classes", C.c_void_p)]
 
 
+class GenericCookie(C.Structure):
+    _fields_ = [("type", C.c_int), ("serial", C.c_ulong), ("send_event", C.c_int),
+                ("display", C.c_void_p), ("extension", C.c_int), ("evtype", C.c_int),
+                ("cookie", C.c_uint), ("data", C.c_void_p)]
+
+
+class NativeEvent(C.Union):
+    _fields_ = [("cookie", GenericCookie), ("pad", C.c_long * 24)]
+
+
+class XIKeyPrefix(C.Structure):
+    _fields_ = [("type", C.c_int), ("serial", C.c_ulong), ("send_event", C.c_int),
+                ("display", C.c_void_p), ("extension", C.c_int), ("evtype", C.c_int),
+                ("time", C.c_ulong), ("deviceid", C.c_int), ("sourceid", C.c_int), ("detail", C.c_int),
+                ("root", C.c_ulong), ("event", C.c_ulong), ("child", C.c_ulong)]
+
+
+class XIEventMask(C.Structure):
+    _fields_ = [("deviceid", C.c_int), ("mask_len", C.c_int), ("mask", C.POINTER(C.c_ubyte))]
+
+
+class XIGrabModifiers(C.Structure):
+    _fields_ = [("modifiers", C.c_int), ("status", C.c_int)]
+
+
+# Public XKBstr.h layouts. A separate original Xlib client observes controls;
+# neither the input worker's ACK nor its claimed settings are the oracle.
+class XkbMods(C.Structure):
+    _fields_ = [("mask", C.c_ubyte), ("real_mods", C.c_ubyte), ("vmods", C.c_ushort)]
+
+
+class XkbControls(C.Structure):
+    _fields_ = [("mk_dflt_btn", C.c_ubyte), ("num_groups", C.c_ubyte), ("groups_wrap", C.c_ubyte),
+                ("internal", XkbMods), ("ignore_lock", XkbMods), ("enabled_ctrls", C.c_uint)] + [
+                    (name, C.c_short if name == "mk_curve" else C.c_ushort) for name in (
+                        "repeat_delay", "repeat_interval", "slow_keys_delay", "debounce_delay", "mk_delay",
+                        "mk_interval", "mk_time_to_max", "mk_max_speed", "mk_curve", "ax_options", "ax_timeout",
+                        "axt_opts_mask", "axt_opts_values")] + [
+                ("axt_ctrls_mask", C.c_uint), ("axt_ctrls_values", C.c_uint),
+                ("per_key_repeat", C.c_ubyte * 32)]
+
+
+class XkbDesc(C.Structure):
+    _fields_ = [("dpy", C.c_void_p), ("flags", C.c_ushort), ("device_spec", C.c_ushort),
+                ("min_key_code", C.c_ubyte), ("max_key_code", C.c_ubyte),
+                ("ctrls", C.POINTER(XkbControls))] + [
+                    (name, C.c_void_p) for name in ("server", "map", "indicators", "names", "compat", "geom")]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", type=Path, required=True)
@@ -84,6 +133,26 @@ def main():
             finally:
                 free(values)
 
+        def keyboard_controls(device):
+            description = bind(x, "XkbAllocKeyboard", C.POINTER(XkbDesc))()
+            if not description:
+                raise RuntimeError("independent keyboard description allocation failed")
+            try:
+                description.contents.device_spec = device
+                status = bind(x, "XkbGetControls", integer, ptr, C.c_ulong, C.POINTER(XkbDesc))(
+                    opened, 0xf8001fff, description)
+                if status != 0 or not description.contents.ctrls:
+                    raise RuntimeError("independent device controls query failed")
+                controls = description.contents.ctrls.contents
+                result = {}
+                for name, _ in XkbControls._fields_:
+                    value = getattr(controls, name)
+                    result[name] = ([value.mask, value.real_mods, value.vmods] if isinstance(value, XkbMods)
+                                    else list(value) if name == "per_key_repeat" else value)
+                return result
+            finally:
+                bind(x, "XkbFreeKeyboard", None, C.POINTER(XkbDesc), C.c_uint, integer)(description, 0, 1)
+
         def pump(seconds=0.1):
             context = GLib.MainContext.default()
             until = time.monotonic() + seconds
@@ -126,6 +195,10 @@ def main():
             entries[0].select_region(len(prefix), len(prefix))
             entries[0].set_position(len(prefix))
             original = devices()
+            original_controls = {device: keyboard_controls(device) for device in
+                                 [256] + [item[0] for item in original if item[2] in {2, 4}]}
+            if not any(value["enabled_ctrls"] & 1 for value in original_controls.values()):
+                raise RuntimeError("fixture must retain an originally repeating keyboard")
             chords = []
 
             def keys(*symbols):
@@ -150,10 +223,36 @@ def main():
                     raise RuntimeError("explicit private process artifact identity mismatch")
                 from native_keyboard_process_fixture import run
 
+                admitted_controls, grab_events = {}, []
+                late_grab_installed = False
+
+                def late_grab():
+                    nonlocal late_grab_installed
+                    bits = (C.c_ubyte * 1)((1 << 2) | (1 << 3))
+                    mask = XIEventMask(1, 1, bits)
+                    modifiers = XIGrabModifiers(C.c_int(1 << 31).value, 0)
+                    result = bind(xi, "XIGrabKeycode", integer, ptr, integer, integer, window, integer, integer,
+                                  integer, C.POINTER(XIEventMask), integer, C.POINTER(XIGrabModifiers))(
+                                      opened, 1, code(opened, ord("a")), root, 1, 1, 0,
+                                      C.byref(mask), 1, C.byref(modifiers))
+                    sync(opened, 0)
+                    if result != 0 or modifiers.status != 0:
+                        raise RuntimeError("owned all-master passive XI2 grab refused")
+                    late_grab_installed = True
+
                 def process_ready(keyboard):
                     known = Gdk.Display.get_default().get_device_manager().list_devices(Gdk.DeviceType.MASTER)
                     if not any(device.get_property("device-id") == keyboard for device in known):
                         return False
+                    owned = [item[0] for item in devices() if item[0] == keyboard
+                             or (item[2] == 4 and item[3] == keyboard)]
+                    if len(owned) != 2:
+                        raise RuntimeError("expected exact original private master and slave")
+                    admitted_controls.update({device: keyboard_controls(device) for device in owned})
+                    if any(value["enabled_ctrls"] & 1 for value in admitted_controls.values()):
+                        raise RuntimeError("private keyboard still admits autonomous repeat")
+                    if original_controls != {device: keyboard_controls(device) for device in original_controls}:
+                        raise RuntimeError("private setup changed original keyboard controls")
                     if (entries[0].get_position() != len(prefix) or entries[0].get_selection_bounds()
                             or entries[0].get_text() != prefix + suffix):
                         raise RuntimeError("process admission changed the original fixture caret")
@@ -175,7 +274,32 @@ def main():
                                "server": {"pid": int(os.environ["MINTCLAW_PRIVATE_XVFB_PID"]),
                                           "uid": os.getuid(), "root": root}},
                               {"window": target, "pid": os.getpid(), "lease_window": token,
-                               "lease_pid": os.getpid()}, chords, pump, process_ready, process_observed, cleanup_observed)
+                               "lease_pid": os.getpid()}, chords, pump, process_ready, process_observed, cleanup_observed,
+                              late_grab if args.process_mode == "late_grab_repeat" else None)
+                if args.process_mode == "late_grab_repeat":
+                    pending = bind(x, "XPending", integer, ptr)
+                    next_event = bind(x, "XNextEvent", integer, ptr, C.POINTER(NativeEvent))
+                    sync(opened, 0)
+                    while pending(opened):
+                        packet = NativeEvent()
+                        next_event(opened, C.byref(packet))
+                        if packet.cookie.type != 35 or packet.cookie.evtype not in {2, 3}:
+                            continue
+                        loaded = bind(x, "XGetEventData", integer, ptr, C.POINTER(GenericCookie))(
+                            opened, C.byref(packet.cookie))
+                        if not loaded or not packet.cookie.data:
+                            raise RuntimeError("grabbed XI2 event cookie unavailable")
+                        try:
+                            value = C.cast(packet.cookie.data, C.POINTER(XIKeyPrefix)).contents
+                            grab_events.append({"type": value.evtype, "window": value.event,
+                                                "native": not bool(value.send_event), "keycode": value.detail,
+                                                "device": value.deviceid, "source": value.sourceid})
+                        finally:
+                            bind(x, "XFreeEventData", None, ptr, C.POINTER(GenericCookie))(
+                                opened, C.byref(packet.cookie))
+                    with (args.output / "grab-measurement.json").open("x") as handle:
+                        json.dump({"root": root, "original_target": target, "grab_events": grab_events,
+                                   "target_text": entries[0].get_text(), "outcome": outcome}, handle, sort_keys=True)
                 if args.process_mode in {"keeper_crash_held", "group_term_held"}:
                     # Wait past several server autorepeat periods. A removed
                     # process/closed socket alone did not stop this regression.
@@ -189,7 +313,16 @@ def main():
                           "guard_unchanged": entries[1].get_text() == "GUARD_UNCHANGED",
                           "core_focus_unchanged": focus.value == guard,
                           "original_windows_live": all(app.get_visible() for app in windows),
-                          "original_devices_preserved_and_pair_absent": devices() == original}
+                          "original_devices_preserved_and_pair_absent": devices() == original,
+                          "original_keyboard_controls_preserved": original_controls == {
+                              device: keyboard_controls(device) for device in original_controls},
+                          "private_repeat_disabled_at_admission": len(admitted_controls) == 2 and all(
+                              not (value["enabled_ctrls"] & 1) for value in admitted_controls.values())}
+                if args.process_mode == "late_grab_repeat":
+                    checks["late_grab_actually_installed"] = late_grab_installed
+                    checks["no_key_to_grabbing_client"] = not grab_events
+                with (args.output / "controls-measurement.json").open("x") as handle:
+                    json.dump({"original": original_controls, "admitted_owned": admitted_controls}, handle, sort_keys=True)
                 with (args.output / "process-result.json").open("x") as handle:
                     json.dump({"checks": checks, "outcome": outcome}, handle, sort_keys=True)
                 if not all(checks.values()):
