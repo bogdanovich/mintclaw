@@ -7,12 +7,17 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
 	onepassword "github.com/1password/onepassword-sdk-go"
 	"golang.org/x/net/publicsuffix"
 )
+
+// Metadata listing may need to refresh an idle SDK connection. Include queueing
+// in this budget without extending the timeout for private field retrieval.
+const discoveryTimeout = 45 * time.Second
 
 // DiscoveryQuery searches item overviews. A website match suggests candidates;
 // it never grants value access or authorizes a consumer by itself.
@@ -58,7 +63,7 @@ func (provider Provider) FindLogins(ctx context.Context, vaultID string, query D
 	if !ok {
 		return nil, ErrUnavailable
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, providerTimeout)
+	requestCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
 	defer cancel()
 	defer runtime.KeepAlive(provider.client)
 	select {
@@ -92,7 +97,7 @@ func findLogins(ctx context.Context, items itemLister, vaultID string,
 			return nil, ErrUnavailable
 		}
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, providerTimeout)
+	requestCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
 	defer cancel()
 	overviews, err := items.List(requestCtx, vaultID)
 	if err != nil || requestCtx.Err() != nil || len(overviews) > 4096 {

@@ -70,6 +70,14 @@ reads no password or TOTP. It confirms access under the operator's configured
 mode: automatic scoped access, or a phone approval when required. Metadata
 discovery alone does not establish authorization or prove login.
 
+`discover` returning `not_found` means a completed lookup found no matching Login.
+`unavailable` means the lookup could not complete, including a timeout; it is
+not evidence that the Login is missing. For a failed `discover`, observe fresh
+state and repeat metadata discovery once. If it remains unavailable, report
+the lookup failure and follow normal cleanup or the user's preservation request.
+This metadata recovery does not authorize repeating credentials, TOTP, or an
+uncertain private submission.
+
 Complete authorization before asking the owner to solve a challenge or handing
 off through RustDesk. If phone approval suspends the task, the idle browser is
 closed; after approval open a fresh session in the selected rendering profile
