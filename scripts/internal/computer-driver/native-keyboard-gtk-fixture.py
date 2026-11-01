@@ -13,17 +13,13 @@ import struct
 import subprocess
 import time
 
+from native_state_oracle import DeviceInfo, key_state, window_viewable
+
 
 def bind(library, name, result, *arguments):
     function = getattr(library, name)
     function.restype, function.argtypes = result, list(arguments)
     return function
-
-
-class DeviceInfo(C.Structure):
-    _fields_ = [("deviceid", C.c_int), ("name", C.c_char_p), ("use", C.c_int),
-                ("attachment", C.c_int), ("enabled", C.c_int),
-                ("num_classes", C.c_int), ("classes", C.c_void_p)]
 
 
 class GenericCookie(C.Structure):
@@ -128,7 +124,7 @@ def main():
             if not values:
                 raise RuntimeError("private device query unavailable")
             try:
-                return sorted((value.deviceid, value.name.decode(), getattr(value, "use"), value.attachment)
+                return sorted((value.deviceid, value.name.decode(), getattr(value, "use"), value.attachment, bool(value.enabled))
                               for value in values[:count.value])
             finally:
                 free(values)
@@ -224,6 +220,7 @@ def main():
                 from native_keyboard_process_fixture import run
 
                 admitted_controls, grab_events = {}, []
+                admitted_devices = []
                 late_grab_installed = False
 
                 def late_grab():
@@ -241,10 +238,18 @@ def main():
                     late_grab_installed = True
 
                 def process_ready(keyboard):
+                    nonlocal admitted_devices
                     known = Gdk.Display.get_default().get_device_manager().list_devices(Gdk.DeviceType.MASTER)
                     if not any(device.get_property("device-id") == keyboard for device in known):
                         return False
-                    owned = [item[0] for item in devices() if item[0] == keyboard
+                    current = devices()
+                    snapshot = [item for item in current if item[0] not in {item[0] for item in original}]
+                    if (len(snapshot) != 4 or any(item not in current for item in original)
+                            or any(not item[4] for item in snapshot)
+                            or admitted_devices and snapshot != admitted_devices):
+                        raise RuntimeError("original device identities or retained pair changed")
+                    admitted_devices = snapshot
+                    owned = [item[0] for item in snapshot if item[0] == keyboard
                              or (item[2] == 4 and item[3] == keyboard)]
                     if len(owned) != 2:
                         raise RuntimeError("expected exact original private master and slave")
@@ -262,11 +267,23 @@ def main():
                     return (entries[0].get_text().encode() == (prefix + text + suffix).encode()
                             and entries[1].get_text() == "GUARD_UNCHANGED")
 
+                def retained_identity():
+                    return (len(admitted_devices) == 4
+                            and devices() == sorted(original + admitted_devices))
+
+                def independently_clear():
+                    keyboards = [item[0] for item in admitted_devices if item[2] in {2, 4}]
+                    return len(keyboards) == 2 and all(not any(key_state(xi, opened, device)) for device in keyboards)
+
+                def native_windows_live():
+                    return all(window_viewable(x, opened, item, root) for item in [target, guard])
+
                 def cleanup_observed(cleaned):
-                    current_devices = devices()
+                    keyboards = [item[0] for item in admitted_devices if item[2] in {2, 4}]
+                    held = len(keyboards) == 2 and all(any(key_state(xi, opened, device)) for device in keyboards)
                     return (entries[0].get_text() == prefix + "a" + suffix
-                            and entries[1].get_text() == "GUARD_UNCHANGED"
-                            and (current_devices == original if cleaned else len(current_devices) == len(original) + 4))
+                            and entries[1].get_text() == "GUARD_UNCHANGED" and retained_identity()
+                            and native_windows_live() and (independently_clear() if cleaned else held))
 
                 outcome = run(executable, args.process_mode,
                               {"socket": f"/tmp/.X11-unix/X{os.environ['MINTCLAW_PRIVATE_X_DISPLAY_NUMBER']}",
@@ -313,7 +330,9 @@ def main():
                           "guard_unchanged": entries[1].get_text() == "GUARD_UNCHANGED",
                           "core_focus_unchanged": focus.value == guard,
                           "original_windows_live": all(app.get_visible() for app in windows),
-                          "original_devices_preserved_and_pair_absent": devices() == original,
+                          "original_devices_preserved_and_pair_retained": retained_identity(),
+                          "native_master_and_slave_keys_clear": independently_clear(),
+                          "native_original_windows_viewable": native_windows_live(),
                           "original_keyboard_controls_preserved": original_controls == {
                               device: keyboard_controls(device) for device in original_controls},
                           "private_repeat_disabled_at_admission": len(admitted_controls) == 2 and all(

@@ -45,10 +45,12 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
                "keeper_crash_held", "group_term_held", "late_grab_repeat"}
     if mode not in allowed:
         raise RuntimeError("unknown private qualification mode")
-    operation = list(secrets.token_bytes(32))
+    channel = list(secrets.token_bytes(32))
+    operation = {"channel": channel, "generation": 1, "nonce": list(secrets.token_bytes(32))}
     parent, child = socket.socketpair()
     keeper = subprocess.Popen([str(executable), "--keeper"], stdin=child, stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+                              stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True,
+                              env={"CUA_TELEMETRY": "0", "DO_NOT_TRACK": "1"})
     child.close()
     buffer = bytearray()
     result, keyboard, pending_ordinal = None, None, None
@@ -65,7 +67,7 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
 
     try:
         parent.settimeout(1)
-        send("start", operation=operation, bootstrap=bootstrap, binding=binding, chords=chords, budget_ms=10000)
+        send("open", channel=channel, bootstrap=bootstrap, budget_ms=30000)
         until = time.monotonic() + 20
         while time.monotonic() < until:
             pump(0.0001)
@@ -85,6 +87,11 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
                 packet = json.loads(buffer[4:length + 4])
                 del buffer[:length + 4]
                 kind, data = packet["kind"], packet.get("data", {})
+                if kind == "opened":
+                    if data != {"channel": channel}:
+                        raise RuntimeError("foreign channel open receipt")
+                    send("start", operation=operation, binding=binding, chords=chords, budget_ms=10000)
+                    continue
                 if kind != "rejected" and data.get("operation") != operation:
                     raise RuntimeError("foreign private result")
                 if kind == "prepared":
@@ -146,8 +153,8 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
                     elif not injected and mode == "foreign_stop":
                         injected = True
                         pending_ordinal = ordinal
-                        foreign = operation.copy()
-                        foreign[0] ^= 1
+                        foreign = dict(operation)
+                        foreign["generation"] = 0
                         send("stop", operation=foreign)
                     elif not injected and mode == "duplicate_permit" and ordinal > 0:
                         injected = True
@@ -184,18 +191,45 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
                         continue
                     # Native/app observations do not manufacture the receipt
                     # lost with the keeper. The real host must retain UNKNOWN.
-                    result = {"controller_loss": mode, "host_outcome": "unknown", "native_cleanup_observed": True}
+                    result = {"controller_loss": mode, "host_outcome": "unknown", "native_quiescence_observed": True,
+                              "resource_disposition": "unverified_retained"}
                 else:
                     result = {"wire_loss": True}
                 break
         if result is None:
             raise RuntimeError("private process qualification deadline")
+        completion_latency = None if cancelled_at is None else time.monotonic() - cancelled_at
+        if not lost_wire:
+            # Action completion is not channel shutdown or device disposal.
+            if not result["input_quiescent"] or result["resource_disposition"] != "retained":
+                raise RuntimeError("native action did not confirm quiescence with retained resources")
+            send("close", channel=channel)
+            close_deadline = time.monotonic() + 2
+            closed = None
+            while time.monotonic() < close_deadline:
+                pump(0.0001)
+                if select.select([parent], [], [], 0.01)[0]:
+                    chunk = parent.recv(65536)
+                    if not chunk:
+                        raise RuntimeError("channel ended before its close receipt")
+                    buffer.extend(chunk)
+                if len(buffer) >= 4:
+                    length = struct.unpack(">I", buffer[:4])[0]
+                    if not 0 < length <= 65536:
+                        raise RuntimeError("close response frame bound")
+                    if len(buffer) >= length + 4:
+                        closed = json.loads(buffer[4:length+4])
+                        del buffer[:length+4]
+                        break
+            if closed != {"kind": "closed", "data": {
+                    "channel": channel, "resource_disposition": "unverified_retained"}}:
+                raise RuntimeError("channel close fabricated disposal or foreign metadata")
         keeper.wait(timeout=2)
         expected_exit = -signal.SIGKILL if mode == "keeper_crash_held" else 1
         if lost_wire and keeper.returncode != expected_exit:
             raise RuntimeError("lost-wire outcome must remain unconfirmed to its caller")
         if not lost_wire:
-            if keeper.returncode != 0 or not result["cleanup_confirmed"]:
+            if keeper.returncode != 0 or not result["input_quiescent"]:
                 raise RuntimeError("private keeper did not independently confirm cleanup")
             normal = mode in {"normal", "foreign_stop", "duplicate_permit"}
             if result["acknowledged"] != normal:
@@ -209,7 +243,7 @@ def run(executable, mode, bootstrap, binding, chords, pump, ready, observed, cle
                 raise RuntimeError("stale/foreign control was not rejected exactly once")
         if mode != "normal" and not injected:
             raise RuntimeError("private adversarial case did not run")
-        return {"mode": mode, "cancel_latency_seconds": None if cancelled_at is None else time.monotonic() - cancelled_at,
+        return {"mode": mode, "cancel_latency_seconds": completion_latency,
                 "metadata": result, "full_native_driver_qualified": False}
     finally:
         if fault_descriptor is not None:

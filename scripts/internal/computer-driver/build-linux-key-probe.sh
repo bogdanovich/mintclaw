@@ -74,7 +74,7 @@ if [[ "$candidate" == native-keyboard ]]; then
   cargo +1.97.1 test --locked --release -p platform-linux --bin mintclaw-private-keyboard \
     --target x86_64-unknown-linux-gnu --features "$features" wire_tests:: -- --test-threads=1
   [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_x11_io::tests::.*: test$/ {n++} END {print n+0}') == 9 ]] || exit 1
-  [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::native::.*: test$/ {n++} END {print n+0}') == 12 ]] || exit 1
+  [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::native::.*: test$/ {n++} END {print n+0}') == 13 ]] || exit 1
   [[ $(printf '%s\n' "$listing" | awk '/^input::mintclaw_native_keyboard::qualification::.*: test$/ {n++} END {print n+0}') == 1 ]] || exit 1
   "$probe_path" input::mintclaw_native_x11_io::tests:: --test-threads=1
   [[ $(sha256sum "$native_module_path" | cut -d ' ' -f 1) == "$native_module_sha" ]] || exit 1
@@ -104,7 +104,8 @@ install -m 600 "$source_dir/libs/cua-driver/rust/THIRD_PARTY_NOTICES.md" "$outpu
   if [[ "$candidate" == native-keyboard ]]; then
     sha256sum "$helper_dir/native-keyboard.patch" "$helper_dir/native_x11_io.rs" \
       "$helper_dir/native_keyboard.rs" "$helper_dir/native_keyboard_qualification.rs"
-    sha256sum "$helper_dir/native-keyboard-fixture.py" "$helper_dir/native-keyboard-gtk-fixture.py"
+    sha256sum "$helper_dir/native-keyboard-fixture.py" "$helper_dir/native-keyboard-gtk-fixture.py" \
+      "$helper_dir/native_state_oracle.py"
     sha256sum "$helper_dir/native_keyboard_worker.rs" "$helper_dir/native_keyboard_process_fixture.py" \
       "$output_dir/native-keyboard-worker"
   fi

@@ -17,13 +17,21 @@ use std::time::{Duration, Instant};
 
 use mintclaw_native_keyboard::{
     BackupCleanup, Binding, Endpoint, InputIdentity, Keeper, PairWitness, PreparedInput,
-    PreparedKeeper, ServerIdentity,
+    PreparedKeeper, ServerIdentity, is_quarantined,
 };
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 type Result<T> = io::Result<T>;
-type Operation = [u8; 32];
+type Channel = [u8; 32];
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Operation {
+    channel: Channel,
+    generation: u64,
+    nonce: [u8; 32],
+}
 const MAX_FRAME: usize = 65536;
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -128,7 +136,6 @@ impl Drop for Chords {
 #[serde(deny_unknown_fields)]
 struct Start {
     operation: Operation,
-    bootstrap: Bootstrap,
     binding: Binding,
     chords: Chords,
     budget_ms: u32,
@@ -142,6 +149,8 @@ struct Start {
     rename_all = "snake_case"
 )]
 enum HostMessage {
+    Open { channel: Channel, bootstrap: Bootstrap, budget_ms: u32 },
+    Close { channel: Channel },
     Start(Start),
     Grant { operation: Operation },
     Ready { operation: Operation },
@@ -151,14 +160,15 @@ enum HostMessage {
 }
 
 impl HostMessage {
-    fn operation(&self) -> Operation {
+    fn operation(&self) -> Option<Operation> {
         match self {
-            Self::Start(start) => start.operation,
+            Self::Open { .. } | Self::Close { .. } => None,
+            Self::Start(start) => Some(start.operation),
             Self::Grant { operation }
             | Self::Ready { operation }
             | Self::Continue { operation, .. }
             | Self::Finish { operation }
-            | Self::Stop { operation } => *operation,
+            | Self::Stop { operation } => Some(*operation),
         }
     }
 }
@@ -171,6 +181,9 @@ impl HostMessage {
     rename_all = "snake_case"
 )]
 enum HostReply {
+    Opened { channel: Channel },
+    Closed { channel: Channel, resource_disposition: ResourceDisposition },
+    Quarantined { operation: Operation },
     Prepared {
         operation: Operation,
     },
@@ -191,9 +204,18 @@ enum HostReply {
         acknowledged: bool,
         canceled: bool,
         cancellation_delivered: bool,
-        cleanup_confirmed: bool,
+        input_quiescent: bool,
+        resource_disposition: ResourceDisposition,
     },
     Rejected,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ResourceDisposition {
+    NotCreated,
+    Retained,
+    UnverifiedRetained,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -602,7 +624,7 @@ fn permit(
     for _ in 0..256 {
         let packet: HostMessage = host.receive(deadline)?;
         // An old/foreign cancellation or ordinal never stops another action.
-        if packet.operation() == operation {
+        if packet.operation() == Some(operation) {
             match (&packet, &expected) {
                 (HostMessage::Stop { .. }, _) => return Ok(false),
                 (HostMessage::Grant { .. }, Permit::Grant)
@@ -714,101 +736,158 @@ fn active(
     permit(host, operation, Permit::Finish, timeout(5, overall))
 }
 
-fn supervise(mut host: Wire, parent: u32, overall: Instant) -> Result<()> {
-    let HostMessage::Start(start) = host.receive(timeout(3, overall))? else {
-        return Err(refused());
-    };
-    if start.binding.lease_pid != parent
-        || start.operation == [0; 32]
-        || start.budget_ms == 0
-        || start.budget_ms > 10000
-        || start.chords.0.is_empty()
-        || start.chords.0.len() > 256
+fn validate_start(start: &Start, parent: u32) -> Result<()> {
+    if start.binding.lease_pid != parent || start.operation.nonce == [0; 32]
+        || start.budget_ms == 0 || start.budget_ms > 10000
+        || start.chords.0.is_empty() || start.chords.0.len() > 256
         || start.chords.0.iter().any(|chord| {
-            chord.is_empty()
-                || chord.len() > 8
-                || chord
-                    .iter()
-                    .enumerate()
-                    .any(|(index, code)| *code < 8 || chord[..index].contains(code))
+            chord.is_empty() || chord.len() > 8 || chord.iter().enumerate()
+                .any(|(index, code)| *code < 8 || chord[..index].contains(code))
         })
     {
         return Err(refused());
     }
-    let control = start.bootstrap.connect(timeout(3, overall))?;
-    let prepared = PreparedKeeper::prepare(control, start.binding, timeout(3, overall))?;
+    Ok(())
+}
+
+/// One original server connection and resource owner, with fresh child and
+/// authority per action. Protected action payloads drop before every idle wait.
+fn run_action(
+    host: &mut Wire,
+    original: &mut Option<Endpoint>,
+    owner: &mut Option<Keeper>,
+    bootstrap: &Bootstrap,
+    start: Start,
+    overall: Instant,
+) -> Result<bool> {
+    let prepared = if let Some(keeper) = owner.as_mut() {
+        keeper.prepare_action(start.binding, timeout(3, overall))?;
+        None
+    } else {
+        Some(PreparedKeeper::prepare(original.take().ok_or_else(refused)?, start.binding, timeout(3, overall))?)
+    };
+    let token = prepared.as_ref().map(PreparedKeeper::controller_token)
+        .or_else(|| owner.as_ref().map(Keeper::controller_token)).ok_or_else(refused)?;
     let (mut child, mut wire) = OwnedChild::spawn()?;
-    // Protected bootstrap is sent once over the inherited private socket, not
-    // argv/env, model messages, logs or an on-disk task manifest.
-    wire.send(
-        &WorkerMessage::Init {
-            operation: start.operation,
-            bootstrap: Bootstrap {
-                socket: start.bootstrap.socket.clone(),
-                screen: start.bootstrap.screen,
-                auth: start.bootstrap.auth.clone(),
-                server: start.bootstrap.server,
-            },
-            binding: start.binding,
-            budget_ms: start.budget_ms,
-            controller_token: prepared.controller_token(),
+    wire.send(&WorkerMessage::Init {
+        operation: start.operation,
+        bootstrap: Bootstrap {
+            socket: bootstrap.socket.clone(), screen: bootstrap.screen,
+            auth: bootstrap.auth.clone(), server: bootstrap.server,
         },
-        timeout(3, overall),
-    )?;
-    let Some(reply) = wait_worker(&mut host, &mut wire, start.operation, timeout(3, overall))?
-    else {
-        child.stop();
-        return host.send(
-            &HostReply::Complete {
-                operation: start.operation,
-                acknowledged: false,
-                canceled: true,
-                cancellation_delivered: false,
-                cleanup_confirmed: false,
-            },
-            timeout(3, overall),
-        );
+        binding: start.binding, budget_ms: start.budget_ms, controller_token: token,
+    }, timeout(3, overall))?;
+    let reply = wait_worker(host, &mut wire, start.operation, timeout(3, overall))?;
+    let identity = match reply {
+        Some(WorkerReply::Prepared { operation, identity }) if operation == start.operation => {
+            host.send(&HostReply::Prepared { operation }, timeout(3, overall))?;
+            if permit(host, operation, Permit::Grant, timeout(5, overall))? { Some(identity) } else { None }
+        }
+        None => None,
+        _ => return Err(refused()),
     };
-    let WorkerReply::Prepared {
-        operation,
-        identity,
-    } = reply
-    else {
-        return Err(refused());
+    let Some(identity) = identity else {
+        let delivered = child.stop();
+        let input_quiescent = if let Some(keeper) = owner.as_mut() {
+            delivered && keeper.cancel_prepared(timeout(3, overall)).is_ok()
+        } else {
+            // No pair, grant, focus or input exists in this initial preparation.
+            true
+        };
+        let resource_disposition = if owner.is_none() {
+            ResourceDisposition::NotCreated
+        } else if input_quiescent {
+            ResourceDisposition::Retained
+        } else {
+            ResourceDisposition::UnverifiedRetained
+        };
+        host.send(&HostReply::Complete {
+            operation: start.operation, acknowledged: false, canceled: true,
+            cancellation_delivered: delivered, input_quiescent, resource_disposition,
+        }, timeout(3, overall))?;
+        // Initial preparation cancellation has allocated no devices. Its
+        // consumed native preparation is terminal; no new socket is substituted.
+        return Ok(input_quiescent && owner.is_some());
     };
-    if operation != start.operation {
-        return Err(refused());
+    if let Some(prepared) = prepared {
+        match prepared.grant(identity, child.process.id(), timeout(3, overall)) {
+            Ok(keeper) => *owner = Some(keeper),
+            Err(error) if is_quarantined(&error) => {
+                child.stop();
+                host.send(&HostReply::Quarantined { operation: start.operation }, timeout(3, overall))?;
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        owner.as_mut().ok_or_else(refused)?.grant_action(identity, child.process.id(), timeout(3, overall))?;
     }
-    host.send(&HostReply::Prepared { operation }, timeout(3, overall))?;
-    // No pair or native focus exists before this original-host epoch fence.
-    if !permit(&mut host, operation, Permit::Grant, timeout(5, overall))? {
-        child.stop();
-        return host.send(
-            &HostReply::Complete {
-                operation,
-                acknowledged: false,
-                canceled: true,
-                cancellation_delivered: false,
-                cleanup_confirmed: false,
-            },
-            timeout(3, overall),
-        );
-    }
-    let mut keeper = prepared.grant(identity, child.process.id(), timeout(3, overall))?;
-    let outcome = active(&mut host, &mut wire, &mut keeper, &start, overall);
+    let keeper = owner.as_mut().ok_or_else(refused)?;
+    let outcome = active(host, &mut wire, keeper, &start, overall);
     let canceled = matches!(outcome, Ok(false));
     let delivered = child.stop();
-    let cleanup_confirmed = keeper.cleanup();
-    host.send(
-        &HostReply::Complete {
-            operation,
-            acknowledged: matches!(outcome, Ok(true)),
-            canceled,
-            cancellation_delivered: canceled && delivered,
-            cleanup_confirmed,
+    let input_quiescent = keeper.quiesce().is_ok();
+    host.send(&HostReply::Complete {
+        operation: start.operation,
+        acknowledged: matches!(outcome, Ok(true)),
+        canceled,
+        cancellation_delivered: canceled && delivered,
+        input_quiescent,
+        resource_disposition: if input_quiescent {
+            ResourceDisposition::Retained
+        } else {
+            ResourceDisposition::UnverifiedRetained
         },
-        timeout(3, overall),
-    )
+    }, timeout(3, overall))?;
+    Ok(input_quiescent)
+}
+
+fn supervise(mut host: Wire, parent: u32, startup: Instant) -> Result<()> {
+    let HostMessage::Open { channel, bootstrap, budget_ms } = host.receive(timeout(3, startup))?
+    else { return Err(refused()) };
+    if channel == [0; 32] || budget_ms == 0 || budget_ms > 3_600_000 {
+        return Err(refused());
+    }
+    let overall = Instant::now() + Duration::from_millis(u64::from(budget_ms));
+    let mut original = Some(bootstrap.connect(timeout(3, overall))?);
+    let mut owner: Option<Keeper> = None;
+    let mut generation = 1u64;
+    let mut completed: Option<Operation> = None;
+    host.send(&HostReply::Opened { channel }, timeout(3, overall))?;
+    loop {
+        let packet: HostMessage = host.receive(overall)?;
+        match packet {
+            HostMessage::Stop { operation } if completed == Some(operation) => {
+                // The caller can cancel while Complete is in flight. This
+                // exact terminal action is already quiescent; acknowledge it
+                // through its existing receipt, without queuing a stray reply.
+            }
+            HostMessage::Close { channel: key } if key == channel => {
+                // Stopping the original resource owner is NOT device disposal.
+                // Devices may remain quarantined on this attached X server.
+                return host.send(&HostReply::Closed {
+                    channel,
+                    resource_disposition: if owner.is_some() {
+                        ResourceDisposition::UnverifiedRetained
+                    } else { ResourceDisposition::NotCreated },
+                }, timeout(3, overall));
+            }
+            HostMessage::Start(start) if start.operation.channel == channel
+                && start.operation.generation == generation =>
+            {
+                validate_start(&start, parent)?;
+                // Stream sequencing is not a second durable replay ledger.
+                // Consume before any uncertain grant; old generations never run.
+                generation = generation.checked_add(1).ok_or_else(refused)?;
+                let operation = start.operation;
+                if !run_action(&mut host, &mut original, &mut owner, &bootstrap, start, overall)? {
+                    return Ok(());
+                }
+                completed = Some(operation);
+            }
+            _ => host.send(&HostReply::Rejected, timeout(3, overall))?,
+        }
+    }
 }
 
 fn main() -> std::process::ExitCode {
@@ -836,6 +915,10 @@ fn main() -> std::process::ExitCode {
 mod wire_tests {
     use super::*;
 
+    fn test_operation(value: u8) -> Operation {
+        Operation { channel: [19; 32], generation: 1, nonce: [value; 32] }
+    }
+
     fn deadline() -> Instant {
         Instant::now() + Duration::from_secs(2)
     }
@@ -855,7 +938,7 @@ mod wire_tests {
     #[test]
     fn fragmented_frame_round_trip() {
         let (mut writer, mut reader) = pair();
-        let operation = [37; 32];
+        let operation = test_operation(37);
         let bytes = serde_json::to_vec(&HostMessage::Continue {
             operation,
             ordinal: 91,
@@ -902,7 +985,7 @@ mod wire_tests {
     #[test]
     fn unknown_envelope_and_phase_fields_are_refused() {
         let packet = serde_json::to_value(HostMessage::Continue {
-            operation: [37; 32],
+            operation: test_operation(37),
             ordinal: 1,
         })
         .unwrap();
@@ -977,7 +1060,7 @@ mod wire_tests {
     fn scoped_stop_interrupts_wait_without_a_worker_reply() {
         let (mut host, mut caller) = pair();
         let (mut worker, _blocked) = pair();
-        let operation = [37; 32];
+        let operation = test_operation(37);
         caller
             .send(&HostMessage::Stop { operation }, deadline())
             .unwrap();
@@ -992,11 +1075,11 @@ mod wire_tests {
     fn foreign_stop_cannot_cancel_the_current_worker() {
         let (mut host, mut caller) = pair();
         let (mut worker, mut child) = pair();
-        let operation = [37; 32];
+        let operation = test_operation(37);
         caller
             .send(
                 &HostMessage::Stop {
-                    operation: [38; 32],
+                    operation: test_operation(38),
                 },
                 deadline(),
             )
@@ -1017,10 +1100,10 @@ mod wire_tests {
     #[test]
     fn permit_requires_current_operation_phase_and_ordinal() {
         let (mut host, mut caller) = pair();
-        let operation = [37; 32];
+        let operation = test_operation(37);
         for packet in [
             HostMessage::Stop {
-                operation: [38; 32],
+                operation: test_operation(38),
             },
             HostMessage::Grant { operation },
             HostMessage::Continue {
@@ -1041,6 +1124,34 @@ mod wire_tests {
                 HostReply::Rejected
             ));
         }
+    }
+
+    #[test]
+    fn reused_nonce_cannot_cross_a_channel_or_action_generation() {
+        let current = test_operation(37);
+        let mut old_generation = current;
+        old_generation.generation = 0;
+        let mut other_channel = current;
+        other_channel.channel = [20; 32];
+        for stale in [old_generation, other_channel] {
+            let (mut host, mut caller) = pair();
+            let (mut worker, mut child) = pair();
+            caller.send(&HostMessage::Stop { operation: stale }, deadline()).unwrap();
+            child.send(&WorkerReply::Begun { operation: current }, deadline()).unwrap();
+            assert!(matches!(wait_worker(&mut host, &mut worker, current, deadline()).unwrap(),
+                Some(WorkerReply::Begun { operation }) if operation == current));
+            assert!(matches!(caller.receive::<HostReply>(deadline()).unwrap(), HostReply::Rejected));
+        }
+    }
+
+    #[test]
+    fn channel_close_does_not_replace_an_active_action_stop() {
+        let current = test_operation(37);
+        let (mut host, mut caller) = pair();
+        caller.send(&HostMessage::Close { channel: current.channel }, deadline()).unwrap();
+        caller.send(&HostMessage::Stop { operation: current }, deadline()).unwrap();
+        assert!(!permit(&mut host, current, Permit::Ready, deadline()).unwrap());
+        assert!(matches!(caller.receive::<HostReply>(deadline()).unwrap(), HostReply::Rejected));
     }
 
     #[test]

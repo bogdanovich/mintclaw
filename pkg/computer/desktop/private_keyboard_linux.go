@@ -2,26 +2,22 @@
 
 package desktop
 
-// This private qualification adapter is absent from ordinary builds. It joins
-// the native backend to an already-retained Go guard/lease; it is not an input
-// host, a model grant, an application-effect oracle or a second replay ledger.
+// Private qualification only: no ordinary input host, model permission or
+// second replay ledger. A desktop channel and an action have separate lifetimes.
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/jezek/xgb/xproto"
 	"golang.org/x/sys/unix"
@@ -31,29 +27,11 @@ import (
 
 const privateKeyboardFrameLimit = 64 * 1024
 
-type privateKeyboardOperation [32]byte
-
-func (operation *privateKeyboardOperation) UnmarshalJSON(raw []byte) error {
-	var values []uint16
-	if len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &values) != nil || len(values) != len(operation) {
-		return computer.ErrUnavailable
-	}
-	for index, value := range values {
-		if value > 255 {
-			return computer.ErrUnavailable
-		}
-		operation[index] = byte(value)
-	}
-	return nil
-}
-
 type privateKeyboardConfig struct {
-	Executable string
-	SHA256     string
-	Window     WindowRequest
-	Identity   WindowIdentity
-	Chords     [][]byte
-	BudgetMS   uint32
+	Window   WindowRequest
+	Identity WindowIdentity
+	Chords   [][]byte
+	BudgetMS uint32
 }
 
 func (privateKeyboardConfig) String() string {
@@ -65,14 +43,10 @@ func (privateKeyboardConfig) GoString() string {
 }
 
 type privateKeyboardBootstrap struct {
-	Socket string   `json:"socket"`
-	Screen int      `json:"screen"`
-	Auth   [16]byte `json:"auth"`
-	Server struct {
-		PID  int32  `json:"pid"`
-		UID  uint32 `json:"uid"`
-		Root uint32 `json:"root"`
-	} `json:"server"`
+	Socket string                `json:"socket"`
+	Screen int                   `json:"screen"`
+	Auth   [16]byte              `json:"auth"`
+	Server privateKeyboardServer `json:"server"`
 }
 
 type privateKeyboardBinding struct {
@@ -84,9 +58,8 @@ type privateKeyboardBinding struct {
 
 type privateKeyboardStart struct {
 	Operation privateKeyboardOperation `json:"operation"`
-	Bootstrap privateKeyboardBootstrap `json:"bootstrap"`
 	Binding   privateKeyboardBinding   `json:"binding"`
-	// []byte is base64 in Go JSON, whereas Rust's bounded wire requires arrays.
+	// Go byte slices encode as base64; this native wire requires byte arrays.
 	Chords   [][]uint16 `json:"chords"`
 	BudgetMS uint32     `json:"budget_ms"`
 }
@@ -108,59 +81,65 @@ type privateKeyboardReceipt struct {
 	Acknowledged          bool                     `json:"acknowledged"`
 	Canceled              bool                     `json:"canceled"`
 	CancellationDelivered bool                     `json:"cancellation_delivered"`
-	CleanupConfirmed      bool                     `json:"cleanup_confirmed"`
+	InputQuiescent        bool                     `json:"input_quiescent"`
+	Resources             privateKeyboardResources `json:"resource_disposition"`
 }
 
-// The lease is deliberately NOT closed by this object's cleanup. The trusted
-// owner must retain it on an unknown receipt, including keeper loss. A signal,
-// canceled context or closed stream never supplies CleanupConfirmed.
+type privateKeyboardActionState uint8
+
+const (
+	privateKeyboardActionActive privateKeyboardActionState = iota
+	privateKeyboardActionTerminal
+	privateKeyboardActionClosed
+)
+
+// Neither an ended context nor a closed stream attests input quiescence.
+// The trusted caller owns the lease, including after any UNKNOWN outcome.
 type privateKeyboard struct {
-	actionCtx context.Context
-	lease     *InputLease
-	identity  WindowIdentity
-	operation privateKeyboardOperation
-	wire      *net.UnixConn
-	process   *exec.Cmd
-	exited    chan error
-	watchDone chan struct{}
-	watchExit chan struct{}
-	watchOnce sync.Once
-	writeMu   sync.Mutex
-	stopped   bool // protected by writeMu; never reset/rebound
-	pending   string
-	expected  string
-	ordinal   uint32
-	edges     uint32
-	receipt   *privateKeyboardReceipt
-	closeOnce sync.Once
-	closeErr  error
+	channel     *privateKeyboardChannel
+	actionCtx   context.Context
+	lease       *InputLease
+	identity    WindowIdentity
+	operation   privateKeyboardOperation
+	state       privateKeyboardActionState // protected by channel.mu
+	stopped     bool                       // protected by channel.mu, never reset
+	watchDone   chan struct{}
+	watchExit   chan struct{}
+	watchOnce   sync.Once
+	closeOnce   sync.Once
+	closeErr    error
+	pending     string // protocol fields below protected by channel.readMu
+	expected    string
+	ordinal     uint32
+	edges       uint32
+	keyboard    uint8
+	receipt     *privateKeyboardReceipt
+	terminalErr error
 }
 
-// Preparation has no pair/focus/input authority. In particular, fresh native
-// admission of matching numeric IDs cannot substitute for the original Go
-// epoch: allow() checks that retained epoch AFTER native subscriptions exist.
+// No pair/focus/input authority is granted here. The original Go epoch must
+// still pass allow AFTER the newly scoped native subscriptions are prepared.
 func preparePrivateKeyboard(
-	ctx context.Context, lease *InputLease, config privateKeyboardConfig,
+	ctx context.Context, channel *privateKeyboardChannel, lease *InputLease, config privateKeyboardConfig,
 ) (*privateKeyboard, error) {
-	if ctx.Err() != nil || config.BudgetMS == 0 || config.BudgetMS > 10000 ||
+	if ctx.Err() != nil || channel == nil || config.BudgetMS == 0 || config.BudgetMS > 10000 ||
 		len(config.Chords) == 0 || len(config.Chords) > 256 {
 		return nil, computer.ErrInvalid
 	}
 	start := privateKeyboardStart{BudgetMS: config.BudgetMS}
-	var edges uint32
 	defer func() {
-		clear(start.Bootstrap.Auth[:])
 		for _, chord := range start.Chords {
 			clear(chord)
 		}
 	}()
+	var edges uint32
 	for _, chord := range config.Chords {
 		if len(chord) == 0 || len(chord) > 8 {
 			return nil, computer.ErrInvalid
 		}
 		owned := make([]uint16, len(chord))
-		edges += uint32(2 * len(chord))
 		start.Chords = append(start.Chords, owned)
+		edges += uint32(2 * len(chord))
 		for index, code := range chord {
 			if code < 8 || bytes.IndexByte(chord[:index], code) >= 0 {
 				return nil, computer.ErrInvalid
@@ -168,71 +147,69 @@ func preparePrivateKeyboard(
 			owned[index] = uint16(code)
 		}
 	}
-	var err error
-	start.Bootstrap, start.Binding, err = privateKeyboardAuthority(lease, config)
+	bootstrap, binding, err := privateKeyboardAuthority(lease, config.Window, config.Identity)
 	if err != nil {
 		return nil, err
 	}
-	if _, err = rand.Read(start.Operation[:]); err != nil || start.Operation == [32]byte{} {
+	defer clear(bootstrap.Auth[:])
+	if privateKeyboardDesktopOf(bootstrap) != channel.desktop {
+		return nil, computer.ErrStale
+	}
+	start.Binding = binding
+	if _, err = rand.Read(start.Operation.Nonce[:]); err != nil ||
+		start.Operation.Nonce == (privateKeyboardToken{}) {
 		return nil, computer.ErrUnavailable
 	}
-	executable, err := openPrivateKeyboardExecutable(config.Executable, config.SHA256)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = executable.Close() }()
-	descriptors, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
-	if err != nil {
-		return nil, computer.ErrUnavailable
-	}
-	parent, child := os.NewFile(uintptr(descriptors[0]), "private keyboard host"),
-		os.NewFile(uintptr(descriptors[1]), "private keyboard child")
-	defer func() { _ = parent.Close(); _ = child.Close() }()
-	connection, err := net.FileConn(parent)
-	if err != nil {
-		return nil, computer.ErrUnavailable
-	}
-	// Execute the already-open attested inode, not a pathname resolved again.
-	command := exec.Command("/proc/self/fd/3", "--keeper")
-	command.ExtraFiles, command.Stdin = []*os.File{executable}, child
-	command.Env = []string{"CUA_TELEMETRY=0", "DO_NOT_TRACK=1"}
 	owner := &privateKeyboard{
-		actionCtx: ctx, lease: lease, identity: config.Identity, operation: start.Operation,
-		wire:    connection.(*net.UnixConn),
-		process: command, exited: make(chan error, 1), watchDone: make(chan struct{}), watchExit: make(chan struct{}),
-		expected: "prepared", edges: edges,
+		channel: channel, actionCtx: ctx, lease: lease, identity: config.Identity,
+		watchDone: make(chan struct{}), watchExit: make(chan struct{}), expected: "prepared", edges: edges,
 	}
-	if err = command.Start(); err != nil {
-		_ = connection.Close()
+	channel.mu.Lock()
+	if channel.state == privateKeyboardChannelBusy {
+		channel.mu.Unlock()
+		return nil, computer.ErrBusy
+	}
+	if channel.state != privateKeyboardChannelReady || channel.ctx.Err() != nil ||
+		channel.generation == 0 || channel.generation == ^uint64(0) {
+		channel.mu.Unlock()
 		return nil, computer.ErrUnavailable
 	}
-	go func() { owner.exited <- command.Wait() }()
+	start.Operation.Channel, start.Operation.Generation = channel.id, channel.generation
+	channel.generation++ // before an uncertain write: never resend this generation
+	owner.operation = start.Operation
+	channel.current, channel.state = owner, privateKeyboardChannelBusy
+	channel.mu.Unlock()
 	if err = owner.send("start", start); err != nil {
 		_ = owner.close()
-		return nil, computer.ErrUnavailable
+		return nil, err
 	}
-	if _, err = owner.receive(); err != nil || owner.pending != "prepared" {
+	if _, err = owner.receive(); err != nil {
 		_ = owner.close()
-		return nil, computer.ErrUnavailable
+		return nil, err
 	}
+	// No input is granted while preparation is pending. Begin asynchronous
+	// revocation after the subscription barrier, before any caller can Grant.
+	owner.startWatcher()
+	// A pre-grant cancellation may already have delivered a terminal, verified
+	// no-input receipt. Return it to the caller instead of discarding evidence.
 	return owner, nil
 }
 
 func privateKeyboardAuthority(
-	lease *InputLease, config privateKeyboardConfig,
+	lease *InputLease, request WindowRequest, identity WindowIdentity,
 ) (privateKeyboardBootstrap, privateKeyboardBinding, error) {
 	var bootstrap privateKeyboardBootstrap
 	var binding privateKeyboardBinding
-	if lease == nil || lease.guard == nil || lease.backend == nil || config.Identity.Generation == 0 ||
-		lease.guard.Identity() != config.Identity || config.Window.PID != config.Identity.PID ||
-		config.Window.WindowID != config.Identity.WindowID {
+	if lease == nil || lease.guard == nil || lease.backend == nil || identity.Generation == 0 ||
+		lease.guard.Identity() != identity || request.PID != identity.PID ||
+		request.WindowID != identity.WindowID {
 		return bootstrap, binding, computer.ErrStale
 	}
 	native, ok := lease.backend.(*x11InputLease)
 	guard, nativeGuard := lease.guard.backend.(*x11Window)
-	endpoint, err := x11Display(config.Window.Display)
+	endpoint, err := x11Display(request.Display)
 	if !ok || !nativeGuard || err != nil || native.guard != guard || native.window <= 1 ||
-		uint32(guard.window) != config.Identity.WindowID {
+		uint32(guard.window) != identity.WindowID {
 		return bootstrap, binding, computer.ErrDenied
 	}
 	transport, ok := guard.socket.(*x11ObservedTransport)
@@ -259,7 +236,7 @@ func privateKeyboardAuthority(
 	if endpoint.screen >= len(roots) || roots[endpoint.screen].Root != guard.root {
 		return bootstrap, binding, computer.ErrDenied
 	}
-	cookie, err := x11Cookie(config.Window.XAuthority, endpoint.number)
+	cookie, err := x11Cookie(request.XAuthority, endpoint.number)
 	if err != nil {
 		return bootstrap, binding, computer.ErrDenied
 	}
@@ -272,7 +249,7 @@ func privateKeyboardAuthority(
 	copy(bootstrap.Auth[:], auth)
 	bootstrap.Server.PID, bootstrap.Server.UID, bootstrap.Server.Root = peer.Pid, peer.Uid, uint32(guard.root)
 	binding = privateKeyboardBinding{
-		Window: config.Identity.WindowID, PID: config.Identity.PID,
+		Window: identity.WindowID, PID: identity.PID,
 		LeaseWindow: uint32(native.window), LeasePID: uint32(os.Getpid()),
 	}
 	return bootstrap, binding, nil
@@ -315,37 +292,6 @@ func openPrivateKeyboardExecutable(path, digest string) (*os.File, error) {
 	return file, nil
 }
 
-func (owner *privateKeyboard) send(kind string, data any) error {
-	owner.writeMu.Lock()
-	defer owner.writeMu.Unlock()
-	if owner.stopped && kind != "stop" {
-		return computer.ErrStale
-	}
-	encoded, err := json.Marshal(struct {
-		Kind string `json:"kind"`
-		Data any    `json:"data"`
-	}{kind, data})
-	defer clear(encoded)
-	if err != nil || len(encoded) == 0 || len(encoded) > privateKeyboardFrameLimit {
-		return computer.ErrInvalid
-	}
-	if err = owner.wire.SetWriteDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
-		return computer.ErrUnavailable
-	}
-	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(encoded)))
-	for _, part := range [][]byte{header[:], encoded} {
-		for len(part) > 0 {
-			n, writeErr := owner.wire.Write(part)
-			if writeErr != nil || n == 0 {
-				return computer.ErrUnavailable
-			}
-			part = part[n:]
-		}
-	}
-	return nil
-}
-
 func privateKeyboardDecode(raw []byte, value any) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -355,57 +301,150 @@ func privateKeyboardDecode(raw []byte, value any) error {
 	return nil
 }
 
-// One reader owns this conversation. Stop uses the independently serialized
-// writer and immutable operation, so an old stop cannot address a newer action.
+func (owner *privateKeyboard) startWatcher() {
+	owner.watchOnce.Do(func() {
+		go func() {
+			defer close(owner.watchExit)
+			select {
+			case <-owner.actionCtx.Done():
+				_ = owner.stop()
+			case <-owner.lease.Done():
+				_ = owner.stop()
+			case <-owner.channel.done:
+			case <-owner.watchDone:
+			}
+		}()
+	})
+}
+
+func (owner *privateKeyboard) send(kind string, data any) error {
+	channel := owner.channel
+	channel.mu.Lock()
+	if channel.current != owner || owner.state != privateKeyboardActionActive {
+		channel.mu.Unlock()
+		return computer.ErrStale
+	}
+	if channel.state != privateKeyboardChannelBusy {
+		channel.mu.Unlock()
+		return computer.ErrUnavailable
+	}
+	if owner.stopped && kind != "stop" {
+		channel.mu.Unlock()
+		return computer.ErrStale
+	}
+	err := channel.sendLocked(kind, data)
+	channel.mu.Unlock()
+	if err != nil {
+		channel.fail()
+	}
+	return err
+}
+
+func (owner *privateKeyboard) current() bool {
+	channel := owner.channel
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	return channel.current == owner && owner.state == privateKeyboardActionActive
+}
+
+// One action owns the reader until close. An old action cannot read a later
+// generation's packet, even if its caller keeps a reference to this object.
 func (owner *privateKeyboard) receive() (privateKeyboardStep, error) {
 	var step privateKeyboardStep
-	if owner.receipt != nil || owner.wire.SetReadDeadline(time.Now().Add(3*time.Second)) != nil {
-		return step, computer.ErrUnavailable
+	if !owner.current() {
+		return step, computer.ErrStale
 	}
-	var header [4]byte
-	if _, err := io.ReadFull(owner.wire, header[:]); err != nil {
-		return step, computer.ErrUnavailable
+	channel := owner.channel
+	channel.readMu.Lock()
+	defer channel.readMu.Unlock()
+	if !owner.current() {
+		return step, computer.ErrStale
 	}
-	length := binary.BigEndian.Uint32(header[:])
-	if length == 0 || length > privateKeyboardFrameLimit {
-		return step, computer.ErrUnavailable
-	}
-	encoded := make([]byte, length)
-	defer clear(encoded)
-	if _, err := io.ReadFull(owner.wire, encoded); err != nil {
-		return step, computer.ErrUnavailable
-	}
-	var packet privateKeyboardReply
-	if privateKeyboardDecode(encoded, &packet) != nil {
-		return step, computer.ErrUnavailable
+	packet, err := channel.readPacket()
+	if err != nil {
+		channel.fail()
+		return step, err
 	}
 	defer clear(packet.Data)
+	if packet.Kind == "quarantined" {
+		var refusal struct {
+			Operation privateKeyboardOperation `json:"operation"`
+		}
+		channel.mu.Lock()
+		valid := owner.expected == "admitted" && owner.operation.Generation == 1 &&
+			channel.resources == privateKeyboardNotCreated
+		channel.mu.Unlock()
+		if !valid || privateKeyboardDecode(packet.Data, &refusal) != nil || refusal.Operation != owner.operation {
+			channel.fail()
+			return step, computer.ErrUnavailable
+		}
+		channel.mu.Lock()
+		owner.state = privateKeyboardActionTerminal
+		channel.state = privateKeyboardChannelEnded
+		channel.mu.Unlock()
+		owner.terminalErr = computer.ErrBusy
+		return step, computer.ErrBusy
+	}
 	if packet.Kind == "complete" {
 		var wire struct {
 			Operation             privateKeyboardOperation `json:"operation"`
 			Acknowledged          *bool                    `json:"acknowledged"`
 			Canceled              *bool                    `json:"canceled"`
 			CancellationDelivered *bool                    `json:"cancellation_delivered"`
-			CleanupConfirmed      *bool                    `json:"cleanup_confirmed"`
+			InputQuiescent        *bool                    `json:"input_quiescent"`
+			Resources             privateKeyboardResources `json:"resource_disposition"`
 		}
 		if privateKeyboardDecode(packet.Data, &wire) != nil || wire.Operation != owner.operation ||
 			wire.Acknowledged == nil || wire.Canceled == nil || wire.CancellationDelivered == nil ||
-			wire.CleanupConfirmed == nil {
+			wire.InputQuiescent == nil {
+			channel.fail()
 			return step, computer.ErrUnavailable
 		}
 		receipt := privateKeyboardReceipt{
 			Operation: wire.Operation, Acknowledged: *wire.Acknowledged, Canceled: *wire.Canceled,
-			CancellationDelivered: *wire.CancellationDelivered, CleanupConfirmed: *wire.CleanupConfirmed,
+			CancellationDelivered: *wire.CancellationDelivered, InputQuiescent: *wire.InputQuiescent,
+			Resources: wire.Resources,
 		}
-		if receipt.Acknowledged && (owner.expected != "complete" || receipt.Canceled) ||
-			receipt.CancellationDelivered && !receipt.Canceled {
+		channel.mu.Lock()
+		previous := channel.resources
+		channel.mu.Unlock()
+		valid := (!receipt.Acknowledged || owner.expected == "complete" && !receipt.Canceled) &&
+			(!receipt.CancellationDelivered || receipt.Canceled)
+		switch receipt.Resources {
+		case privateKeyboardNotCreated:
+			valid = valid && receipt.InputQuiescent && receipt.Canceled && !receipt.Acknowledged &&
+				owner.keyboard == 0 && owner.ordinal == 0 && owner.operation.Generation == 1 &&
+				previous == privateKeyboardNotCreated
+		case privateKeyboardRetained:
+			valid = valid && receipt.InputQuiescent &&
+				(owner.expected != "prepared" || previous == privateKeyboardRetained)
+		case privateKeyboardUnverified:
+			valid = valid && !receipt.InputQuiescent
+		default:
+			valid = false
+		}
+		if !valid {
+			channel.fail()
 			return step, computer.ErrUnavailable
 		}
 		owner.receipt, owner.pending = &receipt, "complete"
+		channel.mu.Lock()
+		owner.state = privateKeyboardActionTerminal
+		if channel.state == privateKeyboardChannelBusy {
+			channel.resources = receipt.Resources
+			if !receipt.InputQuiescent {
+				channel.state = privateKeyboardChannelUnknown
+			}
+			if receipt.Resources == privateKeyboardNotCreated {
+				channel.state = privateKeyboardChannelEnded
+			}
+		}
+		channel.mu.Unlock()
 		return step, nil
 	}
 	if owner.pending != "" || packet.Kind != owner.expected ||
 		privateKeyboardDecode(packet.Data, &step) != nil || step.Operation != owner.operation {
+		channel.fail()
 		return step, computer.ErrUnavailable
 	}
 	valid := false
@@ -415,25 +454,40 @@ func (owner *privateKeyboard) receive() (privateKeyboardStep, error) {
 	case "admitted":
 		valid = step.Keyboard != nil && *step.Keyboard >= 2 && *step.Keyboard < 128 &&
 			step.Ordinal == nil && step.Held == nil
+		if valid {
+			owner.keyboard = *step.Keyboard
+			channel.mu.Lock()
+			if channel.state == privateKeyboardChannelBusy {
+				channel.resources = privateKeyboardRetained
+			}
+			channel.mu.Unlock()
+		}
 	case "edge":
 		valid = step.Keyboard == nil && step.Ordinal != nil && *step.Ordinal == owner.ordinal &&
 			owner.ordinal < owner.edges && step.Held != nil && *step.Held <= 8
 	}
 	if !valid {
+		channel.fail()
 		return privateKeyboardStep{}, computer.ErrUnavailable
 	}
 	owner.pending = packet.Kind
 	return step, nil
 }
 
-// The native subscription is already live at Prepared. Only THIS retained
-// guard/generation/lease may now authorize focus, readiness or an input edge.
-// Application readiness/effect must be established separately before allowing
-// Admitted/Dispatched. Calling allow does not itself attest either one.
+// Only the already-retained original guard/generation/lease may authorize this
+// prepared scope. Readiness and app effects remain independent caller gates.
 func (owner *privateKeyboard) allow(ctx context.Context) error {
+	if !owner.current() {
+		return computer.ErrStale
+	}
+	channel := owner.channel
+	channel.readMu.Lock()
+	defer channel.readMu.Unlock()
+	if !owner.current() {
+		return computer.ErrStale
+	}
 	if owner.actionCtx.Err() != nil || owner.lease == nil || owner.lease.guard == nil ||
-		owner.identity != owner.lease.guard.Identity() ||
-		owner.lease.Check(ctx) != nil {
+		owner.identity != owner.lease.guard.Identity() || owner.lease.Check(ctx) != nil {
 		_ = owner.stop()
 		return computer.ErrStale
 	}
@@ -441,18 +495,6 @@ func (owner *privateKeyboard) allow(ctx context.Context) error {
 	switch owner.pending {
 	case "prepared":
 		kind, next = "grant", "admitted"
-		owner.watchOnce.Do(func() {
-			go func() {
-				defer close(owner.watchExit)
-				select {
-				case <-owner.actionCtx.Done():
-					_ = owner.stop()
-				case <-owner.lease.Done():
-					_ = owner.stop()
-				case <-owner.watchDone:
-				}
-			}()
-		})
 	case "admitted":
 		kind, next = "ready", "edge"
 	case "edge":
@@ -472,47 +514,65 @@ func (owner *privateKeyboard) allow(ctx context.Context) error {
 	if kind == "continue" {
 		ordinal := owner.ordinal
 		data.Ordinal = &ordinal
-		owner.ordinal++ // before an uncertain write: this edge is not retryable
+		owner.ordinal++ // never retry an uncertain edge
 	}
-	owner.pending = ""
-	owner.expected = next
+	owner.pending, owner.expected = "", next
 	return owner.send(kind, data)
 }
 
 func (owner *privateKeyboard) stop() error {
-	owner.writeMu.Lock()
+	channel := owner.channel
+	channel.mu.Lock()
+	if channel.current != owner || owner.state != privateKeyboardActionActive {
+		channel.mu.Unlock()
+		return computer.ErrStale
+	}
+	if channel.state != privateKeyboardChannelBusy {
+		channel.mu.Unlock()
+		return computer.ErrUnavailable
+	}
+	if owner.stopped {
+		channel.mu.Unlock()
+		return nil
+	}
 	owner.stopped = true
-	owner.writeMu.Unlock()
-	return owner.send("stop", struct {
+	err := channel.sendLocked("stop", struct {
 		Operation privateKeyboardOperation `json:"operation"`
 	}{owner.operation})
+	channel.mu.Unlock()
+	if err != nil {
+		channel.fail()
+	}
+	return err
 }
 
 func (owner *privateKeyboard) close() error {
 	owner.closeOnce.Do(func() {
-		// A caller that abandons the protocol cannot fabricate cleanup evidence.
-		// Closing the original stream tells the keeper to stop independently.
-		if owner.receipt == nil {
-			_ = owner.stop()
-			owner.closeErr = computer.ErrUnavailable
-		}
+		_ = owner.stop() // terminal/old actions never write
 		close(owner.watchDone)
 		owner.watchOnce.Do(func() { close(owner.watchExit) })
 		<-owner.watchExit
-		_ = owner.wire.Close()
-		select {
-		case err := <-owner.exited:
-			if err != nil {
-				owner.closeErr = computer.ErrUnavailable
+		channel := owner.channel
+		channel.readMu.Lock()
+		verified := owner.receipt != nil && owner.receipt.InputQuiescent
+		if !verified {
+			owner.closeErr = computer.ErrUnavailable
+			if owner.terminalErr != nil {
+				owner.closeErr = owner.terminalErr
 			}
-		case <-time.After(time.Second):
-			// Only this retained os.Process, never a supplied/reused PID. Losing
-			// the keeper still does NOT prove cleanup or relinquish the lease.
-			_ = owner.process.Process.Kill()
-			owner.closeErr = computer.ErrUnavailable
 		}
-		if owner.receipt == nil || !owner.receipt.CleanupConfirmed {
-			owner.closeErr = computer.ErrUnavailable
+		channel.mu.Lock()
+		owner.state = privateKeyboardActionClosed
+		if channel.current == owner {
+			channel.current = nil
+			if verified && channel.state == privateKeyboardChannelBusy {
+				channel.state = privateKeyboardChannelReady
+			}
+		}
+		channel.mu.Unlock()
+		channel.readMu.Unlock()
+		if !verified && owner.terminalErr == nil {
+			channel.fail()
 		}
 	})
 	return owner.closeErr

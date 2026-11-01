@@ -8,6 +8,7 @@ on:
       - 'scripts/computer-native-qualification.sh'
       - 'scripts/internal/computer-native-qualification/fixture_linux.py'
       - 'pkg/computer/cua/native_test.go'
+      - 'pkg/computer/desktop/private_keyboard*.go'
   workflow_dispatch: { }
 
 permissions:
@@ -86,6 +87,7 @@ jobs:
             echo 'PRIVATE QUALIFICATION ONLY; NOT AN ADMITTED INPUT HOST'
             git rev-parse HEAD
             sha256sum go.mod go.sum pkg/computer/desktop/private_keyboard_linux.go \
+              pkg/computer/desktop/private_keyboard_channel_linux.go \
               pkg/computer/desktop/private_keyboard_linux_test.go \
               "$RUNNER_TEMP/mintclaw-window-keys/native-host.test" \
               "$RUNNER_TEMP/mintclaw-window-keys/build-receipt.txt"
