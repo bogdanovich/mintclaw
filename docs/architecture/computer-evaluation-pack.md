@@ -1,7 +1,7 @@
 # Computer-use evaluation pack v1
 
 Status: frozen task intents and acceptance rules, with private text fixtures and
-saved-byte oracles for CU-T01–05 plus Writer setup/saved-ODT checks for CU-T06–10.
+saved-byte oracles for CU-T01–05 plus Writer setup/saved-ODT checks for CU-T06–12.
 The full runner and native/model qualification remain unimplemented. None of
 these model tasks is currently qualified.
 This pack supplies the representative-task gate in the
@@ -138,14 +138,14 @@ mismatch and 2 means unverifiable. `native_task_qualified` is always false.
 An artifact match does not prove native GUI use, CU-T01's reopen, unchanged guard
 window, authorized dialogs, intermediate state, cancellation or post-cleanup
 disposition. The eventual existing-Pipeline controller must attest those
-independently before a full task pass. The Writer subset below supplies five
-more controller fixtures; CU-T11–20 fixtures remain unimplemented. All 20 tasks
+independently before a full task pass. The Writer subset below supplies seven
+more controller fixtures; CU-T13–20 fixtures remain unimplemented. All 20 tasks
 stay in the denominator. No provider run or spending is authorized.
 
 ## Private Writer fixture subset
 
 `scripts/internal/computer-evaluation/writer_fixtures.py` adds controller-only
-setup and saved-artifact checks for CU-T06–10. It opens no application or desktop
+setup and saved-artifact checks for CU-T06–12. It opens no application or desktop
 and makes no model call. CU-T06 starts without `document.odt`; the GUI must create
 the document. CU-T07 seeds one plain paragraph containing exactly `U`. CU-T08
 seeds an empty paragraph. CU-T09 seeds 128 numbered paragraphs followed by the
@@ -158,8 +158,20 @@ file cannot be mistaken for successful cleanup. Every seed is a deterministic
 ODT package with fixed ZIP entry timestamps. The immutable subset revision covers these exact seeds,
 prompts, expected semantic projections and bounds; it is not the full executable
 pack or oracle-source revision. Freeze source/artifact hashes before GUI runs.
-Revision `writer-v2` adds CU-T09–10 and their bounds; older `writer-v1` records
-remain historical evidence and cannot be checked as this expanded revision.
+CU-T11 seeds `document.odt` with `U` and a separate `unrelated.odt`. The candidate
+must contain exactly `R`, the unrelated document must retain its original bytes,
+and the bounded directory census must contain only those two files and the
+controller marker. This does not attest opening through the app's dialog or an
+unchanged guard window; the independent native controller must attest both.
+CU-T12 seeds `U`, expects saved `R`, and declares the required live intermediate
+states: after edit `R`, after undo `U`, after redo `R`. These declarations are
+requirements, not receipts. The checker does not use caller-created files as
+native proof or claim that a final `R` proves undo/redo. `native_task_qualified` stays
+false even when the saved artifact matches.
+
+Revision `writer-v3` adds CU-T11–12 and their bounds; older `writer-v1` and
+`writer-v2` records remain historical evidence and cannot be checked as this
+expanded revision. Source and input revisions must stay bound to each run.
 
 ```sh
 python3 scripts/internal/computer-evaluation/writer_fixtures.py prepare \
@@ -186,7 +198,7 @@ fixture helpers, verifies task/revision/directory identity and observed mutation
 and never extracts ZIP entries. Bounds are 2 MiB compressed/total expanded data,
 64 entries, 256 KiB per parsed XML part, 4,096 nodes and depth 64. DTD/entity
 declarations are refused. No saved text or raw parser/OS detail enters reports.
-CU-T10 additionally scans only the original open task directory, bounded to 16
+CU-T10–11 additionally scan only the original open task directory, bounded to 16
 entries without traversing extras. It checks the census and directory metadata
 again after reading; observed changes are unverifiable. This is not an atomic
 filesystem snapshot or a same-UID security boundary.

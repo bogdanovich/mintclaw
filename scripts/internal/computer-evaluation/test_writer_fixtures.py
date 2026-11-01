@@ -86,8 +86,8 @@ class WriterFixtureTests(unittest.TestCase):
         return result
 
     def test_frozen_revision_and_task_data(self):
-        self.assertEqual(fixtures.FIXTURE_REVISION, "0d51dab17b44e0f3aed0216d320b587cb8c15bd1de3da02ccb33de9a83cbfe64")
-        self.assertEqual(tuple(fixtures.TASKS), ("CU-T06", "CU-T07", "CU-T08", "CU-T09", "CU-T10"))
+        self.assertEqual(fixtures.FIXTURE_REVISION, "a616f2a1e95bd44fa527b7366f35dbf2e8f4ac7b2019e6be038e2287627cca3c")
+        self.assertEqual(tuple(fixtures.TASKS), ("CU-T06", "CU-T07", "CU-T08", "CU-T09", "CU-T10", "CU-T11", "CU-T12"))
         with self.assertRaises(TypeError):
             fixtures.TASKS["new"] = None
         with self.assertRaises(FrozenInstanceError):
@@ -209,6 +209,68 @@ class WriterFixtureTests(unittest.TestCase):
             result = fixtures.check_artifact("CU-T10", path)
         self.assertIsNone(result["artifact_matches"])
         self.assertEqual(result["reason"], "directory_changed")
+
+    def test_open_dialog_artifact_requires_unchanged_unrelated_document_bytes(self):
+        path = self.prepare("CU-T11")
+        guard = path / "unrelated.odt"
+        before = guard.read_bytes()
+        result = self.check("CU-T11", path, package(f"<text:p>{R}</text:p>"))
+        self.assertTrue(result["artifact_matches"], result)
+        self.assertTrue(result["unchanged_document_bytes_match"])
+        self.assertEqual(guard.read_bytes(), before)
+        guard.write_bytes(package("<text:p>GUARD_CHANGED</text:p>"))
+        result = fixtures.check_artifact("CU-T11", path)
+        self.assertFalse(result["artifact_matches"])
+        self.assertFalse(result["unchanged_document_bytes_match"])
+        guard.write_bytes(before)
+        (path / "extra.odt").write_bytes(before)
+        result = fixtures.check_artifact("CU-T11", path)
+        self.assertFalse(result["artifact_matches"])
+        self.assertTrue(result["unchanged_document_bytes_match"])
+        self.assertFalse(result["directory_matches"])
+
+    def test_unrelated_document_missing_symlink_and_hardlink_are_unverifiable(self):
+        path = self.prepare("CU-T11")
+        self.check("CU-T11", path, package(f"<text:p>{R}</text:p>"))
+        guard = path / "unrelated.odt"
+        data = guard.read_bytes()
+        guard.unlink()
+        self.assertIsNone(fixtures.check_artifact("CU-T11", path)["artifact_matches"])
+        outside = self.parent / "untouched.odt"
+        outside.write_bytes(data)
+        guard.symlink_to(outside)
+        self.assertIsNone(fixtures.check_artifact("CU-T11", path)["artifact_matches"])
+        guard.unlink()
+        os.link(outside, guard)
+        self.assertIsNone(fixtures.check_artifact("CU-T11", path)["artifact_matches"])
+        self.assertEqual(outside.read_bytes(), data)
+
+    def test_undo_redo_setup_declares_states_without_fabricating_receipts(self):
+        path = self.parent / "undo-redo"
+        result = fixtures.prepare("CU-T12", path)
+        self.assertEqual(result["required_intermediate_states"],
+                         [{"phase": "after_edit", "text": R}, {"phase": "after_undo", "text": U},
+                          {"phase": "after_redo", "text": R}])
+        self.assertFalse(result["native_task_qualified"])
+        self.assertEqual(set(item.name for item in path.iterdir()), {fixtures.MARKER, "document.odt"})
+        self.assertFalse(fixtures.check_artifact("CU-T12", path)["artifact_matches"])
+        result = self.check("CU-T12", path, package(f"<text:p>{R}</text:p>"))
+        self.assertTrue(result["artifact_matches"])
+        self.assertFalse(result["native_task_qualified"])
+        self.assertNotIn("undo_verified", result)
+        self.assertNotIn("redo_verified", result)
+
+    def test_final_artifact_or_caller_file_cannot_qualify_dialog_or_history(self):
+        for task in ("CU-T11", "CU-T12"):
+            with self.subTest(task=task):
+                path = self.prepare(task)
+                (path / "claimed-native-receipt.json").write_text(json.dumps({
+                    "dialog_verified": True, "undo_verified": True, "redo_verified": True,
+                }))
+                result = self.check(task, path, package(f"<text:p>{R}</text:p>"))
+                self.assertFalse(result["native_task_qualified"])
+                self.assertNotIn("dialog_verified", result)
+                self.assertNotIn("undo_verified", result)
 
     def test_visible_text_without_heading_or_complete_bold_does_not_match(self):
         path = self.prepare("CU-T06")
