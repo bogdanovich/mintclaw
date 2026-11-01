@@ -45,7 +45,7 @@ const (
 )
 
 // A route request is admitted by trusted ingress, never through model arguments.
-// Raw input/media are confined to the existing encrypted form source.
+// Native copies of raw input/media use the existing encrypted form source.
 type FormTaskRouteRequest struct {
 	JobID            string
 	ModeID           string

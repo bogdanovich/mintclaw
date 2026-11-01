@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -9,6 +10,75 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
+
+func TestDocumentConversationDoesNotCopyAuthoredFactsIntoToolFeedbackMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		protected   bool
+		explanation string
+	}{
+		{name: "ordinary fallback"},
+		{name: "form fallback", protected: true},
+		{name: "form provider explanation", protected: true, explanation: "Review BORROWER_FEEDBACK_64"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAgentLoopTestFixture(t, &sequenceProvider{}, documentConversationHistoryConfig)
+			agent := fixture.Agent
+			agent.Tools.Register(resultOnlyDurabilityTestTool{})
+			const sessionKey = "form-feedback-metadata"
+			if test.protected {
+				previous := providers.Message{
+					Role: "user", Content: "Earlier ordinary form conversation.",
+					TurnEnvelope: &providers.TurnEnvelope{Version: 1, DocumentConversationID: "prior-form-input"},
+				}
+				if err := persistFullSessionMessage(t.Context(), agent.Sessions, sessionKey, &previous); err != nil {
+					t.Fatal(err)
+				}
+			}
+			const text = "My name is BORROWER_FEEDBACK_64."
+			opts := makeTestTurnSpec(sessionKey)
+			opts.Dispatch.UserMessage = text
+			ts := newTurnState(agent, opts, turnEventScope{turnID: "form-feedback-turn"})
+			pipeline := newTestPipeline(fixture.Loop)
+			exec, err := pipeline.SetupTurn(t.Context(), ts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			llm := newLLMIterationState(1)
+			if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); err != nil {
+				t.Fatal(err)
+			}
+			llm.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+				ID: "feedback-call", Name: "result_only_test", Arguments: map[string]any{"value": "safe"},
+				ToolFeedbackExplanation: test.explanation,
+			}}}
+			outcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+			if err != nil || outcome.Control != turnStepExecuteTools {
+				t.Fatal("could not normalize the unprotected tool call")
+			}
+			call := exec.messages[len(exec.messages)-1].ToolCalls[0]
+			if test.protected && call.ToolFeedbackExplanation != "" ||
+				!test.protected && !strings.Contains(call.ToolFeedbackExplanation, text) {
+				t.Fatal("tool feedback metadata did not respect ordinary conversation provenance")
+			}
+			seen := 0
+			for _, message := range agent.Sessions.GetHistory(sessionKey) {
+				if message.Role == "user" && message.Content == text {
+					seen++
+				}
+				if test.protected && message.Role == "assistant" {
+					encoded, marshalErr := json.Marshal(message)
+					if marshalErr != nil || strings.Contains(string(encoded), "BORROWER_FEEDBACK_64") {
+						t.Fatal("authored fact was copied into assistant tool-call metadata")
+					}
+				}
+			}
+			if seen != 1 {
+				t.Fatal("metadata protection erased or duplicated the ordinary user message")
+			}
+		})
+	}
+}
 
 func TestDocumentConversationCurrentRootKeepsAuthoredTextAndNativeExecutionFence(t *testing.T) {
 	fixture := newAgentLoopTestFixture(t, &sequenceProvider{}, documentConversationHistoryConfig)

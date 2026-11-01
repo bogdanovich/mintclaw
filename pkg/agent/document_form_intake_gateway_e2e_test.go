@@ -91,14 +91,11 @@ func TestGatewayDocumentIntakeUsesProductionCompositionAndOrdinaryTransport(t *t
 	seen := 0
 	for _, key := range fixture.Agent.Sessions.ListSessions() {
 		for _, message := range fixture.Agent.Sessions.GetHistory(key) {
-			if message.Role == "user" && strings.Contains(message.Content, paragraph) &&
+			if message.Role == "user" && message.Content == paragraph &&
 				documentConversationID(message) != "" {
-				if strings.Count(message.Content, paragraph) != 1 {
-					t.Fatal("ordinary gateway paragraph was duplicated inside its user frame")
-				}
 				seen++
-				// Normal user framing may surround an authored utterance. Only
-				// that content is allowed: inspect every other canonical field.
+				// Only the exact authored user content is allowed; inspect
+				// every other canonical field, including tool feedback metadata.
 				message.Content = ""
 			}
 			encoded, err := json.Marshal(message)

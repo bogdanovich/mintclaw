@@ -1065,7 +1065,9 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			exec.messages,
 		)
 		toolFeedbackExplanation = projectDocumentUserMessageForDurableBoundary(toolFeedbackExplanation)
-		if projection.protected {
+		// Feedback metadata is not another conversation carrier. In particular,
+		// its fallback must not copy an ordinary form utterance into a tool call.
+		if projection.protected || llm.protectedConversationContext {
 			toolFeedbackExplanation = ""
 		}
 		thoughtSignature := ""
