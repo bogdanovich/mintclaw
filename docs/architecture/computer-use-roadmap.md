@@ -365,8 +365,9 @@ including failures, wall-clock time, action count, token/image usage, and p50/p9
 latency. CU-1 sets resource limits that preserve gateway headroom on the 8 GB host.
 
 The [v1 evaluation pack](computer-evaluation-pack.md) freezes the initial 20 task
-intents and independent completion conditions. Private saved-text fixtures and
-artifact-only oracles cover CU-T01–05; they do not qualify native task execution.
+intents and independent completion conditions. Private saved-text fixtures cover
+CU-T01–05; Writer setup/saved-ODT checks cover CU-T06–08. These artifact-only
+checks do not qualify native task execution.
 The full runner, remaining fixtures, approved budgets and actual model runs are
 still pending; no task score is claimed and all 20 tasks remain required.
 

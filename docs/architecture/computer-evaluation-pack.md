@@ -1,8 +1,9 @@
 # Computer-use evaluation pack v1
 
 Status: frozen task intents and acceptance rules, with private text fixtures and
-saved-byte oracles for CU-T01–05. The full runner and native/model qualification
-remain unimplemented. None of these model tasks is currently qualified.
+saved-byte oracles for CU-T01–05 plus Writer setup/saved-ODT checks for CU-T06–08.
+The full runner and native/model qualification remain unimplemented. None of
+these model tasks is currently qualified.
 This pack supplies the representative-task gate in the
 [computer-use roadmap](computer-use-roadmap.md); read-only and single-action
 fixture passes do not satisfy it.
@@ -137,8 +138,53 @@ mismatch and 2 means unverifiable. `native_task_qualified` is always false.
 An artifact match does not prove native GUI use, CU-T01's reopen, unchanged guard
 window, authorized dialogs, intermediate state, cancellation or post-cleanup
 disposition. The eventual existing-Pipeline controller must attest those
-independently before a full task pass. The other 15 tasks remain unimplemented
-and stay in the 20-task denominator. No provider run or spending is authorized.
+independently before a full task pass. The Writer subset below supplies three
+more controller fixtures; CU-T09–20 fixtures remain unimplemented. All 20 tasks
+stay in the denominator. No provider run or spending is authorized.
+
+## Private Writer fixture subset
+
+`scripts/internal/computer-evaluation/writer_fixtures.py` adds controller-only
+setup and saved-artifact checks for CU-T06–08. It opens no application or desktop
+and makes no model call. CU-T06 starts without `document.odt`; the GUI must create
+the document. CU-T07 seeds one plain paragraph containing exactly `U`. CU-T08
+seeds an empty paragraph. Every seed is a deterministic ODT package with fixed
+ZIP entry timestamps. The immutable subset revision covers these exact seeds,
+prompts, expected semantic projections and bounds; it is not the full executable
+pack or oracle-source revision. Freeze source/artifact hashes before GUI runs.
+
+```sh
+python3 scripts/internal/computer-evaluation/writer_fixtures.py prepare \
+  --task CU-T07 --run-directory /absolute/new/private-writer-task
+# A future independently qualified GUI runner performs the task here.
+python3 scripts/internal/computer-evaluation/writer_fixtures.py check-artifact \
+  --task CU-T07 --run-directory /absolute/new/private-writer-task
+```
+
+Checks use the [ODF 1.3 schema](https://docs.oasis-open.org/office/OpenDocument/v1.3/os/part3-schema/OpenDocument-v1.3-os-part3-schema.html)
+for structural meaning: a `text:h` heading and bold paragraph runs, a real
+numbered list with three ordered items, or one unmerged 3-by-3 table with all
+nine exact cell values. Paragraph/span font weight follows supported named-style
+inheritance, including explicit normal overrides. Style IDs, ZIP ordering beyond
+the required mimetype entry, generated metadata and empty layout paragraphs do
+not affect the projection. Text, Unicode sequences and item/cell order stay exact.
+
+This is a bounded structural subset, not a universal ODF renderer. Unknown body
+or inline structures, ambiguous/cyclic/missing styles, unsupported list/table
+forms and malformed packages are unverifiable. A legal document outside this
+subset may therefore be refused; a refusal does not count as task success.
+The checker reads no-follow owned single-link files using the existing text
+fixture helpers, verifies task/revision/directory identity and observed mutation,
+and never extracts ZIP entries. Bounds are 2 MiB compressed/total expanded data,
+64 entries, 256 KiB per parsed XML part, 4,096 nodes and depth 64. DTD/entity
+declarations are refused. No saved text or raw parser/OS detail enters reports.
+
+Exit statuses have the same meaning as the text subset: 0 is only a saved-artifact
+match, 1 a mismatch, and 2 unverifiable. `native_task_qualified` stays false.
+The independent controller still must attest GUI-only execution, original
+target/guard, app/window identity, authorized dialogs, intermediate states and
+post-cleanup disposition. These fixtures neither run the native task nor change
+the 20-task denominator or production access.
 
 ## Scoring, safety and resource limits
 
