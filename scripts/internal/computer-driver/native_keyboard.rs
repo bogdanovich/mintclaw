@@ -1320,6 +1320,7 @@ impl NativeChannel {
             return Err(unavailable());
         }
         let result = (|| {
+            NativeRoutingGuard::check_injection_slot(control, pair, sink)?;
             let extension = checked(connection.extension_information(xinput::X11_EXTENSION_NAME))?
                 .ok_or_else(unavailable)?;
             let release = extension.first_event.checked_add(xinput::DEVICE_KEY_RELEASE_EVENT)
@@ -1570,6 +1571,157 @@ impl StopHandle {
     }
 }
 
+/// Routing checks for one retained original private keyboard pair.
+/// The caller holds this endpoint's original server transaction. Core passive
+/// probes additionally require the active core grab pinned to our master;
+/// XI1/XI2 probes name only that master. No event is injected by these checks.
+/// Input refusal closes the original input client before keeper cleanup.
+struct NativeRoutingGuard;
+
+impl NativeRoutingGuard {
+    fn check_input(
+        input: &Endpoint, pair: &Pair, binding: Binding, code: u8, press: bool,
+    ) -> Result<()> {
+        let connection = &input.connection;
+        let target = binding.window;
+        let pid = binding.pid;
+        checked(checked(connection.xinput_xi_set_client_pointer(x11rb::NONE, pair.pointer))?.check())?;
+        let pointer = checked(checked(connection.xinput_xi_get_client_pointer(x11rb::NONE))?.reply())?;
+        if !pointer.set || pointer.deviceid != pair.pointer { return Err(unavailable()) }
+        let master = checked(checked(connection.grab_keyboard(
+            false, target, x11rb::CURRENT_TIME,
+            xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC,
+        ))?.reply())?;
+        if master.status != xproto::GrabStatus::SUCCESS { return Err(unavailable()) }
+        // XI1 does not detach an attached slave. A checked grab/ungrab can test
+        // its active-grab slot without taking input from any other device.
+        Self::check_injection_slot(input, pair, target)?;
+        pair.check_focus(input, target)?;
+        // Both press and release can normally deliver through a pointer descendant.
+        let windows = Self::windows(input, pair, target, pid)?;
+        if press {
+            let modifiers = Self::grab_modifiers(input, pair.keyboard)?;
+            for window in windows {
+                Self::passives(input, pair, window, code, modifiers)?;
+            }
+        }
+        // On any earlier uncertainty the existing worker failure closes this
+        // original client; do not retry an ungrab through a replacement client.
+        checked(checked(connection.ungrab_keyboard(x11rb::CURRENT_TIME))?.check())
+    }
+
+    fn grab_modifiers(endpoint: &Endpoint, device: u8) -> Result<xproto::ModMask> {
+        let connection = &endpoint.connection;
+        let state = checked(checked(connection.xkb_get_state(u16::from(device)))?.reply())?;
+        let controls = checked(checked(connection.xkb_get_controls(u16::from(device)))?.reply())?;
+        let base = u16::from(state.base_mods);
+        let latched = u16::from(state.latched_mods);
+        let mods = base | latched | u16::from(state.locked_mods);
+        if state.device_id != device || controls.device_id != device || u16::from(state.mods) != mods {
+            return Err(unavailable());
+        }
+        // Xorg GetState omits the derived grab-modifier fields. Compute the
+        // same mask as XkbComputeDerivedState from populated native fields;
+        // do not infer a modifier state from a zero-filled reply member.
+        let internal = u16::from(controls.internal_mods_mask);
+        let ignored = u16::from(controls.ignore_lock_mods_mask);
+        Ok(xproto::ModMask::from((mods & !internal & !ignored) | ((base | latched) & ignored)))
+    }
+
+    fn check_injection_slot(endpoint: &Endpoint, pair: &Pair, sink: u32) -> Result<()> {
+        let connection = &endpoint.connection;
+        let grab = checked(checked(connection.xinput_grab_device(
+            sink, x11rb::CURRENT_TIME, xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC,
+            false, pair.slave, &[],
+        ))?.reply())?;
+        if grab.status != xproto::GrabStatus::SUCCESS { return Err(unavailable()) }
+        checked(checked(connection.xinput_ungrab_device(x11rb::CURRENT_TIME, pair.slave))?.check())?;
+        pair.check(endpoint)
+    }
+
+    fn passives(
+        endpoint: &Endpoint, pair: &Pair, window: u32, code: u8, modifiers: xproto::ModMask,
+    ) -> Result<()> {
+        let connection = &endpoint.connection;
+        let core = modifiers;
+        checked(checked(connection.grab_key(
+            false, window, core, code, xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC,
+        ))?.check())?;
+        checked(checked(connection.ungrab_key(code, window, core))?.check())?;
+        let xi2_modifiers = [u32::from(u16::from(modifiers))];
+        let xi2 = checked(checked(connection.xinput_xi_passive_grab_device(
+            x11rb::CURRENT_TIME, window, x11rb::NONE, u32::from(code), u16::from(pair.keyboard),
+            xinput::GrabType::KEYCODE, xinput::GrabMode22::ASYNC, xproto::GrabMode::ASYNC,
+            xinput::GrabOwner::NO_OWNER, &[], &xi2_modifiers,
+        ))?.reply())?;
+        if !xi2.modifiers.is_empty() { return Err(unavailable()) }
+        checked(checked(connection.xinput_xi_passive_ungrab_device(
+            window, u32::from(code), u16::from(pair.keyboard), xinput::GrabType::KEYCODE, &xi2_modifiers,
+        ))?.check())?;
+        // XI1 can choose an unrelated modifier keyboard whose physical modifier
+        // state may change even under GrabServer. Conservatively test any modifier
+        // for each actual addressable keyboard, still grabbing ONLY our master.
+        let devices = checked(checked(connection.xinput_xi_query_device(0u16))?.reply())?.infos;
+        for device in devices {
+            if !device.classes.iter().any(|class| matches!(&class.data, xinput::DeviceClassData::Key(_))) {
+                continue;
+            }
+            let Ok(modifier) = u8::try_from(device.deviceid) else { continue };
+            checked(checked(connection.xinput_grab_device_key(
+                window, xproto::ModMask::ANY, modifier, pair.keyboard, code,
+                xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC, false, &[],
+            ))?.check())?;
+            checked(checked(connection.xinput_ungrab_device_key(
+                window, xproto::ModMask::ANY, modifier, code, pair.keyboard,
+            ))?.check())?;
+        }
+        Ok(())
+    }
+
+    fn windows(endpoint: &Endpoint, pair: &Pair, target: u32, pid: u32) -> Result<Vec<u32>> {
+        const MAX_ROUTE_WINDOWS: usize = 256;
+        let connection = &endpoint.connection;
+        let mut windows = Vec::new();
+        let mut current = target;
+        loop {
+            if current <= 1 || windows.len() >= MAX_ROUTE_WINDOWS || windows.contains(&current) {
+                return Err(unavailable());
+            }
+            windows.push(current);
+            if current == endpoint.root { break }
+            let tree = checked(checked(connection.query_tree(current))?.reply())?;
+            if tree.root != endpoint.root { return Err(unavailable()) }
+            current = tree.parent;
+        }
+        // Xorg searches the private pointer's descendant trace only when the
+        // explicit focus is on that trace. QueryPointer supplies that native path;
+        // a pointer outside the focus produces no child of the target.
+        current = target;
+        loop {
+            let pointer = checked(checked(connection.xinput_xi_query_pointer(current, pair.pointer))?.reply())?;
+            if !pointer.same_screen || pointer.root != endpoint.root { return Err(unavailable()) }
+            let child = pointer.child;
+            if child == x11rb::NONE { break }
+            if child <= 1 || windows.len() >= MAX_ROUTE_WINDOWS || windows.contains(&child) {
+                return Err(unavailable());
+            }
+            let tree = checked(checked(connection.query_tree(child))?.reply())?;
+            let owner = checked(checked(connection.res_query_client_ids(&[res::ClientIdSpec {
+                client: child, mask: res::ClientIdMask::LOCAL_CLIENT_PID,
+            }]))?.reply())?;
+            if tree.root != endpoint.root || tree.parent != current
+                || owner.ids.len() != 1 || owner.ids[0].spec.mask != res::ClientIdMask::LOCAL_CLIENT_PID
+                || owner.ids[0].value != [pid]
+            {
+                return Err(unavailable());
+            }
+            windows.push(child);
+            current = child;
+        }
+        Ok(windows)
+    }
+}
+
 impl InputWorker {
     #[cfg(test)]
     pub(super) fn stop_handle(&self) -> StopHandle {
@@ -1636,6 +1788,9 @@ impl InputWorker {
             {
                 return Err(unavailable());
             }
+            NativeRoutingGuard::check_input(
+                &self.input, &self.pair, self.input_authority.binding, code, press,
+            )?;
             self.attempted = true;
             let kind =
                 self.event_base + if press { xinput::DEVICE_KEY_PRESS_EVENT } else { xinput::DEVICE_KEY_RELEASE_EVENT };
@@ -1765,6 +1920,770 @@ impl Drop for NativeKeyboard {
 
 #[cfg(test)]
 mod native {
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; active master and held cleanup"]
+    fn active_master_grabs_refuse_input_and_never_capture_cleanup_releases() {
+        for family in 0..3 {
+            for late in [false, true] {
+                let fixture = Fixture::new();
+                let mut session = fixture.session();
+                let foreign = endpoint();
+                session.worker.begin(deadline()).unwrap();
+                if late {
+                    session.worker.edge(0, fixture.key, true).unwrap();
+                    assert_eq!(fixture.events(), [(fixture.target, true)]);
+                }
+                foreign.transaction(deadline(), || {
+                    let connection = &foreign.connection;
+                    let status = if family == 0 {
+                        checked(checked(connection.xinput_xi_set_client_pointer(
+                            x11rb::NONE, session.pair.pointer,
+                        ))?.check())?;
+                        let pointer = checked(checked(connection.xinput_xi_get_client_pointer(x11rb::NONE))?.reply())?;
+                        assert!(pointer.set && pointer.deviceid == session.pair.pointer);
+                        checked(checked(connection.grab_keyboard(
+                            false, fixture.guard, x11rb::CURRENT_TIME,
+                            xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC,
+                        ))?.reply())?.status
+                    } else if family == 1 {
+                        let extension = checked(connection.extension_information(xinput::X11_EXTENSION_NAME))?
+                            .ok_or_else(unavailable)?;
+                        let classes = [xinput::DEVICE_KEY_PRESS_EVENT, xinput::DEVICE_KEY_RELEASE_EVENT]
+                            .map(|kind| {
+                                (u32::from(session.pair.keyboard) << 8) | u32::from(extension.first_event + kind)
+                            });
+                        checked(checked(connection.xinput_grab_device(
+                            fixture.guard, x11rb::CURRENT_TIME,
+                            xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC,
+                            false, session.pair.keyboard, &classes,
+                        ))?.reply())?.status
+                    } else {
+                        let mask = [u32::from(xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE)];
+                        checked(checked(connection.xinput_xi_grab_device(
+                            fixture.guard, x11rb::CURRENT_TIME, x11rb::NONE, u16::from(session.pair.keyboard),
+                            xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC,
+                            xinput::GrabOwner::NO_OWNER, &mask,
+                        ))?.reply())?.status
+                    };
+                    assert_eq!(status, xproto::GrabStatus::SUCCESS);
+                    session.pair.check(&foreign)?;
+                    session.pair.check_focus(&foreign, fixture.target)?;
+                    Ok(())
+                }).unwrap();
+                let edge = session.worker.edge(u32::from(late), fixture.key, !late);
+                assert!(edge.is_err());
+                if !late { assert!(!session.worker.attempted) }
+                let cleanup = session.keeper.quiesce();
+                assert_eq!(cleanup.is_err(), late);
+                if late {
+                    fixture.endpoint.transaction(deadline(), || {
+                        assert_ne!(key_state(&fixture.endpoint, session.pair.slave)?, [0; 32]);
+                        Ok(())
+                    }).unwrap();
+                } else {
+                    fixture.assert_pair_parked(&session.pair);
+                }
+                foreign.transaction(deadline(), || {
+                    let connection = &foreign.connection;
+                    checked(checked(connection.get_input_focus())?.reply())?;
+                    while let Some(event) = checked(connection.poll_for_event())? {
+                        let text = format!("{event:?}");
+                        assert!(!text.contains("KeyPress") && !text.contains("KeyRelease"), "{text}");
+                    }
+                    if family == 0 {
+                        checked(checked(connection.ungrab_keyboard(x11rb::CURRENT_TIME))?.check())
+                    } else if family == 1 {
+                        checked(checked(connection.xinput_ungrab_device(
+                            x11rb::CURRENT_TIME, session.pair.keyboard,
+                        ))?.check())
+                    } else {
+                        checked(checked(connection.xinput_xi_ungrab_device(
+                            x11rb::CURRENT_TIME, u16::from(session.pair.keyboard),
+                        ))?.check())
+                    }
+                }).unwrap();
+                drop(foreign);
+                assert_eq!(fixture.keyboard_observations(), (vec![], vec![]));
+                if late {
+                    fixture.endpoint.transaction(deadline(), || {
+                        session.pair.check(&fixture.endpoint)?;
+                        let remove = xinput::HierarchyChange {
+                            len: 3,
+                            data: xinput::HierarchyChangeData::RemoveMaster(xinput::HierarchyChangeDataRemoveMaster {
+                                deviceid: session.pair.pointer, return_mode: xinput::ChangeMode::FLOAT,
+                                return_pointer: 0, return_keyboard: 0,
+                            }),
+                        };
+                        checked(checked(fixture.endpoint.connection.xinput_xi_change_hierarchy(&[remove]))?.check())
+                    }).unwrap();
+                } else {
+                    assert!(session.keeper.dispose_fixture_pair());
+                }
+                fixture.remains();
+                println!(
+                    "active_master family={} late={} input_refused=true cleanup_unknown={} foreign_keys=0",
+                    family, late, late,
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; native modifier routing"]
+    fn private_modifier_state_preserves_unrelated_shortcuts_and_fences_matching_chords() {
+        for xi2 in [false, true] {
+            for held in [false, true] {
+                let fixture = Fixture::new();
+                let mut session = fixture.session();
+                let control = fixture.endpoint.transaction(deadline(), || {
+                    let connection = &fixture.endpoint.connection;
+                    let setup = connection.setup();
+                    let mapping = checked(checked(connection.get_keyboard_mapping(
+                        setup.min_keycode, setup.max_keycode - setup.min_keycode + 1,
+                    ))?.reply())?;
+                    let index = mapping.keysyms.chunks(usize::from(mapping.keysyms_per_keycode))
+                        .position(|values| values.first() == Some(&0xffe3)).ok_or_else(unavailable)?;
+                    let modifiers = [u32::from(u16::from(xproto::ModMask::CONTROL))];
+                    if xi2 {
+                        let mask = [u32::from(xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE)];
+                        let grab = checked(checked(connection.xinput_xi_passive_grab_device(
+                            x11rb::CURRENT_TIME, fixture.endpoint.root, x11rb::NONE, u32::from(fixture.key),
+                            u16::from(session.pair.keyboard), xinput::GrabType::KEYCODE,
+                            xinput::GrabMode22::ASYNC, xproto::GrabMode::ASYNC,
+                            xinput::GrabOwner::NO_OWNER, &mask, &modifiers,
+                        ))?.reply())?;
+                        assert!(grab.modifiers.is_empty());
+                    } else {
+                        checked(checked(connection.grab_key(
+                            false, fixture.endpoint.root, xproto::ModMask::CONTROL, fixture.key,
+                            xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC,
+                        ))?.check())?;
+                    }
+                    Ok(setup.min_keycode + index as u8)
+                }).unwrap();
+                session.worker.begin(deadline()).unwrap();
+                if held {
+                    session.worker.edge(0, control, true).unwrap();
+                    assert_eq!(fixture.events(), [(fixture.target, true)]);
+                }
+                let press = session.worker.edge(u32::from(held), fixture.key, true);
+                if held {
+                    assert!(press.is_err());
+                    assert_eq!(fixture.keyboard_observations(), (vec![], vec![]));
+                } else {
+                    press.unwrap();
+                    session.worker.edge(1, fixture.key, false).unwrap();
+                    session.worker.end().unwrap();
+                    assert_eq!(
+                        fixture.keyboard_observations(),
+                        (vec![(fixture.target, true), (fixture.target, false)], vec![]),
+                    );
+                }
+                session.worker.input.boundary.stop();
+                session.keeper.quiesce().unwrap();
+                fixture.assert_pair_parked(&session.pair);
+                assert_eq!(fixture.keyboard_observations(), (vec![], vec![]));
+                fixture.endpoint.transaction(deadline(), || {
+                    let connection = &fixture.endpoint.connection;
+                    if xi2 {
+                        checked(checked(connection.xinput_xi_passive_ungrab_device(
+                            fixture.endpoint.root, u32::from(fixture.key), u16::from(session.pair.keyboard),
+                            xinput::GrabType::KEYCODE, &[u32::from(u16::from(xproto::ModMask::CONTROL))],
+                        ))?.check())
+                    } else {
+                        checked(checked(connection.ungrab_key(
+                            fixture.key, fixture.endpoint.root, xproto::ModMask::CONTROL,
+                        ))?.check())
+                    }
+                }).unwrap();
+                assert!(session.keeper.dispose_fixture_pair());
+                fixture.remains();
+                println!("modifier_route xi2={xi2} held={held} matching_refused={held} foreign_keys=0");
+            }
+        }
+    }
+
+    fn wildcard_root_grab(endpoint: &Endpoint, device: u16, key: u8, install: bool) -> Result<()> {
+        let connection = &endpoint.connection;
+        let modifiers = [u32::from(xinput::ModifierMask::ANY)];
+        if install {
+            let mask = [u32::from(xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE)];
+            let reply = checked(checked(connection.xinput_xi_passive_grab_device(
+                x11rb::CURRENT_TIME, endpoint.root, x11rb::NONE, u32::from(key), device,
+                xinput::GrabType::KEYCODE, xinput::GrabMode22::ASYNC, xproto::GrabMode::ASYNC,
+                xinput::GrabOwner::NO_OWNER, &mask, &modifiers,
+            ))?.reply())?;
+            if !reply.modifiers.is_empty() { return Err(unavailable()) }
+            Ok(())
+        } else {
+            checked(checked(connection.xinput_xi_passive_ungrab_device(
+                endpoint.root, u32::from(key), device, xinput::GrabType::KEYCODE, &modifiers,
+            ))?.check())
+        }
+    }
+
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; XI2 wildcard/slave passive routing"]
+    fn wildcard_passives_cover_future_masters_without_rejecting_an_unfocused_slave() {
+        for mode in 0..6 {
+            let fixture = Fixture::new();
+            let wildcard = if mode % 2 == 0 {
+                u16::from(xinput::Device::ALL)
+            } else {
+                u16::from(xinput::Device::ALL_MASTER)
+            };
+            if mode < 2 {
+                fixture.endpoint.transaction(deadline(), || {
+                    wildcard_root_grab(&fixture.endpoint, wildcard, fixture.key, true)
+                }).unwrap();
+            }
+            let mut session = fixture.session();
+            let device = match mode {
+                4 => u16::from(session.pair.slave),
+                5 => u16::from(session.pair.keyboard),
+                _ => wildcard,
+            };
+            if mode >= 2 {
+                fixture.endpoint.transaction(deadline(), || {
+                    wildcard_root_grab(&fixture.endpoint, device, fixture.key, true)
+                }).unwrap();
+            }
+            session.worker.begin(deadline()).unwrap();
+            let press = session.worker.edge(0, fixture.key, true);
+            if mode == 4 {
+                press.unwrap();
+                session.worker.edge(1, fixture.key, false).unwrap();
+                session.worker.end().unwrap();
+                assert_eq!(
+                    fixture.keyboard_observations(), (vec![(fixture.target, true), (fixture.target, false)], vec![]),
+                );
+            } else {
+                assert!(press.is_err());
+                assert!(!session.worker.attempted);
+                assert_eq!(fixture.keyboard_observations(), (vec![], vec![]));
+            }
+            let other = endpoint();
+            other.transaction(deadline(), || {
+                assert!(wildcard_root_grab(&other, device, fixture.key, true).is_err());
+                Ok(())
+            }).unwrap();
+            fixture.endpoint.transaction(deadline(), || {
+                wildcard_root_grab(&fixture.endpoint, device, fixture.key, false)
+            }).unwrap();
+            other.transaction(deadline(), || {
+                wildcard_root_grab(&other, device, fixture.key, true)?;
+                wildcard_root_grab(&other, device, fixture.key, false)
+            }).unwrap();
+            drop(other);
+            assert!(session.finish());
+            fixture.remains();
+            println!(
+                "wildcard_route mode={mode} pre_input_refused={} foreign_preserved=true residual=false", mode != 4,
+            );
+        }
+    }
+
+    struct ForeignChildFixture {
+        child: std::process::Child,
+    }
+
+    impl Drop for ForeignChildFixture {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    impl ForeignChildFixture {
+        fn receive(&mut self) -> serde_json::Value {
+            let stdout = self.child.stdout.as_mut().unwrap();
+            let fd = std::os::fd::AsRawFd::as_raw_fd(stdout);
+            let limit = Instant::now() + Duration::from_secs(3);
+            let mut bytes = Vec::new();
+            loop {
+                assert!(Instant::now() < limit && bytes.len() < 1024, "foreign fixture reply deadline/size");
+                let mut poll = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+                let remaining = limit.saturating_duration_since(Instant::now()).as_millis().min(1000) as i32;
+                let ready = unsafe { libc::poll(&mut poll, 1, remaining.max(1)) };
+                if ready == 0 || (ready < 0 && io::Error::last_os_error().kind() == ErrorKind::Interrupted) {
+                    continue;
+                }
+                assert!(ready > 0, "foreign fixture reply missing");
+                let mut byte = [0];
+                std::io::Read::read_exact(stdout, &mut byte).unwrap();
+                if byte[0] == b'\n' { break }
+                bytes.push(byte[0]);
+            }
+            serde_json::from_slice(&bytes).unwrap()
+        }
+
+        fn launch(parent: u32) -> (Self, u32) {
+            let script = r#"import ctypes as c,json,os,sys
+assert os.environ.get('MINTCLAW_NATIVE_KEYBOARD_NATIVE')=='1'
+assert os.environ['DISPLAY']==':'+os.environ['MINTCLAW_PRIVATE_X_DISPLAY_NUMBER']
+x=c.CDLL('libX11.so.6')
+for name,args,result in [
+ ('XOpenDisplay',[c.c_char_p],c.c_void_p),
+ ('XCreateSimpleWindow',
+  [c.c_void_p,c.c_ulong,c.c_int,c.c_int,c.c_uint,c.c_uint,c.c_uint,c.c_ulong,c.c_ulong],c.c_ulong),
+ ('XSelectInput',[c.c_void_p,c.c_ulong,c.c_long],c.c_int),
+ ('XMapWindow',[c.c_void_p,c.c_ulong],c.c_int),
+ ('XSync',[c.c_void_p,c.c_int],c.c_int),
+ ('XPending',[c.c_void_p],c.c_int),
+ ('XNextEvent',[c.c_void_p,c.c_void_p],c.c_int)]:
+ f=getattr(x,name);f.argtypes=args;f.restype=result
+d=x.XOpenDisplay(None);assert d
+w=x.XCreateSimpleWindow(d,int(sys.argv[1]),20,20,60,30,0,0,0);assert w
+x.XSelectInput(d,w,3);x.XMapWindow(d,w);x.XSync(d,0)
+print(json.dumps({'window':w,'pid':os.getpid()}),flush=True)
+for command in sys.stdin:
+ assert command.strip()=='observe'
+ x.XSync(d,0);counts={2:0,3:0};event=(c.c_long*24)()
+ while x.XPending(d):
+  x.XNextEvent(d,c.byref(event));kind=c.cast(c.byref(event),c.POINTER(c.c_int))[0]
+  if kind in counts:counts[kind]+=1
+ print(json.dumps({'press':counts[2],'release':counts[3]}),flush=True)
+"#;
+            let child = std::process::Command::new("/usr/bin/python3")
+                .args(["-u", "-c", script, &parent.to_string()])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::inherit())
+                .spawn().unwrap();
+            let mut fixture = Self { child };
+            let ready = fixture.receive();
+            assert_eq!(ready["pid"].as_u64(), Some(u64::from(fixture.child.id())));
+            let window = u32::try_from(ready["window"].as_u64().unwrap()).unwrap();
+            (fixture, window)
+        }
+
+        fn observe(&mut self) -> serde_json::Value {
+            std::io::Write::write_all(self.child.stdin.as_mut().unwrap(), b"observe\n").unwrap();
+            self.receive()
+        }
+    }
+
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; separate native child application"]
+    fn foreign_descendants_are_fenced_before_press_and_before_release() {
+        for mode in 0..2 {
+            let fixture = Fixture::new();
+            fixture.endpoint.transaction(deadline(), || {
+                checked(checked(fixture.endpoint.connection.configure_window(
+                    fixture.target, &xproto::ConfigureWindowAux::new().stack_mode(xproto::StackMode::ABOVE),
+                ))?.check())
+            }).unwrap();
+            let mut session = fixture.session();
+            fixture.endpoint.transaction(deadline(), || {
+                checked(checked(fixture.endpoint.connection.xinput_xi_warp_pointer(
+                    x11rb::NONE, fixture.target, 0, 0, 0, 0, 1 << 16, 1 << 16, session.pair.pointer,
+                ))?.check())
+            }).unwrap();
+            session.worker.begin(deadline()).unwrap();
+            if mode == 1 {
+                session.worker.edge(0, fixture.key, true).unwrap();
+                assert_eq!(fixture.keyboard_observations(), (vec![(fixture.target, true)], vec![]));
+            }
+            let (mut foreign, child) = ForeignChildFixture::launch(fixture.target);
+            fixture.endpoint.transaction(deadline(), || {
+                let connection = &fixture.endpoint.connection;
+                let owner = checked(checked(connection.res_query_client_ids(&[res::ClientIdSpec {
+                    client: child, mask: res::ClientIdMask::LOCAL_CLIENT_PID,
+                }]))?.reply())?;
+                assert_eq!(owner.ids.len(), 1);
+                assert_eq!(owner.ids[0].value, [foreign.child.id()]);
+                assert_ne!(foreign.child.id(), std::process::id());
+                checked(checked(connection.xinput_xi_warp_pointer(
+                    x11rb::NONE, child, 0, 0, 0, 0, 1 << 16, 1 << 16, session.pair.pointer,
+                ))?.check())
+            }).unwrap();
+            let edge = session.worker.edge(mode, fixture.key, mode == 0);
+            session.worker.input.boundary.stop();
+            session.keeper.quiesce().unwrap();
+            fixture.assert_pair_parked(&session.pair);
+            let events = foreign.observe();
+            println!("foreign_descendant mode={mode} edge_ack={} events={events}", edge.is_ok());
+            fixture.endpoint.transaction(deadline(), || {
+                checked(checked(fixture.endpoint.connection.get_geometry(child))?.reply())?;
+                Ok(())
+            }).unwrap();
+            drop(foreign);
+            assert!(session.keeper.dispose_fixture_pair());
+            fixture.remains();
+            assert!(edge.is_err(), "foreign application received an admitted native edge");
+            assert_eq!(events["press"].as_u64(), Some(0));
+            assert_eq!(events["release"].as_u64(), Some(0));
+        }
+    }
+
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; paired-device native freeze"]
+    fn paired_pointer_freeze_is_refused_before_input_without_replaying_after_stop() {
+        for mode in 0..3 {
+            let fixture = Fixture::new();
+            let mut session = fixture.session();
+            let pointer = fixture.endpoint.transaction(deadline(), || {
+                let connection = &fixture.endpoint.connection;
+                let devices = checked(checked(connection.xinput_xi_query_device(0u16))?.reply())?.infos;
+                let ambient: Vec<_> = devices.iter().filter(|device| {
+                    device.type_ == xinput::DeviceType::MASTER_POINTER && device.deviceid != session.pair.pointer
+                }).collect();
+                assert_eq!(ambient.len(), 1);
+                let pointer = if mode == 0 { ambient[0].deviceid } else { session.pair.pointer };
+                let paired = if mode == 1 { xproto::GrabMode::ASYNC } else { xproto::GrabMode::SYNC };
+                let grab = checked(checked(connection.xinput_xi_grab_device(
+                    fixture.guard, x11rb::CURRENT_TIME, x11rb::NONE, pointer,
+                    xproto::GrabMode::ASYNC, paired, xinput::GrabOwner::NO_OWNER, &[],
+                ))?.reply())?;
+                assert_eq!(grab.status, xproto::GrabStatus::SUCCESS);
+                session.pair.check(&fixture.endpoint)?;
+                Ok(pointer)
+            }).unwrap();
+            session.worker.begin(deadline()).unwrap();
+            let press = session.worker.edge(0, fixture.key, true);
+            if mode == 2 {
+                assert!(press.is_err());
+                assert!(!session.worker.attempted);
+                assert_eq!(fixture.keyboard_observations(), (vec![], vec![]));
+            } else {
+                press.unwrap();
+                session.worker.edge(1, fixture.key, false).unwrap();
+                session.worker.end().unwrap();
+                assert_eq!(
+                    fixture.keyboard_observations(), (vec![(fixture.target, true), (fixture.target, false)], vec![]),
+                );
+            }
+            session.worker.input.boundary.stop();
+            session.keeper.quiesce().unwrap();
+            // Check retained native state before thawing the foreign grab.
+            // Zero bits alone would not establish absence of queued input.
+            fixture.assert_pair_parked(&session.pair);
+            fixture.endpoint.transaction(deadline(), || {
+                checked(checked(fixture.endpoint.connection.xinput_xi_ungrab_device(
+                    x11rb::CURRENT_TIME, pointer,
+                ))?.check())
+            }).unwrap();
+            assert_eq!(fixture.keyboard_observations(), (vec![], vec![]));
+            assert!(session.keeper.dispose_fixture_pair());
+            fixture.remains();
+            println!("paired_freeze mode={mode} pre_input_refused={} late_key_events=0", mode == 2);
+        }
+    }
+
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; actual native routing paths"]
+    fn native_ancestor_target_and_pointer_descendant_passives_are_fenced() {
+        for location in 0..3 {
+            for family in 0..4 {
+                for matching in [true, false] {
+                    let fixture = Fixture::new();
+                    let (parent, child) = fixture.endpoint.transaction(deadline(), || {
+                        let connection = &fixture.endpoint.connection;
+                        let parent = checked(connection.generate_id())?;
+                        let child = checked(connection.generate_id())?;
+                        for (window, owner, x, y) in [
+                            (parent, fixture.endpoint.root, 100, 100), (child, fixture.target, 20, 20),
+                        ] {
+                            checked(checked(connection.create_window(
+                                x11rb::COPY_DEPTH_FROM_PARENT, window, owner, x, y, 150, 75, 0,
+                                xproto::WindowClass::INPUT_OUTPUT, 0,
+                                &xproto::CreateWindowAux::new().event_mask(
+                                    xproto::EventMask::KEY_PRESS | xproto::EventMask::KEY_RELEASE,
+                                ),
+                            ))?.check())?;
+                            checked(checked(connection.map_window(window))?.check())?;
+                        }
+                        // Establish layout BEFORE fresh target admission.
+                        checked(checked(connection.reparent_window(fixture.target, parent, 0, 0))?.check())?;
+                        checked(checked(connection.map_window(fixture.target))?.check())?;
+                        Ok((parent, child))
+                    }).unwrap();
+                    let mut session = fixture.session();
+                    fixture.endpoint.transaction(deadline(), || {
+                        checked(checked(fixture.endpoint.connection.xinput_xi_warp_pointer(
+                            x11rb::NONE, child, 0, 0, 0, 0, 1 << 16, 1 << 16, session.pair.pointer,
+                        ))?.check())
+                    }).unwrap();
+                    session.worker.input.transaction(deadline(), || {
+                        let route = NativeRoutingGuard::windows(
+                            &session.worker.input, &session.pair, fixture.target, std::process::id(),
+                        )?;
+                        assert_eq!(route, [fixture.target, parent, fixture.endpoint.root, child]);
+                        Ok(())
+                    }).unwrap();
+                    let window = [parent, fixture.target, child][location];
+                    let modifier = fixture.endpoint.transaction(deadline(), || {
+                        let devices = checked(checked(fixture.endpoint.connection
+                            .xinput_xi_query_device(0u16))?.reply())?.infos;
+                        let ambient: Vec<_> = devices.iter().filter(|device| {
+                            device.type_ == xinput::DeviceType::MASTER_KEYBOARD
+                                && device.deviceid != u16::from(session.pair.keyboard)
+                        }).collect();
+                        assert_eq!(ambient.len(), 1);
+                        Ok(if family == 2 { u8::try_from(ambient[0].deviceid).unwrap() } else { session.pair.keyboard })
+                    }).unwrap();
+                    let grabbed = if matching { fixture.key } else { fixture.key.checked_add(1).unwrap() };
+                    fixture.endpoint.transaction(deadline(), || {
+                        window_foreign_passive(
+                            &fixture.endpoint, &session.pair, window, family, modifier, grabbed, true,
+                        )
+                    }).unwrap();
+                    session.worker.begin(deadline()).unwrap();
+                    let press = session.worker.edge(0, fixture.key, true);
+                    if matching {
+                        assert!(press.is_err());
+                        assert!(!session.worker.attempted);
+                        assert_eq!(fixture.keyboard_observations(), (vec![], vec![]));
+                    } else {
+                        press.unwrap();
+                        session.worker.edge(1, fixture.key, false).unwrap();
+                        session.worker.end().unwrap();
+                        assert_eq!(fixture.keyboard_observations(), (vec![(child, true), (child, false)], vec![]));
+                    }
+                    let other = endpoint();
+                    other.transaction(deadline(), || {
+                        assert!(window_foreign_passive(
+                            &other, &session.pair, window, family, modifier, grabbed, true,
+                        ).is_err());
+                        Ok(())
+                    }).unwrap();
+                    fixture.endpoint.transaction(deadline(), || {
+                        window_foreign_passive(
+                            &fixture.endpoint, &session.pair, window, family, modifier, grabbed, false,
+                        )
+                    }).unwrap();
+                    other.transaction(deadline(), || {
+                        window_foreign_passive(&other, &session.pair, window, family, modifier, grabbed, true)?;
+                        window_foreign_passive(&other, &session.pair, window, family, modifier, grabbed, false)
+                    }).unwrap();
+                    drop(other);
+                    assert!(session.finish());
+                    fixture.remains();
+                    println!(
+                        "native_window_path location={} family={} matching={} foreign_preserved=true residual=false",
+                        location, family, matching,
+                    );
+                }
+            }
+        }
+    }
+
+    fn window_foreign_passive(
+        endpoint: &Endpoint, pair: &Pair, window: u32, family: u8, modifier: u8, code: u8, install: bool,
+    ) -> Result<()> {
+        let connection = &endpoint.connection;
+        if family == 0 {
+            if install {
+                checked(checked(connection.grab_key(
+                    false, window, xproto::ModMask::ANY, code,
+                    xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC,
+                ))?.check())
+            } else {
+                checked(checked(connection.ungrab_key(code, window, xproto::ModMask::ANY))?.check())
+            }
+        } else if family == 3 {
+            let modifiers = [u32::from(xinput::ModifierMask::ANY)];
+            if install {
+                let mask = [u32::from(xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE)];
+                let reply = checked(checked(connection.xinput_xi_passive_grab_device(
+                    x11rb::CURRENT_TIME, window, x11rb::NONE, u32::from(code),
+                    u16::from(pair.keyboard), xinput::GrabType::KEYCODE,
+                    xinput::GrabMode22::ASYNC, xproto::GrabMode::ASYNC,
+                    xinput::GrabOwner::NO_OWNER, &mask, &modifiers,
+                ))?.reply())?;
+                if !reply.modifiers.is_empty() { return Err(unavailable()) }
+                Ok(())
+            } else {
+                checked(checked(connection.xinput_xi_passive_ungrab_device(
+                    window, u32::from(code), u16::from(pair.keyboard), xinput::GrabType::KEYCODE, &modifiers,
+                ))?.check())
+            }
+        } else if install {
+            let extension = checked(connection.extension_information(xinput::X11_EXTENSION_NAME))?
+                .ok_or_else(unavailable)?;
+            let classes = [xinput::DEVICE_KEY_PRESS_EVENT, xinput::DEVICE_KEY_RELEASE_EVENT]
+                .map(|kind| (u32::from(pair.keyboard) << 8) | u32::from(extension.first_event + kind));
+            checked(checked(connection.xinput_grab_device_key(
+                window, xproto::ModMask::ANY, modifier, pair.keyboard, code,
+                xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC, false, &classes,
+            ))?.check())
+        } else {
+            checked(checked(connection.xinput_ungrab_device_key(
+                window, xproto::ModMask::ANY, modifier, code, pair.keyboard,
+            ))?.check())
+        }
+    }
+
+    fn root_foreign_passive(
+        endpoint: &Endpoint, pair: &Pair, family: u8, modifier: u8, code: u8, install: bool,
+    ) -> Result<()> {
+        window_foreign_passive(endpoint, pair, endpoint.root, family, modifier, code, install)
+    }
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; core/XI1/XI2 root passive routing"]
+    fn root_passive_families_refuse_matching_and_preserve_unrelated_keys() {
+        for family in 0..4 {
+            for matching in [true, false] {
+                let fixture = Fixture::new();
+                let mut session = fixture.session();
+                let modifier = fixture.endpoint.transaction(deadline(), || {
+                    let devices = checked(checked(fixture.endpoint.connection
+                        .xinput_xi_query_device(0u16))?.reply())?.infos;
+                    let ambient: Vec<_> = devices.iter().filter(|device| {
+                        device.type_ == xinput::DeviceType::MASTER_KEYBOARD
+                            && device.deviceid != u16::from(session.pair.keyboard)
+                    }).collect();
+                    assert_eq!(ambient.len(), 1);
+                    Ok(if family == 2 { u8::try_from(ambient[0].deviceid).unwrap() } else { session.pair.keyboard })
+                }).unwrap();
+                let grabbed = if matching { fixture.key } else { fixture.key.checked_add(1).unwrap() };
+                fixture.endpoint.transaction(deadline(), || {
+                    root_foreign_passive(&fixture.endpoint, &session.pair, family, modifier, grabbed, true)
+                }).unwrap();
+                session.worker.begin(deadline()).unwrap();
+                let press = session.worker.edge(0, fixture.key, true);
+                if matching {
+                    assert!(press.is_err());
+                    assert!(!session.worker.attempted);
+                    assert_eq!(fixture.keyboard_observations(), (vec![], vec![]));
+                } else {
+                    press.unwrap();
+                    session.worker.edge(1, fixture.key, false).unwrap();
+                    session.worker.end().unwrap();
+                    assert_eq!(
+                        fixture.keyboard_observations(),
+                        (vec![(fixture.target, true), (fixture.target, false)], vec![]),
+                    );
+                }
+                let other = endpoint();
+                other.transaction(deadline(), || {
+                    assert!(root_foreign_passive(&other, &session.pair, family, modifier, grabbed, true).is_err());
+                    Ok(())
+                }).unwrap();
+                fixture.endpoint.transaction(deadline(), || {
+                    root_foreign_passive(&fixture.endpoint, &session.pair, family, modifier, grabbed, false)
+                }).unwrap();
+                other.transaction(deadline(), || {
+                    root_foreign_passive(&other, &session.pair, family, modifier, grabbed, true)?;
+                    root_foreign_passive(&other, &session.pair, family, modifier, grabbed, false)
+                }).unwrap();
+                // This separately owned probe can reuse the stopped input
+                // client's numeric X client base. Close it before asking the
+                // keeper for its conservative original-client death fence.
+                drop(other);
+                assert!(session.finish());
+                fixture.remains();
+                println!(
+                    "root_passive_family family={family} matching={matching} foreign_preserved=true residual=false",
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; active XI1 cleanup diversion"]
+    fn held_cleanup_must_not_deliver_to_a_late_active_xi1_slave_grab() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        session.worker.begin(deadline()).unwrap();
+        session.worker.edge(0, fixture.key, true).unwrap();
+        assert_eq!(fixture.events(), [(fixture.target, true)]);
+        fixture.endpoint.transaction(deadline(), || {
+            let connection = &fixture.endpoint.connection;
+            checked(checked(connection.xinput_open_device(session.pair.slave))?.reply())?;
+            let extension = checked(connection.extension_information(xinput::X11_EXTENSION_NAME))?
+                .ok_or_else(unavailable)?;
+            let classes = [xinput::DEVICE_KEY_PRESS_EVENT, xinput::DEVICE_KEY_RELEASE_EVENT]
+                .map(|kind| (u32::from(session.pair.slave) << 8) | u32::from(extension.first_event + kind));
+            let grab = checked(checked(connection.xinput_grab_device(
+                fixture.guard, x11rb::CURRENT_TIME,
+                xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC, false,
+                session.pair.slave, &classes,
+            ))?.reply())?;
+            assert_eq!(grab.status, xproto::GrabStatus::SUCCESS);
+            session.pair.check(&fixture.endpoint)?;
+            session.pair.check_focus(&fixture.endpoint, fixture.target)?;
+            Ok(())
+        }).unwrap();
+        session.worker.input.boundary.stop();
+        let cleanup = session.keeper.quiesce();
+        let observed = fixture.endpoint.transaction(deadline(), || {
+            let connection = &fixture.endpoint.connection;
+            checked(checked(connection.get_input_focus())?.reply())?;
+            let mut events = Vec::new();
+            while let Some(event) = checked(connection.poll_for_event())? {
+                let description = format!("{event:?}");
+                if description.contains("KeyPress") || description.contains("KeyRelease") {
+                    events.push(description);
+                }
+            }
+            checked(checked(connection.xinput_ungrab_device(x11rb::CURRENT_TIME, session.pair.slave))?.check())?;
+            Ok(events)
+        }).unwrap();
+        println!("active_xi1_cleanup quiescent_receipt={} events={observed:?}", cleanup.is_ok());
+        assert!(cleanup.is_err(), "foreign active grab cannot yield a quiescent receipt");
+        assert!(observed.is_empty(), "held cleanup delivered a release to a foreign XI1 slave grab");
+        fixture.endpoint.transaction(deadline(), || {
+            session.pair.check(&fixture.endpoint)?;
+            assert_ne!(key_state(&fixture.endpoint, session.pair.slave)?, [0; 32]);
+            let remove = xinput::HierarchyChange {
+                len: 3,
+                data: xinput::HierarchyChangeData::RemoveMaster(xinput::HierarchyChangeDataRemoveMaster {
+                    deviceid: session.pair.pointer, return_mode: xinput::ChangeMode::FLOAT,
+                    return_pointer: 0, return_keyboard: 0,
+                }),
+            };
+            checked(checked(fixture.endpoint.connection.xinput_xi_change_hierarchy(&[remove]))?.check())
+        }).unwrap();
+        fixture.remains();
+    }
+
+    #[test]
+    #[ignore = "owned attested disposable Xvfb only; active XI1 slave grab"]
+    fn active_xi1_injection_grab_cannot_escape_the_target() {
+        let fixture = Fixture::new();
+        let mut session = fixture.session();
+        fixture.endpoint.transaction(deadline(), || {
+            let connection = &fixture.endpoint.connection;
+            checked(checked(connection.xinput_open_device(session.pair.slave))?.reply())?;
+            let extension = checked(connection.extension_information(xinput::X11_EXTENSION_NAME))?
+                .ok_or_else(unavailable)?;
+            let classes = [xinput::DEVICE_KEY_PRESS_EVENT, xinput::DEVICE_KEY_RELEASE_EVENT]
+                .map(|kind| (u32::from(session.pair.slave) << 8) | u32::from(extension.first_event + kind));
+            let grab = checked(checked(connection.xinput_grab_device(
+                fixture.guard, x11rb::CURRENT_TIME,
+                xproto::GrabMode::ASYNC, xproto::GrabMode::ASYNC, false,
+                session.pair.slave, &classes,
+            ))?.reply())?;
+            assert_eq!(grab.status, xproto::GrabStatus::SUCCESS);
+            // XI1 active grabs do not detach this original slave. Its native
+            // topology and persistent focus can still pass fresh snapshots.
+            session.pair.check(&fixture.endpoint)?;
+            session.pair.check_focus(&fixture.endpoint, fixture.target)?;
+            Ok(())
+        }).unwrap();
+        session.worker.begin(deadline()).unwrap();
+        let press = session.worker.edge(0, fixture.key, true);
+        let release = if press.is_ok() { session.worker.edge(1, fixture.key, false) } else { Err(unavailable()) };
+        let observed = fixture.endpoint.transaction(deadline(), || {
+            let connection = &fixture.endpoint.connection;
+            checked(checked(connection.get_input_focus())?.reply())?;
+            let mut events = Vec::new();
+            while let Some(event) = checked(connection.poll_for_event())? {
+                let description = format!("{event:?}");
+                if description.contains("KeyPress") || description.contains("KeyRelease") {
+                    events.push(description);
+                }
+            }
+            checked(checked(connection.xinput_ungrab_device(x11rb::CURRENT_TIME, session.pair.slave))?.check())?;
+            Ok(events)
+        }).unwrap();
+        println!("active_xi1_slave press_ack={} release_ack={} events={observed:?}", press.is_ok(), release.is_ok());
+        assert!(session.finish());
+        fixture.remains();
+        assert!(press.is_err() && observed.is_empty(), "foreign active XI1 slave grab received admitted input");
+    }
+
     use super::*;
 
     pub(super) fn deadline() -> Instant {
