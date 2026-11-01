@@ -25,5 +25,14 @@
     "paths": [".>@tailwindcss/typography>postcss-selector-parser"],
     "expiresOn": "2026-11-17",
     "reason": "Tailwind typography pins this major. It parses repository CSS selectors during compilation; the product does not parse user selectors with it. A major override needs compatibility evidence. Reassess upstream and build-input boundaries before renewal."
+  },
+  {
+    "id": "GHSA-gcqx-w48m-w2h4",
+    "module": "deepmerge",
+    "version": "4.3.1",
+    "severity": "low",
+    "paths": [".>shadcn>deepmerge"],
+    "expiresOn": "2026-11-17",
+    "reason": "No upstream patch exists. The sole installed path is the shadcn CLI, whose JavaScript imports deepmerge. MintClaw imports only shadcn/tailwind.css; reviewed build/lint/test commands do not run the CLI or merge untrusted registry objects. Reassess all paths, CLI use and upstream before renewal."
   }
 ]

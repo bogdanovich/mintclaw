@@ -72,5 +72,12 @@
     "typescript-eslint": "^8.71.2",
     "vite": "^8.3.4",
     "vitest": "^4.1.12"
+  },
+  "pnpm": {
+    "overrides": {
+      "minimatch@<11.0.1": "11.0.1",
+      "seroval@<1.6.11": "1.6.11",
+      "systeminformation@<5.33.16": "5.33.16"
+    }
   }
 }
