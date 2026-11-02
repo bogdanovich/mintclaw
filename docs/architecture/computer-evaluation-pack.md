@@ -1,7 +1,8 @@
 # Computer-use evaluation pack v1
 
 Status: frozen task intents and acceptance rules, with private text fixtures and
-saved-byte oracles for CU-T01–05 plus Writer setup/saved-ODT checks for CU-T06–12.
+saved-byte oracles for CU-T01–05, Writer setup/saved-ODT checks for CU-T06–12,
+and Calc setup/saved-ODS checks for CU-T13–14.
 The full runner and native/model qualification remain unimplemented. None of
 these model tasks is currently qualified.
 This pack supplies the representative-task gate in the
@@ -210,6 +211,41 @@ The independent controller still must attest GUI-only execution, original
 target/guard, app/window identity, authorized dialogs, intermediate states and
 post-cleanup disposition. These fixtures neither run the native task nor change
 the 20-task denominator or production access.
+
+## Private Calc fixture subset
+
+`scripts/internal/computer-evaluation/calc_fixtures.py` supplies controller-only
+CU-T13–14 seeds and saved-ODS checks. `calc-v1` freezes the input recipes,
+instructions, namespaces, projection rules and bounds. CU-T13 starts with an
+empty `Evaluation` sheet; CU-T14 seeds numeric A1 with 1000.25. These helpers
+open no GUI and make no model call. All reports keep `native_task_qualified=false`.
+
+CU-T13 requires numeric literals in B2:B4 and a real OpenFormula SUM of that local
+range in B5. It independently recomputes the result with Decimal arithmetic and
+checks the cached numeric value; a typed result or misleading namespace fails.
+CU-T14 checks the unchanged numeric value and effective currency format through
+supported cell, row, column, default and inherited styles. Display text alone
+does not establish either property. Conditional number-format branches must all
+retain supported currency semantics. These are bounded projections, not a
+general formula evaluator or an ODF renderer; unsupported structures and styles
+are unverifiable and never qualify a native task.
+
+The existing no-follow owned-file reader and bounded ODF ZIP/XML reader are
+reused. No ZIP entry is extracted. Sparse empty repeats can span a worksheet,
+but meaningful data is limited to 16 rows by 16 columns. Package/XML bounds
+remain those of the Writer checker. Number/formula strings and style traversal
+are bounded separately. Source hashes must be frozen alongside each run.
+
+```sh
+python3 scripts/internal/computer-evaluation/calc_fixtures.py prepare \
+  --task CU-T13 --run-directory /absolute/new/private-calc-task
+# A future independently qualified GUI runner performs the task here.
+python3 scripts/internal/computer-evaluation/calc_fixtures.py check-artifact \
+  --task CU-T13 --run-directory /absolute/new/private-calc-task
+```
+
+CU-T15–20 setup/controllers and native/model qualification remain pending. The
+full task denominator remains 20 per OS; these saved artifacts are not GUI proof.
 
 ## Scoring, safety and resource limits
 
