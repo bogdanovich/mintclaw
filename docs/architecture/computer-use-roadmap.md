@@ -367,7 +367,9 @@ latency. CU-1 sets resource limits that preserve gateway headroom on the 8 GB ho
 The [v1 evaluation pack](computer-evaluation-pack.md) freezes the initial 20 task
 intents and independent completion conditions. Private saved-text fixtures cover
 CU-T01–05; Writer setup/saved-ODT checks cover CU-T06–12; Calc setup/saved-ODS
-checks cover CU-T13–16. These artifact-only checks do not qualify native task execution.
+checks cover CU-T13–16; a separate chart-structure checker covers CU-T17 while
+requiring independent fresh rendered evidence. These artifact-only checks do not
+qualify native task execution.
 The full runner, remaining fixtures, approved budgets and actual model runs are
 still pending; no task score is claimed and all 20 tasks remain required.
 
