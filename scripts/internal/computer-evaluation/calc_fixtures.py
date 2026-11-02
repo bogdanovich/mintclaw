@@ -263,9 +263,12 @@ class Sheet:
                     count = repeat(cell, "table:number-columns-repeated", MAX_COLUMNS)
                     if position + count - 1 > MAX_COLUMNS:
                         raise shared.Unverifiable("repeat_bounds")
-                    meaningful = cell.get(tag("office:value-type")) is not None or \
-                        cell.get(tag("table:formula")) is not None or any(
-                            "".join(p.itertext()) for p in cell.findall(tag("text:p")))
+                    # ODF spaces/tabs/line-breaks can carry data without itertext().
+                    # Untyped value attributes are unsupported, never empty.
+                    meaningful = any(cell.get(tag(name)) is not None for name in (
+                        "office:value-type", "office:value", "office:string-value", "office:boolean-value",
+                        "office:date-value", "office:time-value", "table:formula",
+                    )) or any(len(p) or "".join(p.itertext()) for p in cell.findall(tag("text:p")))
                     if meaningful:
                         if position + count - 1 > MAX_DATA_COLUMNS or row + copies - 1 > MAX_DATA_ROWS:
                             raise shared.Unverifiable("data_bounds")

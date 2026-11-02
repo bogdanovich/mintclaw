@@ -161,6 +161,18 @@ class CalcFixtureTests(unittest.TestCase):
         extra = '<table:table table:name="Other"><table:table-row><table:table-cell/></table:table-row></table:table>'
         self.assertIsNone(self.check("CU-T13", package(SUM_BODY, extra_content=extra))["artifact_matches"])
 
+    def test_encoded_whitespace_and_untyped_values_are_not_silent_empty_cells(self):
+        for content in ["<text:s/>", '<text:s text:c="1000000000"/>', "<text:tab/>",
+                        "<text:line-break/>", "<text:span/>"]:
+            body = SUM_BODY.replace('<table:table-cell/>',
+                                    '<table:table-cell><text:p>' + content + '</text:p></table:table-cell>', 1)
+            self.assertIsNone(self.check("CU-T13", package(body))["artifact_matches"])
+        for attribute in ['office:value="9"', 'office:string-value="extra"',
+                          'office:boolean-value="false"', 'office:date-value="2026-11-01"',
+                          'office:time-value="PT1H"']:
+            body = SUM_BODY.replace('<table:table-cell/>', '<table:table-cell ' + attribute + '/>', 1)
+            self.assertIsNone(self.check("CU-T13", package(body))["artifact_matches"])
+
     def test_shared_package_limits_and_expected_mime_are_enforced(self):
         ods = package(SUM_BODY)
         with self.assertRaises(fixtures.shared.Unverifiable):

@@ -140,7 +140,7 @@ An artifact match does not prove native GUI use, CU-T01's reopen, unchanged guar
 window, authorized dialogs, intermediate state, cancellation or post-cleanup
 disposition. The eventual existing-Pipeline controller must attest those
 independently before a full task pass. The Writer subset below supplies seven
-more controller fixtures; CU-T13–20 fixtures remain unimplemented. All 20 tasks
+more controller fixtures; CU-T15–20 fixtures remain unimplemented. All 20 tasks
 stay in the denominator. No provider run or spending is authorized.
 
 ## Private Writer fixture subset
