@@ -81,7 +81,7 @@ jobs:
         run: |
           python3 -m unittest discover -s scripts/internal/computer-driver -p 'test_native_text_plan.py' -v
           go test -race -tags=mintclaw_private_native_keyboard ./pkg/computer/desktop \
-            -run '^TestPrivateKeyboard' -count=1 -timeout=30s
+            -run '^Test(PrivateKeyboard|PrivateNativeEffectProbe)' -count=1 -timeout=30s
           go test -race -tags=mintclaw_private_native_keyboard -c ./pkg/computer/desktop \
             -o "$RUNNER_TEMP/mintclaw-window-keys/native-host.test"
           {
@@ -92,6 +92,8 @@ jobs:
               pkg/computer/desktop/private_keyboard_linux_test.go \
               pkg/computer/desktop/private_keyboard_application_linux_test.go \
               pkg/computer/desktop/private_keyboard_text_observation_linux_test.go \
+              pkg/computer/desktop/private_keyboard_pixel_effect_linux_test.go \
+              pkg/computer/cua/driver.go \
               scripts/internal/computer-driver/gnome_keyboard_fixture.py \
               scripts/internal/computer-driver/gnome_session_fixture.py \
               scripts/internal/computer-driver/atspi_text_observer.py \
