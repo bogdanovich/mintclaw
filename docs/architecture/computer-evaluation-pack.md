@@ -3,7 +3,10 @@
 Status: frozen task intents and acceptance rules, with private text fixtures and
 saved-byte oracles for CU-T01–05, Writer setup/saved-ODT checks for CU-T06–12,
 Calc setup/saved-ODS checks for CU-T13–16, a CU-T17 chart-structure checker,
-and disposable GTK/AppKit canvas/form sources and state projections for CU-T18–19.
+disposable GTK/AppKit canvas/form sources and state projections for CU-T18–19,
+and CU-T20 setup/saved-byte phase projections. The
+[handoff subset](computer-handoff-evaluation.md) defines its document states
+and localized instructions without executing the interaction.
 The full runner and native/model qualification remain unimplemented. None of
 these model tasks is currently qualified.
 This pack supplies the representative-task gate in the
@@ -142,7 +145,8 @@ window, authorized dialogs, intermediate state, cancellation or post-cleanup
 disposition. The eventual existing-Pipeline controller must attest those
 independently before a full task pass. The Writer subset below supplies seven
 more controller fixtures. The interactive subset below supplies CU-T18–19;
-CU-T20 remains outside these merged subsets. All 20 tasks
+the [handoff helper](computer-handoff-evaluation.md) supplies CU-T20 setup and
+saved-byte projections. Full native controllers remain unimplemented. All 20 tasks
 stay in the denominator. No provider run or spending is authorized.
 
 ## Private Writer fixture subset
@@ -260,8 +264,10 @@ python3 scripts/internal/computer-evaluation/calc_fixtures.py check-artifact \
   --task CU-T13 --run-directory /absolute/new/private-calc-task
 ```
 
-CU-T20 setup/controller and all native/model qualification remain pending.
-The full task denominator remains 20 per OS; saved artifacts are not GUI proof.
+All native/model qualification and the CU-T20 native controller remain pending.
+The separate [CU-T20 setup/projection helper](computer-handoff-evaluation.md)
+does not execute its interaction. The full task denominator remains 20 per OS;
+saved artifacts are not GUI proof.
 
 ## Private canvas and form fixture subset
 
