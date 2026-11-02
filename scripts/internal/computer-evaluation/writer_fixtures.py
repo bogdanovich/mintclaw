@@ -187,7 +187,7 @@ def parse_xml(data):
     return root
 
 
-def read_package(data):
+def read_package(data, expected_mime=MIME):
     with zipfile.ZipFile(BytesIO(data)) as archive:
         entries = archive.infolist()
         names = [entry.filename for entry in entries]
@@ -200,15 +200,15 @@ def read_package(data):
                     any(part in {".", ".."} for part in parts) or entry.file_size < 0:
                 raise shared.Unverifiable("unsupported_package")
         if names[0] != "mimetype" or entries[0].compress_type != zipfile.ZIP_STORED or \
-                archive.read("mimetype") != MIME:
-            raise shared.Unverifiable("not_odt")
+                archive.read("mimetype") != expected_mime:
+            raise shared.Unverifiable("unexpected_document_type")
         content = parse_xml(archive.read("content.xml"))
         styles = parse_xml(archive.read("styles.xml"))
         manifest = parse_xml(archive.read("META-INF/manifest.xml"))
         roots = [entry for entry in manifest if entry.get(tag("manifest:full-path")) == "/"]
         if manifest.tag != tag("manifest:manifest") or len(roots) != 1 or \
-                roots[0].get(tag("manifest:media-type")) != MIME.decode():
-            raise shared.Unverifiable("not_odt")
+                roots[0].get(tag("manifest:media-type")) != expected_mime.decode():
+            raise shared.Unverifiable("unexpected_document_type")
         for name in ("content.xml", "styles.xml"):
             found = [entry for entry in manifest if entry.get(tag("manifest:full-path")) == name]
             if len(found) != 1 or found[0].get(tag("manifest:media-type")) != "text/xml" or len(found[0]):
