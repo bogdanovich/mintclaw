@@ -195,6 +195,26 @@ class HandoffFixtureTests(unittest.TestCase):
         self.assertIs(projected['native_source_verified'], False)
         self.assertNotIn('HUMAN', result.stdout.decode())
 
+    def test_unknown_phase_cli_is_structured_and_never_echoes_supplied_value(self):
+        script = str(Path(fixtures.__file__).resolve())
+        for path in (self.path, self.parent / 'absent'):
+            for phase in ('private phase canary', '', '-private-phase-canary'):
+                with self.subTest(path_exists=path.exists(), phase=phase):
+                    result = subprocess.run(
+                        [sys.executable, script, 'check-artifact', '--run-directory', str(path), '--phase=' + phase],
+                        capture_output=True, timeout=5, check=False,
+                    )
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(result.stderr, b'')
+                    value = json.loads(result.stdout)
+                    self.assertEqual(value['reason'], 'unsupported_phase')
+                    self.assertIsNone(value['phase'])
+                    self.assertIsNone(value['artifact_matches'])
+                    self.assertIs(value['native_task_qualified'], False)
+                    self.assertIs(value['native_source_verified'], False)
+                    if phase:
+                        self.assertNotIn(phase.encode(), result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

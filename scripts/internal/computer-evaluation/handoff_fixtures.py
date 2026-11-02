@@ -115,7 +115,7 @@ def main():
         subparser = subparsers.add_parser(operation)
         subparser.add_argument("--run-directory", required=True)
         if operation == "check-artifact":
-            subparser.add_argument("--phase", choices=tuple(EXPECTED), required=True)
+            subparser.add_argument("--phase", required=True, help="Saved-byte projection: " + ", ".join(EXPECTED))
     args = parser.parse_args()
     if args.operation == "prepare":
         try:
