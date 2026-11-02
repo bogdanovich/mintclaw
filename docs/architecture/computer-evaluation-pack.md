@@ -2,7 +2,7 @@
 
 Status: frozen task intents and acceptance rules, with private text fixtures and
 saved-byte oracles for CU-T01–05, Writer setup/saved-ODT checks for CU-T06–12,
-and Calc setup/saved-ODS checks for CU-T13–16.
+Calc setup/saved-ODS checks for CU-T13–16, and a CU-T17 chart-structure checker.
 The full runner and native/model qualification remain unimplemented. None of
 these model tasks is currently qualified.
 This pack supplies the representative-task gate in the
@@ -140,7 +140,7 @@ An artifact match does not prove native GUI use, CU-T01's reopen, unchanged guar
 window, authorized dialogs, intermediate state, cancellation or post-cleanup
 disposition. The eventual existing-Pipeline controller must attest those
 independently before a full task pass. The Writer subset below supplies seven
-more controller fixtures; CU-T17–20 fixtures remain unimplemented. All 20 tasks
+more controller fixtures; CU-T18–20 fixtures remain unimplemented. All 20 tasks
 stay in the denominator. No provider run or spending is authorized.
 
 ## Private Writer fixture subset
@@ -258,8 +258,47 @@ python3 scripts/internal/computer-evaluation/calc_fixtures.py check-artifact \
   --task CU-T13 --run-directory /absolute/new/private-calc-task
 ```
 
-CU-T17–20 setup/controllers and native/model qualification remain pending. The
+CU-T18–20 setup/controllers and native/model qualification remain pending. The
 full task denominator remains 20 per OS; these saved artifacts are not GUI proof.
+
+## Private chart fixture
+
+`scripts/internal/computer-evaluation/chart_fixtures.py` adds CU-T17 with a
+separate `chart-v1` recipe. It seeds `Evaluation.A1:B4`: headers `Category` and
+`Value`, followed by `(alpha,2)`, `(beta,3)`, `(gamma,5)`. The instruction requests
+one bar chart using A2:A4 as categories, B2:B4 as its value series and B1 as its
+series label, with the source cells unchanged. Calc-v2 remains unchanged.
+
+The saved-artifact check requires one embedded chart frame with positive
+dimensions, matching manifest/part types, actual series/category/label ranges,
+and consistent cached labels/numbers. An image-only substitute, a range-looking
+description or a deprecated plot-range hint cannot establish those bindings.
+QName values retain their lexical namespace scope. External/traversing package
+references, XML base overrides, unsupported link modes, inline objects and
+unsupported chart/cache structures are unverifiable. This is a bounded ODF
+projection, not a general renderer or a macro/network security sandbox.
+
+The chart checker reuses the Calc controller's owned no-follow single-link file
+reader, original task/revision/directory binding, mutation checks and package/XML
+bounds. Its projection callback is trusted controller code, not a model-selected
+parser or a native driver. The existing Calc CLI and recipe are unchanged.
+
+```sh
+python3 scripts/internal/computer-evaluation/chart_fixtures.py prepare \
+  --task CU-T17 --run-directory /absolute/new/private-chart-task
+# A future independently qualified GUI runner performs the task here.
+python3 scripts/internal/computer-evaluation/chart_fixtures.py check-artifact \
+  --task CU-T17 --run-directory /absolute/new/private-chart-task
+```
+
+Exit statuses retain the same saved-artifact meaning: 0 matches the bounded
+structure, 1 is a mismatch, 2 is unverifiable. Every result retains
+`native_task_qualified=false`; artifact-check results also retain
+`fresh_render_required=true`. Setup declares the required live evidence. Caller-created
+files or flags cannot supply native or rendered proof. The independent native
+controller must still attest fresh visible chart evidence, GUI execution,
+unchanged guard and release/disposition. A headless compatibility export is
+separate evidence and does not satisfy the native task's fresh-render gate.
 
 ## Scoring, safety and resource limits
 
