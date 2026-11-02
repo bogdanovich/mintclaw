@@ -164,8 +164,7 @@ class Sheet:
 
     def __init__(self, content, styles):
         self.cell_styles, self.formats = {}, {}
-        self.default_data_style = None
-        default_seen = False
+        self.default_cell_style = None
         for root in (content, styles):
             for kind in ("office:styles", "office:automatic-styles"):
                 containers = root.findall(tag(kind))
@@ -175,10 +174,9 @@ class Sheet:
                     for node in odf.structural_children(container):
                         name = node.get(tag("style:name"))
                         if node.tag == tag("style:default-style") and node.get(tag("style:family")) == "table-cell":
-                            if default_seen:
+                            if self.default_cell_style is not None:
                                 raise shared.Unverifiable("ambiguous_styles")
-                            default_seen = True
-                            self.default_data_style = node.get(tag("style:data-style-name"))
+                            self.default_cell_style = node
                         elif node.tag == tag("style:style") and node.get(tag("style:family")) == "table-cell":
                             if not name or name in self.cell_styles:
                                 raise shared.Unverifiable("ambiguous_styles")
@@ -221,18 +219,24 @@ class Sheet:
         return all(self.currency_format(mapping.get(tag("style:apply-style-name")), seen + (name,))
                    for mapping in node.findall(tag("style:map")))
 
-    def currency_cell(self, name, seen=()):
-        if not name:
-            return self.currency_format(self.default_data_style)
-        if name in seen or len(seen) >= MAX_STYLE_DEPTH:
-            raise shared.Unverifiable("style_cycle")
-        node = self.cell_styles.get(name)
-        if node is None:
-            raise shared.Unverifiable("missing_cell_style")
-        data_style = node.get(tag("style:data-style-name"))
-        if data_style:
-            return self.currency_format(data_style)
-        return self.currency_cell(node.get(tag("style:parent-style-name")), seen + (name,))
+    def currency_cell(self, name):
+        data_style, seen = None, set()
+        while name:
+            if name in seen or len(seen) >= MAX_STYLE_DEPTH:
+                raise shared.Unverifiable("style_cycle")
+            seen.add(name)
+            node = self.cell_styles.get(name)
+            if node is None:
+                raise shared.Unverifiable("missing_cell_style")
+            if node.findall(tag("style:map")):
+                raise shared.Unverifiable("unsupported_conditional_cell_style")
+            data_style = data_style or node.get(tag("style:data-style-name"))
+            name = node.get(tag("style:parent-style-name"))
+        if self.default_cell_style is not None:
+            if self.default_cell_style.findall(tag("style:map")):
+                raise shared.Unverifiable("unsupported_conditional_cell_style")
+            data_style = data_style or self.default_cell_style.get(tag("style:data-style-name"))
+        return self.currency_format(data_style)
 
     def projection(self):
         values, defaults = {}, {}

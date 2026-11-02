@@ -226,7 +226,10 @@ checks the cached numeric value; a typed result or misleading namespace fails.
 CU-T14 checks the unchanged numeric value and effective currency format through
 supported cell, row, column, default and inherited styles. Display text alone
 does not establish either property. Conditional number-format branches must all
-retain supported currency semantics. These are bounded projections, not a
+retain supported currency semantics. Conditional cell-style mappings, including
+inherited and default mappings, are unsupported and refused. The complete named
+parent chain is checked even when a child declares its own number format.
+These are bounded projections, not a
 general formula evaluator or an ODF renderer; unsupported structures and styles
 are unverifiable and never qualify a native task.
 

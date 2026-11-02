@@ -29,7 +29,7 @@ CURRENCY_STYLES = '''<number:currency-style style:name="Money"><number:currency-
 <style:style style:name="Price" style:family="table-cell" style:data-style-name="Money"/>'''
 
 
-def package(body, styles="", extra_content="", namespace_override=None):
+def package(body, styles="", extra_content="", namespace_override=None, named_styles=""):
     """Independent compressed ODS examples, not task completion through prepare."""
     namespaces = dict(fixtures.NS)
     if namespace_override:
@@ -40,7 +40,7 @@ def package(body, styles="", extra_content="", namespace_override=None):
                '<office:spreadsheet>' + body + extra_content
                + '</office:spreadsheet></office:body></office:document-content>').encode()
     document_styles = (f'<office:document-styles {declarations} office:version="1.3">'
-                       '<office:styles/></office:document-styles>').encode()
+                       '<office:styles>' + named_styles + '</office:styles></office:document-styles>').encode()
     manifest = (f'<manifest:manifest xmlns:manifest="{namespaces["manifest"]}">'
                 '<manifest:file-entry manifest:full-path="/" '
                 'manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/>'
@@ -153,6 +153,32 @@ class CalcFixtureTests(unittest.TestCase):
                      SUM_BODY.replace('office:value="2"', 'table:number-columns-spanned="2" office:value="2"'),
                      SUM_BODY.replace('office:value="10"', 'table:number-matrix-columns-spanned="2" office:value="10"')]:
             self.assertIsNone(self.check("CU-T13", package(body))["artifact_matches"])
+
+    def test_conditional_cell_styles_are_refused_through_inheritance_and_defaults(self):
+        mapping = '<style:map style:condition="cell-content() &gt; 0" style:apply-style-name="Plain"/>'
+        plain = ('<number:number-style style:name="Number"><number:number/></number:number-style>'
+                 '<style:style style:name="Plain" style:family="table-cell" style:data-style-name="Number"/>')
+        for location in ("automatic", "named"):
+            for inheritance in ("direct", "parent", "default"):
+                styles = CURRENCY_STYLES + plain
+                body = CURRENCY_BODY
+                if inheritance == "direct":
+                    styles = styles.replace('style:data-style-name="Money"/>',
+                                            'style:data-style-name="Money">' + mapping + '</style:style>')
+                elif inheritance == "parent":
+                    styles += ('<style:style style:name="Base" style:family="table-cell">' + mapping
+                               + '</style:style>')
+                    # Child format must not short-circuit inspection of a parent mapping.
+                    styles = styles.replace('style:name="Price"', 'style:parent-style-name="Base" style:name="Price"')
+                else:
+                    body = body.replace('table:style-name="Price"', "")
+                    styles += ('<style:default-style style:family="table-cell" style:data-style-name="Money">'
+                               + mapping + '</style:default-style>')
+                with self.subTest(location=location, inheritance=inheritance):
+                    data = package(body, styles=styles) if location == "automatic" else package(body, named_styles=styles)
+                    result = self.check("CU-T14", data)
+                    self.assertIsNone(result["artifact_matches"])
+                    self.assertEqual(result["reason"], "unsupported_conditional_cell_style")
 
     def test_non_xml_numeric_lexemes_nonfinite_values_and_extra_sheets_are_unverifiable(self):
         for value in ["NaN", "INF", "1_000", "١٠", " 2 ", "1" * 129]:
