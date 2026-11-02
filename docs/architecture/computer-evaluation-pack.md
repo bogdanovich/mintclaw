@@ -2,7 +2,8 @@
 
 Status: frozen task intents and acceptance rules, with private text fixtures and
 saved-byte oracles for CU-T01–05, Writer setup/saved-ODT checks for CU-T06–12,
-Calc setup/saved-ODS checks for CU-T13–16, and a CU-T17 chart-structure checker.
+Calc setup/saved-ODS checks for CU-T13–16, a CU-T17 chart-structure checker,
+and disposable GTK/AppKit canvas/form sources and state projections for CU-T18–19.
 The full runner and native/model qualification remain unimplemented. None of
 these model tasks is currently qualified.
 This pack supplies the representative-task gate in the
@@ -140,7 +141,8 @@ An artifact match does not prove native GUI use, CU-T01's reopen, unchanged guar
 window, authorized dialogs, intermediate state, cancellation or post-cleanup
 disposition. The eventual existing-Pipeline controller must attest those
 independently before a full task pass. The Writer subset below supplies seven
-more controller fixtures; CU-T18–20 fixtures remain unimplemented. All 20 tasks
+more controller fixtures. The interactive subset below supplies CU-T18–19;
+CU-T20 remains outside these merged subsets. All 20 tasks
 stay in the denominator. No provider run or spending is authorized.
 
 ## Private Writer fixture subset
@@ -258,8 +260,76 @@ python3 scripts/internal/computer-evaluation/calc_fixtures.py check-artifact \
   --task CU-T13 --run-directory /absolute/new/private-calc-task
 ```
 
-CU-T18–20 setup/controllers and native/model qualification remain pending. The
-full task denominator remains 20 per OS; these saved artifacts are not GUI proof.
+CU-T20 setup/controller and all native/model qualification remain pending.
+The full task denominator remains 20 per OS; saved artifacts are not GUI proof.
+
+## Private canvas and form fixture subset
+
+`scripts/internal/computer-evaluation/interactive_fixtures.py` freezes CU-T18–19
+as `interactive-v1`. Setup creates a new mode-0700 directory with an owned
+task/revision/run/directory marker and exact immutable recipe bytes. Protected
+bounded reads reject altered recipes, unsafe files and observed replacement.
+The same no-follow reader used by the text subset applies; this is not a
+same-UID security boundary or an atomic filesystem snapshot.
+
+The canvas is a logical 640-by-480 client area. Card Alpha starts at (40,60),
+Card Beta at (260,60); both measure 120 by 70. Alpha must finish wholly inside
+the outlined destination (32,252,136,86), leaving Beta unchanged. The projection
+requires a completed Alpha drag from its original position with at least one
+motion callback, not just a matching final position or button acknowledgement.
+Held, cancelled and release-only gestures cannot qualify the projected state.
+
+The form starts with empty Name, Choice alpha, Confirm unchecked and Period
+daily. The task requires exact `U`, beta, checked and monthly. Editable preview
+controls appear before the real controls and must retain KEEP, gamma and
+unchecked. Neither Unicode normalization nor Boolean-as-integer substitutions
+are accepted. Both apps retain a separate guard window with editable text
+GUARD_UNCHANGED and an Apply counter; the guard must stay visible and unchanged.
+
+`interactive_fixture_linux.py` supplies GTK 3 widgets and canvas callbacks;
+`interactive_fixture_macos.swift` supplies AppKit equivalents. Neither is a
+MintClaw driver, companion replacement or installed application. The Mac source
+pins the canonical recipe hashes. Compile/typecheck without launching it where
+Mac GUI testing is deferred. Launching either source opens only its disposable
+windows, but still requires an explicitly selected authorized desktop.
+The Linux fixture requires GTK 3, GdkX11, PyGObject, Pycairo and the PyGObject
+Cairo foreign-struct adapter (`python3-gi-cairo` on the selected Ubuntu tuple).
+It checks the adapter before creating windows; receiving events alone does not
+prove that a canvas rendered. Privately staged dependencies are test inputs,
+not permission for a system installation.
+
+The controller prepares a task and passes `launch-config` JSON as the app's
+first stdin line. Apps take `--task CU-T18` or `--task CU-T19`. After a ready
+record, their only supported request is `{"inspect_id":"fresh-nonce"}` on
+stdin. Each response reads current widgets/layout on the UI thread and includes
+the nonce, process ID, original native target/guard window IDs and current
+visible-window IDs. There are no controller set/reset commands or clipboard
+operations. Closing the guard exits the app; closing the target never silently
+creates a replacement. The owning controller must stop and verify its exact
+original process during cleanup; a protocol EOF is not an exit receipt.
+
+```sh
+python3 scripts/internal/computer-evaluation/interactive_fixtures.py prepare \
+  --task CU-T18 --run-directory /absolute/new/private-interactive-task
+python3 scripts/internal/computer-evaluation/interactive_fixtures.py launch-config \
+  --task CU-T18 --run-directory /absolute/new/private-interactive-task
+# An independently qualified controller launches the app and obtains its snapshot.
+# Pass only the snapshot's value object to check-state on stdin.
+python3 scripts/internal/computer-evaluation/interactive_fixtures.py check-state \
+  --task CU-T18 --run-directory /absolute/new/private-interactive-task
+```
+
+`check-state` accepts at most 32 KiB, verifies the run/revision binding and
+projects the exact bounded state. Exit 0 means state matches, 1 means mismatch
+and 2 means unverifiable. Reports include hashes and counts, never field text.
+Every result keeps both `native_task_qualified=false` and
+`native_source_verified=false`, including a perfect caller-supplied snapshot.
+Extra fields cannot supply authenticated source, freshness or execution proof.
+The future controller must independently attest the original process, native
+window lineage, fresh channel/nonce, native input and post-cleanup disposition.
+Compatibility tests of app callbacks, including synthetic input on an owned
+private display, do not satisfy those native/model gates. All 20 tasks remain
+in each OS's denominator.
 
 ## Private chart fixture
 
