@@ -369,14 +369,14 @@ class Sheet:
         return True
 
 
-def prepare(task_id, path):
-    task = TASKS[task_id]
+def prepare_ods_fixture(task_id, path, task, fixture_revision, marker):
+    """Trusted controller recipe only; no native execution or task proof."""
     Path(path).mkdir(mode=0o700, parents=False, exist_ok=False)
     directory, info = shared.open_directory(path)
     try:
-        record = {"task_id": task_id, "fixture_revision": FIXTURE_REVISION, "run_id": uuid.uuid4().hex,
+        record = {"task_id": task_id, "fixture_revision": fixture_revision, "run_id": uuid.uuid4().hex,
                   "root_device": info.st_dev, "root_inode": info.st_ino}
-        shared.write_new(directory, MARKER, json.dumps(record, sort_keys=True).encode("utf-8"))
+        shared.write_new(directory, marker, json.dumps(record, sort_keys=True).encode("utf-8"))
         shared.write_new(directory, CANDIDATE, seed_ods(task.seed, text_cells=task.text_seed))
         return {**record, "candidate": CANDIDATE, "instruction": task.instruction,
                 "seeded": True, "native_task_qualified": False}
@@ -384,31 +384,35 @@ def prepare(task_id, path):
         os.close(directory)
 
 
-def check_artifact(task_id, path):
-    result = {"task_id": task_id, "fixture_revision": FIXTURE_REVISION,
+def prepare(task_id, path):
+    return prepare_ods_fixture(task_id, path, TASKS[task_id], FIXTURE_REVISION, MARKER)
+
+
+def check_ods_fixture(task_id, path, matches, fixture_revision, marker):
+    """Bound owned reads around a trusted saved-ODS projection, never a GUI oracle."""
+    result = {"task_id": task_id, "fixture_revision": fixture_revision,
               "artifact_matches": None, "native_task_qualified": False}
     try:
         directory, root = shared.open_directory(path)
         try:
-            record = json.loads(shared.read_owned_file(directory, MARKER, 4096), object_pairs_hook=shared.unique_object)
+            record = json.loads(shared.read_owned_file(directory, marker, 4096), object_pairs_hook=shared.unique_object)
             if not isinstance(record, dict) or set(record) != {
                 "task_id", "fixture_revision", "run_id", "root_device", "root_inode",
-            } or record["task_id"] != task_id or record["fixture_revision"] != FIXTURE_REVISION or \
+            } or record["task_id"] != task_id or record["fixture_revision"] != fixture_revision or \
                     record["root_device"] != root.st_dev or record["root_inode"] != root.st_ino or \
                     not isinstance(record["run_id"], str) or len(record["run_id"]) != 32 or \
                     any(char not in "0123456789abcdef" for char in record["run_id"]):
                 raise shared.Unverifiable("invalid_fixture_record")
             data = shared.read_owned_file(directory, CANDIDATE, odf.MAX_ARTIFACT_BYTES)
-            content, styles = odf.read_package(data, MIME)
-            with zipfile.ZipFile(BytesIO(data)) as archive:
-                validate_formula_namespaces(archive.read("content.xml"))
-            matches = Sheet(content, styles).matches(TASKS[task_id])
+            matched = matches(data)
+            if not isinstance(matched, bool):
+                raise shared.Unverifiable("invalid_projection")
             named = os.stat(path, follow_symlinks=False)
             if (root.st_dev, root.st_ino, root.st_uid, root.st_mode) != (
                 named.st_dev, named.st_ino, named.st_uid, named.st_mode,
             ):
                 raise shared.Unverifiable("directory_changed")
-            result.update(run_id=record["run_id"], artifact_matches=matches,
+            result.update(run_id=record["run_id"], artifact_matches=matched,
                           artifact_sha256=shared.digest(data), artifact_bytes=len(data))
         finally:
             os.close(directory)
@@ -418,6 +422,16 @@ def check_artifact(task_id, path):
             ET.ParseError, zipfile.BadZipFile, zlib.error, NotImplementedError):
         result["reason"] = "artifact_unavailable"
     return result
+
+
+def check_artifact(task_id, path):
+    def matches(data):
+        content, styles = odf.read_package(data, MIME)
+        with zipfile.ZipFile(BytesIO(data)) as archive:
+            validate_formula_namespaces(archive.read("content.xml"))
+        return Sheet(content, styles).matches(TASKS[task_id])
+
+    return check_ods_fixture(task_id, path, matches, FIXTURE_REVISION, MARKER)
 
 
 def main():
