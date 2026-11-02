@@ -734,15 +734,19 @@ func TestPrivateNativeKeyboardKeeperLossRetainsUnknownHostOwnership(t *testing.T
 	}
 	until := time.Now().Add(time.Second)
 	for {
+		if time.Now().After(until) {
+			t.Fatal("original backup input process did not finish after keeper loss")
+		}
 		process := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
-		if _, err := unix.Poll(process, 5); err != nil {
+		_, err := unix.Poll(process, 5)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 		if process[0].Revents&unix.POLLIN != 0 {
 			break
-		}
-		if time.Now().After(until) {
-			t.Fatal("original backup input process did not finish after keeper loss")
 		}
 	}
 	fixture.heldOutsideWorker(t)
