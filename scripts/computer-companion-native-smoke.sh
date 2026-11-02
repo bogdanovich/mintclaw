@@ -4,8 +4,9 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: computer-companion-native-smoke.sh --driver /absolute/cua-driver --node /absolute/mintclaw-node [--suite companion|gateway|input] [--app /absolute/Companion.app] [--test-binary /absolute/suite.test] [--capture-dir /absolute/private/directory]'
+  echo 'Usage: computer-companion-native-smoke.sh --driver /absolute/cua-driver --node /absolute/mintclaw-node [--suite companion|gateway|input|ownership] [--app /absolute/Companion.app] [--test-binary /absolute/suite.test] [--capture-dir /absolute/private/directory]'
   echo 'The macOS-only input suite optionally accepts --input-test-binary /absolute/cua.test.'
+  echo 'The macOS-only ownership suite optionally accepts --ownership-test-binary /absolute/desktop.test.'
 }
 
 driver_path=''
@@ -13,6 +14,7 @@ node_path=''
 app_path=''
 test_path=''
 input_test_path=''
+ownership_test_path=''
 capture_dir=''
 suite='companion'
 test_timeout='3m'
@@ -24,6 +26,7 @@ while [[ $# -gt 0 ]]; do
     --app) app_path=$2 ;;
     --test-binary) test_path=$2 ;;
     --input-test-binary) input_test_path=$2 ;;
+    --ownership-test-binary) ownership_test_path=$2 ;;
     --capture-dir) capture_dir=$2 ;;
     --suite) suite=$2 ;;
     *) usage; exit 2 ;;
@@ -41,10 +44,18 @@ case "$suite" in
     test_timeout='4m'
     [[ -z "$capture_dir" ]] || { echo '--capture-dir is companion-suite only.' >&2; exit 2; }
     ;;
+  ownership)
+    test_name=TestCompanionNativeInputOwnershipOverWSS; test_package=./cmd/mintclaw-node
+    test_timeout='4m'
+    [[ -z "$capture_dir" ]] || { echo '--capture-dir is companion-suite only.' >&2; exit 2; }
+    ;;
   *) usage; exit 2 ;;
 esac
 [[ "$suite" == input || -z "$input_test_path" ]] || {
   echo '--input-test-binary is input-suite only.' >&2; exit 2;
+}
+[[ "$suite" == ownership || -z "$ownership_test_path" ]] || {
+  echo '--ownership-test-binary is ownership-suite only.' >&2; exit 2;
 }
 for executable in "$driver_path" "$node_path"; do
   [[ "$executable" == /* && -f "$executable" && ! -L "$executable" && -x "$executable" ]] || {
@@ -60,7 +71,9 @@ trap cleanup EXIT
 qualification_os=$(uname -s)
 case "$qualification_os/$(uname -m)" in
   Linux/x86_64)
-    [[ "$suite" != input ]] || { echo 'The actual-app input suite is macOS-only.' >&2; exit 2; }
+    [[ "$suite" != input && "$suite" != ownership ]] || {
+      echo 'Actual-app input/ownership suites are macOS-only.' >&2; exit 2;
+    }
     driver_sha256=fd922e708099aae311873a6667beb48eaabb8c15c3abec744492db8a96b544ee
     actual_sha256=$(sha256sum "$driver_path" | cut -d ' ' -f 1)
     [[ -n "${DISPLAY:-}" && -n "${XAUTHORITY:-}" && -z "$app_path" ]] || {
@@ -103,6 +116,18 @@ if [[ "$suite" == input ]]; then
     echo 'The input helper lacks native fixture qualification.' >&2; exit 2;
   }
 fi
+if [[ "$suite" == ownership ]]; then
+  if [[ -z "$ownership_test_path" ]]; then
+    ownership_test_path="$qualification_dir/desktop-ownership.test"
+    (cd "$repository_root" && go test -c -tags goolm,stdjson -o "$ownership_test_path" ./pkg/computer/desktop)
+  fi
+  [[ "$ownership_test_path" == /* && -f "$ownership_test_path" && ! -L "$ownership_test_path" && -x "$ownership_test_path" ]] || {
+    echo 'Ownership qualification requires an absolute regular helper executable.' >&2; exit 2;
+  }
+  [[ $("$ownership_test_path" -test.list '^TestNativeMacInputOwnership$') == TestNativeMacInputOwnership ]] || {
+    echo 'The ownership helper lacks native fixture qualification.' >&2; exit 2;
+  }
+fi
 if [[ "$qualification_os" == Darwin ]]; then
   # The controller may belong to an old Background/audit session after a GUI
   # logout/login. Launch the test in the current GUI, like the actual companion.
@@ -122,6 +147,7 @@ if [[ "$qualification_os" == Darwin ]]; then
     --env "MINTCLAW_COMPUTER_NATIVE_SHA256=$driver_sha256" \
     --env "MINTCLAW_COMPUTER_NATIVE_FIXTURE=$fixture_path" \
     --env "MINTCLAW_COMPUTER_NATIVE_INPUT_TEST_BINARY=$input_test_path" \
+    --env "MINTCLAW_COMPUTER_NATIVE_OWNERSHIP_TEST_BINARY=$ownership_test_path" \
     --env "MINTCLAW_COMPUTER_COMPANION_APP=$app_path" \
     --env "MINTCLAW_COMPUTER_NATIVE_CAPTURE_DIR=$capture_dir" \
     --env MINTCLAW_COMPUTER_NATIVE_LOSS_CASE=1 \

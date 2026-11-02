@@ -30,8 +30,8 @@ type InputLease struct {
 }
 
 // AcquireInputLease never chooses a desktop from an operator alias or reconnects
-// a lost guard. Currently only the qualified Linux X11 mechanism is implemented;
-// other native backends refuse explicitly. The context bounds acquisition only:
+// a lost guard. Linux X11 and macOS have distinct cooperative native mechanisms;
+// other backends refuse explicitly. The context bounds acquisition only:
 // canceling it later must not unlock before the executor cleans up owned input.
 func (guard *WindowGuard) AcquireInputLease(ctx context.Context) (*InputLease, error) {
 	if err := ctx.Err(); err != nil {

@@ -22,7 +22,7 @@ var (
 		// admission. The refcon is a numeric registry token, never a Go pointer.
 		return purego.NewCallback(func(_ uintptr, _ uintptr, _ uintptr, token uintptr) {
 			if value, ok := macObservers.Load(token); ok {
-				value.(*darwinWindow).lost.Store(true)
+				value.(*darwinWindow).invalidate()
 			}
 		})
 	})
@@ -34,7 +34,10 @@ type macProbe struct {
 }
 
 type darwinWindow struct {
+	pid       uint32
 	lost      atomic.Bool
+	loss      chan struct{}
+	lossOnce  sync.Once
 	probes    chan macProbe
 	stop      chan struct{}
 	done      chan struct{}
@@ -69,13 +72,22 @@ func watchNativeWindow(ctx context.Context, request WindowRequest) (windowBacken
 	if !report.Ready {
 		return nil, computer.ErrDenied
 	}
+	return openDarwinWindow(ctx, request)
+}
+
+// Admission above remains mandatory in production. The native mechanism can
+// also be qualified by an actual-app child without inventing a main-bundle ID.
+func openDarwinWindow(ctx context.Context, request WindowRequest) (*darwinWindow, error) {
 	openCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	guard := &darwinWindow{probes: make(chan macProbe), stop: make(chan struct{}), done: make(chan struct{})}
+	guard := &darwinWindow{
+		pid: request.PID, loss: make(chan struct{}), probes: make(chan macProbe),
+		stop: make(chan struct{}), done: make(chan struct{}),
+	}
 	ready := make(chan error)
 	go guard.run(openCtx, request, ready)
 	select {
-	case err = <-ready:
+	case err := <-ready:
 		if err != nil {
 			_ = guard.close()
 			return nil, err
@@ -144,10 +156,17 @@ func (guard *darwinWindow) alive(ctx context.Context) bool {
 }
 
 func (guard *darwinWindow) close() error {
-	guard.lost.Store(true)
+	guard.invalidate()
 	guard.closeOnce.Do(func() { close(guard.stop) })
 	<-guard.done
 	return nil
+}
+
+func (guard *darwinWindow) invalidate() {
+	guard.lost.Store(true)
+	if guard.loss != nil {
+		guard.lossOnce.Do(func() { close(guard.loss) })
+	}
 }
 
 func (resources *macWindowResources) open(ctx context.Context, guard *darwinWindow) error {
@@ -243,11 +262,11 @@ func (resources *macWindowResources) drain(guard *darwinWindow) {
 			return
 		case 4: // Handled one source; continue the bounded drain.
 		default:
-			guard.lost.Store(true)
+			guard.invalidate()
 			return
 		}
 	}
-	guard.lost.Store(true)
+	guard.invalidate()
 }
 
 func (resources *macWindowResources) alive(ctx context.Context, guard *darwinWindow) bool {
@@ -256,7 +275,7 @@ func (resources *macWindowResources) alive(ctx context.Context, guard *darwinWin
 	}
 	resources.drain(guard)
 	if guard.lost.Load() || !resources.process.alive() {
-		guard.lost.Store(true)
+		guard.invalidate()
 		return false
 	}
 	api := resources.api
@@ -264,7 +283,7 @@ func (resources *macWindowResources) alive(ctx context.Context, guard *darwinWin
 	var window uint32
 	if api.elementPID(resources.element, &pid) != 0 || pid != int32(resources.pid) ||
 		api.elementWindow(resources.element, &window) != 0 || window != resources.window {
-		guard.lost.Store(true)
+		guard.invalidate()
 		return false
 	}
 	role, code := api.attribute(resources.element, "AXRole")
@@ -272,12 +291,12 @@ func (resources *macWindowResources) alive(ctx context.Context, guard *darwinWin
 		defer api.release(role)
 	}
 	if code != 0 || api.text(role) != "AXWindow" {
-		guard.lost.Store(true)
+		guard.invalidate()
 		return false
 	}
 	resources.drain(guard)
 	if !resources.process.alive() {
-		guard.lost.Store(true)
+		guard.invalidate()
 	}
 	return ctx.Err() == nil && !guard.lost.Load()
 }
