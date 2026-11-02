@@ -2,7 +2,7 @@
 
 Status: frozen task intents and acceptance rules, with private text fixtures and
 saved-byte oracles for CU-T01–05, Writer setup/saved-ODT checks for CU-T06–12,
-and Calc setup/saved-ODS checks for CU-T13–14.
+and Calc setup/saved-ODS checks for CU-T13–16.
 The full runner and native/model qualification remain unimplemented. None of
 these model tasks is currently qualified.
 This pack supplies the representative-task gate in the
@@ -140,7 +140,7 @@ An artifact match does not prove native GUI use, CU-T01's reopen, unchanged guar
 window, authorized dialogs, intermediate state, cancellation or post-cleanup
 disposition. The eventual existing-Pipeline controller must attest those
 independently before a full task pass. The Writer subset below supplies seven
-more controller fixtures; CU-T15–20 fixtures remain unimplemented. All 20 tasks
+more controller fixtures; CU-T17–20 fixtures remain unimplemented. All 20 tasks
 stay in the denominator. No provider run or spending is authorized.
 
 ## Private Writer fixture subset
@@ -215,7 +215,7 @@ the 20-task denominator or production access.
 ## Private Calc fixture subset
 
 `scripts/internal/computer-evaluation/calc_fixtures.py` supplies controller-only
-CU-T13–14 seeds and saved-ODS checks. `calc-v1` freezes the input recipes,
+CU-T13–16 seeds and saved-ODS checks. `calc-v2` freezes the input recipes,
 instructions, namespaces, projection rules and bounds. CU-T13 starts with an
 empty `Evaluation` sheet; CU-T14 seeds numeric A1 with 1000.25. These helpers
 open no GUI and make no model call. All reports keep `native_task_qualified=false`.
@@ -233,6 +233,17 @@ These are bounded projections, not a
 general formula evaluator or an ODF renderer; unsupported structures and styles
 are unverifiable and never qualify a native task.
 
+CU-T15 seeds the headerless A1:B3 rows `(C,3)`, `(A,1)`, `(B,2)` and requires
+exact `(A,1)`, `(B,2)`, `(C,3)` rows after sorting. String cells must have one
+plain paragraph, consistent optional string-value metadata and no formula.
+CU-T16 seeds only A2:A5 with 1 through 4. The saved B2:B5 cells must contain
+the translated local relative formulas `A2*2` through `A5*2`, with independent
+Decimal results 2, 4, 6, 8 and unchanged source values. Constants, absolute or
+cross-sheet references, lost associations and extra data fail. Artifact equality
+does not prove that the GUI sort/fill commands were used; the native controller
+must independently attest execution. All reports retain native_task_qualified=false.
+The previous calc-v1 recipe remains historical; it is not accepted as calc-v2.
+
 The existing no-follow owned-file reader and bounded ODF ZIP/XML reader are
 reused. No ZIP entry is extracted. Sparse empty repeats can span a worksheet,
 but meaningful data is limited to 16 rows by 16 columns. Package/XML bounds
@@ -247,7 +258,7 @@ python3 scripts/internal/computer-evaluation/calc_fixtures.py check-artifact \
   --task CU-T13 --run-directory /absolute/new/private-calc-task
 ```
 
-CU-T15–20 setup/controllers and native/model qualification remain pending. The
+CU-T17–20 setup/controllers and native/model qualification remain pending. The
 full task denominator remains 20 per OS; these saved artifacts are not GUI proof.
 
 ## Scoring, safety and resource limits

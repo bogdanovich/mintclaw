@@ -1,4 +1,5 @@
 from io import BytesIO
+from decimal import Decimal
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,16 @@ office:value="1000.25"><text:p>$1,000.25</text:p></table:table-cell></table:tabl
 CURRENCY_STYLES = '''<number:currency-style style:name="Money"><number:currency-symbol>$</number:currency-symbol>
 <number:number number:decimal-places="2"/></number:currency-style>
 <style:style style:name="Price" style:family="table-cell" style:data-style-name="Money"/>'''
+SORT_BODY = ('<table:table table:name="Evaluation">' + "".join(
+    '<table:table-row><table:table-cell office:value-type="string"><text:p>' + label
+    + '</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="'
+    + str(number) + '"/></table:table-row>' for label, number in [("A", 1), ("B", 2), ("C", 3)])
+    + '</table:table>')
+FILL_BODY = ('<table:table table:name="Evaluation"><table:table-row><table:table-cell/></table:table-row>'
+             + "".join('<table:table-row><table:table-cell office:value-type="float" office:value="'
+                       + str(row - 1) + '"/><table:table-cell office:value-type="float" office:value="'
+                       + str((row - 1) * 2) + '" table:formula="of:=[.A' + str(row)
+                       + ']*2"/></table:table-row>' for row in range(2, 6)) + '</table:table>')
 
 
 def package(body, styles="", extra_content="", namespace_override=None, named_styles=""):
@@ -77,9 +88,9 @@ class CalcFixtureTests(unittest.TestCase):
         return result
 
     def test_seeds_are_deterministic_and_never_qualify_a_task(self):
-        self.assertEqual(fixtures.FIXTURE_REVISION, "c014b91f509c0674ac14847a40a07349e6064208db13bd1384aafb149b89ef9c")
+        self.assertEqual(fixtures.FIXTURE_REVISION, "1fb357eb69587ef9abdaab43a1252dff259c77fb3d5515b82c598ede1f3470f9")
         self.assertEqual(fixtures.NS["of"], "urn:oasis:names:tc:opendocument:xmlns:of:1.2")
-        self.assertEqual(tuple(fixtures.TASKS), ("CU-T13", "CU-T14"))
+        self.assertEqual(tuple(fixtures.TASKS), ("CU-T13", "CU-T14", "CU-T15", "CU-T16"))
         self.assertEqual(fixtures.seed_ods(fixtures.TASKS["CU-T14"].seed),
                          fixtures.seed_ods(fixtures.TASKS["CU-T14"].seed))
         for task in fixtures.TASKS:
@@ -110,6 +121,57 @@ class CalcFixtureTests(unittest.TestCase):
         self.assertIsNone(self.check("CU-T13", package(rebound))["artifact_matches"])
         alias = SUM_BODY.replace('table:formula="of:', 'table:formula="formula:')
         self.assertIs(self.check("CU-T13", package(alias, namespace_override={"formula": fixtures.NS["of"]}))["artifact_matches"], True)
+
+    def test_sorted_rows_require_exact_label_number_associations(self):
+        self.assertIs(self.check("CU-T15", package(SORT_BODY))["artifact_matches"], True)
+        variants = [SORT_BODY.replace('office:value="1"', 'office:value="3"', 1),
+                    SORT_BODY.replace('<text:p>C</text:p>', '<text:p>A</text:p>'),
+                    SORT_BODY.replace('<text:p>A</text:p>', '<text:p>Z</text:p>'),
+                    SORT_BODY.replace('office:value="2"', 'office:value="4"', 1),
+                    SORT_BODY.replace('</table:table>', '<table:table-row><table:table-cell '
+                                      'office:value-type="string"><text:p>extra</text:p>'
+                                      '</table:table-cell></table:table-row></table:table>'),
+                    SORT_BODY.replace('<table:table-cell office:value-type="float" office:value="3"/>', '')]
+        for body in variants:
+            with self.subTest(body=body):
+                self.assertIs(self.check("CU-T15", package(body))["artifact_matches"], False)
+
+    def test_sort_and_fill_seeds_retain_the_exact_frozen_inputs(self):
+        for task, expected in [
+            ("CU-T15", {(1, 1): "C", (1, 2): Decimal(3), (2, 1): "A", (2, 2): Decimal(1),
+                        (3, 1): "B", (3, 2): Decimal(2)}),
+            ("CU-T16", {(2, 1): Decimal(1), (3, 1): Decimal(2), (4, 1): Decimal(3), (5, 1): Decimal(4)}),
+        ]:
+            path = self.prepare(task)
+            roots = fixtures.odf.read_package((path / fixtures.CANDIDATE).read_bytes(), fixtures.MIME)
+            values = fixtures.Sheet(*roots).projection()
+            self.assertEqual({key: value for key, (value, _, _) in values.items()}, expected)
+            self.assertTrue(all(formula is None for _, formula, _ in values.values()))
+
+    def test_plain_string_cells_refuse_spoofed_metadata_rich_content_and_formulas(self):
+        consistent = SORT_BODY.replace('office:value-type="string"',
+                                       'office:value-type="string" office:string-value="A"', 1)
+        self.assertIs(self.check("CU-T15", package(consistent))["artifact_matches"], True)
+        for attribute in ['office:string-value="B"', 'office:value="1"',
+                          'table:formula="of:=&quot;A&quot;"']:
+            body = SORT_BODY.replace('office:value-type="string"', 'office:value-type="string" ' + attribute, 1)
+            self.assertIsNone(self.check("CU-T15", package(body))["artifact_matches"])
+        for text in ['<text:span>A</text:span>', '</text:p><text:p>A', 'A' * 4097]:
+            body = SORT_BODY.replace('<text:p>A</text:p>', '<text:p>' + text + '</text:p>')
+            self.assertIsNone(self.check("CU-T15", package(body))["artifact_matches"])
+
+    def test_filled_formulas_use_translated_relative_references_and_recomputed_values(self):
+        self.assertIs(self.check("CU-T16", package(FILL_BODY))["artifact_matches"], True)
+        variants = [FILL_BODY.replace('[.A3]', '[.A2]'), FILL_BODY.replace('[.A3]', '[.$A$3]'),
+                    FILL_BODY.replace('[.A3]', '[Other.A3]'), FILL_BODY.replace('[.A3]*2', '4'),
+                    FILL_BODY.replace(' table:formula="of:=[.A3]*2"', ''),
+                    FILL_BODY.replace('office:value="6"', 'office:value="7"'),
+                    FILL_BODY.replace('office:value="3"', 'office:value="5"', 1)]
+        for body in variants:
+            with self.subTest(body=body):
+                self.assertIs(self.check("CU-T16", package(body))["artifact_matches"], False)
+        rebound = FILL_BODY.replace('table:formula="of:', 'xmlns:of="urn:fake" table:formula="of:', 1)
+        self.assertIsNone(self.check("CU-T16", package(rebound))["artifact_matches"])
 
     def test_currency_requires_effective_metadata_and_unchanged_numeric_value(self):
         self.assertIs(self.check("CU-T14", package(CURRENCY_BODY, CURRENCY_STYLES))["artifact_matches"], True)
