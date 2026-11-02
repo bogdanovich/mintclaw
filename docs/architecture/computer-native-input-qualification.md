@@ -122,9 +122,107 @@ This repeat is separate from the earlier 3.22/4.57-second candidate runs; it is
 not a replacement for their recorded provenance or failures. All 15 CI checks
 and automated review passed before #1788's authorized merge.
 
+## Private Linux original-Go application fixture
+
+The separately opt-in private keyboard build includes
+`TestPrivateNativeApplicationHostQualification`. Its controller is
+`scripts/internal/computer-driver/gnome_keyboard_fixture.py`; it is not a public
+input tool or host. It requires a preinstalled selected GNOME/IBus/Text Editor
+tuple, a pinned virtual-server binary, private native worker and the matching Go
+test executable. The script installs nothing and never attaches to a user's
+desktop. Select hashes from the approved build and measured application tuple.
+
+```sh
+python3 scripts/internal/computer-driver/gnome_keyboard_fixture.py \
+  --xvfb /absolute/private/Xvfb --xvfb-sha256 "PINNED_XVFB_SHA256" \
+  --worker /absolute/private/native-keyboard-worker --worker-sha256 "PINNED_WORKER_SHA256" \
+  --host-probe /absolute/private/native-host.test --host-probe-sha256 "PINNED_GO_PROBE_SHA256" \
+  --application /usr/bin/gnome-text-editor --application-sha256 "SELECTED_APP_SHA256" \
+  --output /absolute/new/private-gnome-fixture --repetitions 20
+```
+
+Each round owns separate input/control X servers, private empty system/session
+buses, an IBus US engine, GNOME shell, HOME/cache/runtime and disabled audio
+endpoints. Native WM/bus/engine readiness must be observed before admission.
+Fixture activation occurs before input; the backend never receives a focus
+restore. The real application loads synthetic prefix/suffix text. The actual Go
+guard and input lease then authorize every native phase of a middle-of-text
+Unicode composition/save; only an independently read exact saved-artifact hash
+permits Finish. Cyrillic, CJK, Arabic, accents, combining text and a ZWJ emoji are
+included, without clipboard use or accessibility-root geometry matching.
+
+The Go test verifies that closing its action/resource worker preserves the
+caller's original guard/lease. Independent native queries check verified key
+cleanup, retained devices, original core focus and app/window lifetime. The
+no-input control must retain exact original bytes and create no private devices.
+Owned original process handles and a private marker scope teardown; residuals
+are checked before reporting cleanup complete. Retained devices are not removed
+from a live GTK session: the fixture deliberately ends its own virtual server.
+
+Reports keep full-driver, attached-host and model-task qualification false. This
+fixture supports one explicitly selected IME/app/hosting tuple; it neither
+establishes generic AT-SPI window identity nor qualifies public input admission,
+all native actions, full business tasks or twenty distinct model tasks. Failures
+stop the run and remain in its output; no uncertain input is replayed. Existing
+native fault/race, hosting and full-roadmap gates remain independent.
+
+The optional `--effect observed-text --text-observer-sha256 PINNED_SOURCE_SHA256`
+mode separates insertion from saving. Pin the source of
+`scripts/internal/computer-driver/atspi_text_observer.py` and use a matching Go
+probe containing `TestPrivateNativeTextObservationQualification`. This mode starts
+an accessibility bus only inside the owned fixture and discovers its original
+text object before native input. Subsequent captures read fresh text/state from
+that original unique bus owner/object path, check the actual peer PID and role,
+and never scan for a replacement endpoint. No accessibility action is invoked.
+
+The actual Go read-only host uses the merged `ObserveUntil` API with a one-second
+observation lifetime. Valid UI state stays in the protected observation; the
+condition decides whether it matches. Whole-tree discovery is not repeated inside
+that lifetime. Each native phase still requires the separate original
+WindowGuard/InputLease. The observation scope is explicitly the entire owned
+disposable desktop; this does not establish an accessibility-root/native-window
+identity mapping or authorize window-scoped accessibility input.
+
+The fixture positions the caret inside existing prefix/suffix text, composes the
+mixed Unicode corpus and withholds Finish until a fresh observation matches.
+It independently checks that the original file remains unchanged. No-input
+controls must retain both the original UI text and file. Saved-file mode remains
+available and is a separate application-effect gate: observed text is not proof
+that Save is ready or that a document was saved. Both modes retain the original
+native budgets and all hosting, application, model-task and admission limits.
+
+Observed-text mode freezes a complete-unit plan before input. Each segment has
+at most 32 chords, with at most 16 segments and 256 total chords. Each Unicode
+composition stays within one segment. The same channel and original guard/lease
+authorize a fresh action generation; fresh exact partial text and unchanged file
+are required before Finish and before the next action. Failure stops the plan
+without replay. Per-action ten-second, one-second observation and 25-second
+whole-workflow limits stay unchanged. This is qualification orchestration, not a
+public text planner or native application rule. Historical one-action macro and
+Save-readiness failures remain separate recorded failures.
+
+Release-only cleanup maps its owned InputOnly sink with `override_redirect`
+before taking the private keyboard grab. A window manager can otherwise defer
+the mapping through `MapRequest` while the original cleanup transaction holds
+the server. The native regression retains an independent root redirect client,
+proves both original keyboard states were held, then verifies parked, clear
+devices and no synthetic release to the application or ambient focus. Ordinary
+windows remain redirected before and after cleanup. No user window attribute,
+native authority check, cleanup deadline or unknown-outcome rule is changed.
+
+The private process fixture's `deadline_io` fault holds only its attested owned
+server across action expiry after a real key press. Resource validation uses
+the existing channel lifetime with its unchanged 250ms I/O cap; permits, worker
+writes and input keep the action deadline. This preserves the original control
+connection for release-only cleanup without admitting a late edge or reconnect.
+Independent GTK and native observations require the exact partial effect,
+unchanged guard/core focus, live original windows and both keyboards clear.
+This regression does not by itself resolve a separate observed Go-race
+application timeout with unverified held input; that application gate remains.
+
 ## Limits and remaining gates
 
-This harness is macOS-only because the Linux direct fixture run already uses
+The actual-companion launcher is macOS-only because the Linux direct fixture run already uses
 the explicitly selected GUI session, whereas macOS needs the actual app's TCC
 responsibility context. The actual-app harness does not itself qualify Linux
 input, a rebuilt companion identity, arbitrary native applications, pixel actions,
