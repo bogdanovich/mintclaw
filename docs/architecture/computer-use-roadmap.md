@@ -1,6 +1,6 @@
 # MintClaw cross-platform computer-use roadmap
 
-Status: in progress. Updated: 2026-11-01. The opt-in read-only Linux and macOS
+Status: in progress. Updated: 2026-11-22. The opt-in read-only Linux and macOS
 milestone is implemented, natively qualified and merged. Public native input,
 full interactive task evaluation and the production pilot are not complete.
 Production desktop control remains disabled by default.
@@ -9,10 +9,9 @@ The [Linux keyboard qualification checkpoint](computer-linux-keyboard-qualificat
 records the current private backend's passing component suites, preserved failed
 controls and remaining native hosting gates. The committed routing and lifetime
 changes remain in a draft PR; their component results do not qualify public
-input. The Mac ownership PR still
-requires its actual approved-app native gate; the operator selected desktop-free
-work while that gate is deferred. Full host composition, interactive/model task
-evaluation and pilot qualification remain open.
+input. The Mac ownership PR closed automatically after inactivity. Its actual
+approved-app native check is still deferred. Full host composition,
+interactive/model task evaluation and pilot qualification remain open.
 
 ## Decision and scope
 
@@ -220,7 +219,7 @@ deployment remain separately authorized operations.
 
 ### Current evidence and status
 
-| Phase | Status on November 1 | Remaining gate |
+| Phase | Status on November 22 | Remaining gate |
 | --- | --- | --- |
 | CU-0 | Read-only contracts, canonical catalogs, default-disabled composition and generic resource disposition are implemented. | Preserve these invariants as input commands are introduced. |
 | CU-1 | Read-only paths and native incarnation guards qualify on selected Linux GNOME X11 and unlocked macOS 26.6.2. Private semantic-input fixtures include seven nonempty Unicode caret cases on both platforms, with the original Mac driver through the actual app. | Generic exact-root input, cancellation/held-state cleanup, pixel/key/scroll/drag, geometry and alternative-driver comparisons remain incomplete. |
@@ -270,6 +269,17 @@ passes twenty repetitions on the selected attached X11 desktop and twenty in
 race-enabled two-screen CI. This is cross-process lease evidence only: it sends
 no input and does not establish held-state cleanup, Mac exclusion or the full
 twenty-task evaluation. The existing in-process read-only arbiter is unchanged.
+
+The November 22 private Linux Writer smoke uses a race-enabled Go build from
+the [draft keyboard PR](https://github.com/bogdanovich/mintclaw/pull/1813).
+On a disposable X11 display it verified eight native keyboard action segments,
+fresh captures of the original window, exact Unicode insertion and saved ODT
+content. A second Writer window with the same process and geometry remained
+unchanged. Two document-probe timeouts resolved through fresh observations
+without replaying input. A malformed probe result withheld Finish before text
+entry. These runs cover the private Writer composition. An admitted runtime
+input host and the model evaluation remain open.
+
 The [pinned Peekaboo source audit](computer-peekaboo-qualification.md) also records
 why a private config directory alone cannot isolate a stock CLI snapshot run;
 that candidate has not been executed or qualified.
@@ -364,14 +374,15 @@ proposed thresholds, not measured results. Record successful-run cost, total cos
 including failures, wall-clock time, action count, token/image usage, and p50/p95
 latency. CU-1 sets resource limits that preserve gateway headroom on the 8 GB host.
 
-The [v1 evaluation pack](computer-evaluation-pack.md) freezes the initial 20 task
-intents and independent completion conditions. Private saved-text fixtures cover
-CU-T01–05; Writer setup/saved-ODT checks cover CU-T06–12; Calc setup/saved-ODS
-checks cover CU-T13–16; a separate chart-structure checker covers CU-T17 while
-requiring independent fresh rendered evidence. These artifact-only checks do not
-qualify native task execution.
-The full runner, remaining fixtures, approved budgets and actual model runs are
-still pending; no task score is claimed and all 20 tasks remain required.
+The [v1 evaluation pack](computer-evaluation-pack.md) freezes 20 task intents
+and independent completion conditions. The merged helpers cover setup and
+verification for text (CU-T01–05), Writer (CU-T06–12), Calc (CU-T13–16),
+chart structure (CU-T17), canvas and form state (CU-T18–19), and saved document
+phases for [same-session handoff](computer-handoff-evaluation.md) (CU-T20).
+The chart task also requires fresh rendered evidence. The handoff task requires
+an independently observed human edit, fresh same-session resume and verified
+release. The executable native runner, approved budgets and model runs remain
+pending. Each platform still has all 20 tasks to evaluate.
 
 Use [OSWorld](https://github.com/xlang-ai/OSWorld) for additional evaluation ideas,
 not as a substitute for companion lifecycle and policy tests or as evidence that
