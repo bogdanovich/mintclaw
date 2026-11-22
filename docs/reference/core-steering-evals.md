@@ -28,6 +28,11 @@ enqueue hash before releasing the read. The agent then completes and answers a
 same-session follow-up. No sleeps, fabricated acceptance, shell tool or copied
 steering queue substitutes for native execution.
 
+If the gateway rejects the request or sends a correlated terminal reply before
+the barrier, the driver stops waiting without sending guidance. An early reply
+is retained as metadata, not graded as a steering outcome, and never reaches
+the judge. An unrelated reply does not stop the wait.
+
 Native sender/authority selection intentionally coalesces messages from the same
 sender in both configured modes (`dequeueForTurnLocked` in `pkg/agent/steering.go`).
 These scenarios therefore require one ordered injection batch for that sender,

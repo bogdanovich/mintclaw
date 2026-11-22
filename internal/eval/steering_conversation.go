@@ -57,19 +57,29 @@ func steeringGuidance(marker, trial string) string {
 }
 
 func (domain *steeringConversation) afterSend(
-	ctx context.Context, request protocol.MintClawMessage, number int, send func(string) (Event, error),
+	ctx context.Context, request protocol.MintClawMessage, number int, controls inFlightControls,
 ) error {
 	if number != 1 {
 		return nil
 	}
-	domain.proof.PrimaryRequestID = request.ID
-	domain.proof.Code = "active_tool_unavailable"
-	if err := domain.target.activeTool.waitEntered(ctx, domain.args); err != nil {
+	if err := domain.waitForEntry(ctx, request, controls); err != nil {
 		return err
 	}
+	return domain.injectGuidance(ctx, controls)
+}
+
+func (domain *steeringConversation) waitForEntry(
+	ctx context.Context, request protocol.MintClawMessage, controls inFlightControls,
+) error {
+	domain.proof.PrimaryRequestID = request.ID
+	domain.proof.Code = "active_tool_unavailable"
+	return controls.waitEntered(ctx, domain.target.activeTool, domain.args)
+}
+
+func (domain *steeringConversation) injectGuidance(ctx context.Context, controls inFlightControls) error {
 	for _, marker := range domain.item.Steering.Updates {
 		domain.proof.Code = "guidance_not_sent"
-		input, err := send(steeringGuidance(marker, domain.args.TrialID))
+		input, err := controls.send(steeringGuidance(marker, domain.args.TrialID))
 		if err != nil {
 			return err
 		}

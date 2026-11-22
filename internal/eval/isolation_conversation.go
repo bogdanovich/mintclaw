@@ -41,12 +41,12 @@ func newIsolationConversation(
 }
 
 func (domain *isolationConversation) afterSend(
-	ctx context.Context, request protocol.MintClawMessage, number int, send func(string) (Event, error),
+	ctx context.Context, request protocol.MintClawMessage, number int, controls inFlightControls,
 ) error {
 	if number != 1 {
 		return nil
 	}
-	if err := domain.target.activeTool.waitEntered(ctx, domain.args); err != nil {
+	if err := domain.waitForEntry(ctx, request, controls); err != nil {
 		return err
 	}
 	peerSession := uuid.NewString()
@@ -68,7 +68,7 @@ func (domain *isolationConversation) afterSend(
 	if err != nil || held.State != "active" || held.ReleaseSequence != 0 {
 		return errNativeEvidence
 	}
-	return domain.steeringConversation.afterSend(ctx, request, number, send)
+	return domain.injectGuidance(ctx, controls)
 }
 
 func (domain *isolationConversation) conclude(ctx context.Context, trial *Trial) {
