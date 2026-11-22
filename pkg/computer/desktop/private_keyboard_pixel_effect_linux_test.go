@@ -50,10 +50,14 @@ func privateNativeEffectProbe(
 	if ctx.Err() != nil {
 		return state, false, ctx.Err()
 	}
+	// An observed protocol violation can precede a subprocess deadline.
+	if output.overflowed {
+		return state, false, computer.ErrUnavailable
+	}
 	if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
 		return state, false, nil // No positive evidence yet, not a fabricated snapshot.
 	}
-	if err != nil || len(data) > computer.MaxAccessibilityBytes {
+	if err != nil {
 		return state, false, computer.ErrUnavailable
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -65,18 +69,26 @@ func privateNativeEffectProbe(
 }
 
 func TestPrivateNativeEffectProbe(t *testing.T) {
+	const probeTimeout = 200 * time.Millisecond
+	oversized := `import os, time
+try:
+    os.write(1, b'x' * ` + strconv.Itoa(computer.MaxAccessibilityBytes+1) + `)
+except BrokenPipeError:
+    pass
+time.sleep(3)`
 	for _, test := range []struct {
 		name, script string
+		budget       time.Duration
 		available    bool
 		errorIs      error
 	}{
-		{"valid", `print('{"text":"verified","editable":true,"sensitive":true}')`, true, nil},
-		{"timeout", "import time; time.sleep(2)", false, nil},
-		{"failed", "raise SystemExit(1)", false, computer.ErrUnavailable},
-		{"invalid", "print('not-json')", false, computer.ErrInvalid},
-		{"unknown-field", `print('{"extra":true}')`, false, computer.ErrInvalid},
-		{"trailing-value", "print('{} {}')", false, computer.ErrInvalid},
-		{"oversized", "print('x' * 300000)", false, computer.ErrUnavailable},
+		{"valid", `print('{"text":"verified","editable":true,"sensitive":true}')`, time.Second, true, nil},
+		{"timeout", "import time; time.sleep(2)", probeTimeout, false, nil},
+		{"failed", "raise SystemExit(1)", time.Second, false, computer.ErrUnavailable},
+		{"invalid", "print('not-json')", time.Second, false, computer.ErrInvalid},
+		{"unknown-field", `print('{"extra":true}')`, time.Second, false, computer.ErrInvalid},
+		{"trailing-value", "print('{} {}')", time.Second, false, computer.ErrInvalid},
+		{"oversized-before-timeout", oversized, time.Second, false, computer.ErrUnavailable},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "probe.py")
@@ -88,7 +100,7 @@ func TestPrivateNativeEffectProbe(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = file.Close() }()
-			state, available, err := privateNativeEffectProbe(t.Context(), file, nil, 1, 200*time.Millisecond)
+			state, available, err := privateNativeEffectProbe(t.Context(), file, nil, 1, test.budget)
 			if available != test.available || !errors.Is(err, test.errorIs) || t.Context().Err() != nil {
 				t.Fatalf("availability=%v error=%v parent=%v", available, err, t.Context().Err())
 			}

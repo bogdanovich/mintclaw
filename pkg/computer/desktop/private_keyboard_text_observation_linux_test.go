@@ -270,12 +270,16 @@ func (f privateNativeTextCaptureFunc) Capture(
 }
 
 // Limit the subprocess transfer before decoding its protected UI payload.
-type privateNativeTextOutput struct{ buffer bytes.Buffer }
+type privateNativeTextOutput struct {
+	buffer     bytes.Buffer
+	overflowed bool
+}
 
 func (b *privateNativeTextOutput) Bytes() []byte { return b.buffer.Bytes() }
 func (b *privateNativeTextOutput) Len() int      { return b.buffer.Len() }
 func (b *privateNativeTextOutput) Write(p []byte) (int, error) {
 	if len(p) > computer.MaxAccessibilityBytes-b.Len() {
+		b.overflowed = true
 		return 0, io.ErrShortBuffer
 	}
 	return b.buffer.Write(p)
