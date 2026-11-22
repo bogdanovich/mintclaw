@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -169,8 +170,26 @@ func (c *inboundTurnCoordinator) deferInteractionInbound(
 	target *inboundDispatchTarget,
 ) {
 	if err := c.enqueueDeferredInteractionInbound(ctx, msg, target); err != nil {
-		c.al.turns.inbound.release(context.Background(), msg, err)
+		c.failInboundPreparation(ctx, msg, target, err)
 	}
+}
+
+// A failed voice request is consumed only after its final notice has durable
+// admission. Transport/storage failures retain the ordinary release behavior.
+func (c *inboundTurnCoordinator) failInboundPreparation(
+	ctx context.Context, msg bus.InboundMessage, target *inboundDispatchTarget, err error,
+) {
+	if errors.Is(err, errVoiceTranscriptionFailed) {
+		admission := c.al.publishInteractionNoticeAdmission(
+			ctx,
+			msg,
+			target.SessionKey,
+			voiceTranscriptionFailureNotice,
+		)
+		_ = c.al.settleInboundAdmission(ctx, msg, admission)
+		return
+	}
+	c.al.turns.inbound.release(context.Background(), msg, err)
 }
 
 func (c *inboundTurnCoordinator) enqueueDeferredInteractionInbound(
@@ -214,7 +233,7 @@ func (c *inboundTurnCoordinator) handleBusySession(
 
 	msg, err := al.prepareInboundMessageForTarget(ctx, msg, target)
 	if err != nil {
-		al.turns.inbound.release(ctx, msg, err)
+		c.failInboundPreparation(ctx, msg, target, err)
 		return
 	}
 	if err := c.admitPreparedInbound(ctx, msg, target); err != nil {
@@ -360,7 +379,7 @@ func (c *inboundTurnCoordinator) runWorker(
 
 	turn, err := al.buildInboundMessageTurnForTarget(ctx, msg, target)
 	if err != nil {
-		al.turns.inbound.release(context.Background(), msg, err)
+		c.failInboundPreparation(ctx, msg, target, err)
 		return
 	}
 	admission := al.runInboundTurnWithSteering(ctx, turn)

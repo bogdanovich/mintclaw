@@ -4,12 +4,18 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
+
+// Keep provider errors and raw audio out of model/tool recovery paths.
+var errVoiceTranscriptionFailed = errors.New("voice transcription failed")
+
+const voiceTranscriptionFailureNotice = "I couldn’t transcribe that voice message. Please try again or send text."
 
 type audioTranscriptionStatus struct {
 	audioRefs int
@@ -21,6 +27,13 @@ type inboundMediaResolution struct {
 	path     string
 	isAudio  bool
 	resolved bool
+}
+
+func (status audioTranscriptionStatus) failure() error {
+	if status.audioRefs > 0 && !status.complete() {
+		return errVoiceTranscriptionFailed
+	}
+	return nil
 }
 
 func (status audioTranscriptionStatus) complete() bool {

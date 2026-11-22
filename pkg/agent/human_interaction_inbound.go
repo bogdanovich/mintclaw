@@ -581,7 +581,7 @@ func (c *inboundTurnCoordinator) handleInteractionInbound(
 			interactionRouteAuthorizes(record.Route, target, msg.Context) &&
 			(record.Status == interactions.StatusClaimed || record.Status == interactions.StatusResuming) {
 			if err := c.enqueueContendedInteractionInbound(ctx, msg, target, record); err != nil {
-				c.al.turns.inbound.release(context.Background(), msg, err)
+				c.failInboundPreparation(ctx, msg, target, err)
 			}
 			return
 		}
@@ -708,7 +708,7 @@ func (c *inboundTurnCoordinator) runInteractionWorker(
 			"error":       processErr.Error(),
 		})
 		if ownership == interactionInboundCallerOwned {
-			c.al.turns.inbound.release(context.Background(), msg, processErr)
+			c.failInboundPreparation(ctx, msg, target, processErr)
 		}
 		return
 	}
