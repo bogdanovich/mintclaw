@@ -23,6 +23,76 @@ type intakeTranscriber struct {
 	err    error
 }
 
+type countingIntakeTranscriber struct{ calls int }
+
+func (s *countingIntakeTranscriber) Name() string { return "counting-intake-test" }
+func (s *countingIntakeTranscriber) Transcribe(context.Context, string) (*asr.TranscriptionResponse, error) {
+	s.calls++
+	return &asr.TranscriptionResponse{Text: "actual audio transcript"}, nil
+}
+
+func TestVoiceIntakeRequiresAttachmentEvidence(t *testing.T) {
+	for _, mode := range []string{"photo caption", "audio caption", "unresolved voice"} {
+		t.Run(mode, func(t *testing.T) {
+			al, cleanup := newInboundDispatchTestLoop(t)
+			defer cleanup()
+			msg := voiceIntakeMessage(t, al)
+			msg.Content = "[voice] UI label — what do you think?\n[voice]"
+			transcriber := &countingIntakeTranscriber{}
+			al.SetTranscriber(transcriber)
+			switch mode {
+			case "photo caption":
+				store := media.NewFileMediaStore()
+				path := filepath.Join(t.TempDir(), "photo.jpg")
+				if err := os.WriteFile(path, []byte("synthetic image"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				ref, err := store.Store(path, media.MediaMeta{
+					Filename: "photo.jpg", ContentType: "image/jpeg", CleanupPolicy: media.CleanupPolicyForgetOnly,
+				}, "photo-caption")
+				if err != nil {
+					t.Fatal(err)
+				}
+				al.SetMediaStore(store)
+				msg.Media = []string{ref}
+			case "unresolved voice":
+				msg.Content = "[voice]"
+				msg.Media = []string{"media://missing-voice"}
+			}
+			var turn inboundMessageTurn
+			var err error
+			if mode == "unresolved voice" {
+				// The ref can expire after ordinary media-owner admission.
+				var target *inboundDispatchTarget
+				target, err = al.resolveInboundDispatchTarget(msg)
+				if err == nil {
+					turn, err = al.buildInboundMessageTurnForTarget(t.Context(), msg, target)
+				}
+			} else {
+				turn, err = al.buildInboundMessageTurn(t.Context(), msg)
+			}
+			if mode == "unresolved voice" {
+				if !errors.Is(err, errVoiceTranscriptionFailed) || transcriber.calls != 0 {
+					t.Fatalf("unresolved voice intake: error=%v ASR calls=%d", err, transcriber.calls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer turn.Cleanup()
+			if mode == "photo caption" {
+				if transcriber.calls != 0 || turn.Message.Content != msg.Content ||
+					len(turn.Message.Media) != 1 || turn.Message.Media[0] != msg.Media[0] {
+					t.Fatal("literal voice marker discarded or changed a non-audio attachment")
+				}
+			} else if transcriber.calls != 1 || !strings.Contains(turn.Message.Content, "actual audio transcript") {
+				t.Fatal("caption padding rejected successfully transcribed audio")
+			}
+		})
+	}
+}
+
 type partialIntakeTranscriber struct{ calls int }
 
 func (s *partialIntakeTranscriber) Name() string { return "partial-intake-test" }

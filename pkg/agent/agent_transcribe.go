@@ -20,6 +20,8 @@ const voiceTranscriptionFailureNotice = "I couldn’t transcribe that voice mess
 type audioTranscriptionStatus struct {
 	audioRefs int
 	completed int
+	// Excludes annotation-only padding: captions may contain literal [voice] text.
+	failedAttachments int
 }
 
 type inboundMediaResolution struct {
@@ -30,7 +32,7 @@ type inboundMediaResolution struct {
 }
 
 func (status audioTranscriptionStatus) failure() error {
-	if status.audioRefs > 0 && !status.complete() {
+	if status.failedAttachments > 0 {
 		return errVoiceTranscriptionFailed
 	}
 	return nil
@@ -115,6 +117,7 @@ func (al *AgentLoop) transcribeAudioInMessageWithStatus(
 		if !resolution.resolved {
 			if len(transcriptions)+knownAudioRemaining < expectedAudioSlots {
 				status.audioRefs++
+				status.failedAttachments++
 				transcriptions = append(transcriptions, "")
 			}
 			continue
@@ -126,6 +129,7 @@ func (al *AgentLoop) transcribeAudioInMessageWithStatus(
 		status.audioRefs++
 		result, err := al.transcriber.Transcribe(ctx, resolution.path)
 		if err != nil || result == nil || strings.TrimSpace(result.Text) == "" {
+			status.failedAttachments++
 			logger.WarnCF(
 				"voice",
 				"Transcription failed",
