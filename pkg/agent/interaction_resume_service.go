@@ -284,6 +284,17 @@ func (service interactionService) resumeOwned(
 	}
 	// Reconcile live resource ownership before either recovery finalizes cached
 	// model output or a new continuation can consume the persisted receipt.
+	// A committed runtime finish already disposed of the resource. Reacquiring
+	// it would turn successful cleanup into a spurious failure on recovery.
+	if final, ok := interactionFinalMessageAfterToolResult(continuationHistory, resuming.Origin.ToolCallID); ok &&
+		final.RuntimeFinishInteractionID == resuming.ID {
+		runtime.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
+		_, finalizeErr := service.finalizeResumedInteraction(
+			ctx, registry, interactionWorkspace, resuming, inbound, final.Content,
+			taskresult.CloneDeliverable(final.Deliverable), nil, interactionBoundaryPrecomputedFinal,
+		)
+		return finalizeErr
+	}
 	lifecycleReceipts, err := runtime.resolveDurableLiveHandoffs(ctx, agent, resuming)
 	if err != nil {
 		return service.failUnavailableLiveHandoff(
@@ -384,6 +395,11 @@ func (service interactionService) resumeOwned(
 	continuationOpts.ExpectFinalDelivery = deliveryObservation != nil
 	continuationOpts.FinalDeliveryObservation = deliveryObservation
 	continuationOpts.InitialSteeringMessages = supersedingSteering
+	if flight, ok := runtime.loadInteractionResumeFlight(interactionWorkspace, resuming.ID); ok {
+		continuationOpts.interactionFinishSteeringGate = func(pending bool, poll func() []steeringEntry) []steeringEntry {
+			return runtime.pollInteractionFinishSteering(flight, pending, poll)
+		}
+	}
 	continuationExecutor.configure(&continuationOpts)
 	// A phone-ready event resumes without an inbound spool transaction. Give
 	// tool-time media its own stable durable source; final delivery retains its
@@ -407,17 +423,19 @@ func (service interactionService) resumeOwned(
 	if resumedTurn.status == TurnEndStatusAborted {
 		return nil
 	}
-	audits := interactionOutcomeAudits(resuming)
-	audits = appendTurnWriteAudit(audits, "", resumedTurn.writeAudit)
-	finalContent, objectiveOutcome := extractResumedObjectiveOutcome(
-		resumedTurn.finalContent, audits, resuming,
-	)
+	finalContent := resumedTurn.finalContent
+	deliverable := taskresult.CloneDeliverable(resumedTurn.deliverable)
+	if resumedTurn.runtimeFinishInteractionID != resuming.ID {
+		audits := appendTurnWriteAudit(interactionOutcomeAudits(resuming), "", resumedTurn.writeAudit)
+		content, outcome := extractResumedObjectiveOutcome(finalContent, audits, resuming)
+		finalContent = content
+		deliverable = terminalTurnDeliverable(deliverable, finalContent, outcome)
+	}
 	runtime.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
 	var traceScopes []runtimeevents.TraceScope
 	if deliveryObservation != nil {
 		traceScopes = deliveryObservation.traceScopes
 	}
-	deliverable := terminalTurnDeliverable(resumedTurn.deliverable, finalContent, objectiveOutcome)
 	if deliverable != nil {
 		deliverable.LifecycleReceipts = mergeLifecycleReceipts(
 			deliverable.LifecycleReceipts,

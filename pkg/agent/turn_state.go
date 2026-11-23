@@ -117,6 +117,7 @@ type ToolLoopOutcome struct {
 // =============================================================================
 
 type turnResult struct {
+	runtimeFinishInteractionID   string
 	finalContent                 string
 	responseDisposition          finalResponseDisposition
 	modelName                    string

@@ -113,12 +113,41 @@ func TestInteractionContinuationDecisionDefersToNewerGuidance(t *testing.T) {
 	}
 }
 
+func TestAcceptedHandoffFinishYieldsToNewerGuidanceBeforeCleanup(t *testing.T) {
+	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	pipeline := newTestPipeline(loop)
+	pipeline.Context.Steering = &oneShotLoopGuardSteering{messages: []providers.Message{{
+		Role: "user", Content: "Keep working in the same window.",
+	}}}
+	owner := &terminalHandoffOwner{receiptState: "closed"}
+	agent.Tools.Register(owner)
+	spec := makeTestTurnSpec("finish-terminal-steering")
+	spec.InteractionContinuation = interactionContinuationPromptContext{
+		Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
+	}
+	spec.InitialReceipts = []taskresult.Receipt{{Kind: taskresult.ObjectiveKindLiveHandoff}}
+	ts := newTurnState(agent, spec, turnEventScope{
+		turnID: "finish-terminal-steering-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec.continuationDecision.phase = interactionContinuationDecisionFinish
+	outcome := pipeline.completeTerminal(t.Context(), ts, exec, newLLMIterationState(1),
+		TurnEndStatusCompleted, terminalRequest{})
+	if !outcome.resume || outcome.err != nil || !exec.continuationDecision.pending() ||
+		!exec.pendingInputs.HasSteering() || owner.cleanupCalls != 0 {
+		t.Fatalf("new guidance did not supersede finish before cleanup: %#v, cleanup=%d", outcome, owner.cleanupCalls)
+	}
+}
+
 func TestParseInteractionContinuationDecision(t *testing.T) {
 	tests := []struct {
 		name       string
 		response   *providers.LLMResponse
 		wantAction string
-		wantFinal  string
 		wantValid  bool
 	}{
 		{
@@ -132,9 +161,9 @@ func TestParseInteractionContinuationDecision(t *testing.T) {
 			wantAction: "redirect", wantValid: true,
 		},
 		{
-			name:       "finish with localized response",
+			name:       "finish discards provider-authored status",
 			response:   interactionContinuationDecisionResponse("finish", "Задача завершена."),
-			wantAction: "finish", wantFinal: "Задача завершена.", wantValid: true,
+			wantAction: "finish", wantValid: true,
 		},
 		{
 			name: "external tool is not a decision",
@@ -158,17 +187,9 @@ func TestParseInteractionContinuationDecision(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			action, finalResponse, valid := parseInteractionContinuationDecision(test.response)
-			if action != test.wantAction || finalResponse != test.wantFinal || valid != test.wantValid {
-				t.Fatalf(
-					"parse decision = (%q, %q, %t), want (%q, %q, %t)",
-					action,
-					finalResponse,
-					valid,
-					test.wantAction,
-					test.wantFinal,
-					test.wantValid,
-				)
+			action, valid := parseInteractionContinuationDecision(test.response)
+			if action != test.wantAction || valid != test.wantValid {
+				t.Fatalf("parse decision = (%q, %t), want (%q, %t)", action, valid, test.wantAction, test.wantValid)
 			}
 		})
 	}

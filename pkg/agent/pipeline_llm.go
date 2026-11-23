@@ -894,7 +894,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			})
 			return LLMCallOutcome{Control: turnStepContinue}, nil
 		}
-		action, finalResponse, valid := parseInteractionContinuationDecision(llm.response)
+		action, valid := parseInteractionContinuationDecision(llm.response)
 		if !valid {
 			exec.continuationDecision.invalidAttempts++
 			logger.WarnCF("agent", "Interaction continuation preflight returned an invalid decision", map[string]any{
@@ -909,21 +909,8 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			return LLMCallOutcome{Control: turnStepContinue}, nil
 		}
 		if action == "finish" {
-			if finalResponse == "" {
-				exec.continuationDecision.phase = interactionContinuationDecisionFinalize
-				exec.messages = append(exec.messages, interactionContinuationFinalizeMessage())
-				return LLMCallOutcome{Control: turnStepContinue}, nil
-			}
-			exec.continuationDecision.phase = interactionContinuationDecisionInactive
-			exec.actionLog = appendTurnActionRecord(
-				exec.actionLog,
-				"assistant_direct",
-				"",
-				finalResponse,
-				false,
-				false,
-			)
-			return LLMCallOutcome{Control: turnStepFinalize, FinalContent: finalResponse}, nil
+			exec.continuationDecision.phase = interactionContinuationDecisionFinish
+			return LLMCallOutcome{Control: turnStepFinalize}, nil
 		}
 		exec.continuationDecision.phase = interactionContinuationDecisionProceed
 		exec.messages = append(exec.messages, interactionContinuationProceedMessage(action))

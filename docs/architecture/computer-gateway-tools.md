@@ -100,6 +100,9 @@ and explicit release remain available through the original owner.
 6. Release, typed abandon, turn cleanup and gateway shutdown end automation
    authority only. They do not close the native application. Reports explicitly
    say application state was not checked; they must not claim it remains open.
+   The runtime's finish confirmation uses the interaction language when the
+   text catalog supports it. The current catalog covers English and Russian,
+   with English as the fallback for other language tags.
 
 The full original actor, agent, routed session, runtime and execution identity
 own a resource. Knowing a session ID is insufficient to use another turn's

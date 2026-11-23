@@ -163,6 +163,10 @@ type Message struct {
 	// from provider-bound history just like durable tool execution markers.
 	Deliverable *taskresult.Deliverable `json:"deliverable,omitempty"`
 
+	// RuntimeFinishInteractionID binds a committed owner-cleanup result to
+	// its interaction for delivery recovery. Only the runtime finalizer sets it.
+	RuntimeFinishInteractionID string `json:"runtime_finish_interaction_id,omitempty"`
+
 	// RootTurnStart is canonical-session-only identity for the user message
 	// that admitted a new root turn. In-turn user-shaped messages do not set it.
 	RootTurnStart bool `json:"root_turn_start,omitempty"`

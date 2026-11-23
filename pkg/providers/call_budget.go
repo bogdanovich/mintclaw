@@ -7,19 +7,26 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
+
+	oauthprovider "github.com/bogdanovich/mintclaw/pkg/providers/oauth"
 )
 
 var ErrCallBudget = errors.New("provider call budget stopped")
+
+const CodexSubscriptionBudget = "codex_subscription"
 
 // CallBudgetLimits bounds logical adapter calls, not provider-internal HTTP
 // retries or billed tokens. Reported-token exhaustion stops subsequent calls;
 // already admitted calls can overshoot that threshold.
 type CallBudgetLimits struct {
-	MaxCalls          int   `json:"max_calls"`
-	MaxInputBytes     int   `json:"max_input_bytes"`
-	MaxOutputTokens   int   `json:"max_output_tokens"`
-	MaxReportedTokens int64 `json:"max_reported_tokens"`
-	MaxInFlight       int   `json:"max_in_flight"`
+	MaxCalls          int    `json:"max_calls"`
+	MaxInputBytes     int    `json:"max_input_bytes"`
+	MaxOutputTokens   int    `json:"max_output_tokens"`
+	MaxReportedTokens int64  `json:"max_reported_tokens"`
+	MaxInFlight       int    `json:"max_in_flight"`
+	Mode              string `json:"mode,omitempty"`
+	MaxCallSeconds    int    `json:"max_call_seconds,omitempty"`
 }
 
 // CallBudgetSnapshot contains no request, response, model or credential data.
@@ -46,9 +53,26 @@ type CallBudget struct {
 }
 
 func NewCallBudget(limits CallBudgetLimits) (*CallBudget, error) {
+	if limits.Mode != "" || limits.MaxCallSeconds != 0 ||
+		limits.MaxOutputTokens < 1 || limits.MaxOutputTokens > 32768 {
+		return nil, fmt.Errorf("%w: invalid_limits", ErrCallBudget)
+	}
+	return newCallBudget(limits)
+}
+
+// NewSubscriptionCallBudget opts into logical call limits for Codex OAuth.
+// There is no upstream output ceiling; reported totals limit later calls only.
+func NewSubscriptionCallBudget(limits CallBudgetLimits) (*CallBudget, error) {
+	if limits.Mode != CodexSubscriptionBudget || limits.MaxOutputTokens != 0 ||
+		limits.MaxCallSeconds < 1 || limits.MaxCallSeconds > 180 || limits.MaxInFlight != 1 {
+		return nil, fmt.Errorf("%w: invalid_limits", ErrCallBudget)
+	}
+	return newCallBudget(limits)
+}
+
+func newCallBudget(limits CallBudgetLimits) (*CallBudget, error) {
 	if limits.MaxCalls < 1 || limits.MaxCalls > 256 ||
 		limits.MaxInputBytes < 1 || limits.MaxInputBytes > 2<<20 ||
-		limits.MaxOutputTokens < 1 || limits.MaxOutputTokens > 32768 ||
 		limits.MaxReportedTokens < 1 || limits.MaxReportedTokens > 2_000_000 ||
 		limits.MaxInFlight < 1 || limits.MaxInFlight > 2 {
 		return nil, fmt.Errorf("%w: invalid_limits", ErrCallBudget)
@@ -61,7 +85,8 @@ func (b *CallBudget) Wrap(delegate LLMProvider) (LLMProvider, error) {
 		return nil, fmt.Errorf("%w: unsupported_provider", ErrCallBudget)
 	}
 	capabilities := Capabilities(delegate)
-	if !capabilities.CallerMediatedTools || !capabilities.OutputTokenLimit {
+	subscription := b.state.Limits.Mode == CodexSubscriptionBudget
+	if !capabilities.CallerMediatedTools || (!subscription && !capabilities.OutputTokenLimit) {
 		return nil, fmt.Errorf("%w: unsupported_provider", ErrCallBudget)
 	}
 	if wrapped, ok := delegate.(*callBudgetProvider); ok {
@@ -69,6 +94,13 @@ func (b *CallBudget) Wrap(delegate LLMProvider) (LLMProvider, error) {
 			return wrapped, nil
 		}
 		return nil, fmt.Errorf("%w: foreign_budget", ErrCallBudget)
+	}
+	if subscription {
+		codex, ok := delegate.(*oauthprovider.CodexProvider)
+		if !ok {
+			return nil, fmt.Errorf("%w: unsupported_provider", ErrCallBudget)
+		}
+		delegate = codex.ForSubscriptionEval()
 	}
 	if capabilities.Streaming {
 		if _, ok := delegate.(StreamingProvider); !ok {
@@ -128,9 +160,11 @@ func (b *CallBudget) begin(
 	if b.state.InFlight >= b.state.Limits.MaxInFlight {
 		return b.stopLocked("concurrency")
 	}
-	outputTokens, ok := options["max_tokens"].(int)
-	if !ok || outputTokens < 1 || outputTokens > b.state.Limits.MaxOutputTokens {
-		return b.stopLocked("output_limit")
+	if b.state.Limits.Mode == "" {
+		outputTokens, ok := options["max_tokens"].(int)
+		if !ok || outputTokens < 1 || outputTokens > b.state.Limits.MaxOutputTokens {
+			return b.stopLocked("output_limit")
+		}
 	}
 	for _, message := range messages {
 		if len(message.Media) != 0 || len(message.Attachments) != 0 {
@@ -155,6 +189,14 @@ func (b *CallBudget) finish(response *LLMResponse, callErr error) error {
 	defer b.mu.Unlock()
 	b.state.Completed++
 	b.state.InFlight--
+	if b.state.Limits.Mode == CodexSubscriptionBudget {
+		var failure *ProviderError
+		if errors.As(callErr, &failure) && failure != nil &&
+			(failure.Kind == ProviderErrorRateLimit || failure.Kind == ProviderErrorBilling) {
+			b.state.UnknownUsage++
+			return b.stopLocked("subscription_limit")
+		}
+	}
 	tokens, known := reportedCallTokens(response)
 	if !known || callErr != nil || tokens > math.MaxInt64-b.state.ReportedTokens {
 		b.state.UnknownUsage++
@@ -194,6 +236,14 @@ type callBudgetProvider struct {
 	budget   *CallBudget
 }
 
+func (p *callBudgetProvider) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	seconds := p.budget.state.Limits.MaxCallSeconds
+	if seconds == 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
+}
+
 func (p *callBudgetProvider) Chat(
 	ctx context.Context,
 	messages []Message,
@@ -205,6 +255,8 @@ func (p *callBudgetProvider) Chat(
 	if err := p.budget.begin(ctx, messages, tools, options); err != nil {
 		return nil, err
 	}
+	ctx, cancel := p.requestContext(ctx)
+	defer cancel()
 	response, err := p.delegate.Chat(ctx, messages, tools, model, options)
 	budgetErr := p.budget.finish(response, err)
 	if err != nil || budgetErr != nil {
@@ -228,6 +280,8 @@ func (p *callBudgetProvider) ChatStreamEvents(
 	if err := p.budget.begin(ctx, messages, tools, options); err != nil {
 		return nil, err
 	}
+	ctx, cancel := p.requestContext(ctx)
+	defer cancel()
 	response, _, err := ChatStreamEvents(ctx, p.delegate, messages, tools, model, options, onChunk)
 	budgetErr := p.budget.finish(response, err)
 	if err != nil || budgetErr != nil {
