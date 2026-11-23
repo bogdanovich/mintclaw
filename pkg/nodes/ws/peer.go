@@ -33,6 +33,14 @@ const (
 	defaultWriteTimeout    = 15 * time.Second
 )
 
+type invocationWriteDeadlineKey struct{}
+
+// WithInvocationWriteDeadline bounds the node.invoke request write. The
+// original context still governs waiting for a response after the write.
+func WithInvocationWriteDeadline(ctx context.Context, deadline time.Time) context.Context {
+	return context.WithValue(ctx, invocationWriteDeadlineKey{}, deadline)
+}
+
 type peerConnection interface {
 	Close() error
 	ReadMessage() (int, []byte, error)
@@ -502,14 +510,22 @@ func (session *peer) requestWithLease(
 	dispatch func(func() error) error,
 	lease func(func() (bool, error)) (bool, error),
 ) (protocol.Envelope, bool, error) {
+	writeCtx := ctx
+	deadline, hasWriteDeadline := ctx.Value(invocationWriteDeadlineKey{}).(time.Time)
+	checkFreshness := method == "node.invoke" && hasWriteDeadline
+	if checkFreshness {
+		var cancel context.CancelFunc
+		writeCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
 	select {
-	case <-ctx.Done():
-		return protocol.Envelope{}, false, ctx.Err()
+	case <-writeCtx.Done():
+		return protocol.Envelope{}, false, writeCtx.Err()
 	case <-session.closed:
 		return protocol.Envelope{}, false, ErrNodeDisconnected
 	case <-session.ready:
 	}
-	if err := session.acquireRequestSlot(ctx); err != nil {
+	if err := session.acquireRequestSlot(writeCtx); err != nil {
 		return protocol.Envelope{}, false, err
 	}
 
@@ -526,13 +542,13 @@ func (session *peer) requestWithLease(
 	}
 	session.pendingMu.Unlock()
 	write := func() (bool, error) {
-		return session.writeEnvelopeAtDispatch(ctx, protocol.Envelope{
+		return session.writeEnvelopeAtDispatch(writeCtx, protocol.Envelope{
 			Type:           protocol.FrameRequest,
 			ID:             id,
 			Method:         method,
 			Params:         params,
 			IdempotencyKey: idempotencyKey,
-		}, dispatch)
+		}, dispatch, checkFreshness)
 	}
 	var (
 		dispatched bool
@@ -630,7 +646,7 @@ func (session *peer) releaseRequestSlot() {
 }
 
 func (session *peer) writeEnvelope(ctx context.Context, envelope protocol.Envelope) error {
-	_, err := session.writeEnvelopeAtDispatch(ctx, envelope, nil)
+	_, err := session.writeEnvelopeAtDispatch(ctx, envelope, nil, false)
 	return err
 }
 
@@ -638,6 +654,7 @@ func (session *peer) writeEnvelopeAtDispatch(
 	ctx context.Context,
 	envelope protocol.Envelope,
 	dispatch func(func() error) error,
+	checkFreshness bool,
 ) (bool, error) {
 	data, err := protocol.Encode(envelope)
 	if err != nil {
@@ -649,6 +666,7 @@ func (session *peer) writeEnvelopeAtDispatch(
 		data,
 		"request",
 		dispatch,
+		checkFreshness,
 	)
 }
 
@@ -658,6 +676,7 @@ func (session *peer) writeApplicationFrameAtDispatch(
 	data []byte,
 	frameKind string,
 	dispatch func(func() error) error,
+	checkFreshness bool,
 ) (bool, error) {
 	writeCtx, cancel := context.WithTimeout(ctx, defaultWriteTimeout)
 	defer cancel()
@@ -686,6 +705,17 @@ func (session *peer) writeApplicationFrameAtDispatch(
 	write := func() error {
 		if dispatched {
 			return fmt.Errorf("node %s frame write called more than once", frameKind)
+		}
+		if checkFreshness {
+			// A protected action must still be fresh after the durable commit.
+			// Ordinary committed invocations use the attempted-write path
+			// to reconcile their results, including on a transport timeout.
+			if err := writeCtx.Err(); err != nil {
+				return err
+			}
+			if !time.Now().Before(deadline) {
+				return context.DeadlineExceeded
+			}
 		}
 		dispatched = true
 		cancelDone := make(chan struct{})
@@ -745,5 +775,6 @@ func (session *peer) writeTransferFrameAtDispatch(
 		data,
 		"transfer",
 		dispatch,
+		false,
 	)
 }

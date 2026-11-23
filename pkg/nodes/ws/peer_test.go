@@ -94,6 +94,92 @@ func TestPeerDiscardsResponseAfterRequestCancellation(t *testing.T) {
 	}
 }
 
+func TestInvocationWriteDeadlineKeepsWaitingForResponse(t *testing.T) {
+	connection := newStubPeerConnection()
+	session := newPeer(connection)
+	defer func() { _ = session.Close() }()
+	session.markReady()
+	writeBefore := time.Now().Add(150 * time.Millisecond)
+	ctx := WithInvocationWriteDeadline(t.Context(), writeBefore)
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := session.request(ctx, "node.invoke", []byte(`{}`), "idem_test", nil)
+		done <- err
+	}()
+	select {
+	case <-connection.writeStarted:
+	case err := <-done:
+		t.Fatal("request ended before its write", err)
+	case <-time.After(time.Second):
+		t.Fatal("request did not start writing")
+	}
+	timer := time.NewTimer(time.Until(writeBefore))
+	defer timer.Stop()
+	<-timer.C
+	ok := true
+	if err := session.handleResponse(protocol.Envelope{
+		Type: protocol.FrameResponse, ID: "req_1", OK: &ok,
+	}); err != nil {
+		t.Fatal("late response was not correlated", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal("write deadline abandoned an already sent request", err)
+	}
+}
+
+func TestInvocationWriteDeadlineRechecksAfterDispatchCommit(t *testing.T) {
+	connection := newStubPeerConnection()
+	session := newPeer(connection)
+	defer func() { _ = session.Close() }()
+	session.markReady()
+	writeBefore := time.Now().Add(150 * time.Millisecond)
+	ctx := WithInvocationWriteDeadline(t.Context(), writeBefore)
+	entered := false
+	_, sent, err := session.request(ctx, "node.invoke", []byte(`{}`), "idem_test", func(write func() error) error {
+		entered = true
+		timer := time.NewTimer(time.Until(writeBefore))
+		defer timer.Stop()
+		<-timer.C
+		return write()
+	})
+	if !entered || sent || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("dispatch after expiry = entered %t, sent %t, error %v", entered, sent, err)
+	}
+	select {
+	case <-connection.writeStarted:
+		t.Fatal("expired invocation reached the connection")
+	default:
+	}
+}
+
+func TestOrdinaryInvocationPreservesDispatchRecoveryAfterCommitCancellation(t *testing.T) {
+	connection := newStubPeerConnection()
+	connection.blockWrites = true
+	session := newPeer(connection)
+	defer func() { _ = session.Close() }()
+	session.markReady()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, dispatched, err := session.request(
+		ctx,
+		"node.invoke",
+		[]byte(`{}`),
+		"idem_test",
+		func(write func() error) error {
+			cancel()
+			return write()
+		},
+	)
+	if !dispatched || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation after ordinary dispatch commit = sent %t, error %v", dispatched, err)
+	}
+	select {
+	case <-connection.writeStarted:
+	default:
+		t.Fatal("ordinary invocation skipped the attempted-write recovery path")
+	}
+}
+
 func TestPeerRetainsCanceledRequestIDsUntilResponse(t *testing.T) {
 	session := newPeer(newStubPeerConnection())
 	for index := range maxOutstandingRequests {

@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	nodews "github.com/bogdanovich/mintclaw/pkg/nodes/ws"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
@@ -204,7 +206,7 @@ func (source *nodeInvocationSource) DispatchInvocation(
 	invocationID string,
 	expectedPlanHash string,
 ) (json.RawMessage, bool, error) {
-	return source.dispatchInvocation(ctx, owner, invocationID, expectedPlanHash, nil)
+	return source.dispatchInvocation(ctx, owner, invocationID, expectedPlanHash, nil, time.Time{})
 }
 
 func (source *nodeInvocationSource) DispatchInvocationEphemeral(
@@ -217,7 +219,7 @@ func (source *nodeInvocationSource) DispatchInvocationEphemeral(
 	if len(ephemeralInput) == 0 {
 		return nil, false, nodes.ErrGatewayInvocationConflict
 	}
-	return source.dispatchInvocation(ctx, owner, invocationID, expectedPlanHash, ephemeralInput)
+	return source.dispatchInvocation(ctx, owner, invocationID, expectedPlanHash, ephemeralInput, time.Time{})
 }
 
 func (source *nodeInvocationSource) dispatchInvocation(
@@ -226,6 +228,7 @@ func (source *nodeInvocationSource) dispatchInvocation(
 	invocationID string,
 	expectedPlanHash string,
 	ephemeralInput json.RawMessage,
+	writeBefore time.Time,
 ) (json.RawMessage, bool, error) {
 	if source == nil || source.store == nil || source.runtime == nil {
 		return nil, false, errNodeDiscoveryAuthorityUnavailable
@@ -267,6 +270,9 @@ func (source *nodeInvocationSource) dispatchInvocation(
 	if record.State == nodes.GatewayInvocationDispatched {
 		return nil, false, nodes.ErrGatewayInvocationDispatched
 	}
+	if !writeBefore.IsZero() {
+		ctx = nodews.WithInvocationWriteDeadline(ctx, writeBefore)
+	}
 	return handler.Invoke(
 		ctx,
 		record.Plan.NodeID,
@@ -277,6 +283,9 @@ func (source *nodeInvocationSource) dispatchInvocation(
 				source.registryPath,
 				source.generation,
 				func(nodeAdmissionHandler) error {
+					if !writeBefore.IsZero() && !time.Now().Before(writeBefore) {
+						return context.DeadlineExceeded
+					}
 					_, transitioned, markErr := source.store.MarkDispatched(
 						owner,
 						invocationID,
@@ -330,7 +339,7 @@ func (source *nodeInvocationSource) RedispatchInvocation(
 		return nil, false, err
 	}
 	if !found || record.Target != target || record.Plan.NodeID != nodeID ||
-		record.State != nodes.GatewayInvocationDispatched {
+		record.State != nodes.GatewayInvocationDispatched || record.Plan.Command == nodes.ComputerCommandAct {
 		return nil, false, nodes.ErrGatewayInvocationConflict
 	}
 	return handler.Invoke(ctx, nodeID, record.Plan, nil, nil)
