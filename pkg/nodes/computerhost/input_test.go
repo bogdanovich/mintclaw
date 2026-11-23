@@ -3,12 +3,97 @@ package computerhost
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/computer"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 )
+
+func TestInputOwnershipProbeOutlivesCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	release := sync.OnceFunc(func() { close(unblock) })
+	defer release()
+	result := make(chan error, 1)
+	go func() {
+		result <- probeInputOwnership(ctx, ctx, func(probe context.Context) error {
+			close(started)
+			<-unblock
+			if err := probe.Err(); err != nil {
+				t.Error("action cancellation reached the native ownership check", err)
+			}
+			if _, bounded := probe.Deadline(); !bounded {
+				t.Error("ownership check has no native IO bound")
+			}
+			return nil
+		})
+	}()
+	<-started
+	cancel()
+	// The synchronous ownership round trip still needs to finish.
+	select {
+	case <-result:
+		t.Fatal("ownership probe returned while native IO remained live")
+	default:
+	}
+	release()
+	if err := <-result; !errors.Is(err, computer.ErrStale) {
+		t.Fatal("expired action still authorized input after its probe", err)
+	}
+}
+
+type unresolvedFixtureLease struct {
+	done   chan struct{}
+	closed bool
+}
+
+func (lease *unresolvedFixtureLease) Done() <-chan struct{} { return lease.done }
+func (lease *unresolvedFixtureLease) Close() error {
+	lease.closed = true
+	return nil
+}
+
+func TestInputHostResumesDisconnectedCleanupAfterLeaseLoss(t *testing.T) {
+	host, app := nativeHostFixture(t, nil)
+	execute := func(context.Context, InputAuthorization) InputDisposition { return InputUnverified }
+	if _, err := withInputBackends(host, map[string]InputBackend{
+		"fixture": {Revision: [32]byte{1}, Execute: execute},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	session := openFixture(t, host)
+	entry := host.sessions[session.Binding.SessionID]
+	lease := &unresolvedFixtureLease{done: make(chan struct{})}
+	if err := acquire(t.Context(), entry.gate); err != nil {
+		t.Fatal(err)
+	}
+	entry.input.lease, entry.input.faulted = lease, true
+	relinquish(entry.gate)
+	if err := host.Disconnect(t.Context()); !errors.Is(err, computer.ErrUnavailable) {
+		t.Fatal("disconnect claimed cleanup with a live uncertain lease", err)
+	}
+	if app.workers[0].closed.Load() {
+		t.Fatal("worker closed while input remained unverified")
+	}
+	close(lease.done)
+	select {
+	case <-app.workers[0].done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("lease ended without resuming disconnected cleanup")
+	}
+	if err := acquire(t.Context(), entry.gate); err != nil {
+		t.Fatal(err)
+	}
+	defer relinquish(entry.gate)
+	if !entry.retired.Load() || !lease.closed || entry.input.lease != nil {
+		t.Fatal("cleanup did not finish under the session gate")
+	}
+}
 
 func TestInputHostUsesOnlyCurrentWorkspaceObservation(t *testing.T) {
 	base, _ := nativeHostFixture(t, nil)

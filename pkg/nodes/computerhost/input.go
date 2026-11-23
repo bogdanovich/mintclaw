@@ -114,12 +114,18 @@ type observedInput struct {
 	workspace string
 }
 
+type retainedInputLease interface {
+	Done() <-chan struct{}
+	Close() error
+}
+
 type sessionInput struct {
 	// These fields are serialized by the existing session gate.
-	execute  InputExecutor
-	observed observedInput
-	lease    *desktop.InputLease
-	faulted  bool
+	execute        InputExecutor
+	observed       observedInput
+	lease          retainedInputLease
+	faulted        bool
+	cleanupWaiting bool
 
 	// Revocation can cancel the in-flight executor before acquiring the gate.
 	ctx    context.Context
@@ -135,6 +141,21 @@ func (entry *sessionEntry) cancelInput() {
 	if entry.input != nil {
 		entry.input.cancel()
 	}
+}
+
+// A caller abandoning the action cannot interrupt an in-flight native owner
+// probe and accidentally drop exclusion. The probe still has its own bound.
+func probeInputOwnership(scope, caller context.Context, check func(context.Context) error) error {
+	if scope.Err() != nil || caller.Err() != nil {
+		return computer.ErrStale
+	}
+	probe, cancel := context.WithTimeout(context.WithoutCancel(caller), 500*time.Millisecond)
+	defer cancel()
+	err := check(probe)
+	if scope.Err() != nil || caller.Err() != nil {
+		return computer.ErrStale
+	}
+	return err
 }
 
 func (host *InputHost) Act(ctx context.Context, action nodes.ComputerHostActRequest) (nodes.ComputerActResult, error) {
@@ -173,10 +194,12 @@ func (host *InputHost) Act(ctx context.Context, action nodes.ComputerHostActRequ
 	if !ok {
 		return nodes.ComputerActResult{}, computer.ErrDenied
 	}
-	dispatch, cancel := context.WithDeadline(ctx, witness.evidence.ExpiresAt)
-	defer cancel()
-	stop := context.AfterFunc(input.ctx, cancel)
+	lifetime, cancelLifetime := context.WithDeadline(ctx, current.ExpiresAt)
+	defer cancelLifetime()
+	stop := context.AfterFunc(input.ctx, cancelLifetime)
 	defer stop()
+	dispatch, cancelDispatch := context.WithDeadline(lifetime, witness.evidence.ExpiresAt)
+	defer cancelDispatch()
 	lease, err := guard.AcquireInputLease(dispatch)
 	if err != nil {
 		return nodes.ComputerActResult{}, safeFailure(err)
@@ -185,17 +208,22 @@ func (host *InputHost) Act(ctx context.Context, action nodes.ComputerHostActRequ
 	go func() {
 		select {
 		case <-lease.Done():
-			cancel()
-		case <-dispatch.Done():
+			cancelLifetime()
+		case <-lifetime.Done():
 		}
 	}()
-	check := func(checkCtx context.Context) error {
-		if dispatch.Err() != nil || input.ctx.Err() != nil || entry.epoch != host.epoch.Load() {
+	valid := func() bool { return input.ctx.Err() == nil && entry.epoch == host.epoch.Load() }
+	verify := func(scope, caller context.Context) error {
+		if !valid() {
 			return computer.ErrStale
 		}
-		return lease.Check(checkCtx)
+		err := probeInputOwnership(scope, caller, lease.Check)
+		if !valid() {
+			return computer.ErrStale
+		}
+		return err
 	}
-	if err = check(dispatch); err != nil {
+	if err = verify(dispatch, dispatch); err != nil {
 		input.lease = nil
 		_ = lease.Close()
 		return nodes.ComputerActResult{}, safeFailure(err)
@@ -203,11 +231,13 @@ func (host *InputHost) Act(ctx context.Context, action nodes.ComputerHostActRequ
 	input.observed = observedInput{}
 	host.outputs.removeSession(status.SessionID)
 	disposition := input.execute(dispatch, InputAuthorization{
-		Request: request, Evidence: witness.evidence, Window: guard.Identity(), Lease: lease, Check: check,
+		Request: request, Evidence: witness.evidence, Window: guard.Identity(), Lease: lease,
+		Check: func(checkCtx context.Context) error { return verify(dispatch, checkCtx) },
 	})
+	cancelDispatch()
 	var observed nodes.ComputerObservationResult
-	if disposition == InputEffectVerified && check(dispatch) == nil {
-		observed, err = host.observeLocked(dispatch, entry, current, nodes.ComputerHostObserveRequest{
+	if disposition == InputEffectVerified && verify(lifetime, lifetime) == nil {
+		observed, err = host.observeLocked(lifetime, entry, current, nodes.ComputerHostObserveRequest{
 			ComputerHostStatusRequest: status, Generation: current.Binding.Generation,
 			WorkspaceID: action.WorkspaceID, InvocationID: request.ID,
 		})
@@ -225,7 +255,7 @@ func (host *InputHost) Act(ctx context.Context, action nodes.ComputerHostActRequ
 				}
 				return nodes.ComputerActResult{}, computer.ErrDenied
 			case InputEffectVerified:
-				if err == nil && ctx.Err() == nil && entry.epoch == host.epoch.Load() {
+				if err == nil && ctx.Err() == nil && valid() && current.AgentAuthority(time.Now()) == nil {
 					return nodes.ComputerActResult{ActionID: request.ID, Observation: observed}, nil
 				}
 			}

@@ -23,7 +23,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 )
 
-const maxSessions = 128
+const (
+	maxSessions          = 128
+	sessionCleanupBudget = 15 * time.Second
+)
 
 type windowObserver interface {
 	Identity() desktop.WindowIdentity
@@ -277,7 +280,7 @@ func (host *Host) Open(
 		return nodes.ComputerSessionResult{}, computer.ErrExpired
 	}
 	entry.timer = time.AfterFunc(time.Until(session.ExpiresAt), func() {
-		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+		cleanup, stop := context.WithTimeout(context.Background(), sessionCleanupBudget)
 		defer stop()
 		entry.cancelInput()
 		_, _ = core.Lose(cleanup, session.Binding)
@@ -485,6 +488,7 @@ func (host *Host) closeEntry(entry *sessionEntry) error {
 			}
 			entry.input.lease = nil
 		default:
+			host.closeEntryAfterLease(entry)
 			return computer.ErrUnavailable
 		}
 	}
@@ -498,6 +502,24 @@ func (host *Host) closeEntry(entry *sessionEntry) error {
 	}
 	entry.retired.Store(true)
 	return nil
+}
+
+func (host *Host) closeEntryAfterLease(entry *sessionEntry) {
+	input := entry.input
+	if input.cleanupWaiting {
+		return
+	}
+	input.cleanupWaiting = true
+	done := input.lease.Done()
+	go func() {
+		<-done
+		cleanup, cancel := context.WithTimeout(context.Background(), sessionCleanupBudget)
+		defer cancel()
+		if acquire(cleanup, entry.gate) == nil {
+			defer relinquish(entry.gate)
+			_ = host.closeEntry(entry)
+		}
+	}()
 }
 
 func (host *Host) Disconnect(ctx context.Context) error { return host.disconnect(ctx, false) }
