@@ -1,0 +1,12 @@
+[package]
+name = "mintclaw-retained-x11-pointer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+[features]
+fixture-fault-injection = []
+
+[dependencies]
+libc = "0.2"
+x11rb = {version = "=0.13.2", features = ["record", "res", "xinput", "xtest"]}
+zeroize = "1"
