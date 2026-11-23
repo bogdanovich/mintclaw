@@ -2,6 +2,8 @@
 
 Operational docs for debugging, diagnosis, and production troubleshooting.
 
+- [Computer-use pilot readiness and rollback](computer-pilot-readiness.md):
+  read-only staging, protected observation and handoff checks, release and rollback.
 - [Document acquisition and inspection](document-acquisition.md): PDF0A immutable identity,
   PDF0B structural inspection, PDF1A bounded agent/channel reads, typed failures, retained renders,
   portable Linux/macOS backends, native verification tiers, cleanup, and CLI, integration, deployed,

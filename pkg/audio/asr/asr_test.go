@@ -207,6 +207,7 @@ func TestModelSupportsAudioInput(t *testing.T) {
 		{name: "openai gpt-4o-audio-preview", modelID: "gpt-4o-audio-preview", want: true},
 		{name: "openai gpt-4.1-audio", modelID: "gpt-4.1-audio", want: true},
 		{name: "gemini flash", modelID: "gemini-2.5-flash", want: true},
+		{name: "gemini flash lite", modelID: "gemini-3.5-flash-lite", want: true},
 		{name: "gemini pro", modelID: "gemini-2.5-pro", want: true},
 		{name: "qwen omni", modelID: "qwen2.5-omni", want: true},
 		{name: "sensevoice", modelID: "sensevoice-small", want: true},

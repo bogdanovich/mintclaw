@@ -333,7 +333,10 @@ func (al *AgentLoop) processScheduledMessage(
 	}, msg); bindErr != nil {
 		return "", "", fmt.Errorf("admit scheduled media: %w", bindErr)
 	}
-	msg = al.prepareInboundMessageForAgent(ctx, msg)
+	msg, err := al.prepareInboundMessageForAgent(ctx, msg)
+	if err != nil {
+		return "", "", err
+	}
 	modelBinding := al.bindEffectiveModel(allocation.RouteScopeKey, agent)
 	defer modelBinding.Cleanup()
 
@@ -393,9 +396,9 @@ func (al *AgentLoop) ProcessHeartbeat(
 func (al *AgentLoop) prepareInboundMessageForAgent(
 	ctx context.Context,
 	msg bus.InboundMessage,
-) bus.InboundMessage {
-	msg, _ = al.prepareInboundMessageForAgentWithAudioStatus(ctx, msg)
-	return msg
+) (bus.InboundMessage, error) {
+	msg, status := al.prepareInboundMessageForAgentWithAudioStatus(ctx, msg)
+	return msg, status.failure()
 }
 
 func (al *AgentLoop) prepareInboundMessageForAgentWithAudioStatus(

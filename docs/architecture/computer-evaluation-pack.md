@@ -1,7 +1,12 @@
 # Computer-use evaluation pack v1
 
 Status: frozen task intents and acceptance rules, with private text fixtures and
-saved-byte oracles for CU-T01–05 plus Writer setup/saved-ODT checks for CU-T06–08.
+saved-byte oracles for CU-T01–05, Writer setup/saved-ODT checks for CU-T06–12,
+Calc setup/saved-ODS checks for CU-T13–16, a CU-T17 chart-structure checker,
+disposable GTK/AppKit canvas/form sources and state projections for CU-T18–19,
+and CU-T20 setup/saved-byte phase projections. The
+[handoff subset](computer-handoff-evaluation.md) defines its document states
+and localized instructions without executing the interaction.
 The full runner and native/model qualification remain unimplemented. None of
 these model tasks is currently qualified.
 This pack supplies the representative-task gate in the
@@ -138,20 +143,43 @@ mismatch and 2 means unverifiable. `native_task_qualified` is always false.
 An artifact match does not prove native GUI use, CU-T01's reopen, unchanged guard
 window, authorized dialogs, intermediate state, cancellation or post-cleanup
 disposition. The eventual existing-Pipeline controller must attest those
-independently before a full task pass. The Writer subset below supplies three
-more controller fixtures; CU-T09–20 fixtures remain unimplemented. All 20 tasks
+independently before a full task pass. The Writer subset below supplies seven
+more controller fixtures. The interactive subset below supplies CU-T18–19;
+the [handoff helper](computer-handoff-evaluation.md) supplies CU-T20 setup and
+saved-byte projections. Full native controllers remain unimplemented. All 20 tasks
 stay in the denominator. No provider run or spending is authorized.
 
 ## Private Writer fixture subset
 
 `scripts/internal/computer-evaluation/writer_fixtures.py` adds controller-only
-setup and saved-artifact checks for CU-T06–08. It opens no application or desktop
+setup and saved-artifact checks for CU-T06–12. It opens no application or desktop
 and makes no model call. CU-T06 starts without `document.odt`; the GUI must create
 the document. CU-T07 seeds one plain paragraph containing exactly `U`. CU-T08
-seeds an empty paragraph. Every seed is a deterministic ODT package with fixed
-ZIP entry timestamps. The immutable subset revision covers these exact seeds,
+seeds an empty paragraph. CU-T09 seeds 128 numbered paragraphs followed by the
+final `END-MARKER`, with an earlier marker as a navigation distractor. Its
+projection requires all 128 preceding paragraphs unchanged and exactly one `R`
+after the final marker in the same paragraph. CU-T10 starts without a document
+and requires exact `U` in `Крем-世界.odt`, with no other saved file or directory.
+The task closes its saved document before this census so a temporary app lock
+file cannot be mistaken for successful cleanup. Every seed is a deterministic
+ODT package with fixed ZIP entry timestamps. The immutable subset revision covers these exact seeds,
 prompts, expected semantic projections and bounds; it is not the full executable
 pack or oracle-source revision. Freeze source/artifact hashes before GUI runs.
+CU-T11 seeds `document.odt` with `U` and a separate `unrelated.odt`. The candidate
+must contain exactly `R`, the unrelated document must retain its original bytes,
+and the bounded directory census must contain only those two files and the
+controller marker. Close the saved document before this census to release its
+temporary lock file. This does not attest opening through the app's dialog or an
+unchanged guard window; the independent native controller must attest both.
+CU-T12 seeds `U`, expects saved `R`, and declares the required live intermediate
+states: after edit `R`, after undo `U`, after redo `R`. These declarations are
+requirements, not receipts. The checker does not use caller-created files as
+native proof or claim that a final `R` proves undo/redo. `native_task_qualified` stays
+false even when the saved artifact matches.
+
+Revision `writer-v3` adds CU-T11–12 and their bounds; older `writer-v1` and
+`writer-v2` records remain historical evidence and cannot be checked as this
+expanded revision. Source and input revisions must stay bound to each run.
 
 ```sh
 python3 scripts/internal/computer-evaluation/writer_fixtures.py prepare \
@@ -178,6 +206,10 @@ fixture helpers, verifies task/revision/directory identity and observed mutation
 and never extracts ZIP entries. Bounds are 2 MiB compressed/total expanded data,
 64 entries, 256 KiB per parsed XML part, 4,096 nodes and depth 64. DTD/entity
 declarations are refused. No saved text or raw parser/OS detail enters reports.
+CU-T10–11 additionally scan only the original open task directory, bounded to 16
+entries without traversing extras. It checks the census and directory metadata
+again after reading; observed changes are unverifiable. This is not an atomic
+filesystem snapshot or a same-UID security boundary.
 
 Exit statuses have the same meaning as the text subset: 0 is only a saved-artifact
 match, 1 a mismatch, and 2 unverifiable. `native_task_qualified` stays false.
@@ -185,6 +217,164 @@ The independent controller still must attest GUI-only execution, original
 target/guard, app/window identity, authorized dialogs, intermediate states and
 post-cleanup disposition. These fixtures neither run the native task nor change
 the 20-task denominator or production access.
+
+## Private Calc fixture subset
+
+`scripts/internal/computer-evaluation/calc_fixtures.py` supplies controller-only
+CU-T13–16 seeds and saved-ODS checks. `calc-v2` freezes the input recipes,
+instructions, namespaces, projection rules and bounds. CU-T13 starts with an
+empty `Evaluation` sheet; CU-T14 seeds numeric A1 with 1000.25. These helpers
+open no GUI and make no model call. All reports keep `native_task_qualified=false`.
+
+CU-T13 requires numeric literals in B2:B4 and a real OpenFormula SUM of that local
+range in B5. It independently recomputes the result with Decimal arithmetic and
+checks the cached numeric value; a typed result or misleading namespace fails.
+CU-T14 checks the unchanged numeric value and effective currency format through
+supported cell, row, column, default and inherited styles. Display text alone
+does not establish either property. Conditional number-format branches must all
+retain supported currency semantics. Conditional cell-style mappings, including
+inherited and default mappings, are unsupported and refused. The complete named
+parent chain is checked even when a child declares its own number format.
+These are bounded projections, not a
+general formula evaluator or an ODF renderer; unsupported structures and styles
+are unverifiable and never qualify a native task.
+
+CU-T15 seeds the headerless A1:B3 rows `(C,3)`, `(A,1)`, `(B,2)` and requires
+exact `(A,1)`, `(B,2)`, `(C,3)` rows after sorting. String cells must have one
+plain paragraph, consistent optional string-value metadata and no formula.
+CU-T16 seeds only A2:A5 with 1 through 4. The saved B2:B5 cells must contain
+the translated local relative formulas `A2*2` through `A5*2`, with independent
+Decimal results 2, 4, 6, 8 and unchanged source values. Constants, absolute or
+cross-sheet references, lost associations and extra data fail. Artifact equality
+does not prove that the GUI sort/fill commands were used; the native controller
+must independently attest execution. All reports retain native_task_qualified=false.
+The previous calc-v1 recipe remains historical; it is not accepted as calc-v2.
+
+The existing no-follow owned-file reader and bounded ODF ZIP/XML reader are
+reused. No ZIP entry is extracted. Sparse empty repeats can span a worksheet,
+but meaningful data is limited to 16 rows by 16 columns. Package/XML bounds
+remain those of the Writer checker. Number/formula strings and style traversal
+are bounded separately. Source hashes must be frozen alongside each run.
+
+```sh
+python3 scripts/internal/computer-evaluation/calc_fixtures.py prepare \
+  --task CU-T13 --run-directory /absolute/new/private-calc-task
+# A future independently qualified GUI runner performs the task here.
+python3 scripts/internal/computer-evaluation/calc_fixtures.py check-artifact \
+  --task CU-T13 --run-directory /absolute/new/private-calc-task
+```
+
+All native/model qualification and the CU-T20 native controller remain pending.
+The separate [CU-T20 setup/projection helper](computer-handoff-evaluation.md)
+does not execute its interaction. The full task denominator remains 20 per OS;
+saved artifacts are not GUI proof.
+
+## Private canvas and form fixture subset
+
+`scripts/internal/computer-evaluation/interactive_fixtures.py` freezes CU-T18–19
+as `interactive-v1`. Setup creates a new mode-0700 directory with an owned
+task/revision/run/directory marker and exact immutable recipe bytes. Protected
+bounded reads reject altered recipes, unsafe files and observed replacement.
+The same no-follow reader used by the text subset applies; this is not a
+same-UID security boundary or an atomic filesystem snapshot.
+
+The canvas is a logical 640-by-480 client area. Card Alpha starts at (40,60),
+Card Beta at (260,60); both measure 120 by 70. Alpha must finish wholly inside
+the outlined destination (32,252,136,86), leaving Beta unchanged. The projection
+requires a completed Alpha drag from its original position with at least one
+motion callback, not just a matching final position or button acknowledgement.
+Held, cancelled and release-only gestures cannot qualify the projected state.
+
+The form starts with empty Name, Choice alpha, Confirm unchecked and Period
+daily. The task requires exact `U`, beta, checked and monthly. Editable preview
+controls appear before the real controls and must retain KEEP, gamma and
+unchecked. Neither Unicode normalization nor Boolean-as-integer substitutions
+are accepted. Both apps retain a separate guard window with editable text
+GUARD_UNCHANGED and an Apply counter; the guard must stay visible and unchanged.
+
+`interactive_fixture_linux.py` supplies GTK 3 widgets and canvas callbacks;
+`interactive_fixture_macos.swift` supplies AppKit equivalents. Neither is a
+MintClaw driver, companion replacement or installed application. The Mac source
+pins the canonical recipe hashes. Compile/typecheck without launching it where
+Mac GUI testing is deferred. Launching either source opens only its disposable
+windows, but still requires an explicitly selected authorized desktop.
+The Linux fixture requires GTK 3, GdkX11, PyGObject, Pycairo and the PyGObject
+Cairo foreign-struct adapter (`python3-gi-cairo` on the selected Ubuntu tuple).
+It checks the adapter before creating windows; receiving events alone does not
+prove that a canvas rendered. Privately staged dependencies are test inputs,
+not permission for a system installation.
+
+The controller prepares a task and passes `launch-config` JSON as the app's
+first stdin line. Apps take `--task CU-T18` or `--task CU-T19`. After a ready
+record, their only supported request is `{"inspect_id":"fresh-nonce"}` on
+stdin. Each response reads current widgets/layout on the UI thread and includes
+the nonce, process ID, original native target/guard window IDs and current
+visible-window IDs. There are no controller set/reset commands or clipboard
+operations. Closing the guard exits the app; closing the target never silently
+creates a replacement. The owning controller must stop and verify its exact
+original process during cleanup; a protocol EOF is not an exit receipt.
+
+```sh
+python3 scripts/internal/computer-evaluation/interactive_fixtures.py prepare \
+  --task CU-T18 --run-directory /absolute/new/private-interactive-task
+python3 scripts/internal/computer-evaluation/interactive_fixtures.py launch-config \
+  --task CU-T18 --run-directory /absolute/new/private-interactive-task
+# An independently qualified controller launches the app and obtains its snapshot.
+# Pass only the snapshot's value object to check-state on stdin.
+python3 scripts/internal/computer-evaluation/interactive_fixtures.py check-state \
+  --task CU-T18 --run-directory /absolute/new/private-interactive-task
+```
+
+`check-state` accepts at most 32 KiB, verifies the run/revision binding and
+projects the exact bounded state. Exit 0 means state matches, 1 means mismatch
+and 2 means unverifiable. Reports include hashes and counts, never field text.
+Every result keeps both `native_task_qualified=false` and
+`native_source_verified=false`, including a perfect caller-supplied snapshot.
+Extra fields cannot supply authenticated source, freshness or execution proof.
+The future controller must independently attest the original process, native
+window lineage, fresh channel/nonce, native input and post-cleanup disposition.
+Compatibility tests of app callbacks, including synthetic input on an owned
+private display, do not satisfy those native/model gates. All 20 tasks remain
+in each OS's denominator.
+
+## Private chart fixture
+
+`scripts/internal/computer-evaluation/chart_fixtures.py` adds CU-T17 with a
+separate `chart-v1` recipe. It seeds `Evaluation.A1:B4`: headers `Category` and
+`Value`, followed by `(alpha,2)`, `(beta,3)`, `(gamma,5)`. The instruction requests
+one bar chart using A2:A4 as categories, B2:B4 as its value series and B1 as its
+series label, with the source cells unchanged. Calc-v2 remains unchanged.
+
+The saved-artifact check requires one embedded chart frame with positive
+dimensions, matching manifest/part types, actual series/category/label ranges,
+and consistent cached labels/numbers. An image-only substitute, a range-looking
+description or a deprecated plot-range hint cannot establish those bindings.
+QName values retain their lexical namespace scope. External/traversing package
+references, XML base overrides, unsupported link modes, inline objects and
+unsupported chart/cache structures are unverifiable. This is a bounded ODF
+projection, not a general renderer or a macro/network security sandbox.
+
+The chart checker reuses the Calc controller's owned no-follow single-link file
+reader, original task/revision/directory binding, mutation checks and package/XML
+bounds. Its projection callback is trusted controller code, not a model-selected
+parser or a native driver. The existing Calc CLI and recipe are unchanged.
+
+```sh
+python3 scripts/internal/computer-evaluation/chart_fixtures.py prepare \
+  --task CU-T17 --run-directory /absolute/new/private-chart-task
+# A future independently qualified GUI runner performs the task here.
+python3 scripts/internal/computer-evaluation/chart_fixtures.py check-artifact \
+  --task CU-T17 --run-directory /absolute/new/private-chart-task
+```
+
+Exit statuses retain the same saved-artifact meaning: 0 matches the bounded
+structure, 1 is a mismatch, 2 is unverifiable. Every result retains
+`native_task_qualified=false`; artifact-check results also retain
+`fresh_render_required=true`. Setup declares the required live evidence. Caller-created
+files or flags cannot supply native or rendered proof. The independent native
+controller must still attest fresh visible chart evidence, GUI execution,
+unchanged guard and release/disposition. A headless compatibility export is
+separate evidence and does not satisfy the native task's fresh-render gate.
 
 ## Scoring, safety and resource limits
 

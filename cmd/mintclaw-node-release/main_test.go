@@ -140,7 +140,10 @@ func TestRunSignsExactFourReleaseArtifacts(t *testing.T) {
 	t.Setenv(signingKeyEnvironment, base64.RawStdEncoding.EncodeToString(privateKey.Seed()))
 	t.Setenv("MINTCLAW_NODE_RELEASE", "v1.2.3")
 	t.Setenv("MINTCLAW_NODE_RELEASE_CHANNEL", "stable")
-	t.Setenv("MINTCLAW_NODE_RELEASE_PUBLISHED_AT", "2026-08-07T19:00:00Z")
+	t.Setenv(
+		"MINTCLAW_NODE_RELEASE_PUBLISHED_AT",
+		time.Now().Add(-time.Minute).UTC().Truncate(time.Minute).Format(time.RFC3339),
+	)
 	t.Setenv("MINTCLAW_NODE_MIN_COORDINATOR_VERSION", "v1.0.0")
 	t.Setenv("MINTCLAW_NODE_RELEASE_ARTIFACTS", artifacts)
 	t.Setenv("MINTCLAW_NODE_MANIFEST_PATH", manifestPath)

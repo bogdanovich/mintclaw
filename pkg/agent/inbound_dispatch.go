@@ -74,8 +74,9 @@ func (al *AgentLoop) buildInboundMessageTurnWithOptions(
 	options inboundMessageBuildOptions,
 ) (inboundMessageTurn, error) {
 	if msg.Context.Channel == "system" {
-		msg = al.prepareInboundMessageForAgent(ctx, msg)
-		return inboundMessageTurn{Message: msg}, nil
+		var err error
+		msg, err = al.prepareInboundMessageForAgent(ctx, msg)
+		return inboundMessageTurn{Message: msg}, err
 	}
 	msg = bus.NormalizeInboundMessage(msg)
 
@@ -199,7 +200,10 @@ func (al *AgentLoop) prepareInboundMessageForTargetWithOptions(
 	target *inboundDispatchTarget,
 	options inboundMessageBuildOptions,
 ) (bus.InboundMessage, error) {
-	msg, _, err := al.prepareInboundMessageForTargetWithAudioStatusAndOptions(ctx, msg, target, options)
+	msg, status, err := al.prepareInboundMessageForTargetWithAudioStatusAndOptions(ctx, msg, target, options)
+	if err == nil {
+		err = status.failure()
+	}
 	return msg, err
 }
 
