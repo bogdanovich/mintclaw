@@ -610,6 +610,30 @@ This evidence covers fresh disposable X11 displays and one wheel step.
 Production startup wiring, already-running desktop admission and the
 representative per-platform model tasks remain separate qualification gates.
 
+### Native device startup before GNOME
+
+On a disposable X11 display, the pinned private keeper enabled X RECORD,
+confirmed that only its own clients were connected, and created a dedicated
+input device pair before GNOME started. It verified the creation request in
+the recording and retained the device identities. The authenticated Gateway
+fixture then supplied the core pointer identifiers in the action request.
+The keeper used its retained private pointer.
+
+Three interrupted runs dispatched one wheel step to the original GTK window,
+recovered the original button release after WebSocket loss, and preserved the
+unknown outcome on reconnect. Independent readback confirmed that the target
+scrolled once, the neighboring window and core pointer stayed unchanged, and
+the private pointer returned to neutral.
+
+Three additional runs removed and recreated the device with the same numeric
+identifiers and names. The recording revealed the hierarchy change and the
+keeper refused before emitting input. A separate run confirmed startup
+refusal when an unrelated X11 client connected before the keeper.
+
+The harness launched a new keeper on a fresh display for each run. Companion
+ownership of the keeper's process lifecycle and admission on an already-running
+desktop still need separate qualification.
+
 ## Private chart fixture
 
 `scripts/internal/computer-evaluation/chart_fixtures.py` adds CU-T17 with a
