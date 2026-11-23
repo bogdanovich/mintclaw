@@ -5,12 +5,16 @@ package desktop
 import (
 	"context"
 	"errors"
+	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/jezek/xgb"
+	"github.com/jezek/xgb/res"
 	"github.com/jezek/xgb/xproto"
+	"golang.org/x/sys/unix"
 
 	"github.com/bogdanovich/mintclaw/pkg/computer"
 )
@@ -250,6 +254,10 @@ func (protocol x11SelectionProtocol) ungrab() error {
 func (protocol x11SelectionProtocol) abort() { protocol.guard.abortInputTransaction() }
 
 func (lease *x11InputLease) check(ctx context.Context) error {
+	return lease.checkWith(ctx, nil)
+}
+
+func (lease *x11InputLease) checkWith(ctx context.Context, attest func(*x11Window) error) error {
 	guard := lease.guard
 	if lease.lost.Load() {
 		return computer.ErrStale
@@ -268,6 +276,9 @@ func (lease *x11InputLease) check(ctx context.Context) error {
 	err := guard.inputTransaction(ctx, func() error {
 		var err error
 		owner, err = (x11SelectionProtocol{connection: guard.connection, selection: lease.selection}).owner()
+		if err == nil && owner == lease.window && attest != nil {
+			err = attest(guard)
+		}
 		return err
 	})
 	if err != nil {
@@ -278,6 +289,58 @@ func (lease *x11InputLease) check(ctx context.Context) error {
 		return computer.ErrStale
 	}
 	return nil
+}
+
+func (lease *x11InputLease) x11Binding(ctx context.Context) (X11InputBinding, error) {
+	var binding X11InputBinding
+	err := lease.checkWith(ctx, func(guard *x11Window) error {
+		pid := uint32(os.Getpid())
+		owners, err := res.QueryClientIds(guard.connection, 1, []res.ClientIdSpec{
+			{Client: uint32(lease.window), Mask: res.ClientIdMaskLocalClientPID},
+		}).Reply()
+		if err != nil || owners == nil || len(owners.Ids) != 1 ||
+			owners.Ids[0].Spec.Mask != res.ClientIdMaskLocalClientPID || len(owners.Ids[0].Value) != 1 ||
+			owners.Ids[0].Value[0] != pid {
+			return computer.ErrUnavailable
+		}
+		peer, err := retainedX11Peer(guard.socket)
+		if err != nil {
+			return err
+		}
+		binding = X11InputBinding{
+			LeaseWindow: uint32(lease.window), LeasePID: pid, Root: uint32(guard.root),
+			ServerPID: uint32(peer.Pid), ServerUID: peer.Uid,
+		}
+		return nil
+	})
+	if err != nil {
+		return X11InputBinding{}, err
+	}
+	return binding, nil
+}
+
+func retainedX11Peer(socket net.Conn) (*unix.Ucred, error) {
+	observed, ok := socket.(*x11ObservedTransport)
+	if !ok {
+		return nil, computer.ErrUnavailable
+	}
+	conn, ok := observed.Conn.(*net.UnixConn)
+	if !ok {
+		return nil, computer.ErrUnavailable
+	}
+	raw, err := conn.SyscallConn()
+	if err != nil {
+		return nil, computer.ErrUnavailable
+	}
+	var peer *unix.Ucred
+	var peerErr error
+	err = raw.Control(func(fd uintptr) {
+		peer, peerErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+	})
+	if err != nil || peerErr != nil || peer == nil || peer.Pid <= 0 {
+		return nil, computer.ErrUnavailable
+	}
+	return peer, nil
 }
 
 func (lease *x11InputLease) close() error {
