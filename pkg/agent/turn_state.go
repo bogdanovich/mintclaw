@@ -1475,7 +1475,9 @@ func splitHistoryForInteractionContinuation(
 		}
 	}
 	if start < 0 {
-		return append([]providers.Message(nil), history...), nil
+		// Older continuation journals can begin at the tool call. Keep
+		// that exact binding and its result without inventing a user turn.
+		start = originIndex
 	}
 
 	stable := append([]providers.Message(nil), history[:start]...)
