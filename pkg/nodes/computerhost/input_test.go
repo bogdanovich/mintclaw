@@ -48,14 +48,15 @@ func TestInputOwnershipProbeOutlivesCallerCancellation(t *testing.T) {
 }
 
 type unresolvedFixtureLease struct {
-	done   chan struct{}
-	closed bool
+	done     chan struct{}
+	closed   bool
+	closeErr error
 }
 
 func (lease *unresolvedFixtureLease) Done() <-chan struct{} { return lease.done }
 func (lease *unresolvedFixtureLease) Close() error {
 	lease.closed = true
-	return nil
+	return lease.closeErr
 }
 
 func TestInputHostResumesDisconnectedCleanupAfterLeaseLoss(t *testing.T) {
@@ -92,6 +93,35 @@ func TestInputHostResumesDisconnectedCleanupAfterLeaseLoss(t *testing.T) {
 	defer relinquish(entry.gate)
 	if !entry.retired.Load() || !lease.closed || entry.input.lease != nil {
 		t.Fatal("cleanup did not finish under the session gate")
+	}
+}
+
+func TestInputHostRetiresRevokedLeaseAfterCloseFailure(t *testing.T) {
+	host, app := nativeHostFixture(t, nil)
+	execute := func(context.Context, InputAuthorization) InputDisposition { return InputUnverified }
+	if _, err := withInputBackends(host, map[string]InputBackend{
+		"fixture": {Revision: [32]byte{1}, Execute: execute},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	session := openFixture(t, host)
+	entry := host.sessions[session.Binding.SessionID]
+	lease := &unresolvedFixtureLease{done: make(chan struct{}), closeErr: computer.ErrUnavailable}
+
+	// A failed native close has revoked authority and cached its error.
+	if err := acquire(t.Context(), entry.gate); err != nil {
+		t.Fatal(err)
+	}
+	entry.input.lease, entry.input.faulted = lease, true
+	_ = lease.Close()
+	close(lease.done)
+	relinquish(entry.gate)
+
+	if err := host.Disconnect(t.Context()); err != nil {
+		t.Fatal("cached native close failure blocked session cleanup", err)
+	}
+	if !entry.retired.Load() || !app.workers[0].closed.Load() || entry.driver.guard.Alive(t.Context()) {
+		t.Fatal("revoked session did not retire its original capture resources")
 	}
 }
 

@@ -483,9 +483,9 @@ func (host *Host) closeEntry(entry *sessionEntry) error {
 		// executor. Losing the original lease independently ends its scope.
 		select {
 		case <-entry.input.lease.Done():
-			if err := entry.input.lease.Close(); err != nil && !errors.Is(err, computer.ErrStale) {
-				return computer.ErrUnavailable
-			}
+			// A revoked lease can retain a failed Close result. Retire the
+			// original capture resources without changing the input outcome.
+			_ = entry.input.lease.Close()
 			entry.input.lease = nil
 		default:
 			host.closeEntryAfterLease(entry)
