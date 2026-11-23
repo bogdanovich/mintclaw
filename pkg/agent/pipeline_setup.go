@@ -87,6 +87,35 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			budgetReport = resp.Budget
 		}
 	}
+	// A budgeted history can retain the interaction exchange yet start at
+	// in-turn steering. Recover the whole active parent from the journal.
+	var canonicalInteractionHistory []providers.Message
+	decision := newInteractionContinuationDecisionState(ts.opts)
+	if ts.opts.mode == turnModeInteractionContinuation && decision.pending() {
+		origin := ts.opts.InteractionContinuation.OriginToolCallID
+		canonical, readErr := ts.agent.Sessions.ReadTurnHistory(ctx, ts.sessionKey)
+		if readErr != nil {
+			return nil, fmt.Errorf("read active live-handoff turn: %w", readErr)
+		}
+		canonicalInteractionHistory = canonical
+		_, parent := splitHistoryForInteractionContinuation(canonical, origin)
+		_, paired := interactionToolPairIndexes(parent, origin)
+		if paired < 0 {
+			return nil, fmt.Errorf("active live-handoff turn is missing its accepted answer")
+		}
+		// Preserve this turn's steering and exclude the next request.
+		for index := paired + 1; index < len(parent); index++ {
+			if parent[index].RootTurnStart {
+				parent = parent[:index]
+				break
+			}
+		}
+		stable, assembledParent := splitHistoryForInteractionContinuation(history, origin)
+		if _, result := interactionToolPairIndexes(assembledParent, origin); result < 0 {
+			stable = nil
+		}
+		history = omitRepeatedConversationInput(append(stable, parent...), conversationID)
+	}
 	if ts.turnEnvelope == nil && ts.opts.mode == turnModeInteractionContinuation {
 		_, protectedTurn := splitHistoryForInteractionContinuation(
 			history,
@@ -296,12 +325,15 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	}
 	if strings.TrimSpace(ts.opts.InteractionSessionKey) != "" &&
 		strings.TrimSpace(ts.userMessage) == "" && len(ts.media) == 0 {
-		recoveryHistory := history
-		if ts.agent != nil && ts.agent.Sessions != nil {
-			var readErr error
-			recoveryHistory, readErr = ts.agent.Sessions.ReadTurnHistory(ctx, ts.sessionKey)
-			if readErr != nil {
-				return nil, fmt.Errorf("read interaction recovery history: %w", readErr)
+		recoveryHistory := canonicalInteractionHistory
+		if recoveryHistory == nil {
+			recoveryHistory = history
+			if ts.agent != nil && ts.agent.Sessions != nil {
+				var readErr error
+				recoveryHistory, readErr = ts.agent.Sessions.ReadTurnHistory(ctx, ts.sessionKey)
+				if readErr != nil {
+					return nil, fmt.Errorf("read interaction recovery history: %w", readErr)
+				}
 			}
 		}
 		exec.deliverable = unfinishedTurnDeliverable(recoveryHistory)

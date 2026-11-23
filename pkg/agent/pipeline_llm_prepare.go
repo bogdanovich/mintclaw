@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -92,18 +93,7 @@ func (p *Pipeline) prepareLLMRequest(
 		llm.providerToolDefs = filtered
 	}
 
-	llm.callMessages = exec.messages
-	if exec.protectedAnswerContinuation.pending() {
-		llm.callMessages = append(
-			append([]providers.Message(nil), exec.messages...),
-			exec.protectedAnswerContinuation.instruction(),
-		)
-	} else if exec.continuationDecision.pending() {
-		llm.callMessages = append(
-			append([]providers.Message(nil), exec.messages...),
-			interactionContinuationDecisionInstruction(exec.continuationDecision.invalidAttempts),
-		)
-	}
+	llm.callMessages = exec.continuationAttemptMessages(exec.messages)
 	if llm.gracefulTerminal {
 		llm.callMessages = append(
 			append([]providers.Message(nil), exec.messages...),
@@ -324,4 +314,19 @@ func objectiveRecoveryToolDefs(
 		}
 	}
 	return filtered
+}
+
+// continuationAttemptMessages adds the runtime instruction on both the initial
+// attempt and any retry that rebuilds messages from canonical history.
+func (exec *turnExecution) continuationAttemptMessages(messages []providers.Message) []providers.Message {
+	switch {
+	case exec.protectedAnswerContinuation.pending():
+		return append(slices.Clone(messages), exec.protectedAnswerContinuation.instruction())
+	case exec.continuationDecision.pending():
+		return append(slices.Clone(messages), interactionContinuationDecisionInstruction(
+			exec.continuationDecision.invalidAttempts,
+		))
+	default:
+		return messages
+	}
 }

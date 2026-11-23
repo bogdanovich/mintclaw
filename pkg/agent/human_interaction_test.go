@@ -5241,7 +5241,34 @@ func testLiveHandoffContinuationClaimsDurableReceipt(t *testing.T, requirement s
 	}
 }
 
+type liveHandoffContextCase struct {
+	name                       string
+	noContext, rootless, retry bool
+	assembledWithoutRoot       bool
+}
+
 func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
+	for _, test := range []liveHandoffContextCase{
+		{name: "with context"},
+		{name: "assembled context starts at steering", assembledWithoutRoot: true},
+		{name: "without stored context", noContext: true},
+		{name: "legacy rootless journal", noContext: true, rootless: true},
+		{name: "context limit retry", noContext: true, retry: true},
+		{name: "rootless context limit retry", noContext: true, rootless: true, retry: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testLiveHandoffContinuationCanEnd(t, test)
+		})
+	}
+}
+
+func testLiveHandoffContinuationCanEnd(t *testing.T, test liveHandoffContextCase) {
+	t.Helper()
+	const origin = "Передай мне управление этим окном."
+	const answer = "Спасибо, заканчивай."
+	const steering = "Оставь окно открытым."
+	const unrelated = "An older, unrelated request."
+	const key = "session-end-live-handoff"
 	toolCall := func(id, operation string) providers.ToolCall {
 		return providers.ToolCall{
 			ID: id, Name: "browser_session",
@@ -5254,8 +5281,23 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 		interactionContinuationDecisionResponse("finish", "The live session is still open."),
 		{ToolCalls: []providers.ToolCall{toolCall("call-forbidden-rehandoff", "handoff")}},
 	}}
-	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
-	defer cleanup()
+	if test.retry {
+		provider.responses = slices.Insert(provider.responses, 1, nil)
+		provider.errors = []error{nil, errors.New("context_length_exceeded")}
+	}
+	fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
+		if !test.noContext {
+			cfg.Agents.Defaults.ContextManager = "seahorse"
+		}
+	})
+	al, agent := fixture.Loop, fixture.Agent
+	if test.noContext {
+		if err := agent.Sessions.AppendTurnMessage(t.Context(), key, providers.Message{
+			Role: "user", Content: unrelated, RootTurnStart: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	installInteractionChannelManager(t, al, newInteractionChannelManager())
 	tool := &terminalHandoffOwner{receiptState: "closed"}
 	agent.Tools.Register(tool)
@@ -5268,8 +5310,8 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 
 	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
 		Dispatch: DispatchRequest{
-			RouteSessionKey: "route-end-live-handoff", SessionKey: "session-end-live-handoff",
-			UserMessage: "open the live resource and hand it to me", InboundContext: inbound,
+			RouteSessionKey: "route-end-live-handoff", SessionKey: key,
+			UserMessage: origin, InboundContext: inbound,
 		},
 		ObjectiveChecklist: checklist,
 		DefaultResponse:    defaultResponse, EnableSummary: true, SendResponse: false,
@@ -5278,15 +5320,50 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 		t.Fatalf("initial handoff turn = (%q, %q, %v)", response, turnStatus, err)
 	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
-	record, ok := activeInteractionForSession(registry, "session-end-live-handoff")
+	record, ok := activeInteractionForSession(registry, key)
 	if !ok {
 		t.Fatal("initial live handoff interaction not found")
 	}
+	if test.rootless {
+		history, readErr := agent.Sessions.ReadTurnHistory(t.Context(), key)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		callIndex, _ := interactionToolPairIndexes(history, record.Origin.ToolCallID)
+		if callIndex < 0 {
+			t.Fatal("originating tool intent absent from test journal")
+		}
+		if replaceErr := agent.Sessions.ReplaceTurnHistory(t.Context(), key, history[callIndex:]); replaceErr != nil {
+			t.Fatal(replaceErr)
+		}
+	}
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
-		Text: "finish the current task", MessageID: "end-live-handoff-answer", ReceivedAt: time.Now().UnixMilli(),
+		Text: answer, MessageID: "end-live-handoff-answer", ReceivedAt: time.Now().UnixMilli(),
 	}, interactions.OutcomeAnswered)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if test.assembledWithoutRoot {
+		if ensureErr := al.ensureInteractionToolResult(t.Context(), agent, record); ensureErr != nil {
+			t.Fatal(ensureErr)
+		}
+		history, readErr := agent.Sessions.ReadTurnHistory(t.Context(), key)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		call, result := interactionToolPairIndexes(history, record.Origin.ToolCallID)
+		if call < 1 || result < 0 {
+			t.Fatal("test journal is missing its originating request or accepted exchange")
+		}
+		history = slices.Insert(history, call, providers.Message{Role: "user", Content: steering})
+		if replaceErr := agent.Sessions.ReplaceTurnHistory(t.Context(), key, history); replaceErr != nil {
+			t.Fatal(replaceErr)
+		}
+		// This is a valid budgeted suffix. The context manager retained the
+		// operator's in-turn clarification and the exact question/answer pair.
+		setTestContextManager(al, &trackingContextManager{
+			assembleResponse: &AssembleResponse{History: history[call:]},
+		})
 	}
 	if err = al.resumeClaimedInteraction(
 		t.Context(), registry, agent.Workspace, agent, nil, *inbound, record,
@@ -5300,18 +5377,43 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 	if tool.cleanupCalls != 1 {
 		t.Fatalf("browser cleanup calls = %d, want 1 after terminal continuation", tool.cleanupCalls)
 	}
-	if _, ok = activeInteractionForSession(registry, "session-end-live-handoff"); ok {
+	if _, ok = activeInteractionForSession(registry, key); ok {
 		t.Fatal("terminal continuation created another waiting interaction")
 	}
-	if provider.callCount != 3 {
-		t.Fatalf("provider calls = %d, want handoff, rejected preflight and finish", provider.callCount)
+	wantCalls := 3
+	if test.retry {
+		wantCalls++
 	}
-	for _, request := range provider.toolRequests[1:] {
-		if len(request) != 1 || request[0].Function.Name != interactionContinuationDecisionTool {
-			t.Fatalf("finish preflight tool exposure = %#v", request)
+	if provider.callCount != wantCalls {
+		t.Fatalf("provider calls = %d, want %d", provider.callCount, wantCalls)
+	}
+	for index := 1; index < wantCalls; index++ {
+		request := provider.requests[index]
+		sawOrigin, sawCall, sawAnswer := false, false, false
+		for _, message := range request {
+			sawOrigin = sawOrigin || message.Role == "user" && strings.Contains(message.Content, origin)
+			sawCall = sawCall || messageContainsToolCall(message, record.Origin.ToolCallID)
+			sawAnswer = sawAnswer || message.Role == "tool" && message.ToolCallID == record.Origin.ToolCallID &&
+				strings.Contains(message.Content, answer)
+			if test.noContext && strings.Contains(message.Content, unrelated) {
+				t.Fatal("continuation restored unrelated stored conversation")
+			}
+		}
+		if test.assembledWithoutRoot && !messagesContainText(request, steering) {
+			t.Fatalf("decision attempt %d lost the in-turn clarification", index)
+		}
+		if sawOrigin == test.rootless || !sawCall || !sawAnswer ||
+			!strings.Contains(request[len(request)-1].Content, "<runtime_interaction_continuation_preflight>") {
+			t.Fatalf("decision attempt %d: origin present %v, tool call present %v, accepted answer present %v",
+				index, sawOrigin, sawCall, sawAnswer,
+			)
+		}
+		exposed := provider.toolRequests[index]
+		if len(exposed) != 1 || exposed[0].Function.Name != interactionContinuationDecisionTool {
+			t.Fatalf("decision attempt %d exposed tools: %#v", index, exposed)
 		}
 	}
-	history, err := agent.Sessions.ReadTurnHistory(t.Context(), "session-end-live-handoff")
+	history, err := agent.Sessions.ReadTurnHistory(t.Context(), key)
 	if err != nil {
 		t.Fatal(err)
 	}
