@@ -516,6 +516,42 @@ provides no authority. This fixture covers one wheel step and a pinned
 disposable server. Runtime integration, production privacy, broader buttons
 and hosting qualification remain open.
 
+### First-recipient proof from a fresh X11 server
+
+The fixture started a RECORD context before GNOME or GTK connected. It checked
+the original startup client inventory, kept potential core, XI1 and XI2
+button selections, and fenced the stream under the original server grab.
+Observing a request alone did not confirm an effective selection. The
+recorder checked for matching X11 errors and required current XI2 press and
+release selection in the original window path. An unconfirmed removal or a
+window ID reused by a new window could not authorize input.
+
+The first implementation refused the usual GNOME frame subscription on an
+ancestor window. The tested revision admitted an ancestor only when a
+confirmed deeper XI2 owner stops that class of event before the ancestor.
+Four nominal trials verified one scroll step in the original GTK window,
+including a listener on the independent sibling window. Eight controls
+refused before sending the press. They covered competing core and XI2
+subscriptions, an unconfirmed removal, a recorder that started late or
+stopped, and a client requesting an exception to the server grab. No
+competing listener received a button event in the final matrix.
+
+A combined fixture kept a separate recovery connection and recorder after
+the actual input socket closed following the press. It matched the recorded
+XTEST request to the admitted client, request sequence and bytes, then
+required the original recipient and unchanged route. In two trials it sent
+one release to the live original window, verified native neutral state and
+observed one scroll step. The result after transport loss remained uncertain.
+Recording loss and private-pointer movement blocked the release. The
+core-event mode refused an initial recovery. Three diagnostic repeats then
+verified two releases and withheld another after intervening window-attribute
+requests. That mode still needs qualification.
+
+This evidence applies to the tested disposable X11 startup and one wheel
+step. Admission on an already running desktop still needs authoritative
+initial recipient state. Managed and attached profiles retain their own
+qualification gates, including runtime integration and privacy.
+
 ## Private chart fixture
 
 `scripts/internal/computer-evaluation/chart_fixtures.py` adds CU-T17 with a
