@@ -152,6 +152,34 @@ func TestInvocationWriteDeadlineRechecksAfterDispatchCommit(t *testing.T) {
 	}
 }
 
+func TestOrdinaryInvocationPreservesDispatchRecoveryAfterCommitCancellation(t *testing.T) {
+	connection := newStubPeerConnection()
+	connection.blockWrites = true
+	session := newPeer(connection)
+	defer func() { _ = session.Close() }()
+	session.markReady()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, dispatched, err := session.request(
+		ctx,
+		"node.invoke",
+		[]byte(`{}`),
+		"idem_test",
+		func(write func() error) error {
+			cancel()
+			return write()
+		},
+	)
+	if !dispatched || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation after ordinary dispatch commit = sent %t, error %v", dispatched, err)
+	}
+	select {
+	case <-connection.writeStarted:
+	default:
+		t.Fatal("ordinary invocation skipped the attempted-write recovery path")
+	}
+}
+
 func TestPeerRetainsCanceledRequestIDsUntilResponse(t *testing.T) {
 	session := newPeer(newStubPeerConnection())
 	for index := range maxOutstandingRequests {

@@ -511,7 +511,9 @@ func (session *peer) requestWithLease(
 	lease func(func() (bool, error)) (bool, error),
 ) (protocol.Envelope, bool, error) {
 	writeCtx := ctx
-	if deadline, ok := ctx.Value(invocationWriteDeadlineKey{}).(time.Time); method == "node.invoke" && ok {
+	deadline, hasWriteDeadline := ctx.Value(invocationWriteDeadlineKey{}).(time.Time)
+	checkFreshness := method == "node.invoke" && hasWriteDeadline
+	if checkFreshness {
 		var cancel context.CancelFunc
 		writeCtx, cancel = context.WithDeadline(ctx, deadline)
 		defer cancel()
@@ -546,7 +548,7 @@ func (session *peer) requestWithLease(
 			Method:         method,
 			Params:         params,
 			IdempotencyKey: idempotencyKey,
-		}, dispatch)
+		}, dispatch, checkFreshness)
 	}
 	var (
 		dispatched bool
@@ -644,7 +646,7 @@ func (session *peer) releaseRequestSlot() {
 }
 
 func (session *peer) writeEnvelope(ctx context.Context, envelope protocol.Envelope) error {
-	_, err := session.writeEnvelopeAtDispatch(ctx, envelope, nil)
+	_, err := session.writeEnvelopeAtDispatch(ctx, envelope, nil, false)
 	return err
 }
 
@@ -652,6 +654,7 @@ func (session *peer) writeEnvelopeAtDispatch(
 	ctx context.Context,
 	envelope protocol.Envelope,
 	dispatch func(func() error) error,
+	checkFreshness bool,
 ) (bool, error) {
 	data, err := protocol.Encode(envelope)
 	if err != nil {
@@ -663,6 +666,7 @@ func (session *peer) writeEnvelopeAtDispatch(
 		data,
 		"request",
 		dispatch,
+		checkFreshness,
 	)
 }
 
@@ -672,6 +676,7 @@ func (session *peer) writeApplicationFrameAtDispatch(
 	data []byte,
 	frameKind string,
 	dispatch func(func() error) error,
+	checkFreshness bool,
 ) (bool, error) {
 	writeCtx, cancel := context.WithTimeout(ctx, defaultWriteTimeout)
 	defer cancel()
@@ -701,12 +706,16 @@ func (session *peer) writeApplicationFrameAtDispatch(
 		if dispatched {
 			return fmt.Errorf("node %s frame write called more than once", frameKind)
 		}
-		// The durable dispatch callback may have spent the remaining budget.
-		if err := writeCtx.Err(); err != nil {
-			return err
-		}
-		if !time.Now().Before(deadline) {
-			return context.DeadlineExceeded
+		if checkFreshness {
+			// A protected action must still be fresh after the durable commit.
+			// Ordinary committed invocations use the attempted-write path
+			// to reconcile their results, including on a transport timeout.
+			if err := writeCtx.Err(); err != nil {
+				return err
+			}
+			if !time.Now().Before(deadline) {
+				return context.DeadlineExceeded
+			}
 		}
 		dispatched = true
 		cancelDone := make(chan struct{})
@@ -766,5 +775,6 @@ func (session *peer) writeTransferFrameAtDispatch(
 		data,
 		"transfer",
 		dispatch,
+		false,
 	)
 }
