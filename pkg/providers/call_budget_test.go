@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type budgetTestProvider struct {
@@ -510,5 +511,86 @@ func TestCallBudgetRequiresTransmittedOutputLimitBeforeDelegation(t *testing.T) 
 			budget.Snapshot().Calls != 0 {
 			t.Fatalf("OAuth Codex admitted through %s wrapper: %v/%v", transform, wrapped, err)
 		}
+	}
+}
+
+func subscriptionTestLimits() CallBudgetLimits {
+	return CallBudgetLimits{
+		Mode: CodexSubscriptionBudget, MaxCalls: 4, MaxInputBytes: 4096,
+		MaxReportedTokens: 1000, MaxInFlight: 1, MaxCallSeconds: 2,
+	}
+}
+
+func TestSubscriptionCallBudgetRequiresExplicitModeAndCodex(t *testing.T) {
+	limits := subscriptionTestLimits()
+	if _, err := NewCallBudget(limits); !errors.Is(err, ErrCallBudget) {
+		t.Fatalf("strict budget accepted subscription limits: %v", err)
+	}
+	for _, invalid := range []func(*CallBudgetLimits){
+		func(l *CallBudgetLimits) { l.Mode = "" },
+		func(l *CallBudgetLimits) { l.MaxOutputTokens = 1 },
+		func(l *CallBudgetLimits) { l.MaxCallSeconds = 0 },
+		func(l *CallBudgetLimits) { l.MaxInFlight = 2 },
+	} {
+		bad := limits
+		invalid(&bad)
+		if _, err := NewSubscriptionCallBudget(bad); !errors.Is(err, ErrCallBudget) {
+			t.Fatalf("subscription budget accepted %+v: %v", bad, err)
+		}
+	}
+	budget, err := NewSubscriptionCallBudget(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := &budgetTestProvider{caps: ProviderCapabilities{CallerMediatedTools: true, OutputTokenLimit: true}}
+	if wrapped, err := budget.Wrap(other); wrapped != nil || !errors.Is(err, ErrCallBudget) {
+		t.Fatalf("subscription budget accepted non-Codex provider: %v/%v", wrapped, err)
+	}
+	wrapped, err := budget.Wrap(NewCodexProvider("synthetic", "account"))
+	if err != nil || Capabilities(wrapped).OutputTokenLimit || Capabilities(wrapped).NativeSearch {
+		t.Fatalf("unexpected Codex subscription budget: %v/%v", wrapped, err)
+	}
+	if again, err := budget.Wrap(wrapped); err != nil || again != wrapped {
+		t.Fatalf("same budget did not reuse its wrapper: %v/%v", again, err)
+	}
+	if _, err := testCallBudget(t, nil).Wrap(wrapped); !errors.Is(err, ErrCallBudget) {
+		t.Fatalf("strict budget accepted subscription wrapper: %v", err)
+	}
+}
+
+func TestSubscriptionCallBudgetStopsAfterFirstLimitResponse(t *testing.T) {
+	for _, kind := range []ProviderErrorKind{ProviderErrorRateLimit, ProviderErrorBilling} {
+		t.Run(string(kind), func(t *testing.T) {
+			budget, err := NewSubscriptionCallBudget(subscriptionTestLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			failure := &ProviderError{Kind: kind}
+			delegate := &budgetTestProvider{caps: ProviderCapabilities{Streaming: true}, chat: func(
+				ctx context.Context, options map[string]any,
+			) (*LLMResponse, error) {
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 2*time.Second {
+					t.Errorf("missing per-call deadline: %v", deadline)
+				}
+				if options["native_search"] != false {
+					t.Errorf("provider-owned search not disabled: %+v", options)
+				}
+				return nil, failure
+			}}
+			// Inject the remote result after admission; Wrap's concrete-provider gate is tested separately.
+			wrapped := &callBudgetProvider{delegate: delegate, budget: budget}
+			if _, err := wrapped.Chat(t.Context(), nil, nil, "gpt-test", nil); !errors.Is(err, failure) {
+				t.Fatalf("initial failure lost: %v", err)
+			}
+			_, err = wrapped.ChatStreamEvents(t.Context(), nil, nil, "gpt-test", nil, func(StreamChunk) {})
+			if !errors.Is(err, ErrCallBudget) || delegate.calls.Load() != 1 {
+				t.Fatalf("stream reached provider after quota failure: calls=%d err=%v", delegate.calls.Load(), err)
+			}
+			if snapshot := budget.Seal(); snapshot.StoppedReason != "subscription_limit" ||
+				snapshot.Completed != 1 || snapshot.UnknownUsage != 1 || snapshot.UsageKnown {
+				t.Fatalf("inaccurate quota evidence: %+v", snapshot)
+			}
+		})
 	}
 }

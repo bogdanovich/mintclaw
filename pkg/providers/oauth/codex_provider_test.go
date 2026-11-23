@@ -3,9 +3,11 @@ package oauthprovider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,7 +18,56 @@ import (
 
 	orc "github.com/bogdanovich/mintclaw/pkg/providers/openai_responses_common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
+	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
+
+func TestCodexSubscriptionEvalDoesNotRetryOrSubstituteModel(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Header.Get("Authorization") != "Bearer synthetic" {
+			t.Error("subscription call did not use the pinned credential")
+		}
+		var body responses.ResponseNewParams
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model != "gpt-test" ||
+			body.MaxOutputTokens.Valid() {
+			t.Errorf("unexpected subscription request: model=%q err=%v", body.Model, err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("x-should-retry", "true")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = fmt.Fprint(w, `{"error":{"code":"rate_limit_exceeded","message":"test rate limit"}}`)
+	}))
+	defer server.Close()
+	provider := NewCodexProviderWithTokenSource("synthetic", "account", func() (string, string, error) {
+		t.Error("subscription call attempted credential refresh")
+		return "", "", errors.New("unexpected credential lookup")
+	})
+	client := openai.NewClient(
+		openaiopt.WithBaseURL(server.URL), openaiopt.WithAPIKey("synthetic"), openaiopt.WithMaxRetries(2),
+	)
+	provider.client = &client
+	bounded := provider.ForSubscriptionEval()
+	if bounded == provider || provider.subscriptionEval {
+		t.Fatal("subscription policy mutated the underlying provider")
+	}
+	for _, model := range []struct {
+		name string
+		kind providererrors.Kind
+	}{
+		{"gemini-test", providererrors.KindInvalidRequest},
+		{"gpt-test", providererrors.KindRateLimit},
+	} {
+		_, err := bounded.Chat(t.Context(), []Message{{Role: "user", Content: "test"}}, nil, model.name, nil)
+		var failure *providererrors.ProviderError
+		if !errors.As(err, &failure) || failure.Kind != model.kind {
+			t.Fatalf("unexpected error for %s: %v", model.name, err)
+		}
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("got %d wire requests, want one", requests.Load())
+	}
+}
 
 func TestBuildCodexParams_BasicMessage(t *testing.T) {
 	messages := []Message{

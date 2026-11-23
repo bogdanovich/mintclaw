@@ -1,8 +1,8 @@
 # Owned Provider Call Budgets
 
 `providers.NewCallBudget` creates an opt-in, caller-owned limit shared by
-explicitly wrapped provider instances. It is a prerequisite for bounded manual
-core evals, not an enabled runtime policy or a completed eval integration.
+explicitly wrapped provider instances. It is the strict budget used by bounded
+manual core evals, not an enabled policy for ordinary runtime requests.
 
 ## Contract
 
@@ -29,6 +29,26 @@ core evals, not an enabled runtime policy or a completed eval integration.
 - The reported-token count uses the larger of provider total and input + output
   counts. It does not treat cache dimensions as separately billed tokens.
   Reaching/exceeding the threshold stops work and returns a budget error.
+
+## Codex Subscription Budget
+
+`providers.NewSubscriptionCallBudget` is a separate opt-in policy for the
+native Codex OAuth provider. It accepts `mode: "codex_subscription"`, one
+in-flight call, and `max_call_seconds` from 1 to 180. `max_output_tokens` must
+be zero: this route does not transmit an output limit. The strict constructor
+rejects these limits; neither policy silently substitutes for the other.
+
+This policy keeps the call, serialized input and reported-usage limits. It
+pins the already-loaded credential, disables SDK request retries, refuses a
+model that would require substitution, and stops before another call after a
+rate-limit or billing response. It never
+claims to know the cost of a failed request or to prevent account-level use of
+purchased ChatGPT credits. The caller owns credential and profile admission.
+
+This is a provider primitive, not a selectable live eval profile yet. The
+owned-launch protocol and existing eval presets still require the strict
+constructor. Subscription credential isolation, preset selection and live
+qualification are separate from this change.
 
 ## Evidence And Boundaries
 
@@ -81,5 +101,6 @@ qualification or a witnessed compaction scenario.
 This API does not wrap independently created providers inside provider-owning
 tools such as document-private auditing. An eval caller must enforce its
 restricted profile separately; no tool/approval authority is granted here.
-Owned gateway launch, per-trial frozen evidence and qualification remain
-unimplemented at this stage. Native-model `AllCalls` semantics are unchanged.
+The [owned gateway protocol](owned-eval-call-budget.md) defines launch and
+frozen evidence for the strict policy only. Native-model `AllCalls` semantics
+are unchanged.
