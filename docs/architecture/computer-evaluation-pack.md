@@ -372,6 +372,41 @@ lease, cancellation that releases held buttons, and independent
 post-action verification. This probe exercised the driver and disposable
 fixture directly. The CU-T18 model run and the macOS run remain pending.
 
+### Independent pointer cleanup experiment
+
+An alternate prototype used a private XInput pointer and a separate cleanup
+connection. In the disposable GNOME X11 fixture, native button and motion
+events moved the expected card while the system pointer and guard were
+unchanged. The application and its original window survived the release.
+
+Closing the actuator connection left the private button held. When the
+original window still existed, an independent release cleared the button.
+In an interrupted gesture, GTK accepted that release as a partial drop
+outside the requested destination. Report interrupted effects separately from
+input cleanup.
+
+When the fixture destroyed the original window while the button was held, the
+cleanup connection reacquired the private pointer and directed the release
+into a dedicated input-only window. It verified the original window's absence
+under the same server grab used to acquire the pointer. The X server delivered
+one matching release to the cleanup window and reported the primary button
+up. The guard window and process survived, the system pointer was unchanged,
+and the fixture recorded no completed drop.
+
+The target-loss scenario verified quarantine and release in twenty
+disposable GNOME runs. The application recorded the initial press in all
+twenty and corresponding motion in seven. The remaining thirteen had
+no application-observed movement even though the X server tracked the
+private pointer moving. This establishes repeated cleanup evidence for
+target loss. Reliable gesture delivery still requires qualification.
+
+The original foreground core pointer refused this capture while the GTK
+application still held the grab. An earlier forced removal of a held private
+device caused a GTK XInput error. The passing prototype retained the private
+device until the owned display shut down. Admission to the protected runtime,
+cleanup after loss of that display connection, and the rest of the target and
+cancellation matrix remain open.
+
 ## Private chart fixture
 
 `scripts/internal/computer-evaluation/chart_fixtures.py` adds CU-T17 with a
