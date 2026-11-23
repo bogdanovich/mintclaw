@@ -109,3 +109,38 @@ func TestTerminalLifecycleUnconfirmedCleanupCannotReturnSuccessfulTurn(t *testin
 		)
 	}
 }
+
+// terminalHandoffOwner exercises the normal disposition guard if finish
+// incorrectly reopens model tools before performing owner cleanup.
+type terminalHandoffOwner struct {
+	browserHandoffContinuationTool
+	receiptState string
+}
+
+func (*terminalHandoffOwner) Name() string { return "browser_session" }
+
+func (tool *terminalHandoffOwner) TurnFinalizationRequirement(
+	context.Context,
+) (tools.TurnFinalizationRequirement, bool, error) {
+	return tools.TurnFinalizationRequirement{
+		RecoveryKind: taskresult.ObjectiveKindResourceDisposition,
+		Instruction:  "Dispose of the live session.",
+	}, tool.cleanupCalls == 0, nil
+}
+
+func (tool *terminalHandoffOwner) ObjectiveRecoveryParameters(kind string) (map[string]any, bool) {
+	if kind == taskresult.ObjectiveKindResourceDisposition {
+		return tool.Parameters(), true
+	}
+	return tool.browserHandoffContinuationTool.ObjectiveRecoveryParameters(kind)
+}
+
+func (tool *terminalHandoffOwner) CleanupTurnWithResult(context.Context) (tools.TurnCleanupResult, error) {
+	tool.cleanupCalls++
+	return tools.TurnCleanupResult{Receipts: []taskresult.Receipt{{
+		ID: "finished-session", Kind: taskresult.ReceiptKindResourceCleanup,
+		Tool: "browser_session", Target: "browser:gateway/managed",
+		Action: "close", Summary: "Browser session cleanup reached terminal state.",
+		Metadata: map[string]string{"state": tool.receiptState},
+	}}}, nil
+}

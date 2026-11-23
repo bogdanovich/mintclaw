@@ -54,7 +54,13 @@ func (p *Pipeline) completeTerminal(
 	}
 
 	exec.terminal = request.content
-	if request.renderMode == terminalRenderExact {
+	if exec.continuationDecision.finished() {
+		// New guidance may supersede the decision until the normal steering
+		// boundary seals it. Finish then proceeds directly to owner cleanup.
+		if p.continueWithSteeringAtExit(turnCtx, ts, exec, llm, "finish live handoff") {
+			return terminalGatewayOutcome{status: status, resume: true}
+		}
+	} else if request.renderMode == terminalRenderExact {
 		if strings.TrimSpace(exec.terminal.content) == "" {
 			exec.terminal.content = "The tool loop was stopped by runtime safety protection."
 		}

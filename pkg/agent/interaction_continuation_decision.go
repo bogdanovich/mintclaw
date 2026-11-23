@@ -19,6 +19,7 @@ const (
 	interactionContinuationDecisionPending
 	interactionContinuationDecisionProceed
 	interactionContinuationDecisionFinalize
+	interactionContinuationDecisionFinish
 )
 
 type interactionContinuationDecisionState struct {
@@ -68,6 +69,10 @@ func (state *interactionContinuationDecisionState) finalizing() bool {
 		return false
 	}
 	return state.phase == interactionContinuationDecisionFinalize
+}
+
+func (state *interactionContinuationDecisionState) finished() bool {
+	return state != nil && state.phase == interactionContinuationDecisionFinish
 }
 
 func (state *interactionContinuationDecisionState) requiresModelCall() bool {
@@ -146,21 +151,20 @@ final response in the user's language. The runtime will release the live resourc
 </runtime_interaction_continuation_decision>`}
 }
 
-func parseInteractionContinuationDecision(response *providers.LLMResponse) (string, string, bool) {
+func parseInteractionContinuationDecision(response *providers.LLMResponse) (string, bool) {
 	if response == nil || len(response.ToolCalls) != 1 {
-		return "", "", false
+		return "", false
 	}
 	call := providers.NormalizeToolCall(response.ToolCalls[0])
 	if call.Name != interactionContinuationDecisionTool {
-		return "", "", false
+		return "", false
 	}
 	action, _ := call.Arguments["action"].(string)
 	action = strings.ToLower(strings.TrimSpace(action))
 	switch action {
 	case "continue", "redirect", "finish":
 	default:
-		return "", "", false
+		return "", false
 	}
-	finalResponse, _ := call.Arguments["final_response"].(string)
-	return action, strings.TrimSpace(finalResponse), true
+	return action, true
 }
