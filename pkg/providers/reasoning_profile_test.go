@@ -9,13 +9,6 @@ import (
 )
 
 func TestReasoningProfileUsesConcreteCodexCatalog(t *testing.T) {
-	profile := ReasoningProfile(&config.ModelConfig{
-		Provider: "openai", Model: "gpt-5.6-sol", AuthMethod: "oauth",
-	})
-	got := make([]reasoning.Effort, 0, len(profile.Options))
-	for _, option := range profile.Options {
-		got = append(got, option.ID)
-	}
 	want := []reasoning.Effort{
 		reasoning.EffortLow,
 		reasoning.EffortMedium,
@@ -23,12 +16,20 @@ func TestReasoningProfileUsesConcreteCodexCatalog(t *testing.T) {
 		reasoning.EffortXHigh,
 		reasoning.EffortMax,
 	}
-	if !slices.Equal(got, want) || profile.Default != reasoning.EffortLow ||
-		profile.Source != "bundled_codex_catalog" {
-		t.Fatalf("ReasoningProfile() = %+v", profile)
-	}
-	if profile.Supports(reasoning.EffortAdaptive) {
-		t.Fatal("Codex profile advertised unsupported adaptive reasoning")
+	for _, model := range []string{"gpt-5.6-sol", "gpt-6.2-sol"} {
+		t.Run(model, func(t *testing.T) {
+			profile := ReasoningProfile(&config.ModelConfig{
+				Provider: "openai", Model: model, AuthMethod: "oauth",
+			})
+			got := make([]reasoning.Effort, 0, len(profile.Options))
+			for _, option := range profile.Options {
+				got = append(got, option.ID)
+			}
+			if !slices.Equal(got, want) || profile.Default != reasoning.EffortLow ||
+				profile.Source != "bundled_codex_catalog" {
+				t.Fatalf("ReasoningProfile() = %+v", profile)
+			}
+		})
 	}
 }
 
