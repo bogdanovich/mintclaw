@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -72,10 +73,14 @@ func TestOwnedX11DisplayNative(t *testing.T) {
 	if got, err := StartOwnedX11Display(t.Context(), bad); got != nil || !errors.Is(err, computer.ErrDenied) {
 		t.Fatalf("wrong Xvfb pin admitted: %v", err)
 	}
-	start := func() (*OwnedX11Display, OwnedX11Binding) {
+	start := func(retireCaller bool) (*OwnedX11Display, OwnedX11Binding) {
 		t.Helper()
 		ctx, cancel := context.WithCancel(t.Context())
-		display, err := StartOwnedX11Display(ctx, cfg)
+		open := StartOwnedX11Display
+		if retireCaller {
+			open = startX11FromRetiringThread
+		}
+		display, err := open(ctx, cfg)
 		cancel()
 		if err != nil {
 			t.Fatal(err)
@@ -93,10 +98,10 @@ func TestOwnedX11DisplayNative(t *testing.T) {
 		}
 		return display, binding
 	}
-	first, original := start()
+	first, original := start(true)
 	keeper := startOwnedX11TestKeeper(t, original, keeperPath, keeperSHA)
 	checkOwnedX11TestClient(t, original, cfg)
-	sibling, other := start()
+	sibling, other := start(false)
 	if original.Display == other.Display || original.ServerPID == other.ServerPID ||
 		original.Authority == other.Authority {
 		t.Fatal("separate launches shared display authority")
@@ -126,7 +131,7 @@ func TestOwnedX11DisplayNative(t *testing.T) {
 		t.Fatal("retiring the original display affected its sibling", err)
 	}
 	checkOwnedX11TestClient(t, current, cfg)
-	stalled, unresponsive := start()
+	stalled, unresponsive := start(false)
 	stalled.mu.Lock()
 	err = unix.PidfdSendSignal(stalled.pidfd, unix.SIGSTOP, nil, 0)
 	stalled.mu.Unlock()
@@ -162,6 +167,52 @@ func TestOwnedX11DisplayNative(t *testing.T) {
 		t.Fatal("forced stop affected the sibling display", err)
 	}
 	checkOwnedX11TestClient(t, current, cfg)
+}
+
+func startX11FromRetiringThread(ctx context.Context, config OwnedX11Config) (*OwnedX11Display, error) {
+	type result struct {
+		display *OwnedX11Display
+		err     error
+		tid     int
+	}
+	parsed := make(chan result, 1)
+	launch := func() {
+		display, err := StartOwnedX11Display(ctx, config)
+		parsed <- result{display: display, err: err, tid: unix.Gettid()}
+		// Exiting while locked makes Go retire this calling thread.
+	}
+	go func() {
+		runtime.LockOSThread()
+		if unix.Gettid() != os.Getpid() {
+			launch()
+			return
+		}
+		// Go keeps its original main thread around. Holding it forces the
+		// launch to run on a different, retireable thread.
+		defer runtime.UnlockOSThread()
+		finished := make(chan struct{})
+		go func() {
+			runtime.LockOSThread()
+			launch()
+			close(finished)
+		}()
+		<-finished
+	}()
+	got := <-parsed
+	if got.err != nil {
+		return nil, got.err
+	}
+	task := "/proc/self/task/" + strconv.Itoa(got.tid)
+	until := time.Now().Add(time.Second)
+	for time.Now().Before(until) {
+		if _, err := os.Stat(task); errors.Is(err, os.ErrNotExist) {
+			return got.display, nil
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return nil, errors.Join(errors.New("fixture caller thread did not exit"), got.display.Close(cleanup))
 }
 
 func startOwnedX11TestKeeper(

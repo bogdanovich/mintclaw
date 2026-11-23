@@ -105,14 +105,15 @@ func StartOwnedX11Display(ctx context.Context, config OwnedX11Config) (*OwnedX11
 	if startupErr := ctx.Err(); startupErr != nil {
 		return nil, startupErr
 	}
-	if startErr := command.Start(); startErr != nil {
+	owner, err := isolation.StartParentBoundCommand(command)
+	if err != nil {
 		return nil, computer.ErrUnavailable
 	}
 	_ = writer.Close()
 	if pidfd < 0 {
 		// Our original child is still unreaped here.
 		_ = command.Process.Kill()
-		_ = command.Wait()
+		_ = owner.Wait()
 		return nil, ErrUnsupported
 	}
 	display := &OwnedX11Display{
@@ -122,7 +123,7 @@ func StartOwnedX11Display(ctx context.Context, config OwnedX11Config) (*OwnedX11
 		},
 	}
 	handedOff = true
-	go display.reap(command)
+	go display.reap(owner)
 	name, err := readOwnedX11Display(ctx, reader)
 	if err == nil {
 		err = writeOwnedX11Authority(authority, name[1:], cookie[:])
@@ -281,8 +282,8 @@ func (display *OwnedX11Display) signalStop(signal unix.Signal) error {
 	return nil
 }
 
-func (display *OwnedX11Display) reap(command *exec.Cmd) {
-	_ = command.Wait()
+func (display *OwnedX11Display) reap(owner *isolation.ParentBoundCommand) {
+	_ = owner.Wait()
 	cleanup := os.RemoveAll(display.dir)
 	display.mu.Lock()
 	defer display.mu.Unlock()
