@@ -71,6 +71,19 @@ func TestNativeX11InputLeaseLifecycle(t *testing.T) {
 	if lease.Check(t.Context()) != nil {
 		t.Fatal("new original input lease is not live")
 	}
+	binding, err := lease.X11Binding(t.Context())
+	root := xproto.Setup(connection).Roots[0].Root
+	if err != nil || binding.Window != first.Identity() || binding.Root != uint32(root) {
+		t.Fatal("original native window not bound", err)
+	}
+	if binding.LeasePID != uint32(os.Getpid()) || binding.ServerPID <= 1 || binding.LeasePID == binding.ServerPID {
+		t.Fatal("original native server peer not bound")
+	}
+	if native := lease.backend.(*x11InputLease); binding.LeaseWindow != uint32(nativeSelectionOwner(
+		t, connection, native.selection,
+	)) {
+		t.Fatal("binding did not resolve to existing selection owner")
+	}
 	if other, err := second.AcquireInputLease(t.Context()); other != nil || !errors.Is(err, computer.ErrBusy) {
 		if other != nil {
 			_ = other.Close()
@@ -100,6 +113,14 @@ func TestNativeX11InputLeaseLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = next.Close() })
 	if lease.Close() != nil || next.Check(t.Context()) != nil {
 		t.Fatal("stale cleanup released a newer owner")
+	}
+	if got, err := lease.X11Binding(t.Context()); got != (X11InputBinding{}) || !errors.Is(err, computer.ErrStale) {
+		t.Fatal("stale transfer inherited a replacement lease", err)
+	}
+	replacement, err := next.X11Binding(t.Context())
+	if err != nil || replacement.Window != second.Identity() || replacement.ServerPID != binding.ServerPID ||
+		replacement.LeaseWindow == binding.LeaseWindow {
+		t.Fatal("replacement failed to bind its own token on the same server", err)
 	}
 	if err = next.Close(); err != nil {
 		t.Fatal(err)
@@ -140,6 +161,9 @@ func TestNativeX11InputLeaseLossCannotResurrectOrClearNewOwner(t *testing.T) {
 	nativeLeaseEnded(t, lease)
 	if !errors.Is(lease.Check(t.Context()), computer.ErrStale) || !first.Alive(t.Context()) {
 		t.Fatal("restoring the numeric owner resurrected a lost lease or lost the target")
+	}
+	if got, err := lease.X11Binding(t.Context()); got != (X11InputBinding{}) || !errors.Is(err, computer.ErrStale) {
+		t.Fatal("storage of the old identifier resurrected the native binding", err)
 	}
 	if err = xproto.SetSelectionOwnerChecked(connection, foreign, native.selection, xproto.TimeCurrentTime).
 		Check(); err != nil {

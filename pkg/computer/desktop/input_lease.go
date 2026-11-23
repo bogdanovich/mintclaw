@@ -75,6 +75,45 @@ func (lease *InputLease) Check(ctx context.Context) error {
 	return lease.backend.check(ctx)
 }
 
+// X11InputBinding identifies the original window and native control token on
+// the already connected server. It contains no cookie, display locator, or
+// model-provided selector. The input backend must verify this binding on its
+// original native connection before acting, and still fence the lease.
+type X11InputBinding struct {
+	Window      WindowIdentity
+	LeaseWindow uint32
+	LeasePID    uint32
+	Root        uint32
+	ServerPID   uint32
+	ServerUID   uint32
+}
+
+// X11Binding revalidates this original lease and identifies its retained
+// local X11 peer. Other providers return ErrUnsupported.
+func (lease *InputLease) X11Binding(ctx context.Context) (X11InputBinding, error) {
+	if err := ctx.Err(); err != nil {
+		return X11InputBinding{}, err
+	}
+	if lease == nil || lease.guard == nil || lease.backend == nil {
+		return X11InputBinding{}, computer.ErrInvalid
+	}
+	if lease.guard.lost.Load() {
+		return X11InputBinding{}, computer.ErrStale
+	}
+	provider, ok := lease.backend.(interface {
+		x11Binding(context.Context) (X11InputBinding, error)
+	})
+	if !ok {
+		return X11InputBinding{}, ErrUnsupported
+	}
+	binding, err := provider.x11Binding(ctx)
+	if err != nil {
+		return X11InputBinding{}, err
+	}
+	binding.Window = lease.guard.Identity()
+	return binding, nil
+}
+
 var unavailableInputLeaseDone = func() <-chan struct{} {
 	done := make(chan struct{})
 	close(done)
