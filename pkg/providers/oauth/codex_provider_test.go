@@ -34,7 +34,7 @@ func TestCodexSubscriptionEvalDoesNotRetryOrSubstituteModel(t *testing.T) {
 			t.Errorf("unexpected subscription request: model=%q err=%v", body.Model, err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("x-should-retry", "true")
+		w.Header().Set("X-Should-Retry", "true")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = fmt.Fprint(w, `{"error":{"code":"rate_limit_exceeded","message":"test rate limit"}}`)
 	}))

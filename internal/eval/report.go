@@ -188,6 +188,10 @@ func (report *privateReport) finish(result RunReport) error {
 			_, writeErr = fmt.Fprintf(file,
 				"\nOwned target call budget: %s (%s); shared across all repetitions, not a billing total.\n",
 				observation.Code, observation.verdict())
+			if writeErr == nil && observation.Spec.Limits.Mode != "" {
+				_, writeErr = io.WriteString(file,
+					"Model access: Codex subscription; no enforced per-call output-token cap.\n")
+			}
 		}
 	}
 	if writeErr == nil {

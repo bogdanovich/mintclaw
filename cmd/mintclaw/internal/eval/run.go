@@ -51,8 +51,12 @@ func newRunCommand() *cobra.Command {
 				runContext, stopSignals = signal.NotifyContext(runContext, os.Interrupt, syscall.SIGTERM)
 				defer stopSignals()
 			}
+			timeout := suiteTimeout
+			if !cmd.Flags().Changed("suite-timeout") {
+				timeout = 0
+			}
 			result, runErr := manualeval.Run(runContext, preset, selected, manualeval.RunOptions{
-				Home: manualeval.RuntimeHome(), OutputParent: outputParent, SuiteTimeout: suiteTimeout,
+				Home: manualeval.RuntimeHome(), OutputParent: outputParent, SuiteTimeout: timeout,
 				PDFOraclePython: python,
 				Repeat:          repeat,
 				StartTarget:     startTarget,

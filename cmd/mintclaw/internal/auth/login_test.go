@@ -19,6 +19,7 @@ func TestNewLoginSubCommand(t *testing.T) {
 
 	assert.NotNil(t, cmd.Flags().Lookup("device-code"))
 	assert.NotNil(t, cmd.Flags().Lookup("no-browser"))
+	assert.NotNil(t, cmd.Flags().Lookup("credentials-only"))
 
 	providerFlag := cmd.Flags().Lookup("provider")
 	require.NotNil(t, providerFlag)
@@ -27,4 +28,10 @@ func TestNewLoginSubCommand(t *testing.T) {
 	require.True(t, found)
 	require.NotEmpty(t, val)
 	assert.Equal(t, "true", val[0])
+}
+
+func TestLoginCredentialsOnlyRejectsOtherProvidersBeforeLogin(t *testing.T) {
+	cmd := newLoginCommand()
+	cmd.SetArgs([]string{"--provider", "anthropic", "--credentials-only"})
+	require.ErrorContains(t, cmd.Execute(), "--credentials-only requires --provider openai")
 }

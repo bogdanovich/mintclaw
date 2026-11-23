@@ -36,6 +36,14 @@ type admittedTarget struct {
 	activeTool   *activeToolFixture
 	ownedLog     string
 	priorTraces  map[string]string
+	filter       *strings.Replacer
+}
+
+func (target admittedTarget) evidenceFilter() *strings.Replacer {
+	if target.filter != nil {
+		return target.filter
+	}
+	return target.config.SensitiveDataReplacer()
 }
 
 func admitPreparedTarget(ctx context.Context, preset Preset, home string) (admittedTarget, error) {
@@ -106,6 +114,13 @@ func validateConversationProfile(cfg *config.Config, preset Preset, workspace st
 	}
 	if _, err := gatewayclient.ChannelSettings(cfg); err != nil {
 		return ErrUnsafeTarget
+	}
+	if preset.ModelAccess == modelAccessAPIKey {
+		for _, model := range cfg.ModelList {
+			if model.Enabled && model.APIKey() == "" {
+				return ErrUnsafeTarget
+			}
+		}
 	}
 	return nil
 }
@@ -217,7 +232,7 @@ func validateConversationPolicy(cfg *config.Config, preset Preset, workspace str
 			names[model.ModelName] = true
 		}
 	}
-	if !names[cfg.Agents.Defaults.GetModelName()] {
+	if !names[cfg.Agents.Defaults.GetModelName()] || !validModelAccess(cfg, preset) {
 		return ErrUnsafeTarget
 	}
 	if pdfEnabled && (!slices.Contains(preset.Capabilities, "interactions") ||

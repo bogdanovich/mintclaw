@@ -17,6 +17,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/internal/evaltarget"
 	"github.com/bogdanovich/mintclaw/internal/gatewayclient"
+	"github.com/bogdanovich/mintclaw/pkg/auth"
 	protocol "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
@@ -159,5 +160,62 @@ func TestOwnedBudgetProtocolUsesRealGatewayAndTerminalCounters(t *testing.T) {
 		proof.Snapshot.InFlight != 0 || !proof.Snapshot.UsageKnown || proof.Snapshot.ReportedTokens != 9 ||
 		proof.Snapshot.StoppedReason != "" || requests.Load() != 1 {
 		t.Fatalf("real CLI budget wiring = %+v/%v, provider requests %d", proof, err, requests.Load())
+	}
+	t.Run("subscription_startup", func(t *testing.T) { verifyOwnedSubscriptionStartup(t, binary) })
+}
+
+func verifyOwnedSubscriptionStartup(t *testing.T, binary string) {
+	t.Helper()
+	fixture := newOwnedGatewayFixture(t, "normal")
+	fixture.preset = testSubscriptionPreset(fixture.preset)
+	model := fixture.cfg.ModelList[0]
+	model.Model, model.AuthMethod, model.APIBase, model.APIKeys = "gpt-5.6-terra", "oauth", "", nil
+	fixture.writeConfig(t)
+	const fakeAccess = "synthetic-owned-subscription-token-not-a-live-credential"
+	name := filepath.Join(fixture.home, subscriptionAuthPath)
+	writeAdmissionJSON(t, name, auth.AuthStore{Credentials: map[string]*auth.AuthCredential{
+		"openai": {
+			Provider:    "openai",
+			AuthMethod:  "oauth",
+			AccessToken: fakeAccess,
+			ExpiresAt:   time.Now().Add(time.Hour),
+		},
+	}})
+	// The parent can have an unrelated login and API key; neither belongs to the child.
+	t.Setenv("MINTCLAW_AUTH_FILE", filepath.Join(fixture.home, "ambient.json"))
+	t.Setenv("OPENAI_API_KEY", "synthetic-ambient-key")
+	profile, err := readPreparedProfile(fixture.preset, fixture.home)
+	if err != nil || validateConversationProfile(profile.config, fixture.preset, fixture.workspace) != nil ||
+		validateFreshOwnedProfile(profile) != nil {
+		t.Fatal("subscription profile not admitted", err)
+	}
+	child, err := launchOwnedGatewayWithBudget(profile, binary, fixture.preset.TargetCallBudget)
+	registerOwnedGatewayCleanup(t, child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := admitOwnedGateway(t.Context(), child, fixture.preset, fixture.home, nil, nil)
+	if err != nil || target.evidenceFilter().Replace(fakeAccess) == fakeAccess {
+		t.Fatal("native subscription gateway not admitted with guarded credentials", err)
+	}
+	stopCtx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+	if receipt := child.stopAndWait(
+		stopCtx,
+	); receipt.Code != "native_exit_zero" || !receipt.Admitted ||
+		receipt.Forced {
+		t.Fatalf("native subscription shutdown: %+v", receipt)
+	}
+	receipt, err := child.budgetSpec.ReceiptName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(fixture.home, receipt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := evaltarget.DecodeProof(data, *child.budgetSpec, child.command.Process.Pid)
+	if err != nil || !proof.GatewayClean || proof.Snapshot.Calls != 0 {
+		t.Fatalf("subscription startup performed model work: %+v/%v", proof, err)
 	}
 }

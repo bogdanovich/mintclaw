@@ -80,6 +80,12 @@ resolved-answer and ordered canonical history evidence; a judge's passing text a
 
 ## Active And Pending Sets
 
+For new live setups using a ChatGPT subscription, start with
+[`presets/subscription.template.json`](presets/subscription.template.json) and the
+[subscription smoke instructions](../docs/operations/manual-agent-evals.md#subscription-smoke-profile).
+This separate one-case run does not replace the strict six-case General baseline. The API-key template is an
+explicit choice, never a fallback from a subscription profile.
+
 With no `--suite`, `--tag` or `--case` filters, `run` selects only catalog defaults (currently six general cases).
 Explicit filters select their full matching set. Any selected pending case refuses the whole run before profile/model
 work unless `--include-pending` is present; there is no silent partial execution. `--suite all` is not an opt-in.

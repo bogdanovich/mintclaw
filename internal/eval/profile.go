@@ -3,6 +3,7 @@ package eval
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
@@ -11,6 +12,14 @@ type preparedProfile struct {
 	config    *config.Config
 	home      string
 	workspace string
+	filter    *strings.Replacer
+}
+
+func (profile preparedProfile) evidenceFilter() *strings.Replacer {
+	if profile.filter != nil {
+		return profile.filter
+	}
+	return profile.config.SensitiveDataReplacer()
 }
 
 // File admission is shared by run and judge-only work. Only run adds process
