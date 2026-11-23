@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -330,17 +330,14 @@ func TestSystemdServiceManagerCancellationTerminatesProcess(t *testing.T) {
 }
 
 func TestSystemdProcessRunnerExecutesPinnedDescriptorAfterPathReplacement(t *testing.T) {
-	source, err := exec.LookPath("echo")
+	source, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := os.ReadFile(source)
-	if err != nil {
+	path := filepath.Join(t.TempDir(), "systemctl")
+	// The fixture must work regardless of the argv[0] used for the descriptor.
+	if err := os.Symlink(source, path); err != nil {
 		t.Fatal(err)
-	}
-	path := t.TempDir() + "/systemctl"
-	if writeErr := os.WriteFile(path, content, 0o700); writeErr != nil {
-		t.Fatal(writeErr)
 	}
 	pinned, err := os.Open(path)
 	if err != nil {
@@ -353,13 +350,17 @@ func TestSystemdProcessRunnerExecutesPinnedDescriptorAfterPathReplacement(t *tes
 	if writeErr := os.WriteFile(path, []byte("#!/bin/sh\necho replacement\n"), 0o700); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	runner := systemdProcessRunner{env: fixedSystemdEnvironment()}
-	result, err := runner.run(t.Context(), commandExecutable{path: path, file: pinned}, []string{"pinned"}, 1024)
+	runner := systemdProcessRunner{env: append(fixedSystemdEnvironment(), systemdReadHelperEnvironment+"=1")}
+	executable := commandExecutable{
+		path: path, file: pinned,
+		prefix: []string{"-test.run=^TestSystemdReadProcessHelper$", "--", "pinned"},
+	}
+	result, err := runner.run(t.Context(), executable, []string{"pinned"}, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(result.stdout) != "pinned\n" {
-		t.Fatalf("pinned descriptor reopened replacement path: %q", result.stdout)
+	if result.exitCode != 0 || string(result.stdout) != "pinned\n" {
+		t.Fatalf("pinned descriptor exited %d with output %q", result.exitCode, result.stdout)
 	}
 }
 
@@ -411,6 +412,11 @@ func TestSystemdReadProcessHelper(t *testing.T) {
 	mode := os.Args[separator+1]
 	args := os.Args[separator+2:]
 	switch mode {
+	case "pinned":
+		if !slices.Equal(args, []string{"pinned"}) {
+			os.Exit(91)
+		}
+		fmt.Print("pinned\n")
 	case "status":
 		want := []string{
 			"--system", "--no-pager", "--no-ask-password", "--plain", "show",
