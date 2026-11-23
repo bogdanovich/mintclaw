@@ -217,11 +217,11 @@ func (host *InputHost) Act(ctx context.Context, action nodes.ComputerHostActRequ
 		if !valid() {
 			return computer.ErrStale
 		}
-		err := probeInputOwnership(scope, caller, lease.Check)
+		probeErr := probeInputOwnership(scope, caller, lease.Check)
 		if !valid() {
 			return computer.ErrStale
 		}
-		return err
+		return probeErr
 	}
 	if err = verify(dispatch, dispatch); err != nil {
 		input.lease = nil
