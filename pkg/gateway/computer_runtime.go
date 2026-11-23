@@ -31,7 +31,7 @@ func setupComputerTools(cfg *config.Config, loop *agent.AgentLoop, running *serv
 	if err := setupComputerRuntime(cfg, running); err != nil {
 		return err
 	}
-	for _, name := range []string{"computer_targets", "computer_session", "computer_observe"} {
+	for _, name := range []string{"computer_targets", "computer_session", "computer_observe", "computer_act"} {
 		if err := loop.RegisterRuntimeTool(name, func(reload *config.Config) (toolshared.Tool, error) {
 			if reload.ValidateComputerConfig() != nil {
 				return nil, computer.ErrDenied
@@ -46,6 +46,8 @@ func setupComputerTools(cfg *config.Config, loop *agent.AgentLoop, running *serv
 				return tools.NewComputerTargetsTool(options, source), nil
 			case "computer_session":
 				return tools.NewComputerSessionTool(options, source), nil
+			case "computer_act":
+				return tools.NewComputerActTool(options, source), nil
 			default:
 				return tools.NewComputerObserveTool(options, source), nil
 			}
@@ -185,6 +187,14 @@ func (source *gatewayComputerToolSource) Observe(
 ) (computer.Observation, error) {
 	return withComputerClient(ctx, source, func(client *nodeComputerClient) (computer.Observation, error) {
 		return client.Observe(ctx, principal, id, request)
+	})
+}
+
+func (source *gatewayComputerToolSource) Act(
+	ctx context.Context, principal runtimecap.Principal, request tools.ComputerActRequest,
+) (computer.Observation, error) {
+	return withComputerClient(ctx, source, func(client *nodeComputerClient) (computer.Observation, error) {
+		return client.Act(ctx, principal, request)
 	})
 }
 

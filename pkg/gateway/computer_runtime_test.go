@@ -14,14 +14,18 @@ import (
 )
 
 func TestComputerRuntimeToolRegistrationRequiresExplicitAgentGrant(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		name := "disabled"
-		if enabled {
-			name = "enabled"
-		}
-		t.Run(name, func(t *testing.T) {
-			client, _, cfg := computerClientFixtureConfig(t, 0)
-			cfg.Tools.Computer.Enabled = enabled
+	for _, scenario := range []struct {
+		name    string
+		enabled bool
+		input   bool
+	}{
+		{name: "disabled"},
+		{name: "read-only", enabled: true},
+		{name: "input", enabled: true, input: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			client, _, cfg := computerClientFixtureWithInput(t, 0, scenario.input, scenario.input)
+			cfg.Tools.Computer.Enabled = scenario.enabled
 			cfg.Agents.List = []config.AgentConfig{{ID: "browser", Default: true}, {ID: "reader"}}
 			messageBus := bus.NewMessageBus()
 			t.Cleanup(messageBus.Close)
@@ -36,9 +40,10 @@ func TestComputerRuntimeToolRegistrationRequiresExplicitAgentGrant(t *testing.T)
 					t.Error(err)
 				}
 			}()
-			for _, toolName := range []string{"computer_targets", "computer_session", "computer_observe"} {
+			for _, toolName := range []string{"computer_targets", "computer_session", "computer_observe", "computer_act"} {
 				_, visible := loop.GetRegistry().GetDefaultAgent().Tools.Get(toolName)
-				if visible != enabled {
+				want := scenario.enabled && (toolName != "computer_act" || scenario.input)
+				if visible != want {
 					t.Fatal("computer tools did not follow explicit enablement", toolName)
 				}
 				other, found := loop.GetRegistry().GetAgent("reader")

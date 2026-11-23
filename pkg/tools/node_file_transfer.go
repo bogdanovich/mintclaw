@@ -700,6 +700,7 @@ func ToolLogArguments(toolName string, arguments map[string]any) map[string]any 
 		return projected
 	}
 	if isNodeFileToolName(toolName) ||
+		toolName == "computer_act" ||
 		toolName == "nodes_invoke" ||
 		toolName == "nodes_status" ||
 		toolName == "nodes_cancel" ||

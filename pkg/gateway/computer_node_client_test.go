@@ -29,6 +29,10 @@ type computerClientTestHandler struct {
 	commands        []string
 	observations    int
 	loseNextControl bool
+	loseNextAction  bool
+	actionText      string
+	cancelCalls     int
+	actionStarted   chan struct{}
 	mutate          func(any)
 	delay           time.Duration
 	loseNextOpen    bool
@@ -78,12 +82,19 @@ func (handler *computerClientTestHandler) Invocation(
 	return record, nil
 }
 
-func (*computerClientTestHandler) CancelInvocation(context.Context, nodes.ID, string) (nodes.InvocationRecord, error) {
+func (handler *computerClientTestHandler) CancelInvocation(
+	context.Context,
+	nodes.ID,
+	string,
+) (nodes.InvocationRecord, error) {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	handler.cancelCalls++
 	return nodes.InvocationRecord{}, nodes.ErrGatewayInvocationNotFound
 }
 
 func (handler *computerClientTestHandler) Invoke(
-	ctx context.Context, _ nodes.ID, plan nodes.ExecutionPlan, _ json.RawMessage, commit func() error,
+	ctx context.Context, _ nodes.ID, plan nodes.ExecutionPlan, ephemeral json.RawMessage, commit func() error,
 ) (json.RawMessage, bool, error) {
 	if err := commit(); err != nil {
 		return nil, false, err
@@ -91,6 +102,10 @@ func (handler *computerClientTestHandler) Invoke(
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
 	handler.commands = append(handler.commands, plan.Command)
+	if plan.Command == nodes.ComputerCommandAct && handler.actionStarted != nil {
+		close(handler.actionStarted)
+		handler.actionStarted = nil
+	}
 	if handler.delay > 0 {
 		timer := time.NewTimer(handler.delay)
 		defer timer.Stop()
@@ -145,9 +160,9 @@ func (handler *computerClientTestHandler) Invoke(
 			)
 		}
 		result = &nodes.ComputerSessionResult{Session: handler.session, ObservedAt: now}
-	case nodes.ComputerCommandObserve:
+	case nodes.ComputerCommandObserve, nodes.ComputerCommandAct:
 		handler.observations++
-		result = &nodes.ComputerObservationResult{
+		observation := nodes.ComputerObservationResult{
 			Session: handler.session, ObservedAt: now,
 			Observation: computer.Observation{
 				ID:      computerNodeID("observation", plan.InvocationID),
@@ -161,6 +176,24 @@ func (handler *computerClientTestHandler) Invoke(
 				ExpiresAt:  now.Add(20 * time.Second),
 			},
 			AccessibilityText: "private-fixture-canary",
+		}
+		if plan.Command == nodes.ComputerCommandAct {
+			request, err := nodes.BindComputerAct(plan, ephemeral)
+			if err != nil || request.Binding != handler.session.Binding {
+				return nil, true, computer.ErrStale
+			}
+			defer clear(request.Text)
+			handler.actionText = string(request.Text)
+			if handler.loseNextAction {
+				handler.loseNextAction = false
+				return nil, true, errors.New("private action response lost")
+			}
+			if len(request.Text) != 0 {
+				observation.AccessibilityText = string(request.Text)
+			}
+			result = &nodes.ComputerActResult{ActionID: plan.InvocationID, Observation: observation}
+		} else {
+			result = &observation
 		}
 	default:
 		if handler.loseNextControl {
@@ -525,6 +558,13 @@ func computerClientFixtureConfig(
 	skew time.Duration,
 ) (*nodeComputerClient, *computerClientTestHandler, *config.Config) {
 	t.Helper()
+	return computerClientFixtureWithInput(t, skew, false, false)
+}
+
+func computerClientFixtureWithInput(
+	t *testing.T, skew time.Duration, advertiseInput, allowInput bool,
+) (*nodeComputerClient, *computerClientTestHandler, *config.Config) {
+	t.Helper()
 	public, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -540,6 +580,13 @@ func computerClientFixtureConfig(
 	descriptors, err := nodes.ComputerCommandDescriptors([]nodes.ComputerProfileDescriptor{profile})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if advertiseInput {
+		action, err := nodes.ComputerInputCommandDescriptor([]nodes.ComputerProfileDescriptor{profile})
+		if err != nil {
+			t.Fatal(err)
+		}
+		descriptors = append(descriptors, action)
 	}
 	catalog := nodes.CapabilityCatalog{Commands: descriptors}
 	hash, err := catalog.Hash()
@@ -597,6 +644,7 @@ func computerClientFixtureConfig(
 	cfg.Execution.Targets = map[string]config.ExecutionTarget{"native": {Type: "node", Node: "native-companion"}}
 	cfg.Tools.Computer = config.ComputerToolsConfig{Enabled: true, Targets: map[string]config.ComputerTargetConfig{
 		"desktop": {
+			AllowInput: allowInput,
 			NodeTarget: "native",
 			Profile:    "selected",
 			Revision:   profile.Revision,

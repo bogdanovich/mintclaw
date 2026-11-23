@@ -161,7 +161,7 @@ func (tool *ComputerTargetsTool) Execute(ctx context.Context, args map[string]an
 
 func (*ComputerSessionTool) Name() string { return "computer_session" }
 func (*ComputerSessionTool) Description() string {
-	return "Open an explicitly granted computer target, inspect automation control, release automation, or hand the same native window to the user and suspend this turn. Handoff requires a useful self-contained prompt and the root user's interaction_language. Release ends automation only; never claim that the application closed or remains open. Replies are interpreted by the existing interaction lifecycle; do not reopen a replacement or capture before deciding whether to finish. No clicking, typing, scrolling or application closing is available."
+	return "Open an explicitly granted computer target, inspect automation control, release automation, or hand the same native window to the user and suspend this turn. Handoff requires a useful self-contained prompt and the root user's interaction_language. Release ends automation only; never claim that the application closed or remains open. Replies are interpreted by the existing interaction lifecycle; do not reopen a replacement or capture before deciding whether to finish."
 }
 
 func (*ComputerSessionTool) Parameters() map[string]any {
@@ -276,7 +276,7 @@ func (tool *ComputerSessionTool) Execute(ctx context.Context, args map[string]an
 
 func (*ComputerObserveTool) Name() string { return "computer_observe" }
 func (*ComputerObserveTool) Description() string {
-	return "Obtain a fresh scoped computer observation from the existing agent-controlled native window. Pixels and accessibility text are protected one-shot model context, not a saved file or chat attachment. Observe again after human control; never reuse earlier pixels as evidence of current state. No native input is available."
+	return "Obtain a fresh scoped computer observation from the existing agent-controlled native window. Pixels and accessibility text are protected one-shot model context, not a saved file or chat attachment. Observe again after human control; never reuse earlier pixels as evidence of current state."
 }
 
 func (*ComputerObserveTool) Parameters() map[string]any {
@@ -304,6 +304,12 @@ func (tool *ComputerObserveTool) Execute(ctx context.Context, args map[string]an
 	if err != nil {
 		return computerToolError(err)
 	}
+	return computerObservationToolResult(observation, principal, id)
+}
+
+func computerObservationToolResult(
+	observation computer.Observation, principal runtimecap.Principal, id string,
+) *toolshared.ToolResult {
 	defer clear(observation.Screenshot)
 	if observation.Binding.Principal != principal || observation.Binding.SessionID != id ||
 		observation.Validate(computer.Session{

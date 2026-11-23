@@ -1,10 +1,10 @@
 # Bounded computer-input contracts
 
-Status: typed foundation plus a separately opt-in internal companion transport.
-No native input executor, public input tool, configuration grant or production
-enablement is provided. Ordinary computer-host composition remains read-only.
-This independent slice does not depend on the private Linux Unicode-driver
-candidate or the Mac native ownership primitive.
+Status: typed foundation, opt-in companion transport and an independently
+opt-in gateway action route. The standard native host composition provides
+observation and control. Input requires a separately admitted and qualified host.
+The gateway transport is independent of the private Linux Unicode-driver
+candidate and the Mac native ownership primitive.
 
 ## Shapes and protected payload
 
