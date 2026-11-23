@@ -580,10 +580,35 @@ The independent GTK check observed no second scroll.
 
 The cancel request reached the live handler and stayed unconfirmed in the
 ledger because the attempted scroll could already have taken effect. Verified
-release established native quiescence. These results cover a controlled
-Companion fixture with one wheel step. The production host adapter,
-client transport reconnect and native attached profiles still require their
-own qualification.
+release established native quiescence.
+
+### Authenticated Gateway reconnect with the original invocation
+
+A Linux fixture exercised the production Gateway admission handler and
+Companion client over a loopback TLS WebSocket. A disposable Companion identity
+completed signed challenge authentication and received explicit command
+approval. The fixture used the pending protected host and lease binding, a
+pinned native worker and real Cua pixel capture.
+
+The balanced scroll returned a fresh protected observation bound to the same
+window and session. An independent GTK readback confirmed one scroll step.
+In the interruption case, the original worker died before acknowledging its
+press. The fixture observed the held button, closed the original WebSocket,
+and saw the connection loss cancel the live action. The keeper verified one
+release in the original window. The attempted effect remained `unknown`.
+
+In each case the first connection reached `disconnected` before a new client
+opened the same file ledger and authenticated. A query over that connection
+returned the original plan hash, idempotency key and recorded state. Gateway
+refused to dispatch the already recorded invocation again. Sending the exact
+saved plan through the replacement connection also left the native executor's
+call count at one. The completed action returned only its protected receipt.
+The interrupted action returned an unknown outcome. Independent GTK and input
+state checks confirmed no second scroll and neutral button state.
+
+This evidence covers fresh disposable X11 displays and one wheel step.
+Production startup wiring, already-running desktop admission and the
+representative per-platform model tasks remain separate qualification gates.
 
 ## Private chart fixture
 
