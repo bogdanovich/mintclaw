@@ -552,6 +552,39 @@ step. Admission on an already running desktop still needs authoritative
 initial recipient state. Managed and attached profiles retain their own
 qualification gates, including runtime integration and privacy.
 
+### Companion restart after an attempted X11 scroll
+
+A disposable GNOME X11 fixture connected the Companion's existing
+`computer.act.v1` handler and file-backed invocation ledger to a private
+native keeper through inherited pipes. The action used host-owned observation
+geometry, the original native window generation and a desktop input lease.
+The command reached the native worker only after the ledger entered
+`running`. The worker was killed after pressing the button and before
+acknowledging the press. The keeper checked the worker's departure from
+X11 and matched the original request and recipient.
+
+Five cases covered normal recovery, Companion process death after release but
+before recording the outcome, recording loss, native lease loss and a cancel
+request while the button was held. Recovery verified one release to the
+original live window in three cases. It withheld release when the recorder
+or lease disappeared. The disposable fixture cleaned up the remaining held
+state separately after retiring its own window.
+
+Submitting the same invocation during every held interval returned an
+unknown outcome without entering the input host again. In the two abrupt
+Companion exits, reopening the ledger converted the saved `running` record
+to `unknown`. The other three had already recorded `unknown`. Two replays
+after each restart preserved the same invocation and idempotency key,
+returned no protected result and made zero further input-host calls.
+The independent GTK check observed no second scroll.
+
+The cancel request reached the live handler and stayed unconfirmed in the
+ledger because the attempted scroll could already have taken effect. Verified
+release established native quiescence. These results cover a controlled
+Companion fixture with one wheel step. The production host adapter,
+client transport reconnect and native attached profiles still require their
+own qualification.
+
 ## Private chart fixture
 
 `scripts/internal/computer-evaluation/chart_fixtures.py` adds CU-T17 with a
