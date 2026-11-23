@@ -459,6 +459,36 @@ loss and the full protected host lifecycle remain separate qualification
 gates. Treat a server acknowledgement as dispatch evidence and use fresh
 application evidence for the result.
 
+### Linux X11 wheel release when the caller or transport fails
+
+A Rust implementation of the route composed the original window guard and
+desktop lease with a bounded X11 transaction. Three nominal trials produced
+one independently observed GTK scroll step each. Eleven controls sent no
+button event. These included stale geometry, foreign input ownership, legacy
+and XI2 grabs, a remapped button, a mismatched source device and a blocked
+server connection. The blocked connection returned in about 255 ms.
+
+In three caller-loss trials, the X11 owner retained its original connection
+and transaction. The requesting process exited after the native press. The
+owner sent the release once, verified that both original devices were clear,
+and recorded an uncertain action result. GTK had already applied the single
+scroll step, and the sibling guard and core pointer remained unchanged.
+
+Losing the X11 actuator connection itself left the wheel button held in all
+four trials. GTK had already scrolled. With the original window still live,
+its implicit grab prevented a separate owner from capturing a release in two
+tests. After the original window was destroyed, all four tests captured the
+single release in an owned sink with a neutral button and unchanged sibling
+and replacement. The tests controlled target destruction; runtime cleanup
+must preserve an original window that is still open.
+
+Detaching the held XTEST source was refused by the isolated server. Disabling
+the held master caused the disposable Xvfb instance to crash. Keep both
+device mutations out of release recovery. Full protected pointer admission
+still requires independent cleanup when an actual actuator transport fails
+and the original window survives, along with durable outcome and no-replay
+qualification.
+
 ## Private chart fixture
 
 `scripts/internal/computer-evaluation/chart_fixtures.py` adds CU-T17 with a
