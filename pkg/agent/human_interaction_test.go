@@ -5242,6 +5242,16 @@ func testLiveHandoffContinuationClaimsDurableReceipt(t *testing.T, requirement s
 }
 
 func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
+	t.Run("with context", func(t *testing.T) { testLiveHandoffContinuationCanEnd(t, false) })
+	t.Run("without stored context", func(t *testing.T) { testLiveHandoffContinuationCanEnd(t, true) })
+}
+
+func testLiveHandoffContinuationCanEnd(t *testing.T, noContext bool) {
+	t.Helper()
+	const origin = "Передай мне управление этим окном."
+	const answer = "Спасибо, заканчивай."
+	const unrelated = "An older, unrelated request."
+	const key = "session-end-live-handoff"
 	toolCall := func(id, operation string) providers.ToolCall {
 		return providers.ToolCall{
 			ID: id, Name: "browser_handoff_continuation",
@@ -5259,8 +5269,19 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 		interactionContinuationDecisionResponse("finish", plainTerminal),
 		{Content: reportedTerminal, FinishReason: "stop"},
 	}}
-	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
-	defer cleanup()
+	fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
+		if !noContext {
+			cfg.Agents.Defaults.ContextManager = "seahorse"
+		}
+	})
+	al, agent := fixture.Loop, fixture.Agent
+	if noContext {
+		if err := agent.Sessions.AppendTurnMessage(t.Context(), key, providers.Message{
+			Role: "user", Content: unrelated, RootTurnStart: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	installInteractionChannelManager(t, al, newInteractionChannelManager())
 	tool := &browserHandoffContinuationTool{}
 	agent.Tools.Register(tool)
@@ -5273,8 +5294,8 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 
 	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
 		Dispatch: DispatchRequest{
-			RouteSessionKey: "route-end-live-handoff", SessionKey: "session-end-live-handoff",
-			UserMessage: "open the live resource and hand it to me", InboundContext: inbound,
+			RouteSessionKey: "route-end-live-handoff", SessionKey: key,
+			UserMessage: origin, InboundContext: inbound,
 		},
 		ObjectiveChecklist: checklist,
 		DefaultResponse:    defaultResponse, EnableSummary: true, SendResponse: false,
@@ -5283,12 +5304,12 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 		t.Fatalf("initial handoff turn = (%q, %q, %v)", response, turnStatus, err)
 	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
-	record, ok := activeInteractionForSession(registry, "session-end-live-handoff")
+	record, ok := activeInteractionForSession(registry, key)
 	if !ok {
 		t.Fatal("initial live handoff interaction not found")
 	}
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
-		Text: "finish the current task", MessageID: "end-live-handoff-answer", ReceivedAt: time.Now().UnixMilli(),
+		Text: answer, MessageID: "end-live-handoff-answer", ReceivedAt: time.Now().UnixMilli(),
 	}, interactions.OutcomeAnswered)
 	if err != nil {
 		t.Fatal(err)
@@ -5305,7 +5326,7 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 	if tool.cleanupCalls != 1 {
 		t.Fatalf("browser cleanup calls = %d, want 1 after terminal continuation", tool.cleanupCalls)
 	}
-	if _, ok = activeInteractionForSession(registry, "session-end-live-handoff"); ok {
+	if _, ok = activeInteractionForSession(registry, key); ok {
 		t.Fatal("terminal continuation created another waiting interaction")
 	}
 	if provider.callCount != 4 {
@@ -5313,6 +5334,20 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 			"provider calls = %d, want handoff, rejected preflight, decision, and normalization",
 			provider.callCount,
 		)
+	}
+	for _, request := range provider.requests[1:3] {
+		sawOrigin, sawAnswer := false, false
+		for _, message := range request {
+			sawOrigin = sawOrigin || message.Role == "user" && strings.Contains(message.Content, origin)
+			sawAnswer = sawAnswer || message.Role == "tool" && message.ToolCallID == "call-initial-handoff" &&
+				strings.Contains(message.Content, answer)
+			if noContext && strings.Contains(message.Content, unrelated) {
+				t.Fatal("continuation restored unrelated stored conversation")
+			}
+		}
+		if !sawOrigin || !sawAnswer {
+			t.Fatalf("decision context: origin present %v, accepted answer present %v", sawOrigin, sawAnswer)
+		}
 	}
 	if len(provider.toolRequests) != 4 || len(provider.toolRequests[1]) != 1 || len(provider.toolRequests[2]) != 1 ||
 		provider.toolRequests[1][0].Function.Name != interactionContinuationDecisionTool ||

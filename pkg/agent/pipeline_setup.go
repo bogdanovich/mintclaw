@@ -87,6 +87,33 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			budgetReport = resp.Budget
 		}
 	}
+	// The accepted answer belongs to this active handoff, even when stored
+	// history is disabled or the context manager omitted the originating turn.
+	decision := newInteractionContinuationDecisionState(ts.opts)
+	if ts.opts.mode == turnModeInteractionContinuation && decision.pending() {
+		origin := ts.opts.InteractionContinuation.OriginToolCallID
+		_, active := splitHistoryForInteractionContinuation(history, origin)
+		if _, result := interactionToolPairIndexes(active, origin); result < 0 {
+			canonical, readErr := ts.agent.Sessions.ReadTurnHistory(ctx, ts.sessionKey)
+			if readErr != nil {
+				return nil, fmt.Errorf("read active live-handoff turn: %w", readErr)
+			}
+			_, protected := splitHistoryForInteractionContinuation(canonical, origin)
+			_, paired := interactionToolPairIndexes(protected, origin)
+			if paired < 0 {
+				return nil, fmt.Errorf("active live-handoff turn is missing its accepted answer")
+			}
+			// Preserve steering from this turn across recovery, bounded by the
+			// next root request in the shared journal.
+			for index := paired + 1; index < len(protected); index++ {
+				if protected[index].RootTurnStart {
+					protected = protected[:index]
+					break
+				}
+			}
+			history = omitRepeatedConversationInput(protected, conversationID)
+		}
+	}
 	if ts.turnEnvelope == nil && ts.opts.mode == turnModeInteractionContinuation {
 		_, protectedTurn := splitHistoryForInteractionContinuation(
 			history,
