@@ -370,6 +370,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 					)
 				}
 				exec.history = stripMessageMedia(exec.history)
+				exec.continuationParentHistory = stripMessageMedia(exec.continuationParentHistory)
 				ts.stripPersistedMessageMedia()
 				if snapshotErr := ts.refreshCanonicalRestorePointFromSession(turnCtx); snapshotErr != nil {
 					return llmStageResult{}, snapshotErr
@@ -465,11 +466,15 @@ func (p *Pipeline) invokeLLMWithRetry(
 				p.maxMediaSize(),
 			)
 			protectedInputs := ts.liveTurnMessagesSnapshot()
+			suspendedTurn := exec.continuationParentHistory
 			if ts.opts.mode == turnModeInteractionContinuation {
-				_, parentInputs := splitHistoryForInteractionContinuation(
-					exec.history, ts.opts.InteractionContinuation.OriginToolCallID,
-				)
-				protectedInputs = append(parentInputs, protectedInputs...)
+				reserveParent := suspendedTurn
+				if len(reserveParent) == 0 {
+					_, reserveParent = splitHistoryForInteractionContinuation(
+						exec.history, ts.opts.InteractionContinuation.OriginToolCallID,
+					)
+				}
+				protectedInputs = append(reserveParent, protectedInputs...)
 			}
 			liveInputReserve := liveUserInputTokenReserveForHistory(llm.liveUserInputs, protectedInputs)
 			reserveTokens += liveInputReserve
@@ -526,10 +531,20 @@ func (p *Pipeline) invokeLLMWithRetry(
 			if len(protectedTurnTail) == 0 {
 				protectedTurnTail = assembledTurnTail
 			}
+			if len(suspendedTurn) > 0 {
+				// Reassembly can exclude the accepted answer entirely. The
+				// suspended turn must survive even when stable history is empty.
+				stableHistory, _ = splitHistoryForInteractionContinuation(
+					stableHistory, ts.opts.InteractionContinuation.OriginToolCallID,
+				)
+			}
 			localTailIndex := min(exec.objectiveRepairTailIndex, len(protectedTurnTail))
-			fullProtectedTail := append([]providers.Message(nil), protectedTurnTail[:localTailIndex]...)
+			fullProtectedTail := append(
+				append([]providers.Message(nil), suspendedTurn...),
+				protectedTurnTail[:localTailIndex]...)
 			fullProtectedTail = append(fullProtectedTail, exec.objectiveRepairMessages...)
 			fullProtectedTail = append(fullProtectedTail, protectedTurnTail[localTailIndex:]...)
+			protectedTurnTail = append(append([]providers.Message(nil), suspendedTurn...), protectedTurnTail...)
 			exec.history = append(
 				append([]providers.Message(nil), stableHistory...),
 				protectedTurnTail...,
@@ -567,7 +582,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 							ts.interruptHintMessage(),
 						)
 					}
-					return rebuilt
+					return exec.continuationAttemptMessages(rebuilt)
 				},
 				ts.agent.ContextWindow,
 				llm.providerToolDefs,

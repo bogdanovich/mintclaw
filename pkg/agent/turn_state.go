@@ -171,6 +171,9 @@ type turnExecution struct {
 	pendingInputs turnPendingInputs   // steering/SubTurn messages awaiting durable injection
 	history       []providers.Message // from ContextManager.Assemble
 	checkpoint    *ContextCheckpoint
+	// The authenticated parent turn is separate from both compactable history
+	// and the new execution's live messages.
+	continuationParentHistory []providers.Message
 
 	// Turn output
 	deliverable                     *taskresult.Deliverable
@@ -532,16 +535,22 @@ func newTurnExecution(
 	checkpoint *ContextCheckpoint,
 	messages []providers.Message,
 ) *turnExecution {
+	decision := newInteractionContinuationDecisionState(opts)
+	var parent []providers.Message
+	if opts.mode == turnModeInteractionContinuation && decision.enabled {
+		_, parent = splitHistoryForInteractionContinuation(history, opts.InteractionContinuation.OriginToolCallID)
+	}
 	return &turnExecution{
-		history:                 history,
-		checkpoint:              checkpoint,
-		messages:                messages,
-		pendingInputs:           newTurnPendingInputs(opts.InitialSteeringMessages),
-		sawAdditionalUserInput:  len(opts.InitialSteeringMessages) > 0,
-		initialSteeringSpoolIDs: collectSteeringSpoolIDs(opts.InitialSteeringMessages),
-		receipts:                taskresult.CloneReceipts(opts.InitialReceipts),
-		loopGuard:               loopguard.New(agent.ToolLoopDetection),
-		continuationDecision:    newInteractionContinuationDecisionState(opts),
+		history:                   history,
+		continuationParentHistory: parent,
+		checkpoint:                checkpoint,
+		messages:                  messages,
+		pendingInputs:             newTurnPendingInputs(opts.InitialSteeringMessages),
+		sawAdditionalUserInput:    len(opts.InitialSteeringMessages) > 0,
+		initialSteeringSpoolIDs:   collectSteeringSpoolIDs(opts.InitialSteeringMessages),
+		receipts:                  taskresult.CloneReceipts(opts.InitialReceipts),
+		loopGuard:                 loopguard.New(agent.ToolLoopDetection),
+		continuationDecision:      decision,
 		protectedAnswerContinuation: newProtectedAnswerContinuationState(
 			opts,
 			agent.Tools,

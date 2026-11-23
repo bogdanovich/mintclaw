@@ -5242,11 +5242,23 @@ func testLiveHandoffContinuationClaimsDurableReceipt(t *testing.T, requirement s
 }
 
 func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
-	t.Run("with context", func(t *testing.T) { testLiveHandoffContinuationCanEnd(t, false) })
-	t.Run("without stored context", func(t *testing.T) { testLiveHandoffContinuationCanEnd(t, true) })
+	for _, test := range []struct {
+		name                       string
+		noContext, rootless, retry bool
+	}{
+		{name: "with context"},
+		{name: "without stored context", noContext: true},
+		{name: "legacy rootless journal", noContext: true, rootless: true},
+		{name: "context limit retry", noContext: true, retry: true},
+		{name: "rootless context limit retry", noContext: true, rootless: true, retry: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testLiveHandoffContinuationCanEnd(t, test.noContext, test.rootless, test.retry)
+		})
+	}
 }
 
-func testLiveHandoffContinuationCanEnd(t *testing.T, noContext bool) {
+func testLiveHandoffContinuationCanEnd(t *testing.T, noContext, rootless, retry bool) {
 	t.Helper()
 	const origin = "Передай мне управление этим окном."
 	const answer = "Спасибо, заканчивай."
@@ -5269,6 +5281,10 @@ func testLiveHandoffContinuationCanEnd(t *testing.T, noContext bool) {
 		interactionContinuationDecisionResponse("finish", plainTerminal),
 		{Content: reportedTerminal, FinishReason: "stop"},
 	}}
+	if retry {
+		provider.responses = slices.Insert(provider.responses, 1, nil)
+		provider.errors = []error{nil, errors.New("context_length_exceeded")}
+	}
 	fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
 		if !noContext {
 			cfg.Agents.Defaults.ContextManager = "seahorse"
@@ -5308,6 +5324,19 @@ func testLiveHandoffContinuationCanEnd(t *testing.T, noContext bool) {
 	if !ok {
 		t.Fatal("initial live handoff interaction not found")
 	}
+	if rootless {
+		history, readErr := agent.Sessions.ReadTurnHistory(t.Context(), key)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		callIndex, _ := interactionToolPairIndexes(history, record.Origin.ToolCallID)
+		if callIndex < 0 {
+			t.Fatal("originating tool intent absent from test journal")
+		}
+		if replaceErr := agent.Sessions.ReplaceTurnHistory(t.Context(), key, history[callIndex:]); replaceErr != nil {
+			t.Fatal(replaceErr)
+		}
+	}
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 		Text: answer, MessageID: "end-live-handoff-answer", ReceivedAt: time.Now().UnixMilli(),
 	}, interactions.OutcomeAnswered)
@@ -5329,31 +5358,38 @@ func testLiveHandoffContinuationCanEnd(t *testing.T, noContext bool) {
 	if _, ok = activeInteractionForSession(registry, key); ok {
 		t.Fatal("terminal continuation created another waiting interaction")
 	}
-	if provider.callCount != 4 {
-		t.Fatalf(
-			"provider calls = %d, want handoff, rejected preflight, decision, and normalization",
-			provider.callCount,
-		)
+	wantCalls := 4
+	if retry {
+		wantCalls++
 	}
-	for _, request := range provider.requests[1:3] {
-		sawOrigin, sawAnswer := false, false
+	if provider.callCount != wantCalls {
+		t.Fatalf("provider calls = %d, want %d", provider.callCount, wantCalls)
+	}
+	for index := 1; index < wantCalls-1; index++ {
+		request := provider.requests[index]
+		sawOrigin, sawCall, sawAnswer := false, false, false
 		for _, message := range request {
 			sawOrigin = sawOrigin || message.Role == "user" && strings.Contains(message.Content, origin)
-			sawAnswer = sawAnswer || message.Role == "tool" && message.ToolCallID == "call-initial-handoff" &&
+			sawCall = sawCall || messageContainsToolCall(message, record.Origin.ToolCallID)
+			sawAnswer = sawAnswer || message.Role == "tool" && message.ToolCallID == record.Origin.ToolCallID &&
 				strings.Contains(message.Content, answer)
 			if noContext && strings.Contains(message.Content, unrelated) {
 				t.Fatal("continuation restored unrelated stored conversation")
 			}
 		}
-		if !sawOrigin || !sawAnswer {
-			t.Fatalf("decision context: origin present %v, accepted answer present %v", sawOrigin, sawAnswer)
+		if sawOrigin == rootless || !sawCall || !sawAnswer ||
+			!strings.Contains(request[len(request)-1].Content, "<runtime_interaction_continuation_preflight>") {
+			t.Fatalf("decision attempt %d: origin present %v, tool call present %v, accepted answer present %v",
+				index, sawOrigin, sawCall, sawAnswer,
+			)
+		}
+		exposed := provider.toolRequests[index]
+		if len(exposed) != 1 || exposed[0].Function.Name != interactionContinuationDecisionTool {
+			t.Fatalf("decision attempt %d exposed tools: %#v", index, exposed)
 		}
 	}
-	if len(provider.toolRequests) != 4 || len(provider.toolRequests[1]) != 1 || len(provider.toolRequests[2]) != 1 ||
-		provider.toolRequests[1][0].Function.Name != interactionContinuationDecisionTool ||
-		provider.toolRequests[2][0].Function.Name != interactionContinuationDecisionTool ||
-		len(provider.toolRequests[3]) != 0 {
-		t.Fatalf("terminal normalization tool exposure = %#v", provider.toolRequests)
+	if exposed := provider.toolRequests[wantCalls-1]; len(exposed) != 0 {
+		t.Fatalf("terminal normalization exposed tools: %#v", exposed)
 	}
 }
 

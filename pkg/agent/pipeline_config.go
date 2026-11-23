@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -167,6 +168,24 @@ func (p *Pipeline) buildTurnMessagesWithProtectedTurnBoundary(
 	}
 	if documentConversationBound(ts) {
 		media = nil // Canonical references remain; no implicit pending-attachment execution.
+	}
+	if ts.opts.mode == turnModeInteractionContinuation {
+		decision := newInteractionContinuationDecisionState(ts.opts)
+		if decision.enabled {
+			origin := ts.opts.InteractionContinuation.OriginToolCallID
+			stable, active := splitHistoryForInteractionContinuation(history, origin)
+			if _, result := interactionToolPairIndexes(active, origin); result >= 0 && active[0].Role != "user" {
+				// Some legacy journals start at the assistant tool intent. Give
+				// the exact pair a legal provider predecessor without persisting
+				// or inventing an original user request.
+				history = slices.Insert(slices.Clone(history), len(stable), providers.Message{
+					Role: "user",
+					Content: "<runtime_interaction_history>Earlier request text is unavailable. " +
+						"The following tool exchange belongs to the suspended interaction." +
+						"</runtime_interaction_history>",
+				})
+			}
+		}
 	}
 	req := p.promptRequestForTurn(ts, history, checkpoint, currentMessage, media)
 	req.ActiveSkills = append([]string(nil), activeSkills...)
