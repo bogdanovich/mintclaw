@@ -328,6 +328,10 @@ func retainedX11Peer(socket net.Conn) (*unix.Ucred, error) {
 	if !ok {
 		return nil, computer.ErrUnavailable
 	}
+	return localX11Peer(conn)
+}
+
+func localX11Peer(conn *net.UnixConn) (*unix.Ucred, error) {
 	raw, err := conn.SyscallConn()
 	if err != nil {
 		return nil, computer.ErrUnavailable
