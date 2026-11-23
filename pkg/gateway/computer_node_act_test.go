@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -148,25 +149,47 @@ func TestComputerNodeActRequiresSeparateGrantAndNodeApproval(t *testing.T) {
 }
 
 func TestComputerTargetsRechecksInputApprovalAfterDiscovery(t *testing.T) {
-	client, handler, _ := computerClientFixtureWithInput(t, 0, true, true)
-	registry := client.source.runtime.registry
-	handler.mutate = func(result any) {
-		if _, discovery := result.(*nodes.ComputerTargetsResult); !discovery {
-			return
-		}
-		commands := slices.DeleteFunc(slices.Clone(handler.registration.AllowedCommands), func(command string) bool {
-			return command == nodes.ComputerCommandAct
+	for _, count := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d targets", count), func(t *testing.T) {
+			client, handler, cfg := computerClientFixtureWithInput(t, 0, true, true)
+			if count == 2 {
+				secondary := cfg.Tools.Computer.Targets["desktop"]
+				secondary.AllowInput = false
+				cfg.Tools.Computer.Targets["secondary"] = secondary
+				var err error
+				client, err = newNodeComputerClient(cfg, client.source.runtime)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			registry := client.source.runtime.registry
+			discovered := 0
+			handler.mutate = func(result any) {
+				if _, discovery := result.(*nodes.ComputerTargetsResult); !discovery {
+					return
+				}
+				discovered++
+				if discovered != count {
+					return
+				}
+				commands := slices.DeleteFunc(
+					slices.Clone(handler.registration.AllowedCommands),
+					func(command string) bool {
+						return command == nodes.ComputerCommandAct
+					},
+				)
+				_, err := registry.Approve(handler.registration.Snapshot.ID, nodes.PairingApproval{
+					Aliases: handler.registration.Snapshot.Aliases, At: time.Now().Unix(), AllowedCommands: commands,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			targets, err := client.Targets(t.Context(), computerClientPrincipal(), "discovery-revoked")
+			if err != nil || len(targets) != count || targets[0].InputAvailable {
+				t.Fatal("discovery returned a withdrawn input grant", err)
+			}
 		})
-		_, err := registry.Approve(handler.registration.Snapshot.ID, nodes.PairingApproval{
-			Aliases: handler.registration.Snapshot.Aliases, At: time.Now().Unix(), AllowedCommands: commands,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	targets, err := client.Targets(t.Context(), computerClientPrincipal(), "discovery-revoked")
-	if err != nil || len(targets) != 1 || targets[0].InputAvailable {
-		t.Fatal("discovery returned a withdrawn input grant", err)
 	}
 }
 

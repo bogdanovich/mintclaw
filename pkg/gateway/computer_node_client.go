@@ -298,6 +298,7 @@ func (client *nodeComputerClient) Targets(
 ) ([]computer.NamedTarget, error) {
 	aliases := slices.Sorted(maps.Keys(client.policy.Targets))
 	targets := []computer.NamedTarget{}
+	inputAuthorities := make(map[string]computerNodeAuthority)
 	for _, alias := range aliases {
 		if !client.policy.Targets[alias].Admits(principal) {
 			continue
@@ -311,20 +312,26 @@ func (client *nodeComputerClient) Targets(
 			nodes.ComputerTargetsInput{ComputerTurn: computerNodeTurn(principal)}, &result); err != nil {
 			return nil, err
 		}
-		if authority.policy.AllowInput {
-			current, err := client.authority(alias, principal, &authority)
-			if err != nil {
-				return nil, err
-			}
-			authority = current
-		}
 		for _, target := range result.Targets {
 			if target.Alias == authority.profile.Alias && target.Node == string(authority.nodeID) {
-				targets = append(targets, computer.NamedTarget{
-					Alias: alias, Target: target, InputAvailable: authority.inputAvailable,
-				})
+				targets = append(targets, computer.NamedTarget{Alias: alias, Target: target})
+				if authority.policy.AllowInput {
+					inputAuthorities[alias] = authority
+				}
 			}
 		}
+	}
+	// Refresh after the final remote call, which may outlast an earlier input approval.
+	for i, target := range targets {
+		pinned, ok := inputAuthorities[target.Alias]
+		if !ok {
+			continue
+		}
+		current, err := client.authority(target.Alias, principal, &pinned)
+		if err != nil {
+			return nil, err
+		}
+		targets[i].InputAvailable = current.inputAvailable
 	}
 	return targets, nil
 }
