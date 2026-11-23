@@ -201,6 +201,17 @@ whole-workflow limits stay unchanged. This is qualification orchestration, not a
 public text planner or native application rule. Historical one-action macro and
 Save-readiness failures remain separate recorded failures.
 
+The separate pixel/effect composition completes the native Finish handshake
+as soon as the worker reports dispatch. A native acknowledgement and a
+quiescent retained device pair end that dispatch. The caller then checks the
+expected application effect on fresh evidence from the same original session.
+An unverified effect stops the plan before any later segment or success report.
+This keeps a slow application probe separate from the worker's five-second
+Finish gate and preserves the same action and workflow deadlines.
+The opt-in `TestPrivateNativePixelEffectQualification` fixture accepts
+`final_verification_delay_ms` to delay a positive final probe for at most
+6.5 seconds after dispatch.
+
 Release-only cleanup maps its owned InputOnly sink with `override_redirect`
 before taking the private keyboard grab. A window manager can otherwise defer
 the mapping through `MapRequest` while the original cleanup transaction holds

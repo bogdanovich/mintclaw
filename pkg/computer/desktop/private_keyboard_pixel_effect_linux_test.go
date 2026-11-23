@@ -148,6 +148,7 @@ func TestPrivateNativePixelEffectQualification(t *testing.T) {
 		ExpectedText string                   `json:"expected_text"`
 		Capture      string                   `json:"capture_executable"`
 		CaptureSHA   string                   `json:"capture_sha256"`
+		VerifyDelay  uint32                   `json:"final_verification_delay_ms"`
 	}
 	configPath := os.Getenv("MINTCLAW_PRIVATE_NATIVE_APP_CONFIG")
 	file, err := os.Open(configPath)
@@ -165,7 +166,7 @@ func TestPrivateNativePixelEffectQualification(t *testing.T) {
 		!filepath.IsAbs(
 			fixture.Artifact,
 		) || len(fixture.ExpectedHash) != 64 || fixture.OriginalText == fixture.ExpectedText ||
-		len(fixture.Batches) == 0 || len(fixture.Batches) > 16 ||
+		fixture.VerifyDelay > 6500 || len(fixture.Batches) == 0 || len(fixture.Batches) > 16 ||
 		fixture.Batches[len(fixture.Batches)-1].ExpectedText != fixture.ExpectedText {
 		t.Fatal("invalid private pixel/effect fixture")
 	}
@@ -251,12 +252,15 @@ func TestPrivateNativePixelEffectQualification(t *testing.T) {
 	}
 	defer func() { _, _ = host.Release(context.Background(), session.Binding) }()
 	probeTimeouts, pixelCaptures := 0, 0
-	condition := func(want string) computer.ObservationCondition {
+	condition := func(want string, notBefore time.Time) computer.ObservationCondition {
 		return func(checkCtx context.Context, observation computer.Observation) (bool, error) {
 			if len(observation.Screenshot) == 0 || observation.AccessibilityText != "" {
 				return false, computer.ErrInvalid
 			}
 			pixelCaptures++
+			if time.Now().Before(notBefore) {
+				return false, nil
+			}
 			budget := min(400*time.Millisecond, time.Until(observation.ExpiresAt)-150*time.Millisecond)
 			if budget <= 0 {
 				return false, nil
@@ -270,7 +274,7 @@ func TestPrivateNativePixelEffectQualification(t *testing.T) {
 			return available && state.Text == want && state.Editable && state.Sensitive, probeErr
 		}
 	}
-	original, err := host.ObserveUntil(ctx, session, condition(fixture.OriginalText))
+	original, err := host.ObserveUntil(ctx, session, condition(fixture.OriginalText, time.Time{}))
 	if err != nil {
 		t.Fatal("original native pixels/effect unverified", err)
 	}
@@ -288,17 +292,10 @@ func TestPrivateNativePixelEffectQualification(t *testing.T) {
 				t.Fatal("actual Go preparation failed", prepareErr)
 			}
 			defer func() { _ = owner.close() }()
+			var dispatchedAt time.Time
 			for owner.receipt == nil {
 				if owner.pending == "dispatched" {
-					observed, observeErr := host.ObserveUntil(actionCtx, session, condition(batch.ExpectedText))
-					if observeErr != nil || observed.ID == original.ID ||
-						observed.Validate(session, time.Now()) != nil ||
-						!privateApplicationArtifactMatches(fixture.Artifact, fixture.ExpectedHash) {
-						_ = owner.stop()
-						_, _ = owner.receive()
-						t.Fatalf("effect unverified; Finish withheld: segment=%d error=%v", index, observeErr)
-					}
-					original = observed
+					dispatchedAt = time.Now()
 				}
 				if owner.allow(actionCtx) != nil {
 					t.Fatal("original authority refused a native phase")
@@ -307,10 +304,29 @@ func TestPrivateNativePixelEffectQualification(t *testing.T) {
 					t.Fatal("native phase failed", receiveErr)
 				}
 			}
-			if !owner.receipt.Acknowledged || !owner.receipt.InputQuiescent ||
-				owner.receipt.Resources != privateKeyboardRetained || owner.close() != nil {
-				t.Fatal("native effect/retention receipts disagree")
+			closeErr := owner.close()
+			if dispatchedAt.IsZero() || !owner.receipt.Acknowledged || !owner.receipt.InputQuiescent ||
+				owner.receipt.Resources != privateKeyboardRetained || closeErr != nil {
+				t.Fatalf("native completion refused: segment=%d acknowledged=%v quiescent=%v retained=%v",
+					index, owner.receipt.Acknowledged, owner.receipt.InputQuiescent,
+					owner.receipt.Resources == privateKeyboardRetained)
 			}
+			// Finish closes the completed native dispatch. It neither verifies the
+			// app's effect nor permits the plan to start another input segment.
+			t.Logf("native dispatch and quiescence verified: segment=%d elapsed=%s",
+				index, time.Since(dispatchedAt).Round(time.Millisecond))
+			var notBefore time.Time
+			if index == len(fixture.Batches)-1 && fixture.VerifyDelay > 0 {
+				// Controlled fault for the private fixture only.
+				notBefore = dispatchedAt.Add(time.Duration(fixture.VerifyDelay) * time.Millisecond)
+			}
+			observed, observeErr := host.ObserveUntil(actionCtx, session, condition(batch.ExpectedText, notBefore))
+			if observeErr != nil || observed.ID == original.ID || observed.CapturedAt.Before(dispatchedAt) ||
+				observed.Validate(session, time.Now()) != nil ||
+				!privateApplicationArtifactMatches(fixture.Artifact, fixture.ExpectedHash) {
+				t.Fatalf("effect unverified; next action withheld: segment=%d error=%v", index, observeErr)
+			}
+			original = observed
 		}()
 		t.Logf("native pixels and independent effect %d/%d verified", index+1, len(fixture.Batches))
 	}
