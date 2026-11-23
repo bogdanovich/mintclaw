@@ -32,8 +32,11 @@ func (flow *conversation) waitForActiveTool(
 		}
 		premature := reply.Kind != "stream"
 		if premature {
-			// A pre-barrier reply is diagnostic evidence, not the scripted outcome.
-			reply.Kind, reply.Content, reply.Usage = "early_terminal", "", nil
+			// The reply ends the wait without admitting a session or native turn.
+			reply = Event{
+				Turn: reply.Turn, Kind: "early_terminal", WireType: reply.WireType,
+				RequestID: reply.RequestID, MessageID: reply.MessageID,
+			}
 		}
 		if !flow.append(reply) {
 			return &turnReplyError{Inconclusive, "event_limit"}

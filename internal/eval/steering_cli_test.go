@@ -251,6 +251,10 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 					t.Fatalf("provider rejection did not terminate the wait: %v, execution=%s/%s\n%s",
 						runErr, trial.ExecutionVerdict, trial.ExecutionCode, output)
 				}
+				if comparison, err := Compare(report.ReportDirectory, report.ReportDirectory); err != nil ||
+					comparison.CurrentVerdict != Inconclusive {
+					t.Fatal("a complete provider rejection report could not be compared offline", err)
+				}
 				return
 			}
 			if variant.missingSource {

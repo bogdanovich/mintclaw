@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -107,12 +108,34 @@ func TestConversationInFlightRejectsTerminalBeforeToolEntry(t *testing.T) {
 					transport.closed,
 				)
 			}
-			if tc.name == "early final" && (trial.Events[2].Kind != "early_terminal" ||
-				trial.Events[2].RequestID != transport.sent[0].ID || trial.Events[2].Content != "" ||
-				lastOutcome(trial.Events).ID != "") {
-				t.Fatal("the correlated terminal reply was not retained")
+			if tc.name == "early final" {
+				reply := trial.Events[2]
+				if reply.Kind != "early_terminal" || reply.RequestID != transport.sent[0].ID ||
+					reply.WireType != protocol.TypeMessageUpdate || reply.MessageID == "" ||
+					reply.Content != "" || reply.Usage != nil || lastOutcome(trial.Events).ID != "" {
+					t.Fatal("the correlated terminal reply was not retained as diagnostic metadata")
+				}
+				assertComparableEarlyReply(t, trial.Events)
 			}
 		})
+	}
+}
+
+func assertComparableEarlyReply(t *testing.T, transcript []Event) {
+	t.Helper()
+	report := comparisonFixture(t, Pass, Inconclusive)
+	trial := comparisonTrial(t, report, 1)
+	trial.Events = transcript
+	report.NativeModels = &NativeModelObservation{
+		Scope: nativeModelScope, Code: "unavailable", Reason: "no_scopes", AllCalls: "unknown",
+		Totals: summarizeNativeModels(nil),
+	}
+	writeAdmissionJSON(t, filepath.Join(report.ReportDir, report.Trials[1].File), trial)
+	writeAdmissionJSON(t, filepath.Join(report.ReportDir, "run.json"), report)
+	comparison, err := Compare(report.ReportDir, report.ReportDir)
+	if err != nil || len(comparison.Cases) != 1 || comparison.Cases[0].Current.Coverage[Inconclusive] != 1 ||
+		comparison.Cases[0].Current.Coverage[Pass] != 1 {
+		t.Fatal("a trace-bearing early wire reply invalidated the saved report or changed coverage", err)
 	}
 }
 
