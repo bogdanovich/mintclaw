@@ -61,7 +61,7 @@ async function driver() {
         `<input aria-label="Verification code" autocomplete="one-time-code" value="${oneTimeCode}">` : '';
       const logout = discovery && url.pathname === '/home' ? `<button type="button">Log out</button><p>${computedCode}</p>` : '';
       const controls = url.pathname === '/home' ?
-        `<form action="/records/archive" method="post"><input type="submit" value="Archive draft">\n` +
+        `<form action="/records/archive" method="post"><input type="submit" aria-label="Archive draft" value="Archive draft">\n` +
         `<button type="submit" name="restore" formaction="/records/restore?private=${cookie}"` +
         ` aria-description="Restore draft ${password}"></button></form>` : '';
       await route.fulfill({ contentType: 'text/html',

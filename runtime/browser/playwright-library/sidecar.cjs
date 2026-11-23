@@ -326,12 +326,12 @@ function snapshotControlSource(element, { bound, inspectButton }) {
     !value.includes('[ref=') ? value : '';
   const source = { control, password: input && element.type === 'password' };
   if (control) {
-    // Submit inputs display a markup-defined caption. Editable controls
-    // still contribute only their labels, never their field values.
-    const caption = actionInput ? bounded(element.getAttribute(element.type === 'image' ? 'alt' : 'value')) : '';
+    // A type change can reflect previously entered text into the value
+    // attribute. Use only independent labels, even for action inputs.
+    const alt = input && element.type === 'image' ? bounded(element.getAttribute('alt')) : '';
     source.name = referencedText('aria-labelledby').trim() || element.getAttribute('aria-label') ||
       (element.labels && Array.from(element.labels).map(textWithoutValues).join(' ').trim()) ||
-      caption || element.getAttribute('placeholder') || element.getAttribute('title') || '';
+      alt || element.getAttribute('placeholder') || element.getAttribute('title') || '';
   }
   if (inspectButton && (!element.matches('input,textarea,select') || actionInput) && !element.isContentEditable) {
     const details = {};
@@ -343,9 +343,11 @@ function snapshotControlSource(element, { bound, inspectButton }) {
     if (form && (element.type === 'submit' || (input && element.type === 'image'))) {
       const submitterName = bounded(element.getAttribute('name'));
       if (submitterName) details.submitter_name = submitterName;
-      details.form_method = element.hasAttribute('formmethod') ? element.formMethod : form.method;
+      // A named form control can shadow ordinary form.method/action access.
+      const nativeFormSetting = key => Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, key).get.call(form);
+      details.form_method = element.hasAttribute('formmethod') ? element.formMethod : nativeFormSetting('method');
       try {
-        const destination = new URL(element.hasAttribute('formaction') ? element.formAction : form.action);
+        const destination = new URL(element.hasAttribute('formaction') ? element.formAction : nativeFormSetting('action'));
         if (['https:', 'http:'].includes(destination.protocol) && destination.origin === element.ownerDocument.location.origin) {
           details.form_path = bounded(destination.pathname);
         }
@@ -648,19 +650,19 @@ class Driver {
     const wholeDocument = target && regionContext;
     let tree = await (wholeDocument ? page.locator(':root') : scope).ariaSnapshotJSON({ mode: 'ai' });
     let remainingControlContext = MAX_CONTROL_CONTEXT;
+    const inspectSource = async (ref, bound, inspectButton) => {
+      try {
+        // Inspect exact native refs; never rediscover an element by its
+        // caption or wait an action-sized timeout for removed sources.
+        return await this.locatorFor(ref).evaluate(snapshotControlSource,
+          { bound, inspectButton }, { timeout: 500 });
+      } catch (_) { return null; }
+    };
     const redactControls = async nodes => {
       await Promise.all(nodes.map(async node => {
         if (typeof node === 'string') return;
-        const inspectButton = !!node.ref && node.role === 'button' && !node.name && remainingControlContext > 0;
-        if (inspectButton) remainingControlContext--;
-        if (node.ref && (this.credentialBound || node.text || inspectButton)) {
-          let source = null;
-          try {
-            // Inspect exact native refs; never rediscover an element by its
-            // caption or wait an action-sized timeout for removed sources.
-            source = await this.locatorFor(node.ref).evaluate(snapshotControlSource,
-              { bound: this.credentialBound, inspectButton }, { timeout: 500 });
-          } catch (_) {}
+        if (node.ref && (this.credentialBound || node.text)) {
+          const source = await inspectSource(node.ref, this.credentialBound, false);
           if (source && source.control) {
             node.name = source.name;
             delete node.text;
@@ -673,6 +675,12 @@ class Driver {
               delete node.children;
             } else if (node.text) node.text = '[text withheld: source changed during observation]';
           }
+        }
+        // A protected action input can become unlabeled only after masking
+        // its value-derived name; it should still get independent context.
+        if (node.ref && node.role === 'button' && !node.name && remainingControlContext > 0) {
+          remainingControlContext--;
+          const source = await inspectSource(node.ref, false, true);
           if (source && source.controlContext) node.controlContext = source.controlContext;
         }
         if (node.children) await redactControls(node.children);
