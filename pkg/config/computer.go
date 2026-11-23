@@ -20,6 +20,7 @@ type ComputerToolsConfig struct {
 }
 
 type ComputerTargetConfig struct {
+	AllowInput         bool              `json:"allow_input,omitempty"`
 	NodeTarget         string            `json:"node_target"`
 	Profile            string            `json:"profile"`
 	Revision           string            `json:"revision"`

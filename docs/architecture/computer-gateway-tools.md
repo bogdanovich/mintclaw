@@ -1,10 +1,9 @@
-# Opt-in read-only computer tools
+# Opt-in computer tools
 
-The gateway exposes three first-party tools only to explicitly granted agents:
-`computer_targets`, `computer_session` and `computer_observe`. They use the
-existing authenticated companion command and binary-transfer channels. They
-cannot click, type, scroll, launch arbitrary applications or close applications.
-Browser access, shell access and a connected companion are not computer grants.
+Explicit gateway grants expose `computer_targets`, `computer_session` and
+`computer_observe`. A separate input grant enables `computer_act` for selected
+targets. The tools use the existing authenticated companion command and
+binary-transfer channels. Browser and shell access grant no desktop authority.
 
 ## Operator configuration
 
@@ -55,6 +54,28 @@ runtime allowlists. Leases default to 300 seconds, with a 1,800-second maximum;
 observation validity defaults to 15 seconds, with a 60-second maximum and never
 outlives the lease. These gateway budgets can shorten, not extend, the native
 host's limits.
+
+## Protected input
+
+Set `allow_input: true` on a specific gateway target only after admitting and
+qualifying a trusted input-capable companion profile for that window. The default
+omits the action tool. The approved companion catalog must contain
+`computer.act.v1` for the same exact profile revision, in addition to the read
+and control commands. The normal native companion composition still supplies
+observation and control. Input requires a separately constructed native host.
+
+`computer_act` takes a session ID, the latest observation ID, and one typed
+action. Text insertion and replacement carry the literal UTF-8 in the protected
+transport envelope. Durable tool arguments contain a redaction, and the gateway
+invocation store contains the payload commitment. The tool receives verified
+post-action observation metadata and live context through the protected result
+route. The original observation is consumed for each action. A new control
+generation requires a fresh observation.
+
+The gateway sends a scoped cancellation when a dispatched input is interrupted.
+A cancel request or a lost reply does not establish cleanup. An uncertain input
+outcome fences further input and handoff in that session. Read-only observation
+and explicit release remain available through the original owner.
 
 ## Tool and interaction lifecycle
 

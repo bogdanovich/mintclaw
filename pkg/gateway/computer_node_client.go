@@ -40,13 +40,15 @@ type computerNodeAuthority struct {
 }
 
 type computerNodeSession struct {
-	gate      chan struct{}
-	authority computerNodeAuthority
-	remote    computer.Session
-	deadline  time.Time // Gateway clock, fixed at open; status never extends it.
-	uncertain bool
-	pending   *computer.Session
-	terminal  atomic.Bool
+	gate           chan struct{}
+	authority      computerNodeAuthority
+	remote         computer.Session
+	deadline       time.Time // Gateway clock, fixed at open; status never extends it.
+	uncertain      bool
+	pending        *computer.Session
+	inputUncertain bool
+	evidence       computer.InputEvidence
+	terminal       atomic.Bool
 }
 
 // nodeComputerClient consumes only approved first-party commands. It is not
@@ -150,6 +152,13 @@ func (client *nodeComputerClient) invoke(
 	ctx context.Context, authority computerNodeAuthority, principal runtimecap.Principal,
 	requestID, command string, input, output any,
 ) (string, error) {
+	return client.invokeWithEphemeral(ctx, authority, principal, requestID, command, input, nil, output)
+}
+
+func (client *nodeComputerClient) invokeWithEphemeral(
+	ctx context.Context, authority computerNodeAuthority, principal runtimecap.Principal,
+	requestID, command string, input any, ephemeral json.RawMessage, output any,
+) (string, error) {
 	if nodes.ID(requestID).Validate() != nil {
 		return "", computer.ErrInvalid
 	}
@@ -163,7 +172,8 @@ func (client *nodeComputerClient) invoke(
 		return "", computer.ErrUnavailable
 	}
 	descriptor, approved := computerApprovedDescriptor(record, command)
-	if !approved {
+	if !approved || command == nodes.ComputerCommandAct &&
+		(!authority.policy.AllowInput || !slices.Contains(descriptor.ComputerProfiles, authority.profile)) {
 		return "", computer.ErrDenied
 	}
 	encoded, err := json.Marshal(input)
@@ -215,14 +225,29 @@ func (client *nodeComputerClient) invoke(
 	if retained.State != nodes.GatewayInvocationPrepared {
 		return id, errComputerOutcomeUnknown
 	}
-	raw, dispatched, err := client.source.DispatchInvocation(ctx, nodes.GatewayInvocationOwner{
+	owner := nodes.GatewayInvocationOwner{
 		Target: authority.policy.NodeTarget, ToolCallID: callID, AgentID: principal.AgentID,
 		ActorID: principal.ActorID, SessionID: principal.SessionID, WorkspaceID: client.workspaceID,
 		ExecutionID: principal.ExecutionID,
-	}, retained.Plan.InvocationID, retained.ExpectedPlanHash)
+	}
+	var raw json.RawMessage
+	var dispatched bool
+	if len(ephemeral) == 0 {
+		raw, dispatched, err = client.source.DispatchInvocation(
+			ctx, owner, retained.Plan.InvocationID, retained.ExpectedPlanHash,
+		)
+	} else {
+		raw, dispatched, err = client.source.DispatchInvocationEphemeral(
+			ctx, owner, retained.Plan.InvocationID, retained.ExpectedPlanHash, ephemeral,
+		)
+	}
 	if err != nil {
+		if command == nodes.ComputerCommandAct && dispatched && ctx.Err() != nil {
+			client.requestInputCancellation(authority, gatewayPrincipal, id)
+		}
 		return id, computerNodeFailure(err, dispatched)
 	}
+	defer clear(raw)
 	validated, err := nodes.ValidateInvocationOutput(descriptor, raw, 64*1024)
 	if err != nil || json.Unmarshal(validated, output) != nil {
 		if descriptor.Risk == nodes.RiskWrite {
@@ -410,6 +435,9 @@ func (entry *computerNodeSession) accept(result nodes.ComputerSessionResult) err
 	if !entry.uncertain || next.Binding.Generation != previous.Binding.Generation || next.Control.Terminal() {
 		entry.uncertain, entry.pending = false, nil
 	}
+	if next.Binding != previous.Binding {
+		entry.evidence = computer.InputEvidence{}
+	}
 	entry.remote = next
 	entry.terminal.Store(next.Control.Terminal())
 	return nil
@@ -459,7 +487,7 @@ func (client *nodeComputerClient) Control(
 		return computer.Session{}, err
 	}
 	defer computerNodeUnlock(entry.gate)
-	if entry.uncertain {
+	if entry.uncertain || entry.inputUncertain && event != computer.EventRelease {
 		return computer.Session{}, errComputerOutcomeUnknown
 	}
 	if event != computer.EventRelease && !time.Now().Before(entry.deadline) {
@@ -507,6 +535,7 @@ func (client *nodeComputerClient) Observe(
 	if authorityErr := entry.projection().AgentAuthority(time.Now()); authorityErr != nil {
 		return computer.Observation{}, authorityErr
 	}
+	entry.evidence = computer.InputEvidence{}
 	var result nodes.ComputerObservationResult
 	invocationID, err := client.invoke(ctx, entry.authority, principal, requestID, nodes.ComputerCommandObserve,
 		nodes.ComputerObserveInput{ComputerControlInput: nodes.ComputerControlInput{
@@ -519,6 +548,13 @@ func (client *nodeComputerClient) Observe(
 	if err != nil {
 		return computer.Observation{}, err
 	}
+	return client.acceptObservation(ctx, entry, result, start, invocationID)
+}
+
+func (client *nodeComputerClient) acceptObservation(
+	ctx context.Context, entry *computerNodeSession, result nodes.ComputerObservationResult,
+	start time.Time, invocationID string,
+) (computer.Observation, error) {
 	if result.Validate([]nodes.ComputerProfileDescriptor{entry.authority.profile}) != nil ||
 		result.Session.Binding != entry.remote.Binding || !result.Session.ExpiresAt.Equal(entry.remote.ExpiresAt) {
 		return computer.Observation{}, computer.ErrStale
@@ -538,14 +574,19 @@ func (client *nodeComputerClient) Observe(
 		}
 		transfer, cancel := context.WithDeadline(ctx, deadline)
 		defer cancel()
-		observation.Screenshot, err = client.receiveImage(transfer, entry, *result.Output)
+		screenshot, err := client.receiveImage(transfer, entry, *result.Output)
 		if err != nil {
 			return computer.Observation{}, err
 		}
+		observation.Screenshot = screenshot
 	}
-	if err := observation.Validate(entry.projection(), time.Now()); err != nil {
+	evidence, err := computer.InputEvidenceFromObservation(observation, entry.projection(), time.Now())
+	if err != nil {
 		clear(observation.Screenshot)
 		return computer.Observation{}, computer.ErrStale
+	}
+	if entry.authority.policy.AllowInput {
+		entry.evidence = evidence
 	}
 	return observation, nil
 }
