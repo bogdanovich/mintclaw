@@ -430,6 +430,35 @@ of motion under the tested compositor. The fixture-local setting is diagnostic.
 Protected drag admission on ordinary application windows still requires both
 independent effect verification and cancellation qualification.
 
+### Linux X11 scroll scope and effect
+
+A disposable GTK scrolled window and a sibling guard exercised one discrete
+wheel step through an owned XI2 pointer. The Go controller used the merged
+`WindowGuard` and `InputLease` for the original window. It denied competing
+input authority on the sibling during the action and verified lease release
+with the original window still live. The driver prototype attested the hit
+path and XRes owner, checked active and passive grabs on the private devices,
+and paired button press and release inside its original X server transaction.
+
+In three nominal runs the independently read GTK adjustment changed only in
+the original window. Seven controls refused before sending a button event.
+They covered a cross-client child inside the original window, an active XI2
+grab, explicit and wildcard XI2 passive grabs, a core passive grab, and legacy
+XI1 passive and active grabs. All ten runs kept the core pointer and guard
+unchanged, verified a neutral private button state and shut down the owned
+fixture. A separate direct synthetic event comparison had four server
+acknowledgements and zero observed scroll effects.
+Three additional runs
+replaced the target with a new window in the same GTK process while the lease
+was held. The original generation became stale, and the replacement received
+no input.
+
+This experiment covers an isolated GNOME X11 fixture and one native wheel
+step. Typed pixel-distance mapping, arbitrary application geometry, transport
+loss and the full protected host lifecycle remain separate qualification
+gates. Treat a server acknowledgement as dispatch evidence and use fresh
+application evidence for the result.
+
 ## Private chart fixture
 
 `scripts/internal/computer-evaluation/chart_fixtures.py` adds CU-T17 with a

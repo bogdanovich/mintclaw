@@ -426,6 +426,9 @@ published model benchmark scores predict our production success rate.
    remained live. A [GTK frame synchronization comparison](computer-evaluation-pack.md#gtk-frame-synchronization-comparison)
    further isolated intermittent motion handling in the private fixture.
    Reliable application effects and protected gesture admission remain open.
+   A [discrete scroll experiment](computer-evaluation-pack.md#linux-x11-scroll-scope-and-effect)
+   exercised the same window guard and desktop lease with independent effect
+   checks and grab refusals in an owned X11 fixture.
 4. Managed environments, VM/locked-host execution, Wayland and cloud spending
    remain independent extensions, not prerequisites or implicit scope changes.
 5. Complete representative tasks through the actual configured function-tool and
