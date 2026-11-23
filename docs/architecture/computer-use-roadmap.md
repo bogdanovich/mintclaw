@@ -423,7 +423,9 @@ published model benchmark scores predict our production success rate.
    for protected drag.
    An [independent pointer cleanup experiment](computer-evaluation-pack.md#independent-pointer-cleanup-experiment)
    verified release after original-window loss while the private display
-   remained live. Reliable gesture delivery and protected admission remain open.
+   remained live. A [GTK frame synchronization comparison](computer-evaluation-pack.md#gtk-frame-synchronization-comparison)
+   further isolated intermittent motion handling in the private fixture.
+   Reliable application effects and protected gesture admission remain open.
 4. Managed environments, VM/locked-host execution, Wayland and cloud spending
    remain independent extensions, not prerequisites or implicit scope changes.
 5. Complete representative tasks through the actual configured function-tool and
