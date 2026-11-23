@@ -1,10 +1,10 @@
 # MintClaw cross-platform computer-use roadmap
 
-Status: in progress. Updated: 2026-11-22. The opt-in read-only Linux and macOS
-milestone is natively qualified and merged. The opt-in Gateway action route
-is merged and has passed a disposable Linux fixture. Native input host
-admission, full interactive task evaluation and the production pilot remain
-open. Production desktop control remains disabled by default.
+Status: in progress. Updated: 2026-11-23. The opt-in read-only Linux and macOS
+milestone is natively qualified and merged. The protected Linux input host
+and Gateway action route are merged and have passed disposable Linux fixtures.
+Companion configuration for native input, full interactive task evaluation and
+the production pilot remain open. Production desktop control is disabled by default.
 
 The [Linux keyboard qualification checkpoint](computer-linux-keyboard-qualification.md)
 records the current private backend's passing component suites, preserved failed
@@ -81,7 +81,8 @@ prompts and avoid adding a second agent framework merely to obtain input APIs.
 ## Capability contract
 
 The first three tools below are implemented under explicit read-only grants.
-`computer_act` is a planned separate input surface, not an existing model tool.
+`computer_act` requires a separate Gateway grant and an explicitly constructed
+input-capable companion host with the matching approved profile revision.
 
 | Surface | Contract |
 | --- | --- |
@@ -220,12 +221,12 @@ deployment remain separately authorized operations.
 
 ### Current evidence and status
 
-| Phase | Status on November 22 | Remaining gate |
+| Phase | Status on November 23 | Remaining gate |
 | --- | --- | --- |
 | CU-0 | Read-only contracts, canonical catalogs, default-disabled composition and generic resource disposition are implemented. | Preserve these invariants as input commands are introduced. |
 | CU-1 | Read-only paths and native incarnation guards qualify on selected Linux GNOME X11 and unlocked macOS 26.6.2. Private semantic-input fixtures include seven nonempty Unicode caret cases on both platforms, with the original Mac driver through the actual app. | Generic exact-root input, cancellation/held-state cleanup, pixel/key/scroll/drag, geometry and alternative-driver comparisons remain incomplete. |
 | CU-2 | Merged in [#1672](https://github.com/bogdanovich/mintclaw/pull/1672) and [#1683](https://github.com/bogdanovich/mintclaw/pull/1683). | Requalify supported platform tuples after driver, OS or signing changes. |
-| CU-3 | Bounded contracts [#1771](https://github.com/bogdanovich/mintclaw/pull/1771), Linux cooperative ownership [#1787](https://github.com/bogdanovich/mintclaw/pull/1787), protected companion invocation [#1799](https://github.com/bogdanovich/mintclaw/pull/1799), and the opt-in Gateway action route [#1943](https://github.com/bogdanovich/mintclaw/pull/1943) are merged. Linux execution [#1813](https://github.com/bogdanovich/mintclaw/pull/1813) remains a draft, and Mac ownership [#1797](https://github.com/bogdanovich/mintclaw/pull/1797) awaits the actual-app test. | Qualify and admit native input hosts using the protected transport, cancellation, and independent post-action evidence. |
+| CU-3 | Bounded contracts [#1771](https://github.com/bogdanovich/mintclaw/pull/1771), Linux cooperative ownership [#1787](https://github.com/bogdanovich/mintclaw/pull/1787), protected companion invocation [#1799](https://github.com/bogdanovich/mintclaw/pull/1799), the opt-in Gateway route [#1943](https://github.com/bogdanovich/mintclaw/pull/1943), the protected Linux host [#1962](https://github.com/bogdanovich/mintclaw/pull/1962), and the Gateway dispatch deadline [#1965](https://github.com/bogdanovich/mintclaw/pull/1965) are merged. | Register and qualify platform-specific executors with cancellation and independent post-action evidence. The private Linux keyboard execution branch [#1813](https://github.com/bogdanovich/mintclaw/pull/1813) is a draft. Actual-app Mac ownership qualification is deferred [#1797](https://github.com/bogdanovich/mintclaw/pull/1797). |
 | CU-4 | Read-only localized handoff, same-target fresh resume and typed finish/release are implemented. A private Linux fixture also verified these transitions after input and independently verified held-key cancellation. | Qualify host interlocks with actual human interaction and overlapping capabilities on both platforms. |
 | CU-5 | Function tools and protected observation context are merged for observation and opt-in actions. | Complete action planning and budgets, representative full-task evaluation and adversarial task tests on both OSes. |
 | CU-6 | [Pilot health and rollback guidance](../operations/computer-pilot-readiness.md) is merged. Production control is disabled. | Qualify explicit profiles, rehearse rollback and recovery, and obtain deployment and enablement approval for the pilot. |
@@ -294,8 +295,20 @@ further repetitions at the standard budget. Additional signed-WSS fixture
 runs verified localized handoff, fresh same-window resume, typed finish, and
 held-key cancellation with independent cleanup evidence. A scripted CU-T09
 run through the Gateway completed all Writer actions and independently
-verified the saved ODT. Native host admission, the actual Mac input lifecycle
-and representative model execution remain open.
+verified the saved ODT. Companion input configuration, the actual Mac input
+lifecycle and representative model execution remain open.
+
+In disposable Linux X11 tests using the staged [native worker](https://github.com/bogdanovich/mintclaw/pull/1968)
+and [display owner](https://github.com/bogdanovich/mintclaw/pull/1969), a Go test
+started the display and waited for the native recorder before launching GTK.
+Two scrolls in one session changed the original window, including a run with
+4,600 read-only X11 queries between actions. Signed replay returned existing
+receipts without applying either scroll again. In three fault-injection runs,
+the original native process died while the second input was held. The test
+closed its own display, kept a sibling display available and reconciled the
+second action as `unknown` without replay. The standard Companion still needs
+to own this lifecycle, including local cancellation and the independent effect
+check, before it can register an input-capable managed profile.
 
 The [pinned Peekaboo source audit](computer-peekaboo-qualification.md) also records
 why a private config directory alone cannot isolate a stock CLI snapshot run;
@@ -304,10 +317,9 @@ that candidate has not been executed or qualified.
 The protected [companion input transport](computer-input-contract.md) merged in
 [#1799](https://github.com/bogdanovich/mintclaw/pull/1799). Its counter-host tests
 exercise the existing invocation ledger, payload commitments, terminal protected
-receipts and uncertain-outcome no-replay behavior. This completes the transport
-foundation, not native execution or held-state cleanup. The ordinary host remains
-read-only; native admission and the public action facade still require their own
-qualified implementation.
+receipts and uncertain-outcome no-replay behavior. The standard companion
+configuration exposes observation and control. A separate input host combines
+local session validation with an explicitly supplied native executor.
 
 ### Remaining implementation sequence
 
