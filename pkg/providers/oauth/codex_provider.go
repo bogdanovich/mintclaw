@@ -25,10 +25,11 @@ const (
 )
 
 type CodexProvider struct {
-	client          *openai.Client
-	accountID       string
-	tokenSource     func() (string, string, error)
-	enableWebSearch bool
+	client           *openai.Client
+	accountID        string
+	tokenSource      func() (string, string, error)
+	enableWebSearch  bool
+	subscriptionEval bool
 }
 
 func NewCodexProvider(token, accountID string) *CodexProvider {
@@ -55,6 +56,15 @@ func NewCodexProviderWithTokenSource(
 	p := NewCodexProvider(token, accountID)
 	p.tokenSource = tokenSource
 	return p
+}
+
+// ForSubscriptionEval pins the loaded credential and requested model. Refresh
+// and SDK request retries are not part of a bounded eval call.
+func (p *CodexProvider) ForSubscriptionEval() *CodexProvider {
+	clone := *p
+	clone.tokenSource = nil
+	clone.subscriptionEval = true
+	return &clone
 }
 
 func (p *CodexProvider) Chat(
@@ -84,6 +94,9 @@ func (p *CodexProvider) chatResponses(
 ) (*LLMResponse, error) {
 	resolvedModel, fallbackReason := resolveCodexModel(model)
 	if fallbackReason != "" {
+		if p.subscriptionEval {
+			return nil, &providererrors.ProviderError{Kind: providererrors.KindInvalidRequest}
+		}
 		logger.WarnCF(
 			"provider.codex",
 			"Requested model is not compatible with Codex backend, using fallback",
@@ -97,6 +110,9 @@ func (p *CodexProvider) chatResponses(
 	opts, accountID, err := p.requestOptions()
 	if err != nil {
 		return nil, err
+	}
+	if p.subscriptionEval {
+		opts = append(opts, option.WithMaxRetries(0))
 	}
 	if accountID != "" {
 	} else {
