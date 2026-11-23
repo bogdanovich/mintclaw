@@ -131,6 +131,10 @@ func TestComputerNodeActRequiresSeparateGrantAndNodeApproval(t *testing.T) {
 			}
 			session := openComputerClientFixture(t, client)
 			principal := computerClientPrincipal()
+			targets, err := client.Targets(t.Context(), principal, "discover")
+			if err != nil || len(targets) != 1 || targets[0].InputAvailable {
+				t.Fatal("discovery advertised unapproved input", err)
+			}
 			observation, err := client.Observe(t.Context(), principal, session.Binding.SessionID, "observe")
 			if err != nil {
 				t.Fatal(err)
@@ -140,6 +144,29 @@ func TestComputerNodeActRequiresSeparateGrantAndNodeApproval(t *testing.T) {
 				t.Fatal("unapproved input reached the node", err)
 			}
 		})
+	}
+}
+
+func TestComputerTargetsRechecksInputApprovalAfterDiscovery(t *testing.T) {
+	client, handler, _ := computerClientFixtureWithInput(t, 0, true, true)
+	registry := client.source.runtime.registry
+	handler.mutate = func(result any) {
+		if _, discovery := result.(*nodes.ComputerTargetsResult); !discovery {
+			return
+		}
+		commands := slices.DeleteFunc(slices.Clone(handler.registration.AllowedCommands), func(command string) bool {
+			return command == nodes.ComputerCommandAct
+		})
+		_, err := registry.Approve(handler.registration.Snapshot.ID, nodes.PairingApproval{
+			Aliases: handler.registration.Snapshot.Aliases, At: time.Now().Unix(), AllowedCommands: commands,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	targets, err := client.Targets(t.Context(), computerClientPrincipal(), "discovery-revoked")
+	if err != nil || len(targets) != 1 || targets[0].InputAvailable {
+		t.Fatal("discovery returned a withdrawn input grant", err)
 	}
 }
 

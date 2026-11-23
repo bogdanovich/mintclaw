@@ -37,6 +37,7 @@ type computerNodeAuthority struct {
 	catalogHash    string
 	policyRevision string
 	profile        nodes.ComputerProfileDescriptor
+	inputAvailable bool
 }
 
 type computerNodeSession struct {
@@ -140,12 +141,19 @@ func (client *nodeComputerClient) authority(
 		}
 		authority.profile = profile
 	}
+	if descriptor, approved := computerApprovedDescriptor(record, nodes.ComputerCommandAct); approved {
+		authority.inputAvailable = authority.allowsInput(descriptor)
+	}
 	if pinned != nil && (pinned.nodeID != authority.nodeID || pinned.executor != authority.executor ||
 		pinned.catalogHash != authority.catalogHash || pinned.policyRevision != authority.policyRevision ||
 		pinned.profile != authority.profile) {
 		return computerNodeAuthority{}, computer.ErrStale
 	}
 	return authority, nil
+}
+
+func (authority computerNodeAuthority) allowsInput(descriptor nodes.CommandDescriptor) bool {
+	return authority.policy.AllowInput && slices.Contains(descriptor.ComputerProfiles, authority.profile)
 }
 
 func (client *nodeComputerClient) invoke(
@@ -172,8 +180,7 @@ func (client *nodeComputerClient) invokeWithEphemeral(
 		return "", computer.ErrUnavailable
 	}
 	descriptor, approved := computerApprovedDescriptor(record, command)
-	if !approved || command == nodes.ComputerCommandAct &&
-		(!authority.policy.AllowInput || !slices.Contains(descriptor.ComputerProfiles, authority.profile)) {
+	if !approved || command == nodes.ComputerCommandAct && !authority.allowsInput(descriptor) {
 		return "", computer.ErrDenied
 	}
 	encoded, err := json.Marshal(input)
@@ -304,9 +311,18 @@ func (client *nodeComputerClient) Targets(
 			nodes.ComputerTargetsInput{ComputerTurn: computerNodeTurn(principal)}, &result); err != nil {
 			return nil, err
 		}
+		if authority.policy.AllowInput {
+			current, err := client.authority(alias, principal, &authority)
+			if err != nil {
+				return nil, err
+			}
+			authority = current
+		}
 		for _, target := range result.Targets {
 			if target.Alias == authority.profile.Alias && target.Node == string(authority.nodeID) {
-				targets = append(targets, computer.NamedTarget{Alias: alias, Target: target})
+				targets = append(targets, computer.NamedTarget{
+					Alias: alias, Target: target, InputAvailable: authority.inputAvailable,
+				})
 			}
 		}
 	}
