@@ -81,31 +81,31 @@ func StartOwnedX11Display(ctx context.Context, config OwnedX11Config) (*OwnedX11
 	}()
 	var cookie [16]byte
 	defer clear(cookie[:])
-	if _, err := rand.Read(cookie[:]); err != nil {
+	if _, randomErr := rand.Read(cookie[:]); randomErr != nil {
 		return nil, computer.ErrUnavailable
 	}
 	authority := filepath.Join(dir, "authority")
-	if err := writeOwnedX11Authority(authority, "", cookie[:]); err != nil {
-		return nil, err
+	if authorityErr := writeOwnedX11Authority(authority, "", cookie[:]); authorityErr != nil {
+		return nil, authorityErr
 	}
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		return nil, computer.ErrUnavailable
 	}
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
 	command, snapshot, err := newOwnedX11Command(config, dir, authority)
 	if err != nil {
 		return nil, err
 	}
-	defer snapshot.Close()
+	defer func() { _ = snapshot.Close() }()
 	command.ExtraFiles = append(command.ExtraFiles, writer)
 	pidfd := -1
 	command.SysProcAttr = &syscall.SysProcAttr{PidFD: &pidfd, Pdeathsig: syscall.SIGKILL}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	if startupErr := ctx.Err(); startupErr != nil {
+		return nil, startupErr
 	}
-	if err := command.Start(); err != nil {
+	if startErr := command.Start(); startErr != nil {
 		return nil, computer.ErrUnavailable
 	}
 	_ = writer.Close()
@@ -145,7 +145,7 @@ func newOwnedX11Command(config OwnedX11Config, dir, authority string) (*exec.Cmd
 		return nil, nil, computer.ErrDenied
 	}
 	file := os.NewFile(uintptr(fd), "configured Xvfb")
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || info.Mode().Perm()&0o111 == 0 {
 		return nil, nil, computer.ErrDenied
@@ -221,7 +221,7 @@ func (display *OwnedX11Display) Binding(ctx context.Context) (OwnedX11Binding, e
 	if err != nil {
 		return OwnedX11Binding{}, computer.ErrUnavailable
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	socket, ok := conn.(*net.UnixConn)
 	if !ok {
 		return OwnedX11Binding{}, computer.ErrUnavailable

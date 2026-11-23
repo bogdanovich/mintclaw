@@ -38,7 +38,7 @@ func TestOwnedX11DisplayNumberRejectsIncompleteOrNonlocalResult(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer reader.Close()
+			defer func() { _ = reader.Close() }()
 			_, err = io.WriteString(writer, tc.reply)
 			_ = writer.Close()
 			if err != nil {
@@ -95,7 +95,6 @@ func TestOwnedX11DisplayNative(t *testing.T) {
 	}
 	first, original := start()
 	keeper := startOwnedX11TestKeeper(t, original, keeperPath, keeperSHA)
-	defer keeper.Close()
 	checkOwnedX11TestClient(t, original, cfg)
 	sibling, other := start()
 	if original.Display == other.Display || original.ServerPID == other.ServerPID ||
@@ -173,14 +172,14 @@ func startOwnedX11TestKeeper(
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	cmd, snapshot, err := isolation.NewSealedExecutableCommand(
 		"x11-keeper-test", file, digest, 64<<20, "--owned-device-bootstrap",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer snapshot.Close()
+	defer func() { _ = snapshot.Close() }()
 	cmd.Env = []string{
 		"PATH=/usr/bin:/bin", "LC_ALL=C", "DISPLAY=" + binding.Display, "XAUTHORITY=" + binding.Authority,
 		"MINTCLAW_PRIVATE_XVFB_PID=" + strconv.FormatInt(int64(binding.ServerPID), 10),
@@ -226,7 +225,7 @@ func checkOwnedX11TestClient(t *testing.T, binding OwnedX11Binding, cfg OwnedX11
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer raw.Close()
+	defer func() { _ = raw.Close() }()
 	if err := raw.SetDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
