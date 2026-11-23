@@ -42,6 +42,8 @@ type finalizationDelivery struct {
 // FinalizationContext is the terminal snapshot consumed by Finalize. It keeps
 // iteration-owned state out of the finalization phase.
 type FinalizationContext struct {
+	runtimeFinishInteractionID string
+
 	content          string
 	contentProtected bool
 	messageID        string
@@ -82,6 +84,10 @@ func newFinalizationContext(
 		reasoningContent = ""
 	}
 
+	finishInteractionID := ""
+	if exec.continuationDecision.finished() {
+		finishInteractionID = ts.opts.InteractionContinuation.RecordID
+	}
 	var historyMessage *providers.Message
 	if disposition == finalResponseAlreadyHandled && !ts.opts.NoHistory {
 		historyMessage = &providers.Message{
@@ -98,10 +104,13 @@ func newFinalizationContext(
 			ReasoningContent: reasoningContent,
 			Deliverable:      taskresult.CloneDeliverable(exec.deliverable),
 		}
+		message.RuntimeFinishInteractionID = finishInteractionID
 		historyMessage = &message
 	}
 
 	return FinalizationContext{
+		runtimeFinishInteractionID: finishInteractionID,
+
 		content:          terminal.content,
 		contentProtected: terminal.protected,
 		messageID:        messageID,
@@ -249,6 +258,8 @@ func (p *Pipeline) Finalize(
 
 func (f *FinalizationContext) result(includeCompaction bool) turnResult {
 	result := turnResult{
+		runtimeFinishInteractionID: f.runtimeFinishInteractionID,
+
 		finalContent:           f.content,
 		responseDisposition:    f.disposition,
 		modelName:              f.modelName,

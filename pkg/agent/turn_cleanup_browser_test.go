@@ -115,6 +115,7 @@ func TestTerminalLifecycleUnconfirmedCleanupCannotReturnSuccessfulTurn(t *testin
 type terminalHandoffOwner struct {
 	browserHandoffContinuationTool
 	receiptState string
+	onCleanup    func()
 }
 
 func (*terminalHandoffOwner) Name() string { return "browser_session" }
@@ -137,6 +138,12 @@ func (tool *terminalHandoffOwner) ObjectiveRecoveryParameters(kind string) (map[
 
 func (tool *terminalHandoffOwner) CleanupTurnWithResult(context.Context) (tools.TurnCleanupResult, error) {
 	tool.cleanupCalls++
+	if tool.onCleanup != nil {
+		tool.onCleanup()
+	}
+	if tool.receiptState == "" {
+		return tools.TurnCleanupResult{}, nil
+	}
 	return tools.TurnCleanupResult{Receipts: []taskresult.Receipt{{
 		ID: "finished-session", Kind: taskresult.ReceiptKindResourceCleanup,
 		Tool: "browser_session", Target: "browser:gateway/managed",

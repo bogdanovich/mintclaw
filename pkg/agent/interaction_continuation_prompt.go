@@ -9,6 +9,7 @@ import (
 )
 
 type interactionContinuationPromptContext struct {
+	RecordID         string
 	Kind             interactions.Kind
 	Outcome          interactions.Outcome
 	PromptLanguage   string
@@ -22,6 +23,7 @@ func newInteractionContinuationPromptContext(
 	record interactions.Record,
 ) interactionContinuationPromptContext {
 	return interactionContinuationPromptContext{
+		RecordID:         record.ID,
 		Kind:             record.Kind,
 		Outcome:          record.Outcome,
 		PromptLanguage:   strings.TrimSpace(record.PromptLanguage),

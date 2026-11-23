@@ -143,7 +143,13 @@ func (p *Pipeline) continueWithSteeringAtExit(
 	reason string,
 ) bool {
 	hadAdmittedSteering := exec.pendingInputs.HasSteering()
-	steerMessages := p.dequeueOrSealSteeringAtExit(ts, hadAdmittedSteering)
+	poll := func() []steeringEntry { return p.dequeueOrSealSteeringAtExit(ts, hadAdmittedSteering) }
+	var steerMessages []steeringEntry
+	if gate := ts.opts.interactionFinishSteeringGate; exec.continuationDecision.finished() && gate != nil {
+		steerMessages = gate(hadAdmittedSteering, poll)
+	} else {
+		steerMessages = poll()
+	}
 	if len(steerMessages) == 0 && !hadAdmittedSteering {
 		return false
 	}

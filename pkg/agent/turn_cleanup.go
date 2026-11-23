@@ -58,16 +58,21 @@ func prepareTerminalCleanup(
 		if result.deliverable == nil {
 			result.deliverable = &taskresult.Deliverable{}
 		}
+		if finish {
+			result.deliverable.ObjectiveOutcome = nil // The user ended the suspended objectives.
+		}
 		if unconfirmed {
 			result.finalContent = "The task's resource cleanup could not be confirmed. " +
 				"Check the outcome before attempting further actions."
+			explanation := "The runtime could not confirm the final resource disposition."
 			if finish {
 				result.finalContent = interactions.PromptText(language, interactions.PromptLiveHandoffUnconfirmed)
+				explanation = result.finalContent
 			}
 			result.deliverable.ObjectiveOutcome = &taskresult.Outcome{
 				Status:       taskresult.OutcomeBlocked,
 				MissingItems: []string{"Confirm resource cleanup before treating the task as complete"},
-				Explanation:  "The runtime could not confirm the final resource disposition.",
+				Explanation:  explanation,
 			}
 		}
 		result.deliverable.Text = result.finalContent
