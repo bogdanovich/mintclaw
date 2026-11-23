@@ -407,6 +407,29 @@ device until the owned display shut down. Admission to the protected runtime,
 cleanup after loss of that display connection, and the rest of the target and
 cancellation matrix remain open.
 
+### GTK frame synchronization comparison
+
+A second comparison on the private GNOME X11 fixture alternated relative XTEST
+motion and XI2 pointer warps confined to the original window. Each variant
+produced GTK motion while held in three of eight trials. The independent cleanup
+connection verified neutral button state after target loss in all 16 trials.
+
+An app-side XInput trace then recorded the four intended motions before GTK
+dispatch, including when the canvas callback did not run. A separate
+comparison toggled frame synchronization only on the disposable canvas
+toplevel. With synchronization enabled, five runs reached input and none
+flushed the frame clock or delivered a held-motion callback before target loss.
+One additional run stopped at GNOME readiness before sending input. With
+synchronization disabled, six of six runs flushed events and GTK processed all
+four held motions, with the final position in the original window. Each of the
+11 runs that reached input verified release in the cleanup sink, a neutral
+private button, and unchanged core pointer and guard.
+
+These results distinguish native event delivery from the application's handling
+of motion under the tested compositor. The fixture-local setting is diagnostic.
+Protected drag admission on ordinary application windows still requires both
+independent effect verification and cancellation qualification.
+
 ## Private chart fixture
 
 `scripts/internal/computer-evaluation/chart_fixtures.py` adds CU-T17 with a
