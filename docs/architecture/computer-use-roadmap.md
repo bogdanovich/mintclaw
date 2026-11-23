@@ -226,7 +226,7 @@ deployment remain separately authorized operations.
 | CU-1 | Read-only paths and native incarnation guards qualify on selected Linux GNOME X11 and unlocked macOS 26.6.2. Private semantic-input fixtures include seven nonempty Unicode caret cases on both platforms, with the original Mac driver through the actual app. | Generic exact-root input, cancellation/held-state cleanup, pixel/key/scroll/drag, geometry and alternative-driver comparisons remain incomplete. |
 | CU-2 | Merged in [#1672](https://github.com/bogdanovich/mintclaw/pull/1672) and [#1683](https://github.com/bogdanovich/mintclaw/pull/1683). | Requalify supported platform tuples after driver, OS or signing changes. |
 | CU-3 | Bounded contracts [#1771](https://github.com/bogdanovich/mintclaw/pull/1771), Linux cooperative ownership [#1787](https://github.com/bogdanovich/mintclaw/pull/1787), protected companion invocation [#1799](https://github.com/bogdanovich/mintclaw/pull/1799), and the opt-in Gateway action route [#1943](https://github.com/bogdanovich/mintclaw/pull/1943) are merged. Linux execution [#1813](https://github.com/bogdanovich/mintclaw/pull/1813) remains a draft, and Mac ownership [#1797](https://github.com/bogdanovich/mintclaw/pull/1797) awaits the actual-app test. | Qualify and admit native input hosts using the protected transport, cancellation, and independent post-action evidence. |
-| CU-4 | Read-only localized handoff, same-target fresh resume and typed finish/release are implemented. | Extend interlocks to input, held-state cancellation and overlapping capabilities; evaluate interactive continuity. |
+| CU-4 | Read-only localized handoff, same-target fresh resume and typed finish/release are implemented. A private Linux fixture also verified these transitions after input and independently verified held-key cancellation. | Qualify host interlocks with actual human interaction and overlapping capabilities on both platforms. |
 | CU-5 | Function tools and protected observation context are merged for observation and opt-in actions. | Complete action planning and budgets, representative full-task evaluation and adversarial task tests on both OSes. |
 | CU-6 | [Pilot health and rollback guidance](../operations/computer-pilot-readiness.md) is merged. Production control is disabled. | Qualify explicit profiles, rehearse rollback and recovery, and obtain deployment and enablement approval for the pilot. |
 
@@ -288,9 +288,14 @@ invocation was rejected, the sibling document and X11 selection owners were
 preserved, and release left the original window live. The successful fixture
 used a 120-second session lease and a 60-second Gateway observation budget.
 The earlier run with the standard 15-second observation budget expired before
-input. The positive result qualifies this fixture path. Production host
-admission, the 15-second timing gate, the actual Mac input lifecycle and
-representative model execution remain open.
+input. On the same hardware, [#1944](https://github.com/bogdanovich/mintclaw/pull/1944)
+reduced observed Gateway latency from 16.51 to 4.31 seconds and passed three
+further repetitions at the standard budget. Additional signed-WSS fixture
+runs verified localized handoff, fresh same-window resume, typed finish, and
+held-key cancellation with independent cleanup evidence. A scripted CU-T09
+run through the Gateway completed all Writer actions and independently
+verified the saved ODT. Native host admission, the actual Mac input lifecycle
+and representative model execution remain open.
 
 The [pinned Peekaboo source audit](computer-peekaboo-qualification.md) also records
 why a private config directory alone cannot isolate a stock CLI snapshot run;
