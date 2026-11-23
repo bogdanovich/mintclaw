@@ -51,6 +51,12 @@ jobs:
         uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
         with:
           targets: x86_64-unknown-linux-gnu
+          components: rustfmt
+
+      - name: Build and test retained X11 pointer
+        run: |
+          bash scripts/internal/computer-driver/build-linux-retained-pointer.sh \
+            --output "$RUNNER_TEMP/mintclaw-retained-pointer"
 
       - name: Build and unit-test explicit private library feature
         id: window_key_probe
