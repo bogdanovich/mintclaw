@@ -30,8 +30,15 @@ and all feature-specific oracles.
 
 ## Runner Admission
 
+The strict and subscription policies are distinct. The isolated subscription
+smoke preset explicitly uses `mode: "codex_subscription"`, one in-flight call,
+`max_call_seconds`, and zero `max_output_tokens`. It cannot satisfy a case's
+`bounded_calls` requirement. A provider rate or billing limit stops the budget
+and leaves an inconclusive receipt, not passing usage evidence. This mode does
+not bound account billing or the output of an already admitted request.
+
 An optional preset `target_call_budget` uses the five explicit limit fields
-shown below and must be paired with capability `bounded_calls`:
+shown below for strict mode and must be paired with capability `bounded_calls`:
 
 ```json
 {

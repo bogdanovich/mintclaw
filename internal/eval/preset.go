@@ -19,6 +19,7 @@ type Preset struct {
 	ExpectedWorkspace    string                      `json:"expected_workspace"`
 	IsolationRoot        string                      `json:"isolation_root"`
 	Capabilities         []string                    `json:"capabilities"`
+	ModelAccess          string                      `json:"model_access,omitempty"`
 	UserModel            string                      `json:"user_model,omitempty"`
 	JudgeModel           string                      `json:"judge_model,omitempty"`
 	WorkspaceFiles       []WorkspaceFile             `json:"workspace_files,omitempty"`
@@ -75,12 +76,21 @@ func (preset Preset) Validate() error {
 		preset.JudgeModel != "" && !validID(preset.JudgeModel) {
 		return ErrInvalidPreset
 	}
-	if preset.TargetCallBudget != nil {
-		if _, err := providers.NewCallBudget(*preset.TargetCallBudget); err != nil {
+	switch preset.ModelAccess {
+	case "", modelAccessAPIKey:
+		if preset.TargetCallBudget != nil {
+			if _, err := providers.NewCallBudget(*preset.TargetCallBudget); err != nil {
+				return ErrInvalidPreset
+			}
+		}
+		if (preset.TargetCallBudget != nil) != slices.Contains(preset.Capabilities, boundedCallsCapability) {
 			return ErrInvalidPreset
 		}
-	}
-	if (preset.TargetCallBudget != nil) != slices.Contains(preset.Capabilities, boundedCallsCapability) {
+	case modelAccessSubscription:
+		if !validSubscriptionPreset(preset) {
+			return ErrInvalidPreset
+		}
+	default:
 		return ErrInvalidPreset
 	}
 	if (preset.ActiveTool != nil) != slices.Contains(preset.Capabilities, activeToolCapability) ||

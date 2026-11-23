@@ -271,31 +271,30 @@ func (sec *Config) SensitiveDataReplacer() *strings.Replacer {
 	return sec.sensitiveCache.replacer
 }
 
+// SensitiveDataReplacerWith includes private values owned by the caller
+// without retaining them in the config or its shared cache.
+func (sec *Config) SensitiveDataReplacerWith(values ...string) *strings.Replacer {
+	return sensitiveDataReplacer(append(sec.collectSensitiveValues(), values...))
+}
+
 // initSensitiveCache initializes the sensitive data cache if not already done.
 func (sec *Config) initSensitiveCache() {
 	if sec.sensitiveCache == nil {
 		sec.sensitiveCache = &SensitiveDataCache{}
 	}
 	sec.sensitiveCache.once.Do(func() {
-		values := sec.collectSensitiveValues()
-		if len(values) == 0 {
-			sec.sensitiveCache.replacer = strings.NewReplacer()
-			return
-		}
-
-		// Build old/new pairs for strings.Replacer
-		var pairs []string
-		for _, v := range values {
-			if len(v) > 3 {
-				pairs = append(pairs, v, "[FILTERED]")
-			}
-		}
-		if len(pairs) == 0 {
-			sec.sensitiveCache.replacer = strings.NewReplacer()
-			return
-		}
-		sec.sensitiveCache.replacer = strings.NewReplacer(pairs...)
+		sec.sensitiveCache.replacer = sensitiveDataReplacer(sec.collectSensitiveValues())
 	})
+}
+
+func sensitiveDataReplacer(values []string) *strings.Replacer {
+	var pairs []string
+	for _, value := range values {
+		if len(value) > 3 {
+			pairs = append(pairs, value, "[FILTERED]")
+		}
+	}
+	return strings.NewReplacer(pairs...)
 }
 
 // collectSensitiveValues collects all sensitive strings from SecurityConfig using reflection.

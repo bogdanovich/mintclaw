@@ -57,7 +57,12 @@ func (spec Spec) budget() (*providers.CallBudget, error) {
 		spec.Version != Version {
 		return nil, ErrBudgetProtocol
 	}
-	budget, err := providers.NewCallBudget(spec.Limits)
+	var budget *providers.CallBudget
+	if spec.Limits.Mode == providers.CodexSubscriptionBudget {
+		budget, err = providers.NewSubscriptionCallBudget(spec.Limits)
+	} else {
+		budget, err = providers.NewCallBudget(spec.Limits)
+	}
 	if err != nil {
 		return nil, ErrBudgetProtocol
 	}
@@ -125,6 +130,11 @@ func (proof Proof) validate(spec Spec, expectedPID int) error {
 	case "", "sealed", "calls", "concurrency", "output_limit", "input_limit", "media_unsupported",
 		"unknown_usage", "reported_tokens":
 		return nil
+	case "subscription_limit":
+		if spec.Limits.Mode == providers.CodexSubscriptionBudget && snapshot.UnknownUsage > 0 {
+			return nil
+		}
+		return ErrBudgetProtocol
 	default:
 		return ErrBudgetProtocol
 	}

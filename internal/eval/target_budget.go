@@ -77,6 +77,9 @@ func (observation *TargetBudgetObservation) verdict() Verdict {
 		return Inconclusive
 	}
 	state := proof.Snapshot
+	if state.StoppedReason == "subscription_limit" {
+		return Inconclusive
+	}
 	if state.StoppedReason != "" && state.StoppedReason != "unknown_usage" ||
 		state.ReportedTokens >= state.Limits.MaxReportedTokens {
 		return Fail

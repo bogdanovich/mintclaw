@@ -5,6 +5,7 @@
   "expected_agent": "main",
   "expected_workspace": "profile/workspace",
   "isolation_root": "profile",
+  "model_access": "api-key",
   "capabilities": ["conversation", "interactions", "bounded_calls"],
   "judge_model": "eval-judge",
   "capture_model_metadata": true,

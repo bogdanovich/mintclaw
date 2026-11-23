@@ -64,6 +64,37 @@ func TestSpecCanonicalRoundTripAndAdmission(t *testing.T) {
 	}
 }
 
+func TestSubscriptionReceiptCannotSatisfyStrictBudget(t *testing.T) {
+	strict := testSpec()
+	subscription := strict
+	subscription.Limits.Mode = providers.CodexSubscriptionBudget
+	subscription.Limits.MaxInFlight = 1
+	subscription.Limits.MaxOutputTokens = 0
+	subscription.Limits.MaxCallSeconds = 15
+	encoded, err := subscription.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, budget, err := ParseSpec(encoded)
+	if err != nil || decoded != subscription || budget.Snapshot().Limits != subscription.Limits {
+		t.Fatalf("subscription spec lost its policy: %+v/%v", decoded, err)
+	}
+	snapshot := testSnapshot(subscription)
+	snapshot.StoppedReason = "subscription_limit"
+	snapshot.ReportedTokens, snapshot.UnknownUsage, snapshot.UsageKnown = 0, 1, false
+	proof := Proof{
+		Version: Version, Scope: Scope, Nonce: subscription.Nonce,
+		PID: os.Getpid(), GatewayClean: true, Snapshot: snapshot,
+	}
+	data, _ := json.Marshal(proof)
+	if _, err = DecodeProof(data, subscription, proof.PID); err != nil {
+		t.Fatal("quota evidence rejected", err)
+	}
+	if _, err = DecodeProof(data, strict, proof.PID); !errors.Is(err, ErrBudgetProtocol) {
+		t.Fatal("subscription evidence admitted as strict", err)
+	}
+}
+
 func TestProofFrozenBindingAndUnknownEvidence(t *testing.T) {
 	spec := testSpec()
 	proof := Proof{

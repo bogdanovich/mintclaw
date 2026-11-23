@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "id": "general.subscription.followup",
+  "suite": "general",
+  "tags": ["context", "subscription", "smoke"],
+  "description": "Check a native two-turn reply without a second model or tool.",
+  "task": "Remember this synthetic marker: SUB_EVAL_CTX_8F19. Reply only ACK for now.",
+  "requires": ["conversation"],
+  "fixtures": [],
+  "driver": {
+    "mode": "scripted",
+    "steps": [
+      {
+        "wait_for": {"kind": "final"},
+        "action": {"kind": "message", "text": "What was the synthetic marker? Reply with the marker only."}
+      }
+    ]
+  },
+  "limits": {"max_user_turns": 2, "turn_timeout": "90s", "case_timeout": "3m", "max_driver_calls": 1},
+  "checks": [
+    {"id": "marker-retained", "kind": "response_contains", "expected": "SUB_EVAL_CTX_8F19"},
+    {"id": "same-session", "kind": "same_session"},
+    {"id": "final", "kind": "last_outcome", "expected": "final"}
+  ],
+  "rubric": []
+}

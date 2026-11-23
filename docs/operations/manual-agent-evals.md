@@ -138,8 +138,8 @@ construct providers or call models. It briefly binds a loopback port to choose a
 it; the port is not reserved until gateway startup. The owned gateway's exact-process admission still applies.
 Use the returned home/config/preset for a subsequent `eval run --start-target`, not the seed's environment.
 
-Only the seed's admitted public configuration and enabled HTTP API-key models are copied. Disabled models/channels
-and all other typed secrets are dropped. This first preparation contract refuses proxy, custom-header, OAuth and
+For API-key profiles, only the seed's admitted public configuration and enabled HTTP API-key models are copied.
+Disabled models/channels and all other typed secrets are dropped. This path refuses proxy, custom-header, OAuth and
 fallback or capability-override model configurations. Enabled aliases must have locally resolvable API keys
 (at most 16 model entries,
 eight unique keys per model, 16 KiB per key); declared user/judge aliases must exist. Native durable configuration
@@ -168,6 +168,37 @@ Known configured credential literals in workspace inputs, copied public configur
 destination parent are refused before allocation. This narrow literal guard and an operator's
 allowlist are not comprehensive secret detection, runtime privacy evidence or proof of effective loaded prompts.
 The seed remains operator-owned and immutable; hostile concurrent filesystem mutation is not certified.
+
+### Subscription Smoke Profile
+
+Start a new subscription-backed setup with `evals/presets/subscription.template.json` and point it at an isolated
+seed as above. Use one enabled OpenAI model with `auth_method: "oauth"` as the default. No API key, custom endpoint,
+proxy, fallback or auxiliary model is admitted. To use an API key instead, select `model_access: "api-key"` with a
+separate API-key seed and preset. Old presets retain their original behavior. Key presence never switches a
+subscription profile to API billing.
+
+After `eval prepare`, set `home` to the freshly returned private home (not the seed or deployed home). Sign in
+explicitly to the account whose ChatGPT allowance you intend to use:
+
+```sh
+MINTCLAW_HOME="$home" MINTCLAW_CONFIG="$home/config.json" \
+  MINTCLAW_AUTH_FILE="$home/.security/subscription-auth.json" \
+  mintclaw auth login --provider openai --device-code --credentials-only
+
+MINTCLAW_HOME="$home" MINTCLAW_CONFIG="$home/config.json" \
+  mintclaw eval run --root evals/subscription --start-target \
+    --preset "$home/reports/preset.json" --out "$home/reports"
+```
+
+The owned child receives only this profile's auth store. The first version runs one scripted General case once,
+without LLM user/judge roles. It caps calls, input size and time, disables retries and stops further model calls on
+a rate-limit or billing error. It accounts for provider-reported tokens after each call; it cannot cap the output
+of an already admitted request. Existing strict General defaults are not qualified by this smoke run.
+
+OAuth does not override account billing controls. Disable automatic credit purchases and check permitted use of
+purchased credits in ChatGPT before running; the eval runner cannot guarantee included-quota-only billing when the
+account permits overage. Keep the private auth file out of Git and reports. Delete it after the owned run settles
+if it is no longer needed.
 
 After allocation, a preparation error reports `outcome: incomplete` and the private home, retains partial files,
 and returns failure. Do not use that profile or hide its credential-bearing leftovers. Inspect and dispose of it

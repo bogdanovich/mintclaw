@@ -46,6 +46,9 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	if options.SuiteTimeout == 0 {
 		options.SuiteTimeout = time.Hour
+		if preset.ModelAccess == modelAccessSubscription {
+			options.SuiteTimeout = subscriptionRunTimeout
+		}
 	}
 	if options.SuiteTimeout <= 0 || options.SuiteTimeout > 4*time.Hour ||
 		options.PDFOraclePython != "" && !filepath.IsAbs(options.PDFOraclePython) {
@@ -67,12 +70,21 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		(preset.TargetCallBudget != nil || preset.ActiveTool != nil) && !options.StartTarget {
 		return RunReport{}, ErrUnsafeTarget
 	}
+	if preset.ModelAccess == modelAccessSubscription &&
+		(len(cases) != 1 || options.Repeat != 1 || options.SuiteTimeout > subscriptionRunTimeout) {
+		return RunReport{}, ErrSubscriptionProfile
+	}
 	for _, item := range cases {
 		if item.Case.Validate() != nil || !validDigest(item.Digest) || seen[item.Case.ID] {
 			return RunReport{}, ErrInvalidCase
 		}
 		if requiresTargetBudget(item.Case) && (preset.TargetCallBudget == nil || !options.StartTarget) {
 			return RunReport{}, ErrUnsafeTarget
+		}
+		if preset.ModelAccess == modelAccessSubscription && (item.Case.Suite != "general" ||
+			item.Case.Driver.Mode != "scripted" || len(item.Case.Rubric) != 0 ||
+			!containsAll(preset.Capabilities, item.Case.Requires)) {
+			return RunReport{}, ErrSubscriptionProfile
 		}
 		if validateReadRecoveryBinding(preset, item.Case) != nil ||
 			validateNativeStopBinding(preset, item.Case) != nil ||
@@ -154,7 +166,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 		scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer scanCancel()
 		observation := observePrivateSurfaces(scanCtx, child.profile.home, retainedFacts.values,
-			child.profile.config.SensitiveDataReplacer(), retainedFacts.documents,
+			child.profile.evidenceFilter(), retainedFacts.documents,
 			pendingCore.approvalKeyWitness(child.profile.home, pendingBrowser.approvalKeyWitness(child.profile.home)))
 		privateSurfaces = &observation
 	}
@@ -188,7 +200,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 	}
 	joinFixtureWatch := watchBrowserFixture(suiteCtx, target.config, fixtures, child, cancel)
 	defer joinFixtureWatch()
-	filter := target.config.SensitiveDataReplacer()
+	filter := target.evidenceFilter()
 	if credentialJSONValue(preset, filter) || credentialJSONValue(target.probe, filter) {
 		return RunReport{}, ErrUnsafeTarget
 	}
@@ -443,7 +455,7 @@ func Run(ctx context.Context, preset Preset, cases []LoadedCase, options RunOpti
 }
 
 func prepareConversationRoles(target admittedTarget, cases []LoadedCase) conversationRoles {
-	roles := conversationRoles{filter: target.config.SensitiveDataReplacer()}
+	roles := conversationRoles{filter: target.evidenceFilter()}
 	needsUser, needsJudge := false, false
 	for _, item := range cases {
 		needsUser = needsUser || item.Case.Driver.Mode == "llm_user"
