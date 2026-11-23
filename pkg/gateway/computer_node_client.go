@@ -152,12 +152,12 @@ func (client *nodeComputerClient) invoke(
 	ctx context.Context, authority computerNodeAuthority, principal runtimecap.Principal,
 	requestID, command string, input, output any,
 ) (string, error) {
-	return client.invokeWithEphemeral(ctx, authority, principal, requestID, command, input, nil, output)
+	return client.invokeWithEphemeral(ctx, authority, principal, requestID, command, input, nil, time.Time{}, output)
 }
 
 func (client *nodeComputerClient) invokeWithEphemeral(
 	ctx context.Context, authority computerNodeAuthority, principal runtimecap.Principal,
-	requestID, command string, input any, ephemeral json.RawMessage, output any,
+	requestID, command string, input any, ephemeral json.RawMessage, writeBefore time.Time, output any,
 ) (string, error) {
 	if nodes.ID(requestID).Validate() != nil {
 		return "", computer.ErrInvalid
@@ -230,18 +230,14 @@ func (client *nodeComputerClient) invokeWithEphemeral(
 		ActorID: principal.ActorID, SessionID: principal.SessionID, WorkspaceID: client.workspaceID,
 		ExecutionID: principal.ExecutionID,
 	}
-	var raw json.RawMessage
-	var dispatched bool
-	if len(ephemeral) == 0 {
-		raw, dispatched, err = client.source.DispatchInvocation(
-			ctx, owner, retained.Plan.InvocationID, retained.ExpectedPlanHash,
-		)
-	} else {
-		raw, dispatched, err = client.source.DispatchInvocationEphemeral(
-			ctx, owner, retained.Plan.InvocationID, retained.ExpectedPlanHash, ephemeral,
-		)
-	}
+	raw, dispatched, err := client.source.dispatchInvocation(
+		ctx, owner, retained.Plan.InvocationID, retained.ExpectedPlanHash, ephemeral, writeBefore,
+	)
 	if err != nil {
+		if !dispatched && !writeBefore.IsZero() && !time.Now().Before(writeBefore) &&
+			errors.Is(err, context.DeadlineExceeded) {
+			return id, computer.ErrExpired
+		}
 		if command == nodes.ComputerCommandAct && dispatched && ctx.Err() != nil {
 			client.requestInputCancellation(authority, gatewayPrincipal, id)
 		}

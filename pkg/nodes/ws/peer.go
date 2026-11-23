@@ -33,6 +33,14 @@ const (
 	defaultWriteTimeout    = 15 * time.Second
 )
 
+type invocationWriteDeadlineKey struct{}
+
+// WithInvocationWriteDeadline bounds the node.invoke request write. The
+// original context still governs waiting for a response after the write.
+func WithInvocationWriteDeadline(ctx context.Context, deadline time.Time) context.Context {
+	return context.WithValue(ctx, invocationWriteDeadlineKey{}, deadline)
+}
+
 type peerConnection interface {
 	Close() error
 	ReadMessage() (int, []byte, error)
@@ -502,14 +510,20 @@ func (session *peer) requestWithLease(
 	dispatch func(func() error) error,
 	lease func(func() (bool, error)) (bool, error),
 ) (protocol.Envelope, bool, error) {
+	writeCtx := ctx
+	if deadline, ok := ctx.Value(invocationWriteDeadlineKey{}).(time.Time); method == "node.invoke" && ok {
+		var cancel context.CancelFunc
+		writeCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
 	select {
-	case <-ctx.Done():
-		return protocol.Envelope{}, false, ctx.Err()
+	case <-writeCtx.Done():
+		return protocol.Envelope{}, false, writeCtx.Err()
 	case <-session.closed:
 		return protocol.Envelope{}, false, ErrNodeDisconnected
 	case <-session.ready:
 	}
-	if err := session.acquireRequestSlot(ctx); err != nil {
+	if err := session.acquireRequestSlot(writeCtx); err != nil {
 		return protocol.Envelope{}, false, err
 	}
 
@@ -526,7 +540,7 @@ func (session *peer) requestWithLease(
 	}
 	session.pendingMu.Unlock()
 	write := func() (bool, error) {
-		return session.writeEnvelopeAtDispatch(ctx, protocol.Envelope{
+		return session.writeEnvelopeAtDispatch(writeCtx, protocol.Envelope{
 			Type:           protocol.FrameRequest,
 			ID:             id,
 			Method:         method,
@@ -686,6 +700,13 @@ func (session *peer) writeApplicationFrameAtDispatch(
 	write := func() error {
 		if dispatched {
 			return fmt.Errorf("node %s frame write called more than once", frameKind)
+		}
+		// The durable dispatch callback may have spent the remaining budget.
+		if err := writeCtx.Err(); err != nil {
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			return context.DeadlineExceeded
 		}
 		dispatched = true
 		cancelDone := make(chan struct{})

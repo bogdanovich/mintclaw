@@ -57,9 +57,13 @@ func (client *nodeComputerClient) Act(
 		defer clear(ephemeral)
 	}
 
-	// The gateway may shorten the evidence lease. The companion independently
+	// The gateway's evidence window limits dispatch. The companion still
 	// rechecks its own evidence, target and generation before granting input.
-	actionContext, cancel := context.WithDeadline(ctx, entry.evidence.ExpiresAt)
+	writeBefore := entry.evidence.ExpiresAt
+	if drag := request.Action.Drag; drag != nil {
+		writeBefore = writeBefore.Add(-time.Duration(drag.DurationMS) * time.Millisecond)
+	}
+	actionContext, cancel := context.WithDeadline(ctx, session.ExpiresAt)
 	defer cancel()
 	entry.evidence = computer.InputEvidence{}
 	var result nodes.ComputerActResult
@@ -71,6 +75,7 @@ func (client *nodeComputerClient) Act(
 		nodes.ComputerCommandAct,
 		input,
 		ephemeral,
+		writeBefore,
 		&result,
 	)
 	if err != nil {
@@ -81,7 +86,7 @@ func (client *nodeComputerClient) Act(
 		entry.inputUncertain = true
 		return computer.Observation{}, errComputerOutcomeUnknown
 	}
-	observation, err := client.acceptObservation(ctx, entry, result.Observation, start, invocationID)
+	observation, err := client.acceptObservation(actionContext, entry, result.Observation, start, invocationID)
 	if err != nil {
 		entry.inputUncertain = true
 		return computer.Observation{}, errComputerOutcomeUnknown
