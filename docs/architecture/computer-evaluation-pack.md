@@ -337,6 +337,41 @@ Compatibility tests of app callbacks, including synthetic input on an owned
 private display, do not satisfy those native/model gates. All 20 tasks remain
 in each OS's denominator.
 
+### Linux X11 canvas driver probe
+
+The fixed CU-T18 GTK fixture exercised Cua Driver 0.34.1 in a disposable GNOME
+X11 session on an authenticated Xvfb display. The capability manifest admitted
+one window. The test used the pinned Linux AMD64 driver with SHA-256
+`fbba114405d759ca62b3fae6d53bdf858b5d34c562d771c34e7b56bb8c932ee8`.
+The original driver refused an explicit same-process sibling through the
+manifest. It also refused background delivery to the GTK canvas because the
+window lacked a focus-free input route.
+
+With foreground delivery on the owned display, the real drag moved the first
+card into the destination. The application's gesture record, a separate
+post-action pixel capture, and preserved second-card and guard state agreed.
+Both original windows and the private window manager survived the check.
+
+During a second drag, a separate X11 client moved input focus to the guard
+while the primary button was held. The window manager still reported the
+original target as active. The guard had input focus for at least 400 ms while
+the button was held. The driver returned success and the first card reached the
+destination. The guard stayed unchanged and the button was released at the
+end of that gesture.
+
+In two runs, cancelling the driver request after an independent observer
+detected the held primary button interrupted the drag and the worker
+returned an error. In the second run, the X server still reported that
+button as held throughout a 1.5-second observation after the worker exited.
+The card had not reached the destination, and the second card and guard
+were unchanged. Fixture teardown stopped all owned GUI processes.
+
+Keep this foreground driver route outside the protected gateway input
+allowlist. A subsequent pointer implementation needs an exact-target
+lease, cancellation that releases held buttons, and independent
+post-action verification. This probe exercised the driver and disposable
+fixture directly. The CU-T18 model run and the macOS run remain pending.
+
 ## Private chart fixture
 
 `scripts/internal/computer-evaluation/chart_fixtures.py` adds CU-T17 with a

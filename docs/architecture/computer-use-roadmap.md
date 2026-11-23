@@ -417,6 +417,10 @@ published model benchmark scores predict our production success rate.
    must pass before choosing a production input backend.
 3. Choose input backends only from measured exact-target, Unicode, cancellation,
    latency and resource results; document unsupported operations explicitly.
+   The [Linux canvas probe](computer-evaluation-pack.md#linux-x11-canvas-driver-probe)
+   found that the original foreground driver can move the intended card but
+   can leave its button held after cancellation. This route remains ineligible
+   for protected drag.
 4. Managed environments, VM/locked-host execution, Wayland and cloud spending
    remain independent extensions, not prerequisites or implicit scope changes.
 5. Complete representative tasks through the actual configured function-tool and
