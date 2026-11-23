@@ -64,7 +64,12 @@ type cancellationObserver interface {
 // before sending guidance. The flow-owned sender enforces bounds and records
 // each actual send; domains cannot inject synthetic transcript events.
 type inFlightConversationDomain interface {
-	afterSend(context.Context, protocol.MintClawMessage, int, func(string) (Event, error)) error
+	afterSend(context.Context, protocol.MintClawMessage, int, inFlightControls) error
+}
+
+type inFlightControls struct {
+	send        func(string) (Event, error)
+	waitEntered func(context.Context, *activeToolFixture, activeToolArgs) error
 }
 
 // Only an admitted native-stop case may select the actually sent /stop input
@@ -396,13 +401,22 @@ func (flow *conversation) turn(
 			sent = append(sent, input)
 			return input, nil
 		}
-		err := domain.afterSend(turnCtx, request, number, send)
+		err := domain.afterSend(turnCtx, request, number, inFlightControls{
+			send: send,
+			waitEntered: func(ctx context.Context, fixture *activeToolFixture, args activeToolArgs) error {
+				return flow.waitForActiveTool(ctx, fixture, args, request.ID, number)
+			},
+		})
 		if sendErr != nil {
 			err = sendErr
 		}
 		if err != nil {
 			if errors.Is(err, ErrPrivateEvidence) {
 				return Fail, "private_in_flight_input"
+			}
+			var rejection *turnReplyError
+			if errors.As(err, &rejection) {
+				return rejection.verdict, rejection.code
 			}
 			return Inconclusive, "in_flight_evidence_unavailable"
 		}
@@ -421,52 +435,9 @@ func (flow *conversation) turn(
 		}
 	}
 	for {
-		message, err := flow.transport.Receive(turnCtx)
-		if err != nil {
-			return Inconclusive, transportCode(err)
-		}
-		flow.frames++
-		encoded, encodeErr := json.Marshal(message)
-		flow.bytes += len(encoded)
-		if encodeErr != nil || flow.frames > 256 || flow.bytes > 2*1024*1024 {
-			return Inconclusive, "event_limit"
-		}
-		if credentialJSONValue(message, flow.filter) || privateJSONValue(message, flow.facts) {
-			return Fail, "private_wire_evidence"
-		}
-		if message.SessionID != "" && message.SessionID != flow.trial.SessionID {
-			continue
-		}
-		requestID := payloadString(message.Payload, protocol.PayloadKeyRequestID)
-		if message.Type == protocol.TypeError && (requestID == "" || requestID == terminalRequestID) {
-			return Inconclusive, "protocol_rejected"
-		}
-		if message.SessionID == "" {
-			continue
-		}
-		if requestID != terminalRequestID ||
-			message.Type != protocol.TypeMessageCreate && message.Type != protocol.TypeMessageUpdate {
-			continue
-		}
-		event, eventErr := responseEvent(message, number)
-		if eventErr != nil {
-			return Inconclusive, "invalid_response"
-		}
-		for _, scope := range event.TraceScopes {
-			if !scope.Complete() || scope.Workspace != flow.workspace {
-				event.Usage = nil
-				flow.append(event)
-				return Fail, "unexpected_workspace"
-			}
-		}
-		if event.Kind == "auxiliary" {
-			continue
-		}
-		if event.AgentID != "" && event.AgentID != flow.agent ||
-			flow.trial.SessionKey != "" && event.SessionKey != "" && event.SessionKey != flow.trial.SessionKey {
-			event.Usage = nil
-			flow.append(event)
-			return Fail, "route_changed"
+		event, rejection := flow.receiveTurnReply(turnCtx, terminalRequestID, number)
+		if rejection != nil {
+			return rejection.verdict, rejection.code
 		}
 		if action.Kind == "cancel" && event.Kind == "final" {
 			if observer, ok := flow.domain.(cancellationObserver); ok {
@@ -520,6 +491,65 @@ func (flow *conversation) turn(
 			}
 		}
 		return Pass, "script_completed"
+	}
+}
+
+type turnReplyError struct {
+	verdict Verdict
+	code    string
+}
+
+func (rejection *turnReplyError) Error() string { return rejection.code }
+
+func (flow *conversation) receiveTurnReply(
+	ctx context.Context, terminalRequestID string, number int,
+) (Event, *turnReplyError) {
+	for {
+		message, err := flow.transport.Receive(ctx)
+		if err != nil {
+			return Event{}, &turnReplyError{Inconclusive, transportCode(err)}
+		}
+		flow.frames++
+		encoded, encodeErr := json.Marshal(message)
+		flow.bytes += len(encoded)
+		if encodeErr != nil || flow.frames > 256 || flow.bytes > 2*1024*1024 {
+			return Event{}, &turnReplyError{Inconclusive, "event_limit"}
+		}
+		if credentialJSONValue(message, flow.filter) || privateJSONValue(message, flow.facts) {
+			return Event{}, &turnReplyError{Fail, "private_wire_evidence"}
+		}
+		if message.SessionID != "" && message.SessionID != flow.trial.SessionID {
+			continue
+		}
+		requestID := payloadString(message.Payload, protocol.PayloadKeyRequestID)
+		if message.Type == protocol.TypeError && (requestID == "" || requestID == terminalRequestID) {
+			return Event{}, &turnReplyError{Inconclusive, "protocol_rejected"}
+		}
+		if message.SessionID == "" || requestID != terminalRequestID ||
+			message.Type != protocol.TypeMessageCreate && message.Type != protocol.TypeMessageUpdate {
+			continue
+		}
+		event, eventErr := responseEvent(message, number)
+		if eventErr != nil {
+			return Event{}, &turnReplyError{Inconclusive, "invalid_response"}
+		}
+		for _, scope := range event.TraceScopes {
+			if !scope.Complete() || scope.Workspace != flow.workspace {
+				event.Usage = nil
+				flow.append(event)
+				return Event{}, &turnReplyError{Fail, "unexpected_workspace"}
+			}
+		}
+		if event.Kind == "auxiliary" {
+			continue
+		}
+		if event.AgentID != "" && event.AgentID != flow.agent ||
+			flow.trial.SessionKey != "" && event.SessionKey != "" && event.SessionKey != flow.trial.SessionKey {
+			event.Usage = nil
+			flow.append(event)
+			return Event{}, &turnReplyError{Fail, "route_changed"}
+		}
+		return event, nil
 	}
 }
 

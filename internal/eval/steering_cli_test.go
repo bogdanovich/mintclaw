@@ -50,12 +50,14 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 	for _, variant := range []struct {
 		name, file, mode string
 		missingSource    bool
+		rateLimited      bool
 	}{
-		{"boundary", "steering-boundary.json", "one-at-a-time", false},
-		{"order-one", "steering-order.json", "one-at-a-time", false},
-		{"order-all", "steering-order.json", "all", false},
-		{"isolation", "session-isolation.json", "one-at-a-time", false},
-		{"missing-source", "steering-boundary.json", "one-at-a-time", true},
+		{"boundary", "steering-boundary.json", "one-at-a-time", false, false},
+		{"order-one", "steering-order.json", "one-at-a-time", false, false},
+		{"order-all", "steering-order.json", "all", false, false},
+		{"isolation", "session-isolation.json", "one-at-a-time", false, false},
+		{"missing-source", "steering-boundary.json", "one-at-a-time", true, false},
+		{"provider-rejection", "steering-boundary.json", "one-at-a-time", false, true},
 	} {
 		t.Run(variant.name, func(t *testing.T) {
 			definition, err := os.ReadFile(filepath.Join("../../evals/cases/general", variant.file))
@@ -109,6 +111,16 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 					message = map[string]any{"role": "assistant", "content": string(findings)}
 				} else {
 					targets.Add(1)
+					if variant.rateLimited {
+						w.Header().Set("Content-Type", "application/json")
+						w.Header().Set("Retry-After", "1")
+						w.WriteHeader(http.StatusTooManyRequests)
+						_, _ = io.WriteString(
+							w,
+							"{\"error\":{\"message\":\"Synthetic rate limit\",\"type\":\"rate_limit_error\"}}",
+						)
+						return
+					}
 					var body struct {
 						Messages []struct {
 							Role    string          `json:"role"`
@@ -229,6 +241,21 @@ func TestSteeringCasesUseRealCLIAndNativeInFlightBoundary(t *testing.T) {
 					credentialJSONValue(staged, fixture.cfg.SensitiveDataReplacer()), proofCode,
 					staged.ExecutionVerdict, staged.ExecutionCode)
 				t.Fatalf("native trial: %v; run: %v\n%s\n%s", err, runErr, output, stderr.Bytes())
+			}
+			if variant.rateLimited {
+				if runErr == nil || !report.Complete || report.Verdict != Inconclusive ||
+					trial.ExecutionVerdict != Inconclusive || trial.ExecutionCode != "terminal_before_active_tool" ||
+					trial.Steering == nil || trial.Steering.Code != "active_tool_unavailable" ||
+					len(trial.Steering.Guidance) != 0 || judges.Load() != 0 || targets.Load() < 1 ||
+					report.TargetBudget == nil || report.TargetBudget.verdict() != Inconclusive {
+					t.Fatalf("provider rejection did not terminate the wait: %v, execution=%s/%s\n%s",
+						runErr, trial.ExecutionVerdict, trial.ExecutionCode, output)
+				}
+				if comparison, err := Compare(report.ReportDirectory, report.ReportDirectory); err != nil ||
+					comparison.CurrentVerdict != Inconclusive {
+					t.Fatal("a complete provider rejection report could not be compared offline", err)
+				}
+				return
 			}
 			if variant.missingSource {
 				if !report.Complete || report.Verdict != Inconclusive || trial.Verdict != Inconclusive ||

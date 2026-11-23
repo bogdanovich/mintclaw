@@ -35,15 +35,15 @@ func (domain *stopWireDomain) observeStop(context.Context, Event) error {
 }
 
 func (domain *stopWireDomain) afterSend(
-	_ context.Context, _ protocol.MintClawMessage, number int, send func(string) (Event, error),
+	_ context.Context, _ protocol.MintClawMessage, number int, controls inFlightControls,
 ) error {
 	if number != 1 {
 		return nil
 	}
-	if _, err := send("Synthetic queued guidance."); err != nil {
+	if _, err := controls.send("Synthetic queued guidance."); err != nil {
 		return err
 	}
-	input, err := send(domain.command)
+	input, err := controls.send(domain.command)
 	domain.actual = input.RequestID
 	return err
 }

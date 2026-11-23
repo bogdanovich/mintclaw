@@ -48,17 +48,17 @@ func (*nativeStopConversation) request(context.Context, Action, Event) (protocol
 func (domain *nativeStopConversation) stopRequestID() string { return domain.proof.StopRequestID }
 
 func (domain *nativeStopConversation) afterSend(
-	ctx context.Context, initial protocol.MintClawMessage, number int, send func(string) (Event, error),
+	ctx context.Context, initial protocol.MintClawMessage, number int, controls inFlightControls,
 ) error {
 	if number != 1 {
 		return nil
 	}
 	domain.proof.PrimaryRequestID, domain.proof.Code = initial.ID, "active_tool_unavailable"
-	if err := domain.target.activeTool.waitEntered(ctx, domain.args); err != nil {
+	if err := controls.waitEntered(ctx, domain.target.activeTool, domain.args); err != nil {
 		return err
 	}
 	domain.proof.Code = "enqueue_unavailable"
-	input, err := send(nativeStopGuidance(domain.item.NativeStop.QueuedMarker, domain.args.TrialID))
+	input, err := controls.send(nativeStopGuidance(domain.item.NativeStop.QueuedMarker, domain.args.TrialID))
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (domain *nativeStopConversation) afterSend(
 		Held: observed.barrier, ObservedAt: observed.observedAt,
 	}
 	domain.proof.Code = "stop_not_sent"
-	stop, err := send("/stop")
+	stop, err := controls.send("/stop")
 	if err != nil {
 		return err
 	}
