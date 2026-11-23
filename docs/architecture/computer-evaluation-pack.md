@@ -489,6 +489,33 @@ still requires independent cleanup when an actual actuator transport fails
 and the original window survives, along with durable outcome and no-replay
 qualification.
 
+### Original-window release with a recording fence
+
+A separate recovery owner on the disposable X11 fixture used server RECORD
+metadata to identify the client that received a native wheel press. Inside
+one bounded server transaction, it joined that receipt to a same-connection
+marker, required a single original recipient and no observed request that
+could change the route, and checked the original window, input lease and
+private pointer. It then sent one release without replaying the press. It
+verified delivery to the original receiver and neutral states on both devices.
+The original GTK window stayed open with one observed scroll step in
+all three final nominal trials.
+
+The three final controls withheld release after detecting a second receiver,
+pointer movement or an interrupted recording. Earlier controls also refused
+after a competing grab-changing request or replacement of the original
+window. The disposable harness can destroy its own original target to verify
+cleanup in a private sink.
+
+The competing listener also received the original press even though the
+native window ID matched. A delivery receipt is available after an edge.
+Admitting the first edge still requires separate recipient and ownership
+authority for the selected hosting mode. The compiled reader bounds and
+clears wire buffers. A malformed frame, closed context or missed fence
+provides no authority. This fixture covers one wheel step and a pinned
+disposable server. Runtime integration, production privacy, broader buttons
+and hosting qualification remain open.
+
 ## Private chart fixture
 
 `scripts/internal/computer-evaluation/chart_fixtures.py` adds CU-T17 with a
