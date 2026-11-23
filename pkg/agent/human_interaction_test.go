@@ -5241,27 +5241,32 @@ func testLiveHandoffContinuationClaimsDurableReceipt(t *testing.T, requirement s
 	}
 }
 
+type liveHandoffContextCase struct {
+	name                       string
+	noContext, rootless, retry bool
+	assembledWithoutRoot       bool
+}
+
 func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
-	for _, test := range []struct {
-		name                       string
-		noContext, rootless, retry bool
-	}{
+	for _, test := range []liveHandoffContextCase{
 		{name: "with context"},
+		{name: "assembled context starts at steering", assembledWithoutRoot: true},
 		{name: "without stored context", noContext: true},
 		{name: "legacy rootless journal", noContext: true, rootless: true},
 		{name: "context limit retry", noContext: true, retry: true},
 		{name: "rootless context limit retry", noContext: true, rootless: true, retry: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			testLiveHandoffContinuationCanEnd(t, test.noContext, test.rootless, test.retry)
+			testLiveHandoffContinuationCanEnd(t, test)
 		})
 	}
 }
 
-func testLiveHandoffContinuationCanEnd(t *testing.T, noContext, rootless, retry bool) {
+func testLiveHandoffContinuationCanEnd(t *testing.T, test liveHandoffContextCase) {
 	t.Helper()
 	const origin = "Передай мне управление этим окном."
 	const answer = "Спасибо, заканчивай."
+	const steering = "Оставь окно открытым."
 	const unrelated = "An older, unrelated request."
 	const key = "session-end-live-handoff"
 	toolCall := func(id, operation string) providers.ToolCall {
@@ -5281,17 +5286,17 @@ func testLiveHandoffContinuationCanEnd(t *testing.T, noContext, rootless, retry 
 		interactionContinuationDecisionResponse("finish", plainTerminal),
 		{Content: reportedTerminal, FinishReason: "stop"},
 	}}
-	if retry {
+	if test.retry {
 		provider.responses = slices.Insert(provider.responses, 1, nil)
 		provider.errors = []error{nil, errors.New("context_length_exceeded")}
 	}
 	fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
-		if !noContext {
+		if !test.noContext {
 			cfg.Agents.Defaults.ContextManager = "seahorse"
 		}
 	})
 	al, agent := fixture.Loop, fixture.Agent
-	if noContext {
+	if test.noContext {
 		if err := agent.Sessions.AppendTurnMessage(t.Context(), key, providers.Message{
 			Role: "user", Content: unrelated, RootTurnStart: true,
 		}); err != nil {
@@ -5324,7 +5329,7 @@ func testLiveHandoffContinuationCanEnd(t *testing.T, noContext, rootless, retry 
 	if !ok {
 		t.Fatal("initial live handoff interaction not found")
 	}
-	if rootless {
+	if test.rootless {
 		history, readErr := agent.Sessions.ReadTurnHistory(t.Context(), key)
 		if readErr != nil {
 			t.Fatal(readErr)
@@ -5343,6 +5348,28 @@ func testLiveHandoffContinuationCanEnd(t *testing.T, noContext, rootless, retry 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if test.assembledWithoutRoot {
+		if ensureErr := al.ensureInteractionToolResult(t.Context(), agent, record); ensureErr != nil {
+			t.Fatal(ensureErr)
+		}
+		history, readErr := agent.Sessions.ReadTurnHistory(t.Context(), key)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		call, result := interactionToolPairIndexes(history, record.Origin.ToolCallID)
+		if call < 1 || result < 0 {
+			t.Fatal("test journal is missing its originating request or accepted exchange")
+		}
+		history = slices.Insert(history, call, providers.Message{Role: "user", Content: steering})
+		if replaceErr := agent.Sessions.ReplaceTurnHistory(t.Context(), key, history); replaceErr != nil {
+			t.Fatal(replaceErr)
+		}
+		// This is a valid budgeted suffix. The context manager retained the
+		// operator's in-turn clarification and the exact question/answer pair.
+		setTestContextManager(al, &trackingContextManager{
+			assembleResponse: &AssembleResponse{History: history[call:]},
+		})
+	}
 	if err = al.resumeClaimedInteraction(
 		t.Context(), registry, agent.Workspace, agent, nil, *inbound, record,
 	); err != nil {
@@ -5359,7 +5386,7 @@ func testLiveHandoffContinuationCanEnd(t *testing.T, noContext, rootless, retry 
 		t.Fatal("terminal continuation created another waiting interaction")
 	}
 	wantCalls := 4
-	if retry {
+	if test.retry {
 		wantCalls++
 	}
 	if provider.callCount != wantCalls {
@@ -5373,11 +5400,14 @@ func testLiveHandoffContinuationCanEnd(t *testing.T, noContext, rootless, retry 
 			sawCall = sawCall || messageContainsToolCall(message, record.Origin.ToolCallID)
 			sawAnswer = sawAnswer || message.Role == "tool" && message.ToolCallID == record.Origin.ToolCallID &&
 				strings.Contains(message.Content, answer)
-			if noContext && strings.Contains(message.Content, unrelated) {
+			if test.noContext && strings.Contains(message.Content, unrelated) {
 				t.Fatal("continuation restored unrelated stored conversation")
 			}
 		}
-		if sawOrigin == rootless || !sawCall || !sawAnswer ||
+		if test.assembledWithoutRoot && !messagesContainText(request, steering) {
+			t.Fatalf("decision attempt %d lost the in-turn clarification", index)
+		}
+		if sawOrigin == test.rootless || !sawCall || !sawAnswer ||
 			!strings.Contains(request[len(request)-1].Content, "<runtime_interaction_continuation_preflight>") {
 			t.Fatalf("decision attempt %d: origin present %v, tool call present %v, accepted answer present %v",
 				index, sawOrigin, sawCall, sawAnswer,
