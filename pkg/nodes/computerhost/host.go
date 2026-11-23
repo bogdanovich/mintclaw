@@ -65,25 +65,27 @@ type sessionEntry struct {
 	openCancel context.CancelFunc
 	timer      *time.Timer
 	retired    atomic.Bool
+	input      *sessionInput
 }
 
 // Host is explicitly constructed local authority. One core Arbiter covers all
 // profiles for this GUI user, independently of profile/display labels. It is
 // process-local arbitration, not an OS-wide exclusion or an input capability.
 type Host struct {
-	nodeID   nodes.ID
-	profiles map[string]companion.ComputerProfilePolicy
-	aliases  []string
-	metadata []nodes.ComputerProfileDescriptor
-	arbiter  *computer.Arbiter
-	openGate chan struct{}
-	watch    func(context.Context, desktop.WindowRequest) (windowObserver, error)
-	start    func(context.Context, cua.Config) (captureWorker, error)
-	mu       sync.Mutex
-	sessions map[string]*sessionEntry
-	epoch    atomic.Uint64
-	closed   bool
-	outputs  outputStore
+	nodeID    nodes.ID
+	profiles  map[string]companion.ComputerProfilePolicy
+	aliases   []string
+	metadata  []nodes.ComputerProfileDescriptor
+	arbiter   *computer.Arbiter
+	openGate  chan struct{}
+	watch     func(context.Context, desktop.WindowRequest) (windowObserver, error)
+	start     func(context.Context, cua.Config) (captureWorker, error)
+	mu        sync.Mutex
+	sessions  map[string]*sessionEntry
+	epoch     atomic.Uint64
+	closed    bool
+	outputs   outputStore
+	executors map[string]InputExecutor
 }
 
 func New(nodeID nodes.ID, profiles map[string]companion.ComputerProfilePolicy) (*Host, error) {
@@ -234,6 +236,9 @@ func (host *Host) Open(
 	entry := &sessionEntry{
 		gate: make(chan struct{}, 1), epoch: epoch, core: core, initial: session, driver: driver, openCancel: cancel,
 	}
+	if execute := host.executors[request.Profile]; execute != nil {
+		entry.input = newSessionInput(execute)
+	}
 	entry.gate <- struct{}{}
 	defer relinquish(entry.gate)
 	completed := false
@@ -274,6 +279,7 @@ func (host *Host) Open(
 	entry.timer = time.AfterFunc(time.Until(session.ExpiresAt), func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 		defer stop()
+		entry.cancelInput()
 		_, _ = core.Lose(cleanup, session.Binding)
 		if acquire(cleanup, entry.gate) == nil {
 			defer relinquish(entry.gate)
@@ -354,6 +360,9 @@ func (host *Host) Control(
 		return nodes.ComputerSessionResult{}, computer.ErrStale
 	}
 	if request.Event != computer.EventRelease {
+		if entry.input != nil && entry.input.faulted {
+			return nodes.ComputerSessionResult{}, computer.ErrBusy
+		}
 		current, err = host.refresh(ctx, entry)
 		if err != nil || current.Binding.Generation != request.Generation {
 			return nodes.ComputerSessionResult{}, computer.ErrStale
@@ -376,6 +385,9 @@ func (host *Host) Control(
 		return nodes.ComputerSessionResult{}, err
 	}
 	host.outputs.removeSession(request.SessionID)
+	if entry.input != nil {
+		entry.input.observed = observedInput{}
+	}
 	if next.Control.Terminal() {
 		if err = host.closeEntry(entry); err != nil {
 			return nodes.ComputerSessionResult{}, errors.Join(companion.ErrInvocationOutcomeUnknown, err)
@@ -400,7 +412,16 @@ func (host *Host) Observe(
 	if err != nil || session.Binding.Generation != request.Generation {
 		return nodes.ComputerObservationResult{}, computer.ErrStale
 	}
+	return host.observeLocked(ctx, entry, session, request)
+}
+
+func (host *Host) observeLocked(
+	ctx context.Context, entry *sessionEntry, session computer.Session, request nodes.ComputerHostObserveRequest,
+) (nodes.ComputerObservationResult, error) {
 	host.outputs.removeSession(request.SessionID)
+	if entry.input != nil {
+		entry.input.observed = observedInput{}
+	}
 	observation, err := entry.core.Observe(ctx, session)
 	if err != nil {
 		_, _ = host.refresh(context.Background(), entry)
@@ -414,6 +435,15 @@ func (host *Host) Observe(
 	descriptor, err := host.outputs.register(observation, request)
 	if err != nil {
 		return nodes.ComputerObservationResult{}, err
+	}
+	var input observedInput
+	if entry.input != nil {
+		evidence, err := computer.InputEvidenceFromObservation(observation, session, time.Now())
+		if err != nil {
+			host.outputs.removeSession(request.SessionID)
+			return nodes.ComputerObservationResult{}, computer.ErrStale
+		}
+		input = observedInput{evidence: evidence, workspace: request.WorkspaceID}
 	}
 	observation.Screenshot = nil
 	text := observation.AccessibilityText
@@ -429,6 +459,9 @@ func (host *Host) Observe(
 		host.outputs.removeSession(request.SessionID)
 		return nodes.ComputerObservationResult{}, computer.ErrStale
 	}
+	if entry.input != nil {
+		entry.input.observed = input
+	}
 	return result, nil
 }
 
@@ -438,8 +471,22 @@ func (host *Host) closeEntry(entry *sessionEntry) error {
 	}
 	host.outputs.removeSession(entry.initial.Binding.SessionID)
 	entry.openCancel()
+	entry.cancelInput()
 	if entry.timer != nil {
 		entry.timer.Stop()
+	}
+	if entry.input != nil && entry.input.lease != nil {
+		// An uncertain held state is not safe to relinquish to another
+		// executor. Losing the original lease independently ends its scope.
+		select {
+		case <-entry.input.lease.Done():
+			if err := entry.input.lease.Close(); err != nil && !errors.Is(err, computer.ErrStale) {
+				return computer.ErrUnavailable
+			}
+			entry.input.lease = nil
+		default:
+			return computer.ErrUnavailable
+		}
 	}
 	var workerErr error
 	if entry.driver.worker != nil {
@@ -468,6 +515,7 @@ func (host *Host) disconnect(ctx context.Context, shutdown bool) error {
 		if entry.epoch < epoch {
 			entries = append(entries, entry)
 			entry.openCancel()
+			entry.cancelInput()
 		}
 	}
 	host.mu.Unlock()
