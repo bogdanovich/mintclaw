@@ -1246,6 +1246,27 @@ func (al *AgentLoop) sealInteractionSteeringHandoff(flight *interactionResumeFli
 	}
 	flight.handoffMu.Lock()
 	defer flight.handoffMu.Unlock()
+	al.sealInteractionSteeringHandoffLocked(flight)
+}
+
+// pollInteractionFinishSteering linearizes the last poll with Gateway ingress.
+// Replies admitted before this boundary are eligible to replace the finish.
+// Replies arriving after it remain available for the next turn.
+func (al *AgentLoop) pollInteractionFinishSteering(
+	flight *interactionResumeFlight,
+	hasPending bool,
+	poll func() []steeringEntry,
+) []steeringEntry {
+	flight.handoffMu.Lock()
+	defer flight.handoffMu.Unlock()
+	messages := poll()
+	if len(messages) == 0 && !hasPending {
+		al.sealInteractionSteeringHandoffLocked(flight)
+	}
+	return messages
+}
+
+func (al *AgentLoop) sealInteractionSteeringHandoffLocked(flight *interactionResumeFlight) {
 	if flight.handoffSealed {
 		return
 	}
@@ -1855,20 +1876,32 @@ func interactionFinalAfterToolResult(
 	history []providers.Message,
 	toolCallID string,
 ) (string, *taskresult.Deliverable, bool) {
+	message, ok := interactionFinalMessageAfterToolResult(history, toolCallID)
+	if !ok {
+		return "", nil, false
+	}
+	content := message.Content
+	if content == handledToolResponseSummary && len(message.Attachments) > 0 {
+		content = ""
+	}
+	return content, taskresult.CloneDeliverable(message.Deliverable), true
+}
+
+func interactionFinalMessageAfterToolResult(
+	history []providers.Message,
+	toolCallID string,
+) (providers.Message, bool) {
 	_, resultIndex := interactionToolPairIndexes(history, toolCallID)
 	if resultIndex < 0 {
-		return "", nil, false
+		return providers.Message{}, false
 	}
 	for _, message := range history[resultIndex+1:] {
 		if message.Role == "assistant" && len(message.ToolCalls) == 0 &&
 			strings.TrimSpace(message.Content) != "" {
-			if message.Content == handledToolResponseSummary && len(message.Attachments) > 0 {
-				return "", taskresult.CloneDeliverable(message.Deliverable), true
-			}
-			return message.Content, taskresult.CloneDeliverable(message.Deliverable), true
+			return message, true
 		}
 	}
-	return "", nil, false
+	return providers.Message{}, false
 }
 
 func (al *AgentLoop) ensureInteractionToolResult(

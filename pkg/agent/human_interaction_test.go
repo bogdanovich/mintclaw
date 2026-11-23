@@ -5244,25 +5244,20 @@ func testLiveHandoffContinuationClaimsDurableReceipt(t *testing.T, requirement s
 func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 	toolCall := func(id, operation string) providers.ToolCall {
 		return providers.ToolCall{
-			ID: id, Name: "browser_handoff_continuation",
+			ID: id, Name: "browser_session",
 			Arguments: map[string]any{"operation": operation},
 		}
 	}
-	plainTerminal := "Understood. The live session is finished."
-	reportedTerminal := plainTerminal + "\n" + objectiveOutcomeStart +
-		`{"status":"partial","completed_items":[],"missing_items":["objective_1"],` +
-		`"explanation":"The latest user guidance ended the live session.",` +
-		`"result":"The live session is finished."}` + objectiveOutcomeEnd
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{toolCall("call-initial-handoff", "handoff")}},
 		{ToolCalls: []providers.ToolCall{toolCall("call-forbidden-resume", "resume")}},
-		interactionContinuationDecisionResponse("finish", plainTerminal),
-		{Content: reportedTerminal, FinishReason: "stop"},
+		interactionContinuationDecisionResponse("finish", "The live session is still open."),
+		{ToolCalls: []providers.ToolCall{toolCall("call-forbidden-rehandoff", "handoff")}},
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	installInteractionChannelManager(t, al, newInteractionChannelManager())
-	tool := &browserHandoffContinuationTool{}
+	tool := &terminalHandoffOwner{receiptState: "closed"}
 	agent.Tools.Register(tool)
 	inbound := &bus.InboundContext{
 		Channel: "telegram", ChatID: "chat-end-live-handoff", SenderID: "user-end-live-handoff",
@@ -5308,17 +5303,209 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 	if _, ok = activeInteractionForSession(registry, "session-end-live-handoff"); ok {
 		t.Fatal("terminal continuation created another waiting interaction")
 	}
-	if provider.callCount != 4 {
-		t.Fatalf(
-			"provider calls = %d, want handoff, rejected preflight, decision, and normalization",
-			provider.callCount,
-		)
+	if provider.callCount != 3 {
+		t.Fatalf("provider calls = %d, want handoff, rejected preflight and finish", provider.callCount)
 	}
-	if len(provider.toolRequests) != 4 || len(provider.toolRequests[1]) != 1 || len(provider.toolRequests[2]) != 1 ||
-		provider.toolRequests[1][0].Function.Name != interactionContinuationDecisionTool ||
-		provider.toolRequests[2][0].Function.Name != interactionContinuationDecisionTool ||
-		len(provider.toolRequests[3]) != 0 {
-		t.Fatalf("terminal normalization tool exposure = %#v", provider.toolRequests)
+	for _, request := range provider.toolRequests[1:] {
+		if len(request) != 1 || request[0].Function.Name != interactionContinuationDecisionTool {
+			t.Fatalf("finish preflight tool exposure = %#v", request)
+		}
+	}
+	history, err := agent.Sessions.ReadTurnHistory(t.Context(), "session-end-live-handoff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := history[len(history)-1]
+	if terminal.Content != "Task ended. The session was closed." ||
+		terminal.Deliverable == nil || len(terminal.Deliverable.LifecycleReceipts) != 1 {
+		t.Fatalf("terminal report did not reflect verified closure: %#v", terminal)
+	}
+}
+
+func TestLiveHandoffTaskFinishDelivery(t *testing.T) {
+	const closedRussian = "Задача завершена. Сессия закрыта."
+	fallback := "Task ended. The session was closed."
+	unconfirmed := interactions.PromptText("ru", interactions.PromptLiveHandoffUnconfirmed)
+	for _, test := range []struct {
+		name, language, receiptState, want string
+		recover, lateReply                 bool
+	}{
+		{
+			name: "verified task finish", language: "ru-RU", receiptState: "closed", want: closedRussian,
+			lateReply: true,
+		},
+		{name: "unconfirmed task finish", language: "ru-RU", want: unconfirmed},
+		{name: "catalog fallback", language: "es-ES", receiptState: "closed", want: fallback},
+		{
+			name: "committed finish after restart", language: "ru-RU", receiptState: "closed", want: closedRussian,
+			recover: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &sequenceProvider{responses: []*providers.LLMResponse{
+				interactionContinuationDecisionResponse("finish", "This status is not authoritative."),
+			}}
+			al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+			defer cleanup()
+			manager := newInteractionChannelManager()
+			installInteractionChannelManager(t, al, manager)
+			tool := &terminalHandoffOwner{receiptState: test.receiptState}
+			agent.Tools.Register(tool)
+
+			const taskID = "durable-live-handoff-task"
+			ownerKey := session.BuildOpaqueSessionKey("agent:main:test:handoff-finish-owner")
+			childKey := session.BuildOpaqueSessionKey("agent:main:test:handoff-finish-child")
+			request := testToolSuspensionRequest(agent.Workspace)
+			request.Route.SessionKey = ownerKey
+			request.Origin.TaskID = taskID
+			request.Origin.ToolName = tool.Name()
+			request.Origin.ExecutionID = "orig-live-handoff-execution"
+			request.Origin.ContinuationSessionKey = childKey
+			request.Origin.ObjectiveChecklist = []interactions.ObjectiveChecklistItem{{
+				ID: "objective_1", Item: "Complete the live handoff", Kind: taskresult.ObjectiveKindLiveHandoff,
+			}}
+			inbound := inboundContextForInteraction(request.Route)
+			request.Origin.ExecutionContext = &inbound
+			tasks := al.taskRegistryForWorkspace(agent.Workspace)
+			if err := tasks.Upsert(taskregistry.Record{
+				TaskID: taskID, Runtime: taskregistry.RuntimeDelegate, TaskKind: "delegate", Task: "handoff fixture",
+				Status: taskregistry.StatusRunning, DeliveryStatus: taskregistry.DeliveryPending,
+				DeliveryMode: string(toolshared.AsyncDeliveryUserOnly), Channel: request.Route.Channel,
+				ChatID: request.Route.ChatID, RequesterSessionKey: ownerKey,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			agent.Sessions.AddFullMessage(childKey, providers.Message{
+				Role: "user", Content: "Передай мне браузер.", RootTurnStart: true,
+			})
+			agent.Sessions.AddFullMessage(childKey, providers.Message{
+				Role: "assistant", ToolCalls: []providers.ToolCall{{
+					ID: request.Origin.ToolCallID, Name: tool.Name(), Arguments: map[string]any{"operation": "handoff"},
+				}},
+			})
+			registry := al.interactionRegistryForWorkspace(agent.Workspace)
+			record, err := registry.Create(interactions.CreateRequest{
+				Kind:           interactions.KindQuestion,
+				Route:          request.Route,
+				Origin:         request.Origin,
+				Questions:      request.Prompt.Questions,
+				PromptLanguage: test.language,
+				ExpiresAt:      time.Now().Add(time.Hour),
+				OutcomeReceipts: []taskresult.Receipt{
+					{
+						ID:     "test-live-handoff",
+						Kind:   taskresult.ObjectiveKindLiveHandoff,
+						Tool:   tool.Name(),
+						Target: "browser_session:browser_session_test",
+						Action: "handoff",
+						Metadata: map[string]string{
+							"resource_kind": "browser_session",
+							"resource_id":   "browser_session_test",
+						},
+					},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			record = markTestInteractionWaiting(t, registry, record)
+			record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+				Text: "Спасибо, заканчивай.", MessageID: "finish-reply", ReceivedAt: time.Now().UnixMilli(),
+			}, interactions.OutcomeAnswered)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.lateReply {
+				target := &inboundDispatchTarget{
+					Agent: agent, SessionKey: ownerKey,
+					Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+				}
+				tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+				setTestMessageBus(al, tracker)
+				tool.onCleanup = func() {
+					late := bus.InboundMessage{
+						Content: "Открой новое окно.", SpoolID: "late-after-finish",
+						Context: inbound,
+					}
+					late.Context.MessageID = "new-request"
+					err := newInboundTurnCoordinator(al).enqueueContendedInteractionInbound(
+						t.Context(), late, target, record,
+					)
+					if err != nil {
+						t.Errorf("admit new guidance during owner cleanup: %v", err)
+						return
+					}
+					childScope := newRuntimeSessionScope(agent.Workspace, childKey)
+					if child, owner := al.steering.lenScope(
+						childScope,
+					), al.steering.lenScope(
+						target.runtimeSessionScope(),
+					); child != 0 ||
+						owner != 1 {
+						t.Errorf("steering during cleanup: continuation depth %d, next-turn depth %d", child, owner)
+					}
+				}
+			}
+			if test.recover {
+				if err = al.ensureInteractionToolResult(t.Context(), agent, record); err != nil {
+					t.Fatal(err)
+				}
+				record, err = registry.MarkResuming(record.ID, record.Revision)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The terminal journal write succeeded before the old process
+				// stopped. Its disposed native resource cannot be reacquired.
+				agent.Sessions.AddFullMessage(childKey, providers.Message{
+					Role: "assistant", Content: test.want, RuntimeFinishInteractionID: record.ID,
+					Deliverable: &taskresult.Deliverable{Text: test.want},
+				})
+				tool.resourceResolutionErr = errors.New("fixture browser is already closed")
+				if count := al.RecoverHumanInteractions(t.Context()); count != 1 {
+					t.Fatalf("recovered interactions = %d, want 1", count)
+				}
+				if provider.callCount != 0 || tool.resolutionCalls != 0 || tool.cleanupCalls != 0 {
+					t.Fatalf("finish recovery repeated work: provider %d, resolve %d, cleanup %d",
+						provider.callCount, tool.resolutionCalls, tool.cleanupCalls)
+				}
+			} else {
+				if err = al.resumeClaimedInteraction(
+					t.Context(), registry, agent.Workspace, agent, nil, inbound, record,
+				); err != nil {
+					t.Fatal(err)
+				}
+				if provider.callCount != 1 || tool.cleanupCalls != 1 {
+					t.Fatalf("finish repeated work: provider %d, cleanup %d", provider.callCount, tool.cleanupCalls)
+				}
+			}
+			history, err := agent.Sessions.ReadTurnHistory(t.Context(), childKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			message, ok := interactionFinalMessageAfterToolResult(history, record.Origin.ToolCallID)
+			if !ok || message.RuntimeFinishInteractionID != record.ID || message.Content != test.want {
+				t.Fatalf("journaled finish = %#v, want %q", message, test.want)
+			}
+			if wire := stripCanonicalMessageState(message); wire.RuntimeFinishInteractionID != "" {
+				t.Fatal("internal finish identity leaked into provider history")
+			}
+			got, _ := registry.Get(record.ID)
+			if got.Status != interactions.StatusResolved {
+				t.Fatalf("terminal interaction state = %s", got.Status)
+			}
+			task, _ := tasks.Get(taskID)
+			if task.Deliverable == nil || task.Deliverable.Text != test.want {
+				t.Fatalf("task deliverable = %#v, want %q", task.Deliverable, test.want)
+			}
+			select {
+			case outbound := <-manager.sent:
+				if outbound.Content != test.want {
+					t.Fatalf("sent %q, want %q", outbound.Content, test.want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("finish was not sent")
+			}
+		})
 	}
 }
 

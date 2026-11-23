@@ -45,6 +45,9 @@ type turnSpec struct {
 	SuppressToolUserDelivery     bool                      // Whether direct user-facing delivery from tools is suppressed for this turn
 	SuppressToolFeedback         bool                      // Whether to suppress inline tool feedback messages
 	NoHistory                    bool                      // If true, don't load session history (for heartbeat)
+
+	// Extends the final steering poll to the Gateway's continuation ingress lock.
+	interactionFinishSteeringGate func(bool, func() []steeringEntry) []steeringEntry
 }
 
 // turnIdentity is the normalized identity and routing snapshot for one
@@ -105,10 +108,13 @@ type turnInput struct {
 	turnPromptInput
 	turnExecutionPolicy
 	observers turnObservationHooks
+
+	interactionFinishSteeringGate func(bool, func() []steeringEntry) []steeringEntry
 }
 
 func freezeTurnInput(spec turnSpec) turnInput {
 	return turnInput{
+		interactionFinishSteeringGate: spec.interactionFinishSteeringGate,
 		turnIdentity: turnIdentity{
 			mode:                         spec.mode,
 			Dispatch:                     cloneDispatchRequest(spec.Dispatch),

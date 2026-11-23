@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
@@ -40,28 +42,83 @@ func prepareTerminalCleanup(
 ) terminalContent {
 	cleaned, err, _ := ts.cleanup.settle(ctx, ts)
 	result := turnResult{finalContent: terminal.content, deliverable: exec.deliverable, receipts: exec.receipts}
-	attachTurnCleanupReceipts(&result, cleaned.Receipts)
-	if cleanupFailureAffectsTurn(err, ts) {
-		const content = "The task's resource cleanup could not be confirmed. " +
-			"Check the outcome before attempting further actions."
+	finish := exec.continuationDecision.finished()
+	unconfirmed := cleanupFailureAffectsTurn(err, ts)
+	language := ts.opts.InteractionContinuation.PromptLanguage
+	if finish {
+		attachTurnLifecycleReceipts(&result, cleaned.Receipts)
+		content, verified := liveHandoffFinishMessage(language, ts.opts.InitialReceipts, cleaned.Receipts)
+		result.finalContent = content
+		unconfirmed = unconfirmed || !verified
+	} else {
+		attachTurnCleanupReceipts(&result, cleaned.Receipts)
+	}
+	if finish || unconfirmed {
+		result.deliverable = taskresult.CloneDeliverable(result.deliverable)
 		if result.deliverable == nil {
 			result.deliverable = &taskresult.Deliverable{}
 		}
-		result.deliverable = taskresult.CloneDeliverable(result.deliverable)
-		result.finalContent = content
-		result.deliverable.Text = content
-		result.deliverable.Report = nil
-		result.deliverable.ObjectiveOutcome = &taskresult.Outcome{
-			Status:       taskresult.OutcomeBlocked,
-			MissingItems: []string{"Confirm resource cleanup before treating the task as complete"},
-			Explanation:  "The runtime could not confirm the final resource disposition.",
+		if finish {
+			result.deliverable.ObjectiveOutcome = nil // The user ended the suspended objectives.
 		}
+		if unconfirmed {
+			result.finalContent = "The task's resource cleanup could not be confirmed. " +
+				"Check the outcome before attempting further actions."
+			explanation := "The runtime could not confirm the final resource disposition."
+			if finish {
+				result.finalContent = interactions.PromptText(language, interactions.PromptLiveHandoffUnconfirmed)
+				explanation = result.finalContent
+			}
+			result.deliverable.ObjectiveOutcome = &taskresult.Outcome{
+				Status:       taskresult.OutcomeBlocked,
+				MissingItems: []string{"Confirm resource cleanup before treating the task as complete"},
+				Explanation:  explanation,
+			}
+		}
+		result.deliverable.Text = result.finalContent
+		result.deliverable.Report = nil
 	}
 	exec.deliverable, exec.receipts = result.deliverable, result.receipts
 	if result.finalContent != terminal.content {
 		terminal = terminalContent{content: result.finalContent, persistIfToolHandled: true}
 	}
 	return terminal
+}
+
+// Only terminal effects attested by the owning tools qualify for a status claim.
+func liveHandoffFinishMessage(language string, handoffs, cleaned []taskresult.Receipt) (string, bool) {
+	pendingOwners := make(map[string]struct{})
+	for _, handoff := range handoffs {
+		if handoff.Kind == taskresult.ObjectiveKindLiveHandoff {
+			pendingOwners[handoff.Tool] = struct{}{}
+		}
+	}
+	closed, released := false, false
+	for _, receipt := range cleaned {
+		if receipt.Kind != taskresult.ReceiptKindResourceCleanup {
+			continue
+		}
+		switch {
+		case receipt.Action == "close" && receipt.Metadata["state"] == "closed":
+			closed = true
+		case receipt.Action == "release" && receipt.Metadata["state"] == "released":
+			released = true
+		default:
+			return "", false
+		}
+		delete(pendingOwners, receipt.Tool)
+	}
+	if len(pendingOwners) > 0 || !closed && !released {
+		return "", false
+	}
+	parts := []string{interactions.PromptText(language, interactions.PromptLiveHandoffFinished)}
+	if closed {
+		parts = append(parts, interactions.PromptText(language, interactions.PromptLiveHandoffClosed))
+	}
+	if released {
+		parts = append(parts, interactions.PromptText(language, interactions.PromptLiveHandoffReleased))
+	}
+	return strings.Join(parts, " "), true
 }
 
 // Cleanup visits every registered tool, including unused optional services.
@@ -96,7 +153,7 @@ func cleanupFailureAffectsTurn(err error, ts *turnState) bool {
 	return true
 }
 
-func attachTurnCleanupReceipts(result *turnResult, receipts []taskresult.Receipt) {
+func attachTurnLifecycleReceipts(result *turnResult, receipts []taskresult.Receipt) {
 	if result == nil || len(receipts) == 0 {
 		return
 	}
@@ -106,26 +163,32 @@ func attachTurnCleanupReceipts(result *turnResult, receipts []taskresult.Receipt
 		deliverable = &taskresult.Deliverable{}
 	}
 	deliverable.LifecycleReceipts = mergeLifecycleReceipts(deliverable.LifecycleReceipts, receipts)
+	result.deliverable = deliverable
+}
+
+func attachTurnCleanupReceipts(result *turnResult, receipts []taskresult.Receipt) {
+	attachTurnLifecycleReceipts(result, receipts)
+	if result == nil || !hasBrowserTerminalCleanupReceipt(receipts) {
+		return
+	}
 	// A terminal cleanup receipt means normal finalization ended while a
 	// runtime-owned browser session was still live. Producer text and reports
 	// were generated before that state transition and therefore cannot remain
 	// authoritative. Fail closed with a receipt-backed, identifier-free result.
-	if hasBrowserTerminalCleanupReceipt(receipts) {
-		const content = "The browser session was closed by runtime cleanup because the turn ended without " +
-			"an explicit close or durable handoff. The task's final result could not be verified safely. " +
-			"Check the outcome before attempting further actions."
-		result.finalContent = content
-		deliverable.Text = content
-		deliverable.Report = nil
-		deliverable.ObjectiveOutcome = &taskresult.Outcome{
-			Status: taskresult.OutcomeBlocked,
-			MissingItems: []string{
-				"Complete an explicit browser session close or durable handoff before finalizing the task",
-			},
-			Explanation: "Runtime cleanup closed a browser session that was still live at turn finalization.",
-		}
+	deliverable := result.deliverable
+	const content = "The browser session was closed by runtime cleanup because the turn ended without " +
+		"an explicit close or durable handoff. The task's final result could not be verified safely. " +
+		"Check the outcome before attempting further actions."
+	result.finalContent = content
+	deliverable.Text = content
+	deliverable.Report = nil
+	deliverable.ObjectiveOutcome = &taskresult.Outcome{
+		Status: taskresult.OutcomeBlocked,
+		MissingItems: []string{
+			"Complete an explicit browser session close or durable handoff before finalizing the task",
+		},
+		Explanation: "Runtime cleanup closed a browser session that was still live at turn finalization.",
 	}
-	result.deliverable = deliverable
 }
 
 func hasBrowserTerminalCleanupReceipt(receipts []taskresult.Receipt) bool {

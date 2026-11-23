@@ -18,6 +18,10 @@ const (
 	PromptBrowserAttachAction      PromptTextKey = "browser_attach_action"
 	PromptResponseRecorded         PromptTextKey = "response_recorded"
 	PromptLiveHandoffExpired       PromptTextKey = "live_handoff_expired"
+	PromptLiveHandoffFinished      PromptTextKey = "live_handoff_finished"
+	PromptLiveHandoffClosed        PromptTextKey = "live_handoff_closed"
+	PromptLiveHandoffReleased      PromptTextKey = "live_handoff_released"
+	PromptLiveHandoffUnconfirmed   PromptTextKey = "live_handoff_unconfirmed"
 	PromptFormHeader               PromptTextKey = "form_header"
 	PromptFormAnswerHint           PromptTextKey = "form_answer_hint"
 	PromptClarify                  PromptTextKey = "clarify"
@@ -45,6 +49,10 @@ var promptTextCatalog = map[string]map[PromptTextKey]string{
 		PromptApprovalExactAction:      "Exact action:",
 		PromptBrowserAttachAction:      "Allow MintClaw to connect to one visibly selected browser tab",
 		PromptResponseRecorded:         "Response recorded.",
+		PromptLiveHandoffFinished:      "Task ended.",
+		PromptLiveHandoffClosed:        "The session was closed.",
+		PromptLiveHandoffReleased:      "Automation control was released.",
+		PromptLiveHandoffUnconfirmed:   "The task ended, but resource cleanup could not be confirmed.",
 		PromptLiveHandoffExpired: "The manual-control window expired. Its live resource was closed safely. " +
 			"Retry the request to start a new session.",
 	},
@@ -63,6 +71,10 @@ var promptTextCatalog = map[string]map[PromptTextKey]string{
 		PromptApprovalExactAction:      "Точное действие:",
 		PromptBrowserAttachAction:      "Разрешить MintClaw подключиться к одной выбранной видимой вкладке браузера",
 		PromptResponseRecorded:         "Ответ принят.",
+		PromptLiveHandoffFinished:      "Задача завершена.",
+		PromptLiveHandoffClosed:        "Сессия закрыта.",
+		PromptLiveHandoffReleased:      "Управление освобождено.",
+		PromptLiveHandoffUnconfirmed:   "Задача завершена, но освобождение ресурса не удалось подтвердить.",
 		PromptLiveHandoffExpired: "Время ручного управления истекло. Активный ресурс безопасно закрыт. " +
 			"Повторите запрос, чтобы начать новую сессию.",
 	},
