@@ -37,6 +37,7 @@ type computerNodeAuthority struct {
 	catalogHash    string
 	policyRevision string
 	profile        nodes.ComputerProfileDescriptor
+	inputAvailable bool
 }
 
 type computerNodeSession struct {
@@ -140,12 +141,19 @@ func (client *nodeComputerClient) authority(
 		}
 		authority.profile = profile
 	}
+	if descriptor, approved := computerApprovedDescriptor(record, nodes.ComputerCommandAct); approved {
+		authority.inputAvailable = authority.allowsInput(descriptor)
+	}
 	if pinned != nil && (pinned.nodeID != authority.nodeID || pinned.executor != authority.executor ||
 		pinned.catalogHash != authority.catalogHash || pinned.policyRevision != authority.policyRevision ||
 		pinned.profile != authority.profile) {
 		return computerNodeAuthority{}, computer.ErrStale
 	}
 	return authority, nil
+}
+
+func (authority computerNodeAuthority) allowsInput(descriptor nodes.CommandDescriptor) bool {
+	return authority.policy.AllowInput && slices.Contains(descriptor.ComputerProfiles, authority.profile)
 }
 
 func (client *nodeComputerClient) invoke(
@@ -172,8 +180,7 @@ func (client *nodeComputerClient) invokeWithEphemeral(
 		return "", computer.ErrUnavailable
 	}
 	descriptor, approved := computerApprovedDescriptor(record, command)
-	if !approved || command == nodes.ComputerCommandAct &&
-		(!authority.policy.AllowInput || !slices.Contains(descriptor.ComputerProfiles, authority.profile)) {
+	if !approved || command == nodes.ComputerCommandAct && !authority.allowsInput(descriptor) {
 		return "", computer.ErrDenied
 	}
 	encoded, err := json.Marshal(input)
@@ -291,6 +298,7 @@ func (client *nodeComputerClient) Targets(
 ) ([]computer.NamedTarget, error) {
 	aliases := slices.Sorted(maps.Keys(client.policy.Targets))
 	targets := []computer.NamedTarget{}
+	inputAuthorities := make(map[string]computerNodeAuthority)
 	for _, alias := range aliases {
 		if !client.policy.Targets[alias].Admits(principal) {
 			continue
@@ -307,8 +315,23 @@ func (client *nodeComputerClient) Targets(
 		for _, target := range result.Targets {
 			if target.Alias == authority.profile.Alias && target.Node == string(authority.nodeID) {
 				targets = append(targets, computer.NamedTarget{Alias: alias, Target: target})
+				if authority.policy.AllowInput {
+					inputAuthorities[alias] = authority
+				}
 			}
 		}
+	}
+	// Refresh after the final remote call, which may outlast an earlier input approval.
+	for i, target := range targets {
+		pinned, ok := inputAuthorities[target.Alias]
+		if !ok {
+			continue
+		}
+		current, err := client.authority(target.Alias, principal, &pinned)
+		if err != nil {
+			return nil, err
+		}
+		targets[i].InputAvailable = current.inputAvailable
 	}
 	return targets, nil
 }

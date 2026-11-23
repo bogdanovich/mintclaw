@@ -80,7 +80,10 @@ and explicit release remain available through the original owner.
 ## Tool and interaction lifecycle
 
 1. `computer_targets` discovers configured, currently admitted window metadata
-   without capturing pixels or starting a capture worker.
+   without capturing pixels or starting a capture worker. Each target can report
+   `input_available: true` when the current gateway grant and approved companion
+   catalog permit input for its exact profile. The top-level flag is true if any
+   returned target has input. The action route verifies authority again at dispatch.
 2. `computer_session` with `operation: "open"` accepts a configured gateway
    target alias. It does not accept a PID, display, window ID, native event,
    shell command or caller-authored principal.

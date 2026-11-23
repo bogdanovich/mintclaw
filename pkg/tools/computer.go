@@ -132,7 +132,7 @@ func computerToolError(err error) *toolshared.ToolResult {
 
 func (*ComputerTargetsTool) Name() string { return "computer_targets" }
 func (*ComputerTargetsTool) Description() string {
-	return "Discover explicitly granted native computer windows. This is independent of browser access and does not capture pixels or launch a desktop worker. Select only a returned configured target alias."
+	return "Discover explicitly granted native computer windows and their current input availability. This does not capture pixels or launch a desktop worker. Select only a returned configured target alias."
 }
 
 func (*ComputerTargetsTool) Parameters() map[string]any {
@@ -156,7 +156,11 @@ func (tool *ComputerTargetsTool) Execute(ctx context.Context, args map[string]an
 	if err != nil {
 		return computerToolError(err)
 	}
-	return computerToolResult(map[string]any{"targets": targets, "input_available": false})
+	inputAvailable := slices.ContainsFunc(
+		targets,
+		func(target computer.NamedTarget) bool { return target.InputAvailable },
+	)
+	return computerToolResult(map[string]any{"targets": targets, "input_available": inputAvailable})
 }
 
 func (*ComputerSessionTool) Name() string { return "computer_session" }
