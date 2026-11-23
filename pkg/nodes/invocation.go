@@ -198,7 +198,8 @@ func PrepareExecutionPlan(
 	if err := request.Validate(); err != nil {
 		return ExecutionPlan{}, err
 	}
-	if err := descriptor.Validate(); err != nil {
+	descriptorHash, err := descriptor.Hash()
+	if err != nil {
 		return ExecutionPlan{}, err
 	}
 	if descriptor.Name != request.Command {
@@ -263,10 +264,6 @@ func PrepareExecutionPlan(
 				ErrInvalidInvocation,
 			)
 		}
-	}
-	descriptorHash, err := descriptor.Hash()
-	if err != nil {
-		return ExecutionPlan{}, err
 	}
 	if !validInvocationIdentifier(executor) || len(policyRevision) == 0 ||
 		len(policyRevision) > MaxPolicyRevisionLength || !idPattern.MatchString(policyRevision) {
@@ -463,9 +460,6 @@ func (policy LocalCommandPolicy) authorize(
 		return err
 	}
 	if err := plan.Validate(); err != nil {
-		return err
-	}
-	if err := runtimeCatalog.Validate(); err != nil {
 		return err
 	}
 	actualCatalogHash, err := runtimeCatalog.Hash()
