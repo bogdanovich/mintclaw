@@ -878,7 +878,7 @@ func (snapshot Snapshot) Validate() error {
 	if !validSHA256Digest(snapshot.CatalogHash) {
 		return fmt.Errorf("%w: malformed catalog hash", ErrInvalidNode)
 	}
-	catalogHash, err := snapshot.Catalog.Hash()
+	catalogHash, err := snapshot.Catalog.boundedCanonicalHash()
 	if err != nil {
 		return err
 	}

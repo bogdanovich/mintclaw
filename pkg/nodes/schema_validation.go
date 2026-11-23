@@ -1,12 +1,15 @@
 package nodes
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/jsonschema-go/jsonschema"
 
@@ -24,7 +27,18 @@ var (
 	errMetaSchema      error
 )
 
+// Schema validation is independent of command and pairing authority. Retain
+// only digests of fully validated schemas in bounded, replaceable slots.
+var validatedSchemaDigests [4 * MaxCatalogCommands]atomic.Pointer[[sha256.Size]byte]
+
 func validateJSONSchema(raw json.RawMessage) error {
+	digest := sha256.Sum256(raw)
+	index := int(binary.BigEndian.Uint16(digest[:2])) % len(validatedSchemaDigests)
+	slot := &validatedSchemaDigests[index]
+	if previous := slot.Load(); previous != nil && *previous == digest {
+		return nil
+	}
+
 	if _, err := jsonstrict.Decode(raw); err != nil {
 		return err
 	}
@@ -47,8 +61,11 @@ func validateJSONSchema(raw json.RawMessage) error {
 	if decodeErr := json.Unmarshal(raw, &schema); decodeErr != nil {
 		return decodeErr
 	}
-	_, resolveErr := schema.Resolve(nil)
-	return resolveErr
+	if _, err := schema.Resolve(nil); err != nil {
+		return err
+	}
+	slot.Store(&digest)
+	return nil
 }
 
 func draft202012MetaSchema() (*jsonschema.Resolved, error) {
