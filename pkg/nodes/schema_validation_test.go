@@ -35,3 +35,17 @@ func TestValidateJSONSchemaRejectsEmptyTypeArray(t *testing.T) {
 		t.Fatal("validateJSONSchema() accepted an empty type array")
 	}
 }
+
+func TestValidateJSONSchemaRechecksChangedBytes(t *testing.T) {
+	raw := json.RawMessage(`{"type":"object","minProperties":17}`)
+	if err := validateJSONSchema(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateJSONSchema(raw); err != nil {
+		t.Fatal(err)
+	}
+	copy(raw[len(raw)-3:], "-1}")
+	if err := validateJSONSchema(raw); err == nil {
+		t.Fatal("changed schema was not validated")
+	}
+}
