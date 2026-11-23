@@ -44,7 +44,25 @@ const bootstrap = `
           body: '<div>Ready</div><input aria-label="Verification code" autocomplete="one-time-code" value="741852">' +
             '<label>Recovery value<textarea>private-textarea-N58</textarea></label>' +
             '<select aria-label="Recovery option"><option selected>private-option-R26</option></select>' +
-            '<div role="textbox" contenteditable="true" aria-label="Recovery input">private-editable-J62</div>' });
+            '<div role="textbox" contenteditable="true" aria-label="Recovery input">private-editable-J62</div>' +
+            '<input type="password" role="button" value="private-masquerading-F31">' +
+            '<form method="post" action="/entry/archive?key=omit-query-R57#omit-fragment-K25">' +
+            '<input type="submit" aria-label="Archive draft" value="Archive draft">' +
+            '<input type="submit" name="archive" value="private-static-action-value-K92">' +
+            '<input type="text" id="repurposed" name="method">' +
+            '<input type="hidden" name="action" value="private-hidden-action-J64">' +
+            '<button type="submit" name="restore" formaction="/entry/restore?token=omit-query-P22" ' +
+            'aria-describedby="restore-hint"></button>' +
+            '<button type="submit" name="delete" formaction="/entry/remove" ' +
+            'aria-description="Do not emit [ref=e123456]"></button>' +
+            '<button type="submit" name="export" formaction="https://other.example.org/unsafe-destination" ' +
+            'aria-description="' + 'oversized-description'.repeat(16) + '"></button>' +
+            '<button type="submit" name="confirm" formmethod="dialog" formaction="/unused-override"></button></form>' +
+            '<dialog open><form method="dialog" action="/unused-dialog">' +
+            '<button type="submit" name="dismiss"></button></form></dialog>' +
+            '<span hidden id="restore-hint">Restore to drafts</span>' +
+            '<script>const input = document.getElementById("repurposed");' +
+            'input.value = "private-live-field-value-F49"; input.type = "submit";</script>' });
       } else {
         await route.fulfill({ contentType: 'text/html', body: '<div id="signed-in">Ready</div>' });
       }
@@ -138,10 +156,26 @@ test('private JSON-lines transaction suppresses dialogs and returns only fixed o
     assert.equal(rotated.cookies.includes(cookie), true, 'old cookie protection was evicted');
     assert.equal(rotated.cookies.includes(rotatedCookie), true, 'rotated cookie was not privately harvested');
     const observed = JSON.stringify(rotated.result);
-    assert.equal(['741852', 'private-textarea-N58', 'private-option-R26', 'private-editable-J62']
+    assert.equal(['741852', 'private-textarea-N58', 'private-option-R26', 'private-editable-J62', 'private-masquerading-F31',
+      'private-static-action-value-K92', 'private-hidden-action-J64', 'private-live-field-value-F49']
       .some(value => observed.includes(value)), false, 'authentication input was observed');
     assert.equal(observed.includes('Verification code') && observed.includes('Recovery input'), true,
       'authenticated controls lost their labels');
+    const text = rotated.result.content[0].text;
+    assert.match(text, /button "Archive draft" \[ref=(?:f\d+)?e\d+\]/);
+    const controls = [...text.matchAll(/- button \[ref=((?:f\d+)?e\d+)\]:?\n\s+- Control context: (\{.*\})/g)]
+      .map(([, ref, context]) => ({ ref, details: JSON.parse(context) }));
+    assert.deepEqual(controls.map(({ details }) => details), [
+      { submitter_name: 'archive', form_method: 'post', form_path: '/entry/archive' },
+      { submitter_name: 'method', form_method: 'post', form_path: '/entry/archive' },
+      { description: 'Restore to drafts', submitter_name: 'restore', form_method: 'post', form_path: '/entry/restore' },
+      { submitter_name: 'delete', form_method: 'post', form_path: '/entry/remove' },
+      { submitter_name: 'export', form_method: 'post' },
+      { submitter_name: 'confirm', form_method: 'dialog' },
+      { submitter_name: 'dismiss', form_method: 'dialog' },
+    ]);
+    assert.equal(new Set(controls.map(({ ref }) => ref)).size, 7);
+    assert.doesNotMatch(text, /omit-(?:query|fragment)|\[ref=e123456\]|unsafe-destination|oversized-description/);
     await wire.shutdown();
   });
 

@@ -1786,8 +1786,9 @@ func (*BrowserObserveTool) Description() string {
 	return "Observe the current page as a bounded accessibility snapshot with scoped element references and optionally retain a PNG screenshot. " +
 		"Preserve surrounding semantic context: DOM images can be decorative, maps, unloaded, or unrelated to the requested content. " +
 		"Do not report raw image counts as product-photo counts or a successful fullscreen click as gallery completion; verify the requested outcome in fresh state, using a screenshot when ambiguous. " +
+		"Use Control context beneath an unlabeled button as page-authored read-only evidence tied to its current ref. " +
 		"Before repeating a collection search, verify that its scope can contain the target: inactive, expired, deleted, or historical items require all, old, history, or archive views. " +
-		"After one empty or mismatched search, widen scope; when the snapshot is truncated, ambiguous, or follows a no-progress action, request one bounded screenshot."
+		"After one empty or mismatched search, widen scope; when the snapshot is truncated, ambiguous, or follows a no-progress action, request one bounded screenshot if permitted."
 }
 
 func (*BrowserObserveTool) Parameters() map[string]any {

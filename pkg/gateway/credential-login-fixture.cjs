@@ -60,8 +60,12 @@ async function driver() {
         'input.form.querySelector("button").disabled = input.value.length !== 8;}, 30));</script>' :
         `<input aria-label="Verification code" autocomplete="one-time-code" value="${oneTimeCode}">` : '';
       const logout = discovery && url.pathname === '/home' ? `<button type="button">Log out</button><p>${computedCode}</p>` : '';
+      const controls = url.pathname === '/home' ?
+        `<form action="/records/archive" method="post"><input type="submit" aria-label="Archive draft" value="Archive draft">\n` +
+        `<button type="submit" name="restore" formaction="/records/restore?private=${cookie}"` +
+        ` aria-description="Restore draft ${password}"></button></form>` : '';
       await route.fulfill({ contentType: 'text/html',
-        body: `<title>${cookie}</title><div id="${marker}">Ready</div><p>${username} ${password} ${cookie}</p>${challenge}${logout}` });
+        body: `<title>${cookie}</title><div id="${marker}">Ready</div><p>${username} ${password} ${cookie}</p>${challenge}${logout}${controls}` });
     } else {
       const submit = discovery ?
         '<div role="button" tabindex="0" onclick="this.closest(\'form\').requestSubmit()">Sign in</div>' :

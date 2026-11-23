@@ -19,6 +19,7 @@ const { chromium, firefox, webkit } = require('playwright');
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const MAX_ERROR_BYTES = 2048;
 const MAX_IMAGE_EVIDENCE = 32;
+const MAX_CONTROL_CONTEXT = 24;
 
 const SPECIAL_IPV4_PREFIXES = [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
@@ -293,9 +294,71 @@ function sameWritableSemantics(before, after) {
     before.type === after.type && before.role === after.role && before.name === after.name;
 }
 
-function snapshotString(value) {
+function snapshotJSON(value) {
   // Page-authored text is never a reference token in the private wire format.
-  return JSON.stringify(String(value)).replace(/\[ref=/g, '\\u005bref=');
+  return JSON.stringify(value).replace(/\[ref=/g, '\\u005bref=');
+}
+
+function snapshotString(value) {
+  return snapshotJSON(String(value));
+}
+
+function snapshotControlSource(element, { bound, inspectButton }) {
+  if (!element.isConnected) return null;
+  const input = element.tagName === 'INPUT';
+  const actionInput = input && ['button', 'submit', 'reset', 'image'].includes(element.type);
+  const control = bound && (element.matches('input,textarea,select') || element.isContentEditable);
+  const textWithoutValues = label => {
+    const controls = 'input,textarea,select,[contenteditable],script,style';
+    if (label.matches(controls)) return '';
+    const copy = label.cloneNode(true);
+    for (const child of copy.querySelectorAll(controls)) child.remove();
+    return copy.textContent || '';
+  };
+  const referencedText = (attribute, limit) => {
+    const ids = (element.getAttribute(attribute) || '').trim();
+    return ids ? ids.split(/\s+/, limit).map(id => element.ownerDocument.getElementById(id))
+      .filter(Boolean).map(textWithoutValues).join(' ') : '';
+  };
+  // Omit long values whole. The private output guard needs the complete
+  // original text to recognize any reflected credential or cookie.
+  const bounded = value => typeof value === 'string' && value.length <= 160 && value.trim() &&
+    !value.includes('[ref=') ? value : '';
+  const source = { control, password: input && element.type === 'password' };
+  if (control) {
+    // A type change can reflect previously entered text into the value
+    // attribute. Use only independent labels, even for action inputs.
+    const alt = input && element.type === 'image' ? bounded(element.getAttribute('alt')) : '';
+    source.name = referencedText('aria-labelledby').trim() || element.getAttribute('aria-label') ||
+      (element.labels && Array.from(element.labels).map(textWithoutValues).join(' ').trim()) ||
+      alt || element.getAttribute('placeholder') || element.getAttribute('title') || '';
+  }
+  if (inspectButton && (!element.matches('input,textarea,select') || actionInput) && !element.isContentEditable) {
+    const details = {};
+    const title = bounded(element.getAttribute('title'));
+    const description = bounded(referencedText('aria-describedby', 4) || element.getAttribute('aria-description'));
+    if (title) details.title = title;
+    if (description) details.description = description;
+    const form = element.form;
+    if (form && (element.type === 'submit' || (input && element.type === 'image'))) {
+      const submitterName = bounded(element.getAttribute('name'));
+      if (submitterName) details.submitter_name = submitterName;
+      // A named form control can shadow ordinary form.method/action access.
+      const nativeFormSetting = key => Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, key).get.call(form);
+      details.form_method = element.hasAttribute('formmethod') ? element.formMethod : nativeFormSetting('method');
+      // Dialog submissions do not navigate to the action URL.
+      if (['get', 'post'].includes(details.form_method)) {
+        try {
+          const destination = new URL(element.hasAttribute('formaction') ? element.formAction : nativeFormSetting('action'));
+          if (['https:', 'http:'].includes(destination.protocol) && destination.origin === element.ownerDocument.location.origin) {
+            details.form_path = bounded(destination.pathname);
+          }
+        } catch (_) {}
+      }
+    }
+    if (Object.keys(details).length) source.controlContext = details;
+  }
+  return source;
 }
 
 function renderAriaNodes(nodes, indent = '') {
@@ -317,10 +380,13 @@ function renderAriaNodes(nodes, indent = '') {
     if (node.ref) line += ` [ref=${node.ref}]`;
     if (node.cursor) line += ` [cursor=${node.cursor}]`;
     if (node.text) line += `: ${snapshotString(node.text)}`;
-    else if (node.children && node.children.length) line += ':';
+    else if (node.controlContext || (node.children && node.children.length)) line += ':';
     lines.push(line);
     if (node.url) lines.push(`${indent}  - /url: ${snapshotString(node.url)}`);
     if (node.placeholder) lines.push(`${indent}  - /placeholder: ${snapshotString(node.placeholder)}`);
+    if (node.controlContext) {
+      lines.push(`${indent}  - Control context: ${snapshotJSON(node.controlContext)}`);
+    }
     if (node.children) lines.push(...renderAriaNodes(node.children, indent + '  '));
   }
   return lines;
@@ -586,36 +652,20 @@ class Driver {
     const scope = target ? this.locatorFor(target) : page.locator(':root');
     const wholeDocument = target && regionContext;
     let tree = await (wholeDocument ? page.locator(':root') : scope).ariaSnapshotJSON({ mode: 'ai' });
+    let remainingControlContext = MAX_CONTROL_CONTEXT;
+    const inspectSource = async (ref, bound, inspectButton) => {
+      try {
+        // Inspect exact native refs; never rediscover an element by its
+        // caption or wait an action-sized timeout for removed sources.
+        return await this.locatorFor(ref).evaluate(snapshotControlSource,
+          { bound, inspectButton }, { timeout: 500 });
+      } catch (_) { return null; }
+    };
     const redactControls = async nodes => {
       await Promise.all(nodes.map(async node => {
         if (typeof node === 'string') return;
         if (node.ref && (this.credentialBound || node.text)) {
-          let source = null;
-          try {
-            // Inspect exact native refs; never rediscover an element by its
-            // caption or wait an action-sized timeout for removed sources.
-            source = await this.locatorFor(node.ref).evaluate((element, bound) => {
-              if (!element.isConnected) return null;
-              const control = bound && (element.matches('input,textarea,select') || element.isContentEditable);
-              if (control) {
-                const labelText = label => {
-                  const controls = 'input,textarea,select,[contenteditable],script,style';
-                  if (label.matches(controls)) return '';
-                  const copy = label.cloneNode(true);
-                  for (const child of copy.querySelectorAll(controls)) child.remove();
-                  return copy.textContent || '';
-                };
-                const labelledBy = (element.getAttribute('aria-labelledby') || '').trim();
-                const labels = labelledBy ? labelledBy.split(/\s+/).map(id => document.getElementById(id))
-                  .filter(Boolean).map(labelText).join(' ').trim() : '';
-                const name = labels || element.getAttribute('aria-label') ||
-                  (element.labels && Array.from(element.labels).map(labelText).join(' ').trim()) ||
-                  element.getAttribute('placeholder') || element.getAttribute('title') || '';
-                return { control: true, name };
-              }
-              return { password: element.tagName === 'INPUT' && element.type === 'password' };
-            }, this.credentialBound, { timeout: 500 });
-          } catch (_) {}
+          const source = await inspectSource(node.ref, this.credentialBound, false);
           if (source && source.control) {
             node.name = source.name;
             delete node.text;
@@ -628,6 +678,13 @@ class Driver {
               delete node.children;
             } else if (node.text) node.text = '[text withheld: source changed during observation]';
           }
+        }
+        // A protected action input can become unlabeled only after masking
+        // its value-derived name; it should still get independent context.
+        if (node.ref && node.role === 'button' && !node.name && remainingControlContext > 0) {
+          remainingControlContext--;
+          const source = await inspectSource(node.ref, false, true);
+          if (source && source.controlContext) node.controlContext = source.controlContext;
         }
         if (node.children) await redactControls(node.children);
       }));

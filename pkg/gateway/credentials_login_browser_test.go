@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -482,9 +483,23 @@ func testCredentialBrowserFixtureScenario(t *testing.T, providerKind, expectedOu
 				}
 			}
 		}
-		if result.Outcome == "logged_in" &&
-			record(observe.Execute(ctx, map[string]any{"browser_session_id": session.ID}), nil) != nil {
-			return result, errors.New("fixture authenticated observation failed")
+		if result.Outcome == "logged_in" {
+			if err = record(
+				observe.Execute(ctx, map[string]any{"browser_session_id": session.ID}),
+				&observation,
+			); err != nil {
+				return result, errors.New("fixture authenticated observation failed")
+			}
+			for _, expected := range []string{
+				`button "Archive draft" [ref=`, "Control context: ", "Restore draft", "/records/restore",
+			} {
+				if !strings.Contains(observation.Snapshot, expected) {
+					return result, fmt.Errorf("fixture authenticated observation omitted %q", expected)
+				}
+			}
+			if strings.Contains(observation.Snapshot, "?private=") {
+				return result, errors.New("authenticated control context included form query data")
+			}
 		}
 		return result, nil
 	}
