@@ -22,10 +22,13 @@ const (
 	defaultAnthropicModel = "claude-sonnet-4.6"
 )
 
-func authLoginCmd(provider string, useDeviceCode bool, useOauth bool, noBrowser bool) error {
+func authLoginCmd(provider string, useDeviceCode, useOauth, noBrowser, credentialsOnly bool) error {
+	if credentialsOnly && provider != "openai" {
+		return fmt.Errorf("--credentials-only requires --provider openai")
+	}
 	switch provider {
 	case "openai":
-		return authLoginOpenAI(useDeviceCode, noBrowser)
+		return authLoginOpenAI(useDeviceCode, noBrowser, credentialsOnly)
 	case "anthropic":
 		return authLoginAnthropic(useOauth)
 	case "google-antigravity", "antigravity":
@@ -35,7 +38,7 @@ func authLoginCmd(provider string, useDeviceCode bool, useOauth bool, noBrowser 
 	}
 }
 
-func authLoginOpenAI(useDeviceCode bool, noBrowser bool) error {
+func authLoginOpenAI(useDeviceCode, noBrowser, credentialsOnly bool) error {
 	cfg := auth.OpenAIOAuthConfig()
 
 	var cred *auth.AuthCredential
@@ -53,6 +56,10 @@ func authLoginOpenAI(useDeviceCode bool, noBrowser bool) error {
 
 	if err = auth.SetCredential("openai", cred); err != nil {
 		return fmt.Errorf("failed to save credentials: %w", err)
+	}
+	if credentialsOnly {
+		fmt.Println("Login successful!")
+		return nil
 	}
 
 	model := preferredOpenAIModel(cred)

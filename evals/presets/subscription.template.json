@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "id": "local-subscription",
+  "config_path": "profile/config.json",
+  "expected_agent": "main",
+  "expected_workspace": "profile/workspace",
+  "isolation_root": "profile",
+  "model_access": "subscription",
+  "capabilities": ["conversation"],
+  "target_call_budget": {
+    "mode": "codex_subscription",
+    "max_calls": 6,
+    "max_input_bytes": 131072,
+    "max_output_tokens": 0,
+    "max_reported_tokens": 24000,
+    "max_in_flight": 1,
+    "max_call_seconds": 60
+  }
+}

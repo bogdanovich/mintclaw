@@ -248,6 +248,10 @@ func clonePreparationConfig(source *config.Config, preset Preset) (*config.Confi
 		if !model.Enabled {
 			continue
 		}
+		if preset.ModelAccess == modelAccessSubscription {
+			clone.ModelList = append(clone.ModelList, publicModels[index])
+			continue
+		}
 		endpoint, parseErr := url.Parse(model.APIBase)
 		keys := model.APIKeys.Values()
 		if model.AuthMethod != "" || model.Proxy != "" || len(model.CustomHeaders) != 0 ||

@@ -45,10 +45,9 @@ rate-limit or billing response. It never
 claims to know the cost of a failed request or to prevent account-level use of
 purchased ChatGPT credits. The caller owns credential and profile admission.
 
-This is a provider primitive, not a selectable live eval profile yet. The
-owned-launch protocol and existing eval presets still require the strict
-constructor. Subscription credential isolation, preset selection and live
-qualification are separate from this change.
+The [subscription smoke profile](../operations/manual-agent-evals.md#subscription-smoke-profile)
+uses this policy without admitting cases that require the strict constructor.
+Existing eval presets and historical reports retain the strict interpretation.
 
 ## Evidence And Boundaries
 
@@ -102,5 +101,5 @@ This API does not wrap independently created providers inside provider-owning
 tools such as document-private auditing. An eval caller must enforce its
 restricted profile separately; no tool/approval authority is granted here.
 The [owned gateway protocol](owned-eval-call-budget.md) defines launch and
-frozen evidence for the strict policy only. Native-model `AllCalls` semantics
-are unchanged.
+frozen evidence for both policies. Native-model `AllCalls` semantics are
+unchanged.

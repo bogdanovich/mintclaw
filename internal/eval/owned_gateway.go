@@ -145,7 +145,7 @@ func startOwnedGatewayWithFixtures(
 	}
 	child, err := launchOwnedGatewayWithBudget(profile, executable, preset.TargetCallBudget)
 	if err != nil {
-		return nil, target, ErrOwnedGateway
+		return nil, target, err
 	}
 	target, err = admitOwnedGateway(ctx, child, preset, home, fixture, active)
 	return child, target, err
@@ -183,6 +183,7 @@ func admitOwnedGateway(
 			child.identity.bind(preset, profile, target)
 			child.admitted = true
 			target.activeTool, target.ownedLog = active, child.log.file.Name()
+			target.filter = profile.filter
 			return target, nil
 		}
 		select {
@@ -310,6 +311,15 @@ func launchOwnedGatewayGeneration(
 		}
 		spec = &value
 		args = append(args, "--"+evaltarget.FlagName, encoded)
+		if limits.Mode == providers.CodexSubscriptionBudget {
+			if previous != nil {
+				return nil, ErrSubscriptionProfile
+			}
+			profile.filter, err = subscriptionEvidenceFilter(profile)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	root, err := os.OpenRoot(profile.home)
 	if err != nil {
@@ -362,6 +372,9 @@ func launchOwnedGatewayGeneration(
 		"PATH=" + os.Getenv("PATH"), "LANG=C", "MINTCLAW_LOG_LEVEL=" + config.EffectiveGatewayLogLevel(profile.config),
 		"MINTCLAW_LOG_FORMAT=json",
 		"TMPDIR=" + temporary, "TMP=" + temporary, "TEMP=" + temporary,
+	}
+	if spec != nil && spec.Limits.Mode == providers.CodexSubscriptionBudget {
+		command.Env = append(command.Env, "MINTCLAW_AUTH_FILE="+filepath.Join(profile.home, subscriptionAuthPath))
 	}
 	command.Stdout, command.Stderr = log, log
 	command.WaitDelay = 2 * time.Second
