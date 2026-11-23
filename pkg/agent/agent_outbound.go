@@ -106,6 +106,9 @@ func (al *AgentLoop) maybePublishErrorWithScopes(
 }
 
 func formatUserFacingAgentError(err error) string {
+	if errors.Is(err, errVoiceTranscriptionFailed) {
+		return voiceTranscriptionFailureNotice
+	}
 	if err == nil {
 		return "Error processing message."
 	}

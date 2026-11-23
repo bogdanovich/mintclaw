@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -11,9 +12,16 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
+// Keep provider errors and raw audio out of model/tool recovery paths.
+var errVoiceTranscriptionFailed = errors.New("voice transcription failed")
+
+const voiceTranscriptionFailureNotice = "I couldn’t transcribe that voice message. Please try again or send text."
+
 type audioTranscriptionStatus struct {
 	audioRefs int
 	completed int
+	// Excludes annotation-only padding: captions may contain literal [voice] text.
+	failedAttachments int
 }
 
 type inboundMediaResolution struct {
@@ -21,6 +29,13 @@ type inboundMediaResolution struct {
 	path     string
 	isAudio  bool
 	resolved bool
+}
+
+func (status audioTranscriptionStatus) failure() error {
+	if status.failedAttachments > 0 {
+		return errVoiceTranscriptionFailed
+	}
+	return nil
 }
 
 func (status audioTranscriptionStatus) complete() bool {
@@ -102,6 +117,7 @@ func (al *AgentLoop) transcribeAudioInMessageWithStatus(
 		if !resolution.resolved {
 			if len(transcriptions)+knownAudioRemaining < expectedAudioSlots {
 				status.audioRefs++
+				status.failedAttachments++
 				transcriptions = append(transcriptions, "")
 			}
 			continue
@@ -113,6 +129,7 @@ func (al *AgentLoop) transcribeAudioInMessageWithStatus(
 		status.audioRefs++
 		result, err := al.transcriber.Transcribe(ctx, resolution.path)
 		if err != nil || result == nil || strings.TrimSpace(result.Text) == "" {
+			status.failedAttachments++
 			logger.WarnCF(
 				"voice",
 				"Transcription failed",
