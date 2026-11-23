@@ -501,11 +501,11 @@ verified delivery to the original receiver and neutral states on both devices.
 The original GTK window stayed open with one observed scroll step in
 all three final nominal trials.
 
-The three final controls withheld release with a second receiver, pointer
-movement or an interrupted recording. Earlier controls also exercised a competing grab-changing request and a replaced window. The guarded release was withheld when those controls made
-the original route unprovable. The disposable harness can later destroy its
-own original target to verify cleanup in a private sink. That fixture action
-is separate from recovery of a live original window.
+The three final controls withheld release after detecting a second receiver,
+pointer movement or an interrupted recording. Earlier controls also refused
+after a competing grab-changing request or replacement of the original
+window. The disposable harness can destroy its own original target to verify
+cleanup in a private sink.
 
 The competing listener also received the original press even though the
 native window ID matched. A delivery receipt is available after an edge.
