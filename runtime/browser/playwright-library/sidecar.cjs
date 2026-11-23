@@ -346,12 +346,15 @@ function snapshotControlSource(element, { bound, inspectButton }) {
       // A named form control can shadow ordinary form.method/action access.
       const nativeFormSetting = key => Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, key).get.call(form);
       details.form_method = element.hasAttribute('formmethod') ? element.formMethod : nativeFormSetting('method');
-      try {
-        const destination = new URL(element.hasAttribute('formaction') ? element.formAction : nativeFormSetting('action'));
-        if (['https:', 'http:'].includes(destination.protocol) && destination.origin === element.ownerDocument.location.origin) {
-          details.form_path = bounded(destination.pathname);
-        }
-      } catch (_) {}
+      // Dialog submissions do not navigate to the action URL.
+      if (['get', 'post'].includes(details.form_method)) {
+        try {
+          const destination = new URL(element.hasAttribute('formaction') ? element.formAction : nativeFormSetting('action'));
+          if (['https:', 'http:'].includes(destination.protocol) && destination.origin === element.ownerDocument.location.origin) {
+            details.form_path = bounded(destination.pathname);
+          }
+        } catch (_) {}
+      }
     }
     if (Object.keys(details).length) source.controlContext = details;
   }

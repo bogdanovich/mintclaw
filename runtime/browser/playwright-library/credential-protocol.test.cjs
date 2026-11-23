@@ -56,7 +56,10 @@ const bootstrap = `
             '<button type="submit" name="delete" formaction="/entry/remove" ' +
             'aria-description="Do not emit [ref=e123456]"></button>' +
             '<button type="submit" name="export" formaction="https://other.example.org/unsafe-destination" ' +
-            'aria-description="' + 'oversized-description'.repeat(16) + '"></button></form>' +
+            'aria-description="' + 'oversized-description'.repeat(16) + '"></button>' +
+            '<button type="submit" name="confirm" formmethod="dialog" formaction="/unused-override"></button></form>' +
+            '<dialog open><form method="dialog" action="/unused-dialog">' +
+            '<button type="submit" name="dismiss"></button></form></dialog>' +
             '<span hidden id="restore-hint">Restore to drafts</span>' +
             '<script>const input = document.getElementById("repurposed");' +
             'input.value = "private-live-field-value-F49"; input.type = "submit";</script>' });
@@ -168,8 +171,10 @@ test('private JSON-lines transaction suppresses dialogs and returns only fixed o
       { description: 'Restore to drafts', submitter_name: 'restore', form_method: 'post', form_path: '/entry/restore' },
       { submitter_name: 'delete', form_method: 'post', form_path: '/entry/remove' },
       { submitter_name: 'export', form_method: 'post' },
+      { submitter_name: 'confirm', form_method: 'dialog' },
+      { submitter_name: 'dismiss', form_method: 'dialog' },
     ]);
-    assert.equal(new Set(controls.map(({ ref }) => ref)).size, 5);
+    assert.equal(new Set(controls.map(({ ref }) => ref)).size, 7);
     assert.doesNotMatch(text, /omit-(?:query|fragment)|\[ref=e123456\]|unsafe-destination|oversized-description/);
     await wire.shutdown();
   });
