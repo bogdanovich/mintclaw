@@ -429,6 +429,9 @@ published model benchmark scores predict our production success rate.
    A [discrete scroll experiment](computer-evaluation-pack.md#linux-x11-scroll-scope-and-effect)
    exercised the same window guard and desktop lease with independent effect
    checks and grab refusals in an owned X11 fixture.
+   An [early device startup experiment](computer-evaluation-pack.md#native-device-startup-before-gnome)
+   verified release after transport loss and refusal after device recreation
+   on a fresh disposable display. The test harness owned the process lifecycle.
 4. Managed environments, VM/locked-host execution, Wayland and cloud spending
    remain independent extensions, not prerequisites or implicit scope changes.
 5. Complete representative tasks through the actual configured function-tool and
